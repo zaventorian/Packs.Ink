@@ -316,7 +316,7 @@ for (const [who, src] of mountEffects) {
 section("13. the loser of two overlapping searches writes nothing");
 const guarded = [
   ["runSearch", slice("  const runSearch = useCallback(async (z, r, forceCc) => {",
-                      "}, [mode, fetchNear]);", "runSearch")],
+                      "}, [fetchNear]);", "runSearch")],
   ["useAltPlace", slice("  const useAltPlace = useCallback(async (p) => {",
                         "}, [zip, radius, origin, fetchNear]);", "useAltPlace")],
   ["searchAtRadius", slice("  const searchAtRadius = useCallback(async (r) => {",
@@ -425,6 +425,105 @@ ok(/probedZip\.current !== z/.test(SRC),
 // The pre-search country picker stays gone: this control appears AFTER a
 // search and only on real ambiguity, which is a different thing entirely.
 eq(SRC.includes("sc-country-select"), false, "the old pre-search picker is still gone");
+
+
+const NLJS = String.fromCharCode(10);
+
+section("15. kinds — a multi-select, not one-of-N");
+// The box offered All | Set Champs | Prereleases, so "Set Championships and
+// prereleases, but not league nights" was unaskable and locals had no view of
+// their own. Every failure below is silent: a parse that drops a kind just shows
+// fewer events, and one that ignores a legacy link shows more.
+{
+  // ⚠ ONE slice, start to finish. Stitching several together duplicates every
+  // declaration that is also an end marker — `slice` includes its end marker, so
+  // "…to scKindOf" and "scKindOf to…" both contain that line.
+  const kindSrc = slice("const SC_KINDS = CAL_STORE_KINDS;",
+                        "return `${SC_DOW[d.getUTCDay()]} ${+m[2]}/${+m[3]}`;" + NLJS + "};",
+                        "the kinds + dates block");
+  const K = await import("data:text/javascript," + encodeURIComponent([
+    "const CAL_STORE_KINDS = [{key:'sc',label:'Set Champs'},{key:'prerelease',label:'Prereleases'},{key:'other',label:'Locals'}];",
+    "const CAL_STORE_KIND_KEYS = CAL_STORE_KINDS.map(k => k.key);",
+    "const SC_DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];",
+    kindSrc,
+    "export {SC_KIND_KEYS, scParseKinds, scKindOf, scKindsLabel, scParseDates, scDateChipLabel};",
+  ].join(NLJS)));
+
+  eq(K.scParseKinds("").join(","), "sc,prerelease,other", "nothing stored means everything");
+  eq(K.scParseKinds(null).join(","), "sc,prerelease,other", "null means everything");
+  // ⚠ The legacy single values are in the wild: ?scmode=sc links, the stored
+  // packsink:scMode, and App's own openEventFinder("prerelease").
+  eq(K.scParseKinds("sc").join(","), "sc", "a legacy ?scmode=sc still narrows to Set Champs");
+  eq(K.scParseKinds("prerelease").join(","), "prerelease", "and a legacy prerelease link too");
+  eq(K.scParseKinds("all").join(","), "sc,prerelease,other", "a legacy 'all' is everything");
+  eq(K.scParseKinds("sc,prerelease").join(","), "sc,prerelease", "two of three round-trip");
+  // ⚠ Canonical order, not the order they were typed: two identical filters must
+  // produce one URL and one stored value.
+  eq(K.scParseKinds("other,sc").join(","), "sc,other", "the parse is canonically ordered");
+  // ⚠ Unparseable means EVERYTHING. A filter nobody asked for, silently hiding
+  // most of the results, is the worse failure.
+  eq(K.scParseKinds("zzz").join(","), "sc,prerelease,other", "a value we cannot read shows everything");
+  // RPH only sets those three, but a fourth must ride with the catch-all rather
+  // than vanish — the same rule calStoreAllows follows.
+  eq(K.scKindOf({kind: "sc"}), "sc", "a known kind is itself");
+  eq(K.scKindOf({kind: "tournament"}), "other", "an unknown kind counts as a local");
+  eq(K.scKindOf(null), "other", "and so does no row at all");
+  eq(K.scKindsLabel(["sc", "prerelease", "other"]), "Lorcana Events", "all three read as one phrase");
+  ok(/&/.test(K.scKindsLabel(["sc", "prerelease"])), "a subset names both halves");
+
+  section("16. dates — several of them, and the past is pickable");
+  eq(K.scParseDates("2026-10-16").join(","), "2026-10-16", "a legacy single ?scdate still parses");
+  eq(K.scParseDates("2026-10-17,2026-10-16").join(","), "2026-10-16,2026-10-17", "several, sorted");
+  eq(K.scParseDates("2026-10-16,2026-10-16").join(","), "2026-10-16", "a repeat is one date");
+  eq(K.scParseDates("tomorrow,2026-10-16").join(","), "2026-10-16", "junk is dropped, not kept");
+  eq(K.scParseDates("").length, 0, "empty is empty");
+  // ⚠ UTC in and UTC out. new Date("2026-10-16") is midnight UTC, so local
+  // getters read Oct 15 anywhere west of Greenwich — a chip naming the day
+  // BEFORE the one it filters on, which is invisible on a UTC machine.
+  eq(K.scDateChipLabel("2026-10-16"), "Fri 10/16", "the chip names the right weekday");
+  eq(K.scDateChipLabel("2026-09-01"), "Tue 9/1", "and the right one across a month boundary");
+  eq(K.scDateChipLabel("2027-01-01"), "Fri 1/1", "and across a year boundary");
+  eq(K.scDateChipLabel("nonsense"), "nonsense", "an unparseable value passes through rather than blanking");
+}
+
+section("17. narrowing by kind costs no round trip");
+{
+  // ⚠ p_kind is ALWAYS null: all three kinds live in ONE table, so narrowing is a
+  // client-side filter. Regress this to sending the kind and every chip tap
+  // throws the results away and re-queries — which also loses the selection you
+  // were part-way through reading.
+  const fetchNear = slice("  const fetchNear = useCallback(async (lat, lng, r) => {",
+                          "}, []);", "fetchNear");
+  ok(/p_kind: null/.test(fetchNear), "fetchNear asks for every kind");
+  ok(!/p_kind:\s*(mode|kinds)/.test(fetchNear), "and never for a subset");
+  ok(/\}, \[\]\);\s*$/.test(fetchNear.trim()), "so no kind sits in its deps");
+  // ⚠ Scoped to the finder. `}, [mode]);` is a perfectly ordinary effect
+  // elsewhere in the file (the scanner's, the calendar's own list/month mode), so
+  // a file-wide test here fails for reasons that have nothing to do with this.
+  const finder = slice("const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {",
+                       "const GRADED_HOME_WINS", "the finder");
+  ok(!/\}, \[mode\]\);/.test(finder), "the finder re-queries on no kind change");
+  ok(!/runSearch\(zip, radius\);\s*\n\s*\}, \[kinds\]\);/.test(finder),
+     "and there is no kinds-keyed re-query in its place");
+
+  // The last active kind cannot be switched off — an empty selection renders an
+  // empty box whose only way back is the chip you just used to empty it.
+  const toggle = slice("  const toggleKind = (k) => setKinds(cur => {", "  });", "toggleKind");
+  ok(/cur\.length === 1 \? cur :/.test(toggle), "the last kind standing cannot be unticked");
+
+  // ⚠ The tile badge is gated on the list being MIXED, not on isAll. It was
+  // isAll, which was the same question while the alternative was a single kind;
+  // with a 2-of-3 selection the list is mixed and the badge is the only thing
+  // telling the two apart.
+  ok(/kinds\.length > 1 && html`<span class=\$\{"sc-tile-kind/.test(SRC),
+     "the kind badge shows whenever the list holds more than one kind");
+
+  // ⚠ There is ONE list of the three kinds. The finder and the follow-a-store
+  // boxes are asking about the same things, and a second copy here would be two
+  // lists that have to agree about what "other" is called.
+  ok(/const SC_KINDS = CAL_STORE_KINDS;/.test(SRC),
+     "the finder's chips come from CAL_STORE_KINDS, not a local copy");
+}
 
 // ── report ──────────────────────────────────────────────────────────────────
 console.log(`\n${"-".repeat(60)}`);

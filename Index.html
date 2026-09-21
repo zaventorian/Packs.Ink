@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=438">
+<link rel="stylesheet" href="styles.css?v=457">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2278,6 +2278,14 @@ const LORCANA_CARD_GLYPHS = {
 const LORCANA_MARKS = {
   challengeBadge: LORCANA_ART + "marks/challenge-badge.png",
   lorcanaHex:     LORCANA_ART + "marks/lorcana-hex.png",
+  // ⚠ The hex with CCQ written across it, derived by scripts/derive_ccq_mark.py
+  // from the mark above — which stays untouched, because a derived file that
+  // overwrote its source could never be regenerated. The Challenge badge SAYS
+  // "LORCANA CHALLENGE" in its own artwork so it identifies itself; the plain
+  // hex says nothing, and at the 17-24px a calendar chip gives it "a hexagon"
+  // was all a reader got. RE-RUN that script after any bake_brand_assets.py
+  // run, or this becomes a label on last season's art; `--check` reports it.
+  lorcanaHexCcq:  LORCANA_ART + "marks/lorcana-hex-ccq.png",
   cardBack:       LORCANA_ART + "marks/card-back.webp",
 };
 
@@ -2459,6 +2467,7 @@ const UI_ICON_PATHS = {
   lock:      _icoSvg(html`<rect x="4.5" y="10.5" width="15" height="9.5" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>`),
   trophy:    _icoSvg(html`<path d="M8 3.5h8V9a4 4 0 0 1-8 0z"/><path d="M8 5H5.2a.7.7 0 0 0-.7.7c0 2.4 1.6 4.3 3.9 4.6"/><path d="M16 5h2.8a.7.7 0 0 1 .7.7c0 2.4-1.6 4.3-3.9 4.6"/><path d="M12 13v3.4"/><path d="M8.6 20.5h6.8"/><path d="M10 16.9h4l.7 3.6H9.3z"/>`),
   compass:   _icoSvg(html`<circle cx="12" cy="12" r="8.6"/><path d="M15.4 8.6l-2 4.8-4.8 2 2-4.8z"/>`),
+  filter:    _icoSvg(html`<path d="M3.8 4.5h16.4l-6.4 7.6v6.1l-3.6 1.8v-7.9z"/>`),
   camera:    _icoSvg(html`<path d="M4.5 7.5h3l1.5-2.4h6l1.5 2.4h3A1.5 1.5 0 0 1 21 9v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18V9a1.5 1.5 0 0 1 1.5-1.5z"/><circle cx="12" cy="13" r="3.6"/>`),
   torch:     _icoSvg(html`<path d="M9 2.8h6v3.4l1.5 2v12.5a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1V8.2L9 6.2z"/><path d="M7.5 9.4h9"/><path d="M12 12.4v3"/>`),
   install:   _icoSvg(html`<rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M12 7v7"/><path d="M9 11l3 3 3-3"/><path d="M10.5 18.5h3"/>`),
@@ -2479,6 +2488,10 @@ const UI_ICON_PATHS = {
   wave:      _icoSvg(html`<path d="M8 11.2V7.9a1.5 1.5 0 0 1 3 0v3"/><path d="M11 10.4V5.4a1.5 1.5 0 0 1 3 0v5"/><path d="M14 10.6V6.1a1.5 1.5 0 0 1 3 0v5"/><path d="M17 11.6V8.6a1.5 1.5 0 0 1 3 0v5.9a6.5 6.5 0 0 1-6.5 6.5h-1a5.5 5.5 0 0 1-4.4-2.2l-3.4-4.5a1.6 1.6 0 0 1 2.4-2.1L9.5 15"/>`),
   party:     _icoSvg(html`<path d="M3.2 20.8l4.4-12 8.4 8.4z"/><path d="M13.5 4.5c1.3-1.3 3-1.2 3.9 0"/><path d="M19 8c1.3-1.3 1.4-3 .1-4.3"/><path d="M14.8 10.2l1.4-1.4"/><path d="M19.6 13.4h.01"/><path d="M11.4 4.1h.01"/>`),
   check:     _icoSvg(html`<path d="M4 12.5l5.5 5.5L20 7"/>`),
+  // A tick alone reads as "done"; a tick in a BOX reads as "this is optional and
+  // you may untick it", which is the whole point wherever one of these is used.
+  checkbox:  _icoSvg(html`<rect x="3.5" y="3.5" width="17" height="17" rx="4"/>`),
+  checkboxOn:_icoSvg(html`<rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M7.5 12.2l3.2 3.3L16.8 9"/>`),
   sun:       _icoSvg(html`<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4"/><path d="M12 19.1v2.4"/><path d="M4.2 4.2l1.7 1.7"/><path d="M18.1 18.1l1.7 1.7"/><path d="M2.5 12h2.4"/><path d="M19.1 12h2.4"/><path d="M4.2 19.8l1.7-1.7"/><path d="M18.1 5.9l1.7-1.7"/>`),
   moon:      _icoSvg(html`<path d="M20.5 14.8A8.8 8.8 0 0 1 9.2 3.5a8.8 8.8 0 1 0 11.3 11.3z"/>`),
   reprint:   _icoSvg(html`<path d="M4 10.2a6.4 6.4 0 0 1 10.8-3.5l2.7 2.5"/><path d="M17.9 4.6v4.6h-4.6"/><path d="M20 13.8a6.4 6.4 0 0 1-10.8 3.5l-2.7-2.5"/><path d="M6.1 19.4v-4.6h4.6"/>`),
@@ -2622,20 +2635,28 @@ const calendarArtIndex = (sealedRows, names) => {
       if(CAL_ART_SKIP_TYPES.has(deriveSealedDisplayType(r))) continue;
       const at = CAL_ART_PREF.findIndex(re => re.test(pn));
       const rank = at < 0 ? 98 : at;
-      if(rank < bestRank){ best = r.image_url; bestRank = rank; }
+      if(rank < bestRank){ best = r; bestRank = rank; }
     }
     if(best) idx.set(n, best);
   }
   return idx;
+};
+// ⚠ The index stores the sealed ROW, not its image URL. The detail modal needs
+// the row to build a TCGplayer link off its pid and to ask amazonForSealed —
+// and one map with two accessors is the only way those two can never disagree
+// about WHICH product a calendar row is showing.
+const calendarEventProduct = (ev, artIndex) => {
+  if(!ev || !artIndex || (ev.kind !== "set" && ev.kind !== "product")) return null;
+  const key = String((ev.kind === "set" ? (ev.set_name || ev.title) : ev.title) || "").toLowerCase().trim();
+  return artIndex.get(key) || null;
 };
 // The curated override always wins: it is the only way to correct a wrong
 // automatic match, and a wrong picture is worse than no picture.
 const calendarEventArt = (ev, artIndex) => {
   if(!ev) return null;
   if(ev.image_url) return ev.image_url;
-  if(!artIndex || (ev.kind !== "set" && ev.kind !== "product")) return null;
-  const key = String((ev.kind === "set" ? (ev.set_name || ev.title) : ev.title) || "").toLowerCase().trim();
-  return artIndex.get(key) || null;
+  const row = calendarEventProduct(ev, artIndex);
+  return (row && row.image_url) || null;
 };
 
 // The filter chips, in render order. `store` is the personal category — it holds
@@ -2708,7 +2729,7 @@ const calendarEventIcon = (ev, artIndex) => {
   const img = (ev && (ev.image_url
     || (ev.kind === "product" && calendarEventArt(ev, artIndex)))) || null;
   const mark = ev && (ev.kind === "dlc" ? LORCANA_MARKS.challengeBadge
-             : ev.kind === "ccq" ? LORCANA_MARKS.lorcanaHex : null);
+             : ev.kind === "ccq" ? LORCANA_MARKS.lorcanaHexCcq : null);
   return {icon, hue, img: img || mark};
 };
 
@@ -3163,6 +3184,10 @@ const calendarStoreEntry = (ev, extra) => {
     event_id: ev.event_id,
     store_id: ev.store_id != null ? String(ev.store_id) : null,
     rph_kind: ev.kind || "other",
+    // What the shop WROTE about it. ~45% of RPH events carry one (59-60% of
+    // Set Championships and prereleases), and it is where the entry fee, the
+    // start time and the prize split live.
+    description: ev.description || null,
     // For the mini map and the region filter. RPH gives the VENUE's own
     // coordinates, which is finer than the city-level point a curated row has.
     latitude: typeof ev.latitude === "number" ? ev.latitude : null,
@@ -14754,6 +14779,47 @@ function productCutUrl(src, img){
   }
   return p;
 }
+// The cut on its own, for a surface that only needs the URL. ProductPhoto is a
+// whole positioned well with a glyph under it; a 13px calendar chip icon is one
+// <img> in a box that already exists, and wrapping it in the component would
+// mean giving every one of those boxes a size and a position it does not want.
+//
+// ⚠ It cuts ONLY a photo proxyImg actually rewrites -- i.e. a catalog photo
+// from the TCGplayer or Lorcast CDN, where the white studio sweep is the rule.
+// Anything else comes back untouched, which is what keeps Ravensburger's own
+// brand marks (same-origin /Logos/..., already transparent) out of the canvas
+// entirely rather than relying on the cut to decline them.
+const useProductCutUrl = (src) => {
+  const proxied = useMemo(() => {
+    if(!src || typeof src !== "string") return null;
+    const u = proxyImg(src);
+    return u !== src ? u : null;       // not a CDN photo -> nothing to cut
+  }, [src]);
+  const [cut, setCut] = useState(null);
+  const ref = useRef(null);
+  useEffect(() => {
+    setCut(null);
+    if(!proxied) return;
+    let live = true;
+    const apply = (r) => { if(live && r && r.url) setCut(r.url); };
+    // Both halves, same reason as ProductPhoto: a fresh fetch fires onLoad, but
+    // an image already decoded before React attached the handler never will, and
+    // then the effect's `complete` check is the only thing that runs.
+    const el = ref.current;
+    const p = _productCuts.get(proxied)
+      || (el && el.complete && el.naturalWidth ? productCutUrl(proxied, el) : null);
+    if(p) p.then(apply);
+    return () => { live = false; };
+  }, [proxied]);
+  const onLoad = useCallback((e) => {
+    if(cut || !proxied) return;
+    const el = e.currentTarget;
+    if(!el.complete || !el.naturalWidth) return;
+    productCutUrl(proxied, el).then(r => { if(r && r.url) setCut(r.url); });
+  }, [cut, proxied]);
+  return {src: cut || proxied || src, ref, onLoad, cors: !!proxied, cut: !!cut};
+};
+
 // The one accessor for a TCGplayer product photo. Renders the section glyph
 // underneath, so a product TCGplayer has no photo for (or one whose fetch
 // fails) degrades to a drawn icon rather than a broken-image box.
@@ -37063,12 +37129,68 @@ const MoverChipGroup = ({ariaLabel, order, labels, selected, onToggle, noun}) =>
     })}
   </div>`;
 
+// The mobile movers picker: the banner stack's chrome, replaced by one chip
+// per row. See the "Mobile: the movers stack is ONE row plus a chip strip"
+// note in CLAUDE.md for why a phone shows one banner instead of all of them.
+//
+// ⚠ The active chip is scrolled into view ON MOUNT ONLY. A restored pick can
+// sit off the right edge of the strip, which reads as the pick having been
+// forgotten — but re-centring on every click yanks the strip out from under
+// the finger that just tapped it, and the chip you tapped is by definition
+// already on screen. Mount only is the one case that needs it.
+//
+// ⚠ It sets `scrollLeft` directly rather than calling scrollIntoView, which
+// walks every scrollable ancestor — here that is the page, so restoring a
+// pick would silently scroll the home page down past the header.
+// The sentinel for "show every row, stacked" — the pre-2026-09-20 mobile
+// behaviour, kept as a deliberate choice rather than as the only one. It is a
+// pick like any other and persists like any other, so browsing the whole stack
+// on a phone survives a reload.
+// ⚠ It shares one localStorage key with the banner keys, so it must never
+// collide with one; test_home_layout.mjs pins that.
+const MOVERS_PICK_ALL = "all";
+const MoversPicker = ({keys, pick, onPick}) => {
+  const wrapRef = useRef(null);
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if(!wrap) return;
+    const on = wrap.querySelector(".home-movers-chip.on");
+    if(!on) return;
+    wrap.scrollLeft = Math.max(0, on.offsetLeft - (wrap.clientWidth - on.offsetWidth) / 2);
+  }, []);
+  return html`<div class="home-movers-pick" ref=${wrapRef} role="tablist" aria-label="Movers rows">
+    ${/* FIRST, which is where every other "no filter" control on the site sits
+          — the Screener's preset row, the calendar's regions, the graded
+          visibility filter. It is also why the strip can be a single control
+          rather than a strip plus a separate toggle: "all of them" is just
+          another thing the strip can be showing. */""}
+    <button type="button" role="tab" aria-selected=${pick === MOVERS_PICK_ALL ? "true" : "false"}
+      class=${"home-movers-chip home-movers-chip--all" + (pick === MOVERS_PICK_ALL ? " on" : "")}
+      title="Show every movers row, stacked"
+      onClick=${() => onPick(MOVERS_PICK_ALL)}>All</button>
+    ${keys.map(k => {
+      const rars = HOME_BANNER_RARITIES[k];
+      return html`<button key=${"mp-"+k} type="button" role="tab"
+        aria-selected=${k === pick ? "true" : "false"}
+        ${/* The icon chips have no text node at all, so the accessible name has
+              to come from here — and the FULL label, not the short one, since
+              there is no width pressure on a screen reader. */""}
+        aria-label=${HOME_BANNER_LABELS[k] || k}
+        class=${"home-movers-chip" + (rars ? " home-movers-chip--rar" : "") + (k === pick ? " on" : "")}
+        title=${HOME_BANNER_LABELS[k] || k}
+        onClick=${() => onPick(k)}>${rars
+          ? rars.map(r => html`<${RarityTag} key=${r} rarity=${r} hideText=${true}/>`)
+          : (HOME_BANNER_SHORT[k] || HOME_BANNER_LABELS[k] || k)}</button>`;
+    })}
+  </div>`;
+};
+
 // renderTile lets a banner keep this chrome -- the title row, the drag-to-pan
 // marquee, the whole row treatment -- while drawing a tile the standard
 // MoverTile can't: a graded slab has one price and one set of deltas, where
 // MoverTile is built around LOW vs MKT. Everything outside the tile stays
 // identical, which is the point: a movers row should look like a movers row.
-const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWindow, visibleWindows, paused, onTitleClick, renderTile, tileKey, titleHint, emptyText}) => {
+const MoversBanner =({title, subtitle, controls, cards, onTileClick, activeWindow, visibleWindows, paused, onTitleClick, renderTile, tileKey, titleHint, emptyText}) => {
   const wrapRef = useRef(null);
   // Track manual interaction so the rAF loop yields briefly after the user
   // scrolls / wheels — otherwise the auto-advance immediately yanks the
@@ -37185,18 +37307,25 @@ const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWind
     };
   }, []);
 
-  return html`<section style=${{margin:"0 0 10px"}}>
-    ${(title || subtitle || controls || cards.length) ? html`<div style=${{display:"flex",alignItems:"center",gap:8,marginBottom:3,flexWrap:"wrap"}}>
+  return html`<section style=${{margin:"0 0 6px"}}>
+    ${(title || subtitle || controls || cards.length) ? html`<div class="movers-banner-head">
       ${title ? (onTitleClick
         ? html`<button class="home-title-link" onClick=${onTitleClick}
             title=${titleHint || "Open Screener with this filter"}
             style=${{fontFamily:"'Cinzel',serif",fontSize:12,fontWeight:600,margin:0,color:"var(--accent)",letterSpacing:0.3,background:"none",border:0,padding:0,cursor:"pointer"}}>${title}</button>`
         : html`<h2 class="title-font" style=${{fontSize:12,fontWeight:600,margin:0,color:"var(--accent)",letterSpacing:0.3}}>${title}</h2>`) : null}
       ${controls ? html`<span>${controls}</span>` : null}
-      ${subtitle ? html`<span class="muted" style=${{fontSize:10}}>${subtitle}</span>` : null}
+      ${/* ⚠ The subtitle is the one thing here allowed to SHRINK, so the camera
+            buttons stay on the title's line. It used to be unshrinkable, so on a
+            ~700px main column the row overflowed, the cams wrapped to a line of
+            their own, and their margin-left:auto left the whole line empty to
+            their left. The subtitle is a restatement of what the chips beside it
+            already say, so an ellipsis there costs the least of anything in the
+            row. */""}
+      ${subtitle ? html`<span class="muted movers-banner-sub">${subtitle}</span>` : null}
       ${/* The banner export paints MoverTile-shaped cards, so it is offered
             only for banners that use it. */""}
-      ${cards.length > 0 && !renderTile && html`<span class="movers-banner-cams" style=${{marginLeft:"auto",display:"inline-flex",gap:6,alignItems:"center"}}>
+      ${cards.length > 0 && !renderTile && html`<span class="movers-banner-cams">
         ${[
           {lo:0, hi:10, lbl:"1–10"},
           ...(cards.length > 10 ? [{lo:10, hi:20, lbl:"11–20"}] : []),
@@ -37423,6 +37552,38 @@ const HOME_BANNER_LABELS = {
   gowned:   "Your Graded Movers",
   amazon:   "Lorcana on Amazon",
 };
+// Chip labels for the mobile movers picker. The full names above are titles —
+// a row of them is 900px of text in a 347px strip, so every chip would be
+// half-clipped and the strip would need three swipes to cross. These say the
+// one word that separates the rows from each other; the full name stays in
+// each chip's `title` and in the banner heading the chip reveals.
+// ⚠ Keep a key here for every HOME_BANNER_KEYS entry — a missing one falls
+// back to the long label, which is not an error, just a chip that blows the
+// strip's width out. scripts/test_home_layout.mjs pins the pairing.
+// Three of the movers rows ARE rarity groups, and a rarity has an icon on this
+// site already — so the chip shows the icons instead of a word. That is not
+// decoration: "Rare-Leg" is an abbreviation a reader has to decode, while the
+// three rarity marks say exactly which tiers the row holds, in less width than
+// the abbreviation took. Precedent is the Screener's own icon-only rarity
+// chips (.chip-rarity-only) and the Cards toolbar's.
+// ⚠ Keys must be CANONICAL rarity names — RARITY_ICONS is keyed by them, and a
+// miss renders nothing at all rather than erroring. Only add a row here whose
+// whole content really is those tiers; everything else keeps its word.
+const HOME_BANNER_RARITIES = {
+  chase:   ["Epic", "Enchanted", "Iconic"],
+  rareLeg: ["Rare", "Super Rare", "Legendary"],
+  promo:   ["Promo"],
+};
+const HOME_BANNER_SHORT = {
+  valuable: "Newest set",
+  chase:    "Chase",
+  rareLeg:  "Rare–Leg",
+  promo:    "Promo",
+  sealed:   "Sealed",
+  graded:   "Graded",
+  gowned:   "Your slabs",
+  amazon:   "Amazon",
+};
 // One-shot stamp for the Sealed Movers row (2026-09-11). A stored banner order
 // is explicit, and normalizeBannerOrder APPENDS a key it has never seen — so
 // any browser that has ever pressed ▲▼ would find the new row at the very
@@ -37568,6 +37729,16 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     catch { return "raw"; }
   });
   useEffect(() => { try { localStorage.setItem("packsink:home:moversMode", moversMode); } catch {} }, [moversMode]);
+  // Collapse the movers list on its own, independently of the panel's own
+  // minimize: the chart and the headline value are what most people keep
+  // open, and the movers table is the tallest thing under them.
+  const [moversMin, setMoversMin] = useState(() => {
+    try { return localStorage.getItem("packsink:home:colMoversMin") === "1"; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:home:colMoversMin", moversMin ? "1" : "0"); } catch {}
+  }, [moversMin]);
   // Two-layer cache. (1) In-memory historyCache keyed by (productsHash,
   // rangeKey) holds the raw fetched rows for instant within-session range
   // switching. (2) A localStorage cache holds the COMPUTED value series
@@ -38106,9 +38277,14 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
             ? html`<div style=${{padding:"40px 0",textAlign:"center",color:"var(--red)",fontSize:11}}>${historyState.error}</div>`
             : html`<div class="muted" style=${{padding:"40px 0",textAlign:"center",fontSize:12}}>No price history for the selected range yet.</div>`}
     </div>
-    <div class="panel-movers">
-      <div class="panel-movers-title">Your Top Movers</div>
-      ${hasGraded && html`<div class="panel-movers-mode-tabs" role="tablist"
+    <div class=${"panel-movers" + (moversMin ? " is-min" : "")}>
+      <button class="panel-movers-title" onClick=${()=>setMoversMin(m => !m)}
+        aria-expanded=${!moversMin}
+        title=${moversMin ? "Show your top movers" : "Hide your top movers"}>
+        <span>Your Top Movers</span>
+        <span class="panel-movers-caret" aria-hidden="true">${moversMin ? "▸" : "▾"}</span>
+      </button>
+      ${!moversMin && hasGraded && html`<div class="panel-movers-mode-tabs" role="tablist"
         style=${{display:"flex",gap:4,marginBottom:6}}>
         <button class=${moversMode==="raw"?"active":""}
           onClick=${()=>setMoversMode("raw")}
@@ -38119,7 +38295,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
           style=${{fontSize:11,padding:"3px 10px"}}
           title="Graded card Δ% (eBay sale averages)">Graded</button>
       </div>`}
-      <div class="panel-movers-controls">
+      ${!moversMin && html`<div class="panel-movers-controls">
         <div class="panel-range-buttons">
           ${MOVER_WINDOWS.map(w => html`<button key=${w.key}
             class=${moversWindow===w.key?"active":""}
@@ -38135,8 +38311,8 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
             ▼ Droppers
           </label>
         </div>
-      </div>
-      ${moversMode === "raw"
+      </div>`}
+      ${moversMin ? null : moversMode === "raw"
         ? (collectionMovers.length === 0
           ? html`<div class="muted" style=${{fontSize:11,padding:"10px 2px",textAlign:"center"}}>
               No ${moversWin.label} movement in your collection matching the filters.</div>`
@@ -39344,6 +39520,26 @@ const calStoreAllows = (sub, evKind) => {
 };
 
 const CAL_EVENT_COLS = "event_id,kind,name,set_name,store_id,store_name,start_datetime,end_datetime,timezone,city,state,country,latitude,longitude,gameplay_format,url";
+// ⚠ `description` is asked for SEPARATELY and degrades once, because this fetch
+// cannot afford to fail: supabase-js returns {data, error} rather than throwing,
+// so selecting a column the database does not have yields data:null with NO
+// exception -- the caller's catch never runs and every followed store's events
+// silently vanish from the calendar. Module-level so the fallback outlives a
+// remount, and one-way so a real outage cannot flap it.
+let _calDescCol = true;
+const calEventCols = () => _calDescCol ? CAL_EVENT_COLS + ",description" : CAL_EVENT_COLS;
+const calMissingCol = (e) => !!e && (e.code === "42703"
+  || /column .*description.* does not exist/i.test(e.message || ""));
+// `build` takes the column list and returns the query; it is called twice on a
+// miss, which is the whole point -- the retry has to re-run the SAME query.
+const calSelectEvents = async (build) => {
+  let r = await build(calEventCols());
+  if(r && r.error && _calDescCol && calMissingCol(r.error)){
+    _calDescCol = false;
+    r = await build(calEventCols());
+  }
+  return r;
+};
 
 // Followed stores + pinned series → calendar entries.
 //
@@ -39384,14 +39580,16 @@ function useStoreCalendarEvents(subs){
       const out = new Map();
       try {
         if(storeIds.length){
-          const {data} = await sbClient.from("lorcana_events").select(CAL_EVENT_COLS)
-            .in("store_id", storeIds).gte("start_datetime", from).lte("start_datetime", to)
-            .order("start_datetime", {ascending: true}).limit(1000);
+          const {data} = await calSelectEvents((cols) =>
+            sbClient.from("lorcana_events").select(cols)
+              .in("store_id", storeIds).gte("start_datetime", from).lte("start_datetime", to)
+              .order("start_datetime", {ascending: true}).limit(1000));
           for(const r of data || []) out.set(r.event_id, r);
         }
         if(eventIds.length){
-          const {data} = await sbClient.from("lorcana_events").select(CAL_EVENT_COLS)
-            .in("event_id", eventIds).order("start_datetime", {ascending: true}).limit(1000);
+          const {data} = await calSelectEvents((cols) =>
+            sbClient.from("lorcana_events").select(cols)
+              .in("event_id", eventIds).order("start_datetime", {ascending: true}).limit(1000));
           for(const r of data || []) out.set(r.event_id, r);
         }
       } catch {/* offline → keep what we had */}
@@ -39952,9 +40150,19 @@ const calendarTimeline = (events, opts) => {
 // glyph instead of leaving a hole, with no error handling at the call site.
 const CalendarKindDot = ({kind, ev, art}) => {
   const {icon, hue, img} = calendarEventIcon(ev || {kind}, art);
+  // ⚠ A product photo here is TCGplayer's, shot on a WHITE sweep — so a 13px
+  // calendar chip was a little white square in the middle of a dark grid, and
+  // the ground under it made that worse rather than better (an object-fit:
+  // contain photo letterboxes, so the tile read white edge to edge). The hook
+  // cuts the sweep and leaves the grid showing through; Ravensburger's own
+  // marks are same-origin and already transparent, so it returns them as-is.
+  const photo = useProductCutUrl(img);
   return html`<span class="cal-ico" aria-hidden="true" style=${{color: hue}}>
     <span class="cal-ico-glyph">${uiIcon(icon, 13)}</span>
-    ${img && html`<img class="cal-ico-img" src=${img} alt="" onError=${hideBrokenImg}/>`}
+    ${img && html`<img class=${"cal-ico-img" + (photo.cors && !photo.cut ? " on-white" : "")}
+      ref=${photo.ref} src=${photo.src} alt=""
+      crossOrigin=${photo.cors ? "anonymous" : null}
+      onLoad=${photo.onLoad} onError=${hideBrokenImg}/>`}
   </span>`;
 };
 
@@ -40010,8 +40218,14 @@ const CAL_KIND_PLURAL = {
 };
 const calGroupKindLabel = (kind, n) => n + " " + (CAL_KIND_PLURAL[kind] || "events");
 // One entry per rendered chip: {group:true, events:[...]} for a collapse, {ev}
-// for a single. A group the reader has opened is expanded back to its members.
-const calCellItems = (events, art, openGroups, date) => {
+// for a single.
+//
+// ⚠ A group NEVER expands in place any more. It used to: clicking "CCQ ×3"
+// replaced one chip with three, which in a 44px cell means one readable mark
+// becoming three unreadable ones -- reported as "it breaks the big logo into
+// little logos". Clicking one opens the day's list instead, so the answer to
+// "what are these three" is a list of three names rather than three more icons.
+const calCellItems = (events, art, date) => {
   const groups = [], by = new Map();
   for(const ev of (events || [])){
     const g = calendarEventIcon(ev, art) || {};
@@ -40022,7 +40236,7 @@ const calCellItems = (events, art, openGroups, date) => {
   }
   const items = [];
   for(const n of groups){
-    if(n.events.length > 1 && !(openGroups && openGroups.has(n.key))) items.push(n);
+    if(n.events.length > 1) items.push(n);
     else for(const ev of n.events) items.push({ev});
   }
   return items;
@@ -40157,7 +40371,14 @@ function useCalHoverCard(art){
 // scroll listener is CAPTURING, or scrolling the inner list leaves the menu
 // hanging in space over the page.
 const CAL_POP_W = 252, CAL_POP_H = 190, CAL_POP_M = 8;
-const useCalPopAnchor = (open, btnRef) => {
+// ⚠ `popRef` + `grow` are what keep this honest for a menu whose HEIGHT depends
+// on its own state — the store-kind boxes appear the moment you press Follow. The
+// original measured nothing and flipped against the CAL_POP_H constant, so a menu
+// taller than the constant kept its assumed placement and dropped its last rows
+// off the bottom of a short viewport (measured: 35px lost at 812x400). Both are
+// optional, so every existing caller is unchanged apart from getting a real
+// measurement instead of a guess.
+const useCalPopAnchor = (open, btnRef, popRef, grow) => {
   const [style, setStyle] = useState(null);
   useLayoutEffect(() => {
     if(!open || !btnRef.current){ setStyle(null); return; }
@@ -40168,17 +40389,27 @@ const useCalPopAnchor = (open, btnRef) => {
       // Right-align to the button, then clamp inside the viewport — on a phone a
       // menu anchored to a button near the right edge would otherwise run off.
       const left = Math.max(CAL_POP_M, Math.min(r.right - CAL_POP_W, window.innerWidth - CAL_POP_W - CAL_POP_M));
-      const flipUp = r.bottom + 4 + CAL_POP_H > window.innerHeight && r.top > CAL_POP_H;
-      setStyle(flipUp
-        ? {position: "fixed", left: `${left}px`, top: "auto", right: "auto",
-           bottom: `${window.innerHeight - r.top + 4}px`}
-        : {position: "fixed", left: `${left}px`, top: `${r.bottom + 4}px`, right: "auto", bottom: "auto"});
+      const pop = popRef && popRef.current;
+      // scrollHeight, not the rect: once a clamp is applied the rect IS the clamp,
+      // so re-placing from it would ratchet the menu smaller on every scroll tick.
+      const h = (pop && Math.max(pop.scrollHeight, pop.getBoundingClientRect().height)) || CAL_POP_H;
+      const below = window.innerHeight - r.bottom - 4 - CAL_POP_M;
+      const above = r.top - 4 - CAL_POP_M;
+      const up = h > below && above > below;
+      // Only clamp when NEITHER side fits, so the common case keeps its natural
+      // height and no scrollbar; when nothing fits, the menu scrolls inside
+      // itself rather than putting a row somewhere nobody can reach.
+      const maxHeight = h > Math.max(below, above) ? `${Math.max(120, up ? above : below)}px` : null;
+      setStyle({position: "fixed", left: `${left}px`, right: "auto",
+        ...(up ? {top: "auto", bottom: `${window.innerHeight - r.top + 4}px`}
+               : {top: `${r.bottom + 4}px`, bottom: "auto"}),
+        ...(maxHeight ? {maxHeight, overflowY: "auto"} : {})});
     };
     place();
     window.addEventListener("scroll", place, true);
     window.addEventListener("resize", place);
     return () => { window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
-  }, [open]);
+  }, [open, grow]);
   return style;
 };
 
@@ -40190,7 +40421,8 @@ const CalendarAddMenu = ({ev, subs, compact}) => {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const btnRef = useRef(null);
-  const popStyle = useCalPopAnchor(open, btnRef);
+  const popRef = useRef(null);
+  const popStyle = useCalPopAnchor(open, btnRef, popRef);
   useEffect(() => {
     if(!open) return;
     const onDoc = (e) => { if(ref.current && !ref.current.contains(e.target)) setOpen(false); };
@@ -40212,7 +40444,7 @@ const CalendarAddMenu = ({ev, subs, compact}) => {
       onClick=${(e) => { e.stopPropagation(); setOpen(o => !o); }}>
       ${uiIcon(on ? "check" : "calendarPlus", compact ? 13 : 14)}
     </button>
-    ${open && html`<div class="cal-add-pop" style=${popStyle} onClick=${e => e.stopPropagation()}>
+    ${open && html`<div class="cal-add-pop" ref=${popRef} style=${popStyle} onClick=${e => e.stopPropagation()}>
       ${subRef && html`<button type="button" class="cal-add-item" onClick=${() => {
         subs.toggle({kind: "event", ref: subRef, label,
                      meta: ev.kind === "store" ? {store_id: ev.store_id} : null});
@@ -40301,6 +40533,31 @@ const CalendarMiniMap = ({lat, lng, label, zoom}) => {
 // six products were already listed), so the id join would find nothing exactly
 // when this is most interesting.
 const CAL_PRODUCT_ORDER = ["Booster Box","Booster Pack","Trove","Starter Deck","Gift Set","Bundle","Quest"];
+// Where to buy one sealed product, for the calendar's release rows. TCGplayer
+// first (it is the site's own market and the one with a price behind it),
+// Amazon beside it.
+//
+// ⚠ isUnpricedSealed is the gate on the TCGplayer half, not a pid check: a
+// jigsaw, a pin and a retailer-exclusive bundle all carry a SYNTHETIC pid in a
+// reserved band and have no TCGplayer page at all, so a link built from one is
+// a dead affiliate link that looks exactly like a live one.
+//
+// ⚠ Amazon links are rel="noopener nofollow sponsored" and every surface that
+// renders one carries the required Associate disclosure near it -- the FTC wants
+// it by the link, not only in a footer.
+const calProductLinks = (row, setName) => {
+  if(!row) return null;
+  const tcg = !isUnpricedSealed(row) && row.tcgplayer_product_id
+    ? tcgUrl(row.tcgplayer_product_id) : null;
+  const az = amazonForSealed(row, setName || null);
+  if(!tcg && !(az && az.url)) return null;
+  return html`<span class="cal-buy">
+    ${tcg && html`<a class="cal-buy-link" href=${tcg} target="_blank"
+      rel="noopener nofollow sponsored">TCGplayer ↗</a>`}
+    ${az && az.url && html`<a class="cal-buy-link cal-buy-link--amzn" href=${az.url} target="_blank"
+      rel="noopener nofollow sponsored">${az.exact ? "Amazon ↗" : "Find on Amazon ↗"}</a>`}
+  </span>`;
+};
 function useSetProducts(setName, enabled){
   const [rows, setRows] = useState(null);
   useEffect(() => {
@@ -40309,6 +40566,11 @@ function useSetProducts(setName, enabled){
     (async () => {
       try {
         const {data} = await sbClient.from("sealed_products")
+          // ⚠ Only real COLUMNS. `is_puzzle` / `is_collectible` / `is_exclusive`
+          // are CLIENT-side flags the catalog transform stamps on, not fields of
+          // this table -- asking for one 42703s the whole select, which this
+          // function then swallows into an empty list. Nothing errors; the modal
+          // simply stops listing what comes out that day.
           .select("tcgplayer_product_id,name,product_type,image_url")
           .ilike("name", `%${setName}%`).limit(40);
         if(!cancelled) setRows(data || []);
@@ -40325,6 +40587,82 @@ function useSetProducts(setName, enabled){
       || String(a.name).localeCompare(String(b.name)));
   }, [rows]);
 }
+
+// Every event on one day, as a list you can read.
+//
+// A month cell can hold three or four marks, so a busy day collapses its
+// same-looking events into one chip with a count. Clicking that chip used to
+// expand it back into individual chips IN THE CELL — which is the one place
+// with no room for them: three CCQ hexagons at 44px wide are three unreadable
+// smudges where one readable one had been. So it opens this instead, and the
+// "+N more" marker opens the same thing.
+//
+// ⚠ It lists the WHOLE day, not just the group that was clicked. "What is on
+// this day" is the question, a group is an artefact of how the icons collapsed,
+// and making the two controls in a cell do the same thing is one fewer rule to
+// learn. A row opens that event's own modal.
+// What the shop wrote about the event, from RPH's `description`.
+//
+// ⚠ Rendered as TEXT, never as markup. The ETL strips HTML on the way in
+// (_clean_desc in discover_wu_scs.py) precisely so this can be a plain
+// interpolation, and ~2% of these arrive carrying <br> — but the defence has to
+// hold on both sides, because rows stored before that cleaning existed are still
+// in the table. htm's ${} escapes; nothing here may become innerHTML.
+//
+// ⚠ CLAMPED, not truncated. The median is 121 characters but the longest seen in
+// the live API is 4,009, and one shop's essay would otherwise own the modal.
+// Clamping keeps the whole text in the DOM (so it is selectable and searchable)
+// and lets the reader open it; truncating would throw the rest away.
+const CAL_DESC_CLAMP_CHARS = 420;
+const EventDescription = ({text}) => {
+  const [open, setOpen] = useState(false);
+  const body = String(text || "").trim();
+  if(!body) return null;
+  // Lines matter here: these are usually a little agenda ("Registration 2:30pm /
+  // Fire 3:00pm / Fee $13"), so a long one-liner and a six-line list want
+  // different treatment. Either one being past the bar is enough to clamp.
+  const longEnough = body.length > CAL_DESC_CLAMP_CHARS || body.split("\n").length > 6;
+  return html`<div class=${"cal-desc" + (longEnough && !open ? " is-clamped" : "")}>
+    <div class="cal-desc-head">${uiIcon("news", 12)} From the store</div>
+    <p class="cal-desc-body">${body}</p>
+    ${longEnough && html`<button type="button" class="cal-desc-more"
+      onClick=${() => setOpen(v => !v)}>${open ? "Show less" : "Show more"}</button>`}
+  </div>`;
+};
+
+const CalendarDayModal = ({day, events, onOpen, onClose, art}) => {
+  useEffect(() => {
+    const onKey = (e) => { if(e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  if(!day || !events || !events.length) return null;
+  return html`<div class="cal-modal-overlay" onClick=${onClose}>
+    <div class="cal-modal cal-modal--day" role="dialog" aria-modal="true"
+      aria-label=${calDayLabel(day)} onClick=${e => e.stopPropagation()}>
+      <button class="cal-modal-close" aria-label="Close" onClick=${onClose}>×</button>
+      <div class="cal-modal-kind">${uiIcon("calendar", 13)}${
+        events.length === 1 ? "1 event" : `${events.length} events`}</div>
+      <h3 class="cal-modal-title">${calDayLabel(day)}</h3>
+      <ul class="cal-day-list">
+        ${events.map(ev => {
+          const sub = calEventSubtitle(ev);
+          const t = calTimeLabel(ev);
+          return html`<li key=${ev.id}>
+            <button type="button" class="cal-day-row" onClick=${() => onOpen(ev)}>
+              <${CalendarKindDot} kind=${ev.kind} ev=${ev} art=${art}/>
+              <span class="cal-day-row-txt">
+                <span class="cal-day-row-title">${calEventTitle(ev)}${calEstBadge(ev)}</span>
+                ${(sub || t) && html`<span class="cal-day-row-sub">${[sub, t].filter(Boolean).join(" · ")}</span>`}
+              </span>
+              <span class="cal-day-row-go" aria-hidden="true">›</span>
+            </button>
+          </li>`;
+        })}
+      </ul>
+    </div>
+  </div>`;
+};
 
 const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
   useEffect(() => {
@@ -40355,8 +40693,13 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
   const isPrerelease = isSet && /prerelease/i.test(ev.subtitle || "");
   const title = calEventTitle(ev);
   const slug = String(title || "event").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+  // ⚠ A release modal is a denser thing than an event one: five products, each
+  // with a photo, a name and two buy chips. At the standard 460px the name gets
+  // 168px and clips, which is the half a reader needs.
+  const wide = !!(isSet && products && products.length > 0);
   return html`<div class="cal-modal-overlay" onClick=${onClose}>
-    <div class="cal-modal" role="dialog" aria-modal="true" onClick=${e => e.stopPropagation()}>
+    <div class=${"cal-modal" + (wide ? " cal-modal--wide" : "")} role="dialog" aria-modal="true"
+      onClick=${e => e.stopPropagation()}>
       <button class="cal-modal-close" aria-label="Close" onClick=${onClose}>×</button>
       ${/* The one place a set's own logo is legible. The row icon cannot be a
             wordmark, and a booster-pack thumbnail said nothing useful at 13px
@@ -40365,9 +40708,15 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
             drop shows its photo in the same slot; every other kind shows
             nothing, and the title carries it. */
         isSet ? html`<${SetLogo} set=${ev.set_name || ev.title} klass="cal-modal-art"/>`
-        : (ev.kind === "product" && calendarEventArt(ev, art)) ? html`<img class="cal-modal-art"
-            src=${calendarEventArt(ev, art)} alt="" aria-hidden="true" loading="lazy"
-            onError=${hideBrokenImg}/>` : null}
+        : (ev.kind === "product" && calendarEventArt(ev, art)) ? html`<div class="cal-modal-prodart">
+            ${/* ⚠ ProductPhoto, never a bare <img>. TCGplayer shoots sealed product
+                  on a WHITE sweep, so the raw JPEG is a white slab in the middle of
+                  a dark modal — and at this size it is a big one. ProductPhoto cuts
+                  the sweep to transparency, which leaves the modal's own surface
+                  showing through: the site's purple on the dark themes, the page
+                  colour on the light ones, without a frame being guessed anywhere. */""}
+            <${ProductPhoto} src=${calendarEventArt(ev, art)} glyph="gift" size=${40}/>
+          </div>` : null}
       ${/* A set row names its place in the run — "Set 14" — because that is the
             one thing the set's own name does not say, and it is what tells you
             whether a Challenge falls before or after it. */""}
@@ -40398,13 +40747,42 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
         ${end && html`<div><dt>Runs</dt><dd>${calDayDiff(ev.starts_on, end) + 1} days</dd></div>`}
       </dl>
       ${ev.notes && html`<p class="cal-modal-notes">${ev.notes}</p>`}
+      ${/* A store's own words about its event. Only store rows have one — a set
+            release or a Challenge is ours to describe, and `notes` above is where
+            we do it. */""}
+      <${EventDescription} text=${ev.description}/>
 
+      ${/* A product drop is ONE product, so its links belong beside it rather than
+            in a list of one. */""}
+      ${ev.kind === "product" && calProductLinks(calendarEventProduct(ev, art), null) && html`<div class="cal-prodbuy">
+        ${calProductLinks(calendarEventProduct(ev, art), null)}
+        <p class="cal-products-aff">As an Amazon Associate I earn from qualifying purchases.
+          TCGplayer links are affiliate links.</p>
+      </div>`}
+
+      ${/* Each product gets its PHOTO and where to buy it. It was a plain text
+            list, which answered "what comes out" and not "what does it look like
+            / where do I get it" -- the two things anyone reading a release date
+            is actually about to ask. */""}
       ${isSet && products && products.length > 0 && html`<div class="cal-products">
         <div class="cal-products-head">${uiIcon("box", 13)} Out that day</div>
-        <ul>${products.map(pr => html`<li key=${pr.tcgplayer_product_id}>
-          <span>${cleanSealedName ? cleanSealedName(pr.name) : pr.name}</span>
-          ${pr.product_type && html`<em>${pr.product_type}</em>`}
-        </li>`)}</ul>
+        <ul>${products.map(pr => {
+          const nm = cleanSealedName ? cleanSealedName(pr.name) : pr.name;
+          // ⚠ The type is dropped when the NAME already says it, which is most of
+          // them: "Hyperia City Booster Box · Booster Box" spends a third of the
+          // row repeating itself, and what it costs is characters off the name.
+          // It stays where it adds something -- "2-Player Starter Set" is filed
+          // under Starter Deck, which the name never says.
+          const type = pr.product_type && !String(nm).toLowerCase().includes(String(pr.product_type).toLowerCase())
+            ? pr.product_type : null;
+          return html`<li key=${pr.tcgplayer_product_id}>
+            <span class="cal-prod-art"><${ProductPhoto} src=${pr.image_url} glyph="box" size=${20}/></span>
+            <span class="cal-prod-name" title=${nm}>${nm}${type && html`<em>${type}</em>`}</span>
+            ${calProductLinks(pr, ev.set_name || ev.title)}
+          </li>`;
+        })}</ul>
+        <p class="cal-products-aff">As an Amazon Associate I earn from qualifying purchases.
+          TCGplayer links are affiliate links.</p>
       </div>`}
 
       <div class="cal-modal-actions">
@@ -40446,18 +40824,15 @@ const CAL_CELL_MAX = 3;
 // The full grid's cell is taller, and since the day number moved out of the flow
 // and into the corner it has one more row to spend - see .cal-cell in styles.css.
 const CAL_CELL_MAX_FULL = 4;
-const CalendarMonthView = ({month, events, today, onOpen, onMonth, compact, art}) => {
+const CalendarMonthView = ({month, events, today, onOpen, onOpenDay, onMonth, compact, art}) => {
   const m = /^(\d{4})-(\d{2})$/.exec(month);
   const weeks = useMemo(() => m ? calendarMonthGrid(+m[1], +m[2], events) : [], [month, events]);
   // ⚠ Above the early return — hook order. Nothing bails before this today, and
   // anything added that does has to go below it.
   const hover = useCalHoverCard(art);
-  // Clicking a grouped chip expands it in place rather than opening one of the
-  // three events it stands for, because it cannot honestly mean "open the first
-  // one". Cleared when the month changes, or a key from September would still
-  // count as open in October.
-  const [openGroups, setOpenGroups] = useState(() => new Set());
-  useEffect(() => { setOpenGroups(new Set()); }, [month]);
+  // A grouped chip cannot honestly mean "open the first of the three", so it
+  // opens the DAY -- see CalendarDayModal. It used to expand in place, which put
+  // three unreadable marks where one readable one had been.
   if(!m) return null;
   return html`<div class=${"cal-month" + (compact ? " cal-month--compact" : "")}>
     <div class="cal-month-bar">
@@ -40479,7 +40854,7 @@ const CalendarMonthView = ({month, events, today, onOpen, onMonth, compact, art}
         // wrapped to a second line and, because a grid row takes the height of
         // its tallest cell, inflated that entire week by 7px. Capping at two
         // when there is an overflow marker keeps every week the same height.
-        const items = calCellItems(day.events, art, openGroups, day.date);
+        const items = calCellItems(day.events, art, day.date);
         const max = compact ? CAL_CELL_MAX : CAL_CELL_MAX_FULL;
         const cap = compact && items.length > max ? max - 1 : max;
         return html`<div key=${day.date}
@@ -40492,9 +40867,9 @@ const CalendarMonthView = ({month, events, today, onOpen, onMonth, compact, art}
                 aria-label, which is what it was really there for. */""}
           ${items.slice(0, cap).map(it => it.group
             ? html`<button key=${it.key} type="button" class="cal-chip cal-chip--group"
-                aria-label=${calGroupKindLabel(it.kind, it.events.length) + " on " + calDayLabel(day.date) + " - show them"}
+                aria-label=${calGroupKindLabel(it.kind, it.events.length) + " on " + calDayLabel(day.date) + " - list them"}
                 ...${hover.bindMany(it.events, day.date)}
-                onClick=${() => { hover.close(); setOpenGroups(prev => { const n = new Set(prev); n.add(it.key); return n; }); }}>
+                onClick=${() => { hover.close(); onOpenDay && onOpenDay(day.date, day.events); }}>
                 <${CalendarKindDot} kind=${it.kind} ev=${it.events[0]} art=${art}/><span>${CAL_KIND_SHORT[it.kind] || "Event"}</span><span class="cal-chip-x">×${it.events.length}</span>
               </button>`
             : html`<button key=${it.ev.id} type="button"
@@ -40503,8 +40878,13 @@ const CalendarMonthView = ({month, events, today, onOpen, onMonth, compact, art}
                 onClick=${() => onOpen(it.ev)}>
                 <${CalendarKindDot} kind=${it.ev.kind} ev=${it.ev} art=${art}/><span>${calChipLabel(it.ev)}</span>
               </button>`)}
-          ${items.length > cap && html`<span class="cal-cell-more"
-            title=${day.events.length + " events"}>+${items.length - cap}${compact ? "" : " more"}</span>`}
+          ${/* The overflow marker asks the same question the grouped chip does, so
+                it opens the same list rather than being the one thing in the cell
+                you cannot click. */""}
+          ${items.length > cap && html`<button type="button" class="cal-cell-more"
+            aria-label=${`${day.events.length} events on ${calDayLabel(day.date)} - list them`}
+            onClick=${() => { hover.close(); onOpenDay && onOpenDay(day.date, day.events); }}
+            >+${items.length - cap}${compact ? "" : " more"}</button>`}
         </div>
       </div>`;
       }))}
@@ -41039,7 +41419,29 @@ const calReadSpanPref = (seed) => {
 // you, not about a surface — but a month grid in a 240px rail and a month grid
 // on a full page are different enough that forcing them to agree is annoying.
 const CAL_PANEL_VIEW_LS = "packsink:cal:panelView";
+// ⚠ Default flipped list → MONTH 2026-09-20 (Zaven). The mode is persisted on
+// every mount, so every browser that has ever loaded the home page already holds
+// "list" and a plain default change reaches nobody — the same trap the home
+// LAYOUT defaults hit. Hence a one-shot stamp, and STAMPED rather than coerced:
+// a later deliberate pick of List has to stick.
+// ⚠ Bumped to v2 2026-09-20. A stamp fires ONCE, so re-firing it is a new
+// key — which is the point: "I don't want them saved on a list view just bc
+// they opened that default before" (Zaven). Anyone still holding the old
+// default gets moved once more; a deliberate pick of List after this sticks.
+const CAL_PANEL_VIEW_MONTH_KEY = "packsink:cal:panelViewMonth2";
+const calReadPanelViewPref = () => {
+  try {
+    const raw = localStorage.getItem(CAL_PANEL_VIEW_LS);
+    if(!localStorage.getItem(CAL_PANEL_VIEW_MONTH_KEY)){
+      localStorage.setItem(CAL_PANEL_VIEW_MONTH_KEY, "1");
+      if(raw !== "month") localStorage.setItem(CAL_PANEL_VIEW_LS, "month");
+      return "month";
+    }
+    return raw === "list" ? "list" : "month";
+  } catch { return "month"; }
+};
 const CAL_REGION_LS = "packsink:cal:region";
+const CAL_REGIONS_OPEN_LS = "packsink:cal:regionsOpen";
 const calNormRegionPref = (v) => {
   const set = calRegionSet(v);
   if(!set) return String(v || "").trim() === "" ? null : "all";
@@ -41061,6 +41463,19 @@ const calToggleRegion = (region, key) => {
   if(!set) return key;
   if(set.has(key)) return set.size === 1 ? "all" : calNormRegionPref([...set].filter(k => k !== key).join(","));
   return calNormRegionPref([...set, key].join(","));
+};
+// ⚠ The collapsed button NAMES the active region ("Europe", "2 regions"), it
+// does not just say "Region". A filter you cannot see is a search that
+// silently lies — the same rule the event finder's country box follows — and
+// this one hides nine chips behind one control by default.
+const calRegionSummary = (region) => {
+  const set = calRegionSet(region);
+  if(!set) return "All regions";
+  if(set.size === 1){
+    const only = CALENDAR_REGIONS.find(r => set.has(r.key));
+    return only ? only.label : "1 region";
+  }
+  return `${set.size} regions`;
 };
 const CalendarRegionChips = ({region, onChange, counts, compact}) => {
   const set = calRegionSet(region);
@@ -41113,13 +41528,11 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
   // choice is not (a grid in a 240px rail is a different proposition).
   const [kinds, setKinds] = useState(calReadKindPref);
   const [region, setRegion] = useState(calReadRegionPref);
-  const [mode, setMode] = useState(() => {
-    try { return localStorage.getItem(CAL_PANEL_VIEW_LS) === "month" ? "month" : "list"; }
-    catch { return "list"; }
-  });
+  const [mode, setMode] = useState(calReadPanelViewPref);
   const [openFilters, setOpenFilters] = useState(false);
   const [page, setPage] = useState(0);
   const [sel, setSel] = useState(null);
+  const [dayList, setDayList] = useState(null);     // {day, events} — a busy day's list
   const [month, setMonth] = useState(() => calMonthOf(calTodayYmd()));
   const today = calTodayYmd();
   useEffect(() => { try { localStorage.setItem(CAL_KINDS_LS, kinds.join(",")); } catch {} }, [kinds]);
@@ -41160,10 +41573,17 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
           onClick=${() => setOpenFilters(v => !v)}>
           ${uiIcon("gear", 12)}${nFilters > 0 && html`<span class="cal-panel-tool-n">${nFilters}</span>`}
         </button>
-        <button type="button" class=${"cal-panel-tool" + (mode === "list" ? " on" : "")}
-          title="List" aria-label="List view" onClick=${() => setMode("list")}>${uiIcon("list", 12)}</button>
-        <button type="button" class=${"cal-panel-tool" + (mode === "month" ? " on" : "")}
-          title="Month" aria-label="Month view" onClick=${() => setMode("month")}>${uiIcon("calendar", 12)}</button>
+        ${/* ⚠ ONE button, not two. List and Month are A-or-B, so two buttons spend
+              two slots of a four-slot header saying what one can — and a pair
+              where only ever one is lit reads as a setting you have to hunt
+              through rather than a switch. It shows the view you would GET, the
+              way a play/pause control does, and names the current one in the
+              tooltip so the icon is never ambiguous. */""}
+        <button type="button" class="cal-panel-tool cal-panel-tool--view"
+          title=${mode === "month" ? "Showing the month — switch to the list" : "Showing the list — switch to the month"}
+          aria-label=${mode === "month" ? "Switch to list view" : "Switch to month view"}
+          onClick=${() => setMode(m => m === "month" ? "list" : "month")}>
+          ${uiIcon(mode === "month" ? "list" : "calendar", 12)}</button>
         ${onFindEvents && html`<button type="button" class="cal-panel-tool"
           title="Find events near you" aria-label="Find events near you"
           onClick=${() => onFindEvents()}>${uiIcon("store", 12)}</button>`}
@@ -41177,7 +41597,8 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
     </div>`}
     ${mode === "month"
       ? html`<${CalendarMonthView} month=${month} events=${pool} today=${today}
-          compact=${true} onOpen=${setSel} onMonth=${setMonth} art=${art}/>`
+          compact=${true} onOpen=${setSel} onOpenDay=${(d, evs) => setDayList({day: d, events: evs})}
+          onMonth=${setMonth} art=${art}/>`
       : rows.length === 0
         ? html`<div class="cal-panel-empty muted">Nothing matches those filters.</div>`
         : html`<${React.Fragment}>
@@ -41216,6 +41637,13 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
           Unmounting means it re-reads localStorage on the way back. (`subs` is
           shared rather than duplicated — see UpcomingSCsBox.) */
       !finderOpen && html`<${UpcomingSCsBox} user=${user} embed=${true} subs=${subs}/>`}
+    ${/* ⚠ Rendered ABOVE the detail modal in source order but only while no event
+          is selected: opening a row swaps the list for that event's own modal
+          rather than stacking two dialogs, so Esc and the backdrop always belong
+          to exactly one of them. */""}
+    ${!sel && dayList && html`<${CalendarDayModal} day=${dayList.day} events=${dayList.events}
+      art=${art} onOpen=${(ev) => { setDayList(null); setSel(ev); }}
+      onClose=${() => setDayList(null)}/>`}
     ${sel && html`<${CalendarDetailModal} ev=${sel} subs=${subs} onFindEvents=${onFindEvents} art=${art}
       onClose=${() => setSel(null)}/>`}
   </aside>`;
@@ -41297,8 +41725,34 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   const [month, setMonth] = useState(() =>
     /^\d{4}-\d{2}$/.test(seed.cm || "") ? seed.cm : calMonthOf(calTodayYmd()));
   const [sel, setSel] = useState(null);
+  const [dayList, setDayList] = useState(null);     // {day, events} — a busy day's list
   const [editing, setEditing] = useState(null);     // {} = new row, {id,…} = edit
   const [showStores, setShowStores] = useState(false);
+  // The region chips' disclosure. Persisted, so somebody who genuinely filters
+  // by region keeps it open — but it DEFAULTS CLOSED, because nine chips is
+  // the biggest single block between a visitor and the calendar they came for.
+  // ⚠ The stored value can only ever open it: a missing key, a wiped store or
+  // a private window all read as closed, which is the state we want to fail to.
+  // The Filters disclosure. Deliberately NOT persisted, unlike the regions
+  // inside it: this one is the page's front door, and the whole point is that
+  // every visit opens on the calendar. Somebody who filtered once last week
+  // should not be met by a wall of controls today.
+  //
+  // ⚠ null means "follow the viewport", and that is why it is not a plain
+  // boolean. The complaint this answers is a PHONE complaint — 477px of
+  // controls above an 812px screen — and a desktop, where the same row is one
+  // 44px line beside a fully visible calendar, pays none of that cost while
+  // losing the discoverability. So: closed below 1100px, open above, until
+  // the reader says otherwise, after which their choice holds at either size.
+  const [filtersOpen, setFiltersOpen] = useState(null);
+  const calNarrow = useMaxWidth(1100);
+  const showFilters = filtersOpen == null ? !calNarrow : filtersOpen;
+  const [regionsOpen, setRegionsOpen] = useState(() => {
+    try { return localStorage.getItem(CAL_REGIONS_OPEN_LS) === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(CAL_REGIONS_OPEN_LS, regionsOpen ? "1" : "0"); } catch {}
+  }, [regionsOpen]);
   // Off by default: it is an extra geo query, and most of what it finds is at
   // shops you do not go to. The chip is how you ask.
   const [near, setNear] = useState(() => {
@@ -41423,6 +41877,14 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     flashToast(done ? `Exported ${upcoming.length} events` : "Couldn't download the calendar file");
   };
 
+  // ⚠ Counts a DIMENSION, not a chip: "3 of 5 kinds off" is one narrowing, not
+  // three, and a badge that climbs to 9 because you unticked regions reads as
+  // damage rather than as state. Same rule countActiveFilters follows on Cards.
+  const activeFilters = (query.trim() ? 1 : 0)
+    + (region !== "all" ? 1 : 0)
+    + (near ? 1 : 0)
+    + (kinds.length < CALENDAR_KIND_KEYS.length ? 1 : 0);
+
   return html`<div class=${"cal-view" + (mode === "timeline" ? " cal-view--wide" : "")}>
     <header class="ev-header mkt-header cal-header">
       <div>
@@ -41432,12 +41894,29 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           stores you follow.
         </p>
       </div>
+      ${/* ⚠ "Near me" USED to sit here, beside a "SCs near me" chip two rows
+            down — two controls with the same name doing different jobs, which
+            is most of what made this header read as a page of filters. The
+            finder (search RPH, follow shops) is a thing you do to YOUR list of
+            stores, so it moved into the My-calendar drawer, which is the
+            drawer about exactly that. The chip stays where it is: it is a
+            FILTER, and it already opens the finder itself when no postal code
+            is set. */""}
       <div class="cal-header-actions">
-        ${onFindEvents && html`<button type="button" class="cal-act cal-act--find"
-          title="Search Ravensburger Play for events near you, and follow the shops you play at"
-          onClick=${() => onFindEvents()}>${uiIcon("store", 14)} Near me</button>`}
-        <button type="button" class="cal-act" onClick=${exportAll} title="Download everything shown as an .ics file">
-          ${uiIcon("save", 14)} Export .ics</button>
+        <button type="button" class=${"cal-follow-toggle" + (showStores ? " on" : "")}
+          aria-expanded=${showStores ? "true" : "false"}
+          title="The stores you follow, the events you saved, and anything you hid"
+          onClick=${() => setShowStores(v => !v)}>
+          ${uiIcon("store", 12)} My calendar
+          ${followCount > 0 && html`<span class="cal-follow-n">${followCount}</span>`}
+          <span class="cal-follow-caret">${showStores ? "\u2303" : "\u2304"}</span>
+        </button>
+        ${/* The label is a SPAN so a phone can drop it and keep the glyph —
+              a bare text node cannot be hidden in CSS, and this is the one
+              button on the row with a label long enough to force a wrap. */""}
+        <button type="button" class="cal-act cal-act--export" onClick=${exportAll}
+          aria-label="Export .ics" title="Download everything shown as an .ics file">
+          ${uiIcon("save", 14)}<span>Export .ics</span></button>
         ${isAdmin && html`<button type="button" class="cal-act cal-act--admin"
           onClick=${() => setEditing({})}>${uiIcon("edit", 14)} Add event</button>`}
       </div>
@@ -41463,12 +41942,27 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
             title="The whole season on one axis — Challenges, Qualifiers, your shops and the releases">
             ${uiIcon("timeline", 13)} Timeline</button>
         </div>
+        ${/* ⚠ Default CLOSED, and the whole reason this page was rebuilt:
+              "I want the screen to instantly show you your calendar, and then
+              you can drill into it, not a page of filters and text b4"
+              (Zaven). Search, regions, SCs-near-me and Show-past are all
+              drill-down, so they wait behind here. The BADGE is what keeps
+              that honest — a narrowed list with its controls hidden would
+              otherwise read as an empty calendar. */""}
+        <button type="button" class=${"cal-filtbtn" + (showFilters ? " open" : "") + (activeFilters ? " on" : "")}
+          aria-expanded=${showFilters ? "true" : "false"}
+          title="Search, regions, and what counts as near you"
+          onClick=${() => setFiltersOpen(!showFilters)}>
+          ${uiIcon("filter", 12)}<span>Filters</span>
+          ${activeFilters > 0 && html`<em>${activeFilters}</em>`}
+          <span class="cal-follow-caret">${showFilters ? "\u2303" : "\u2304"}</span>
+        </button>
       </div>
     </div>
     ${/* Row two: the dimensions that narrow WHAT is on the chart, kept off the
           row that chooses the chart. The search box leads because it is the one
           control you reach for knowing what you are after. */""}
-    <div class="cal-filters2">
+    ${showFilters && html`<div class="cal-filters2">
       <label class="cal-search">
         ${uiIcon("search", 13)}
         <input type="search" value=${query} placeholder="Search events, stores, cities…"
@@ -41477,7 +41971,21 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
         ${query && html`<button type="button" class="cal-search-x" aria-label="Clear search"
           onClick=${() => setQuery("")}>${uiIcon("close", 11)}</button>`}
       </label>
-      <${CalendarRegionChips} region=${region} counts=${regionCounts} onChange=${setRegion}/>
+      ${/* ⚠ Default CLOSED. Nine region chips is the single biggest block on
+            this page's control stack (93px at 375px) and the answer is "all"
+            for almost everyone, almost always — so it is the first thing that
+            should not be between you and your calendar. The button names the
+            live region, so narrowing can never be invisible. */""}
+      <div class=${"cal-regbox" + (regionsOpen ? " open" : "")}>
+        <button type="button" class=${"cal-regtoggle" + (calRegionSet(region) ? " on" : "")}
+          aria-expanded=${regionsOpen ? "true" : "false"}
+          title="Filter by the region an event is played in"
+          onClick=${() => setRegionsOpen(v => !v)}>
+          ${uiIcon("compass", 12)}<span>${calRegionSummary(region)}</span>
+          <span class="cal-follow-caret">${regionsOpen ? "\u2303" : "\u2304"}</span>
+        </button>
+        ${regionsOpen && html`<${CalendarRegionChips} region=${region} counts=${regionCounts} onChange=${setRegion}/>`}
+      </div>
       ${/* The "SCs local to you" half of the ask. It reuses the finder's saved
             ZIP, so for anyone who has used the finder once this is a single
             click; for anyone who has not, the chip says where to set one. */""}
@@ -41498,20 +42006,11 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
         ${near && nearAdded > 0 && html`<em>${nearAdded}</em>`}
       </button>
       <div class="cal-filters2-end">
-        ${/* The personal drawer lives at the END of this row rather than on a
-              line of its own below it. Stranded on its own row it was the only
-              control on the page with nothing beside it, which read as an
-              afterthought; here it sits with the other things that are about
-              YOUR view of the calendar rather than about the game's. Its BODY
-              still opens below the whole row — see .cal-follow. */""}
-        <button type="button" class=${"cal-follow-toggle" + (showStores ? " on" : "")}
-          aria-expanded=${showStores ? "true" : "false"}
-          title="The stores you follow, the events you saved, and anything you hid"
-          onClick=${() => setShowStores(v => !v)}>
-          ${uiIcon("store", 12)} My calendar
-          ${followCount > 0 && html`<span class="cal-follow-n">${followCount}</span>`}
-          <span class="cal-follow-caret">${showStores ? "⌃" : "⌄"}</span>
-        </button>
+        ${/* ⚠ "My calendar" USED to live here. It moved up into the header
+              row: it is not a filter — it is YOUR list, the one thing on this
+              page you might open every visit — and everything else in this row
+              is now behind the Filters disclosure, which would have buried it.
+              Its BODY still opens below the whole row (see .cal-follow). */""}
         ${mode === "timeline" && html`<div class="seg-toggle cal-spans" role="group" aria-label="Window length">
           ${CAL_TL_SPANS.map(m => html`<button key=${m} type="button" class=${span === m ? "active" : ""}
             title=${`Draw ${m} months at a time`} onClick=${() => setSpan(m)}>${m} mo</button>`)}
@@ -41524,7 +42023,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           onClick=${() => { setQuery(""); setRegion("all"); setNear(false); setKinds(CALENDAR_KIND_KEYS.slice()); }}>
           Reset filters</button>`}
       </div>
-    </div>
+    </div>`}
 
     ${/* ⚠ "My stores + saved events" until 2026-09-14. It named two of the four
           things in the drawer (a pinned series and a hidden event are in here
@@ -41535,6 +42034,14 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           menu already uses, so the two halves of one idea share one word. */""}
     ${showStores && html`<div class="cal-follow">
       <div class="cal-follow-body">
+        ${/* ⚠ The finder lives HERE now, not in the page header. It is the one
+              action that changes which stores are yours, so it belongs in the
+              drawer about your stores — and the empty state below already
+              pointed at it, which is why that state alone used to be the only
+              place it was reachable once you followed anything. */""}
+        ${onFindEvents && followCount > 0 && html`<button type="button" class="cal-act cal-act--find cal-follow-find"
+          title="Search Ravensburger Play for events near you, and follow the shops you play at"
+          onClick=${() => onFindEvents()}>${uiIcon("store", 13)} Find &amp; follow more stores</button>`}
         ${followCount === 0
           ? html`<p class="muted cal-follow-empty">
               Nothing followed yet. <button type="button" class="cal-linkish"
@@ -41610,7 +42117,8 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           onLane=${(k) => setRegion(r => calToggleRegion(r, k))}/>`
       : mode === "month"
       ? html`<${CalendarMonthView} month=${month} events=${shown} today=${today}
-          onOpen=${setSel} onMonth=${setMonth} art=${art}/>`
+          onOpen=${setSel} onOpenDay=${(d, evs) => setDayList({day: d, events: evs})}
+          onMonth=${setMonth} art=${art}/>`
       : listed.length === 0
         ? (() => {
             const off = CALENDAR_KINDS.filter(k => !kinds.includes(k.key)).map(k => k.label);
@@ -41648,6 +42156,13 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
       </ul>
     </details>`}
 
+    ${/* ⚠ Rendered ABOVE the detail modal in source order but only while no event
+          is selected: opening a row swaps the list for that event's own modal
+          rather than stacking two dialogs, so Esc and the backdrop always belong
+          to exactly one of them. */""}
+    ${!sel && dayList && html`<${CalendarDayModal} day=${dayList.day} events=${dayList.events}
+      art=${art} onOpen=${(ev) => { setDayList(null); setSel(ev); }}
+      onClose=${() => setDayList(null)}/>`}
     ${sel && html`<${CalendarDetailModal} ev=${sel} subs=${subs} onFindEvents=${onFindEvents} art=${art}
       onClose=${() => setSel(null)}/>`}
     ${editing && html`<${CalendarAdminModal} row=${editing} onClose=${() => setEditing(null)}
@@ -42035,6 +42550,54 @@ const SC_KIND_LABEL = {sc: "Set Championship", prerelease: "Prerelease", other: 
 const SC_KIND_BADGE = {sc: "Set Champ", prerelease: "Prerelease", other: "Locals"};
 const SC_KIND_CLASS = {sc: "sc", prerelease: "pre", other: "other"};
 
+// ── Which KINDS the finder shows ────────────────────────────────────────────
+// It was one-of-N: All | Set Champs | Prereleases, with no way to see locals on
+// their own and no way to ask for two of the three. But the three are not
+// alternatives — "Set Championships and prereleases, but not league nights" is
+// a real question, and it was unaskable.
+//
+// ⚠ The labels come from CAL_STORE_KINDS, the SAME list the follow-a-store
+// boxes are built from. They are the same three things, so a second copy here
+// would be two lists that have to agree about what "other" is called.
+const SC_KINDS = CAL_STORE_KINDS;
+const SC_KIND_KEYS = CAL_STORE_KIND_KEYS;
+const SC_KIND_PLURAL = {sc: "Set Championships", prerelease: "Prereleases", other: "locals"};
+// ⚠ Legacy single values still have to parse. `?scmode=sc` links are in the
+// wild, App's openEventFinder("prerelease") passes one, and the stored
+// packsink:scMode is whatever a browser last left there. An unparseable value
+// means EVERYTHING rather than nothing — a filter nobody asked for, silently
+// hiding most of the results, is the worse failure.
+const SC_KIND_ALIAS = {all: null, sc: "sc", champ: "sc", champs: "sc", championships: "sc",
+  pre: "prerelease", pr: "prerelease", prerelease: "prerelease", prereleases: "prerelease",
+  other: "other", local: "other", locals: "other"};
+const scParseKinds = (raw) => {
+  const toks = String(raw || "").toLowerCase().split(/[,+\s]+/).filter(Boolean);
+  const want = new Set(toks.map(t => SC_KIND_ALIAS[t]).filter(Boolean));
+  const out = SC_KIND_KEYS.filter(k => want.has(k));
+  return out.length ? out : SC_KIND_KEYS.slice();
+};
+// RPH only ever classifies sc / prerelease / other, but an unknown kind must
+// ride with the catch-all rather than vanish — the same rule calStoreAllows
+// follows, and the same rule the feed itself follows.
+const scKindOf = (row) => SC_KIND_KEYS.includes(row && row.kind) ? row.kind : "other";
+const scKindsLabel = (ks) => ks.length === SC_KIND_KEYS.length ? "Lorcana Events"
+  : ks.map(k => SC_KIND_PLURAL[k]).join(" & ");
+
+// ── Which DATES ─────────────────────────────────────────────────────────────
+// One date became a list: "which of these three Saturdays" is the question a
+// person planning a month actually has, and one date at a time could not ask it.
+const scParseDates = (raw) => [...new Set(String(raw || "").split(/[,\s]+/)
+  .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)))].sort();
+// ⚠ UTC in and UTC out. `new Date("2026-10-16")` is midnight UTC, so local
+// getters read Oct 15 anywhere west of Greenwich — a chip naming the day before
+// the one it filters on.
+const scDateChipLabel = (ymd) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd || "");
+  if(!m) return ymd || "";
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return `${SC_DOW[d.getUTCDay()]} ${+m[2]}/${+m[3]}`;
+};
+
 // Captured at module load (before any App URL-cleanup effect): did this visit
 // arrive on an event deep link? Forces the box to render even when the user has
 // hidden the home panel — otherwise shared links dead-end.
@@ -42067,7 +42630,7 @@ const ScCalendarButton = ({series, subs}) => {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const btnRef = useRef(null);
-  const popStyle = useCalPopAnchor(open, btnRef);
+  const popRef = useRef(null);
   useEffect(() => {
     if(!open) return;
     const onDoc = (e) => { if(ref.current && !ref.current.contains(e.target)) setOpen(false); };
@@ -42082,9 +42645,16 @@ const ScCalendarButton = ({series, subs}) => {
     start_datetime: o.start_datetime, end_datetime: o.end_datetime,
   })).filter(Boolean);
   const storeId = series.store_id != null ? String(series.store_id) : null;
-  const following = storeId && subs.has("store", storeId);
+  const storeSub = storeId ? subs.subs.find(s => s.kind === "store" && String(s.ref) === storeId) : null;
+  const following = !!storeSub;
+  // Absent meta.kinds means "everything", so an unfollowed store previews as all
+  // three ticked — which is exactly what pressing Follow gives you.
+  const storeKinds = calStoreKindsOf(storeSub);
   const pinned = subs.has("series", series.series_key);
   const on = following || pinned;
+  // ⚠ Re-anchored on `following`, because that is what grows the menu by three
+  // rows — placed once at open, the boxes push its last rows off a short screen.
+  const popStyle = useCalPopAnchor(open, btnRef, popRef, following);
   return html`<div class="cal-add-wrap" ref=${ref}>
     <button type="button" aria-expanded=${open ? "true" : "false"} ref=${btnRef}
       class=${"sc-tile-pin cal-add-btn" + (on ? " on" : "")}
@@ -42093,7 +42663,7 @@ const ScCalendarButton = ({series, subs}) => {
       onClick=${(e) => { e.stopPropagation(); setOpen(o => !o); }}>
       ${uiIcon(on ? "check" : "calendarPlus", 13)}
     </button>
-    ${open && html`<div class="cal-add-pop cal-add-pop--sc" style=${popStyle}
+    ${open && html`<div class="cal-add-pop cal-add-pop--sc" ref=${popRef} style=${popStyle}
       onClick=${e => e.stopPropagation()}>
       <button type="button" class="cal-add-item" onClick=${() => {
         setOpen(false);
@@ -42104,13 +42674,45 @@ const ScCalendarButton = ({series, subs}) => {
         flashToast(pinned ? "Removed from your calendar" : `Added ${occ.length || 1} date${occ.length === 1 ? "" : "s"} to your calendar`);
       }}>${uiIcon(pinned ? "close" : "calendarPlus", 13)}
         ${pinned ? "Remove these dates" : `Add ${occ.length > 1 ? `these ${occ.length} dates` : "this date"}`}</button>
-      ${storeId && html`<button type="button" class="cal-add-item" onClick=${() => {
-        setOpen(false);
-        subs.toggle({kind: "store", ref: storeId, label: series.store_name,
-                     meta: {city: series.city, state: series.state}});
-        flashToast(following ? `Unfollowed ${series.store_name}` : `Following ${series.store_name} — every event lands on your calendar`);
-      }}>${uiIcon(following ? "close" : "store", 13)}
-        ${following ? "Unfollow this store" : "Follow this store — every event"}</button>`}
+      ${/* Following used to be all-or-nothing here, so the one control that could
+            put a shop's Set Championship on your calendar also put six copies of
+            "Weekly Core Constructed" there — the subset the drawer has always
+            offered was two screens away, and you had to already know it existed.
+            The popover STAYS OPEN on Follow so the boxes are on screen the moment
+            you have something to untick. */""}
+      ${storeId && html`<div class="cal-add-store">
+        <button type="button" class="cal-add-item" onClick=${() => {
+          if(following){
+            setOpen(false);
+            subs.remove("store", storeId);
+            flashToast(`Unfollowed ${series.store_name}`);
+            return;
+          }
+          // Deliberately writes NO meta.kinds: absent means everything, which is
+          // what a plain Follow means and what keeps a future fourth kind riding
+          // along. Only unticking one writes the array.
+          subs.add({kind: "store", ref: storeId, label: series.store_name,
+                    meta: {city: series.city, state: series.state}});
+          flashToast(`Following ${series.store_name} — untick anything you don't want`);
+        }}>${uiIcon(following ? "close" : "store", 13)}
+          ${following ? "Unfollow this store" : "Follow this store"}</button>
+        ${following && CAL_STORE_KINDS.map(k => {
+          const isOn = storeKinds.includes(k.key);
+          // Same invariant as the drawer and every other chip group on the site:
+          // the LAST one cannot be unticked. A follow that delivers nothing is a
+          // confusing way to spell "unfollow", and Unfollow is directly above.
+          const last = isOn && storeKinds.length === 1;
+          return html`<button key=${k.key} type="button"
+            class=${"cal-add-item cal-add-check" + (isOn ? " on" : "") + (last ? " last" : "")}
+            aria-pressed=${isOn ? "true" : "false"}
+            title=${last ? "Keep at least one, or use Unfollow above" : k.long}
+            onClick=${() => { if(last) return;
+              subs.updateMeta("store", storeId, {kinds: isOn
+                ? storeKinds.filter(x => x !== k.key)
+                : CAL_STORE_KIND_KEYS.filter(x => storeKinds.includes(x) || x === k.key)});
+            }}>${uiIcon(isOn ? "checkboxOn" : "checkbox", 13)} ${k.label}</button>`;
+        })}
+      </div>`}
       ${entries[0] && googleCalUrl(entries[0]) && html`<a class="cal-add-item"
         href=${googleCalUrl(entries[0])} target="_blank" rel="noopener noreferrer"
         onClick=${() => setOpen(false)}>${uiIcon("link", 13)} Google Calendar (next date) ↗</a>`}
@@ -42143,22 +42745,18 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   // Pins are intentionally NOT in the URL — they're a personal per-device pref.
   const [scSeed] = useState(() => SC_DEEP_SEED || {});
   const pZip = scSeed.zip, pCtry = scSeed.ctry, pDist = scSeed.dist, pDate = scSeed.date, pMode = scSeed.mode;
-  // Which event type the box shows: "all" (EVERY Lorcana event RPH lists near
-  // you — locals, league nights, drafts, prereleases and Set Championships),
-  // "sc" (competitive Set Championships only), or "prerelease" (a set's
-  // launch-weekend sealed events only). All three read the SAME table now
-  // (lorcana_events); a mode is just a `kind` filter, so "all" can never
-  // disagree with the narrow tabs the way two separate tables could.
-  const [mode, setMode] = useState(() => {
-    try {
-      const raw = (pMode || localStorage.getItem("packsink:scMode") || "all").toLowerCase();
-      if(raw === "prerelease" || raw === "pre" || raw === "pr") return "prerelease";
-      if(raw === "sc" || raw === "champ" || raw === "championships") return "sc";
-      return "all";
-    } catch { return "all"; }
+  // Which event kinds the box shows — any subset of Set Championships,
+  // prereleases and locals (league nights, drafts, everything else RPH lists).
+  // All three come from the SAME table (lorcana_events), so the selection is a
+  // client-side filter and "all" can never disagree with a narrow selection the
+  // way two separate tables could.
+  const [kinds, setKinds] = useState(() => {
+    try { return scParseKinds(pMode || localStorage.getItem("packsink:scMode")); }
+    catch { return scParseKinds(pMode); }
   });
-  const isPre = mode === "prerelease", isAll = mode === "all";
-  const KIND_PLURAL = isAll ? "Lorcana Events" : isPre ? "Prereleases" : "Set Championships";
+  const isAll = kinds.length === SC_KIND_KEYS.length;
+  const isPre = kinds.length === 1 && kinds[0] === "prerelease";
+  const KIND_PLURAL = scKindsLabel(kinds);
   // Label for one series, from the `kind` the discovery script classified it as.
   const scKindLabel = (row) => SC_KIND_LABEL[row && row.kind] || "Event";
   const [zip, setZip] = useState(() => { try { return pZip || localStorage.getItem("packsink:scZip") || ""; } catch { return pZip || ""; } });
@@ -42191,7 +42789,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   const [copied, setCopied] = useState(false);
   const [pinned, setPinned] = useState(() => { try { const p = JSON.parse(localStorage.getItem("packsink:scPinned") || "[]"); return Array.isArray(p) ? p : []; } catch { return []; } });
   const [dateOn, setDateOn] = useState(() => { try { return pDate ? true : localStorage.getItem("packsink:scDateOn") === "1"; } catch { return !!pDate; } });
-  const [dateFrom, setDateFrom] = useState(() => { try { return pDate || localStorage.getItem("packsink:scDateFrom") || ""; } catch { return pDate || ""; } });
+  const [dates, setDates] = useState(() => { try { return scParseDates(pDate || localStorage.getItem("packsink:scDateFrom")); } catch { return scParseDates(pDate); } });
   // What the last search RESOLVED to, not a choice anyone made. It seeds the
   // next guess through packsink:scCountry (the strongest signal there is: the
   // country that actually worked for this person) and rides the share link so a
@@ -42216,7 +42814,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   // control breaking under the click that just used it.
   const probedZip = useRef("");
   // "Has anything been searched yet" — set by runSearch itself, so a manual
-  // first search arms the mode-switch effect exactly as the mount auto-run does.
+  // first search counts exactly as the mount auto-run does.
   const didSearch = useRef(false);
   // ⚠ Two searches can be in flight at once — Search pressed twice, a radius
   // chip tapped mid-search, a "did you mean" button — and the loser must never
@@ -42227,10 +42825,10 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   // initial value would erase the stored preference of everyone who had picked
   // one, on mount, before they had searched for anything.
   useEffect(() => { try { if(country) localStorage.setItem("packsink:scCountry", country); } catch {} }, [country]);
-  useEffect(() => { try { localStorage.setItem("packsink:scMode", mode); } catch {} }, [mode]);
+  useEffect(() => { try { localStorage.setItem("packsink:scMode", kinds.join(",")); } catch {} }, [kinds]);
   useEffect(() => { try { localStorage.setItem("packsink:scCollapsed", collapsed ? "1" : "0"); } catch {} }, [collapsed]);
   useEffect(() => { try { localStorage.setItem("packsink:scDateOn", dateOn ? "1" : "0"); } catch {} }, [dateOn]);
-  useEffect(() => { try { localStorage.setItem("packsink:scDateFrom", dateFrom); } catch {} }, [dateFrom]);
+  useEffect(() => { try { localStorage.setItem("packsink:scDateFrom", dates.join(",")); } catch {} }, [dates]);
   useEffect(() => { try { localStorage.setItem("packsink:scPinned", JSON.stringify(pinned)); } catch {} }, [pinned]);
   // Esc exits the full-screen view; lock body scroll while it's open.
   useEffect(() => {
@@ -42252,11 +42850,15 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
     const {data, error} = await sbClient.rpc("get_nearby_lorcana_events", {
       p_lat: lat, p_lng: lng,
       p_radius_mi: Math.max(1, Math.min(500, parseInt(r, 10) || 50)),
-      p_kind: mode === "all" ? null : mode,
+      // ⚠ ALWAYS null. All three kinds live in ONE table, so a subset is a
+      // client-side filter over rows we already hold -- which is what lets the
+      // kind chips be a multi-select at all, and means toggling one re-renders
+      // instead of throwing the results away and re-querying.
+      p_kind: null,
     });
     if(error) throw error;
     return data || [];
-  }, [mode]);
+  }, []);
   // `forceCc` is only ever set by the "did you mean" row and by a ?scc= deep
   // link — a plain search infers the country instead of asking for it.
   const runSearch = useCallback(async (z, r, forceCc) => {
@@ -42286,7 +42888,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
         .catch(() => {});
     } catch(e){ if(live()){ setErr(String(e && e.message || e)); setResults(null); setCountryOpts([]); setAltPlaces([]); } }
     finally { if(live()) setLoading(false); }
-  }, [mode, fetchNear]);
+  }, [fetchNear]);
   // Re-run the same query against a country the first pass skipped.
   const useAltCountry = useCallback((cc) => runSearch(zip, radius, cc), [zip, radius, runSearch]);
   // A town name matched several real places. Swapping between them needs no
@@ -42344,32 +42946,39 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
     if(!didSearch.current && scZipReady(zip)) runSearch(zip, radius, pCtry || undefined);
   }, []);
 
-  // Switching Set Championships <-> Prereleases re-queries the other table.
-  useEffect(() => {
-    if(!didSearch.current) return;        // nothing searched yet
-    setSel(null); setResults(null); setErr(null);
-    if(scZipReady(zip)) runSearch(zip, radius);
-  }, [mode]);
-
-  const pickMode = (m) => { if(m !== mode){ setSel(null); setResults(null); setErr(null); setMode(m); } };
+  // ⚠ There is no longer a re-query on a kind change, and that is the point:
+  // the fetch asks for every kind, so narrowing is free. It also means a
+  // selection can be changed WHILE reading the results without losing them.
+  const toggleKind = (k) => setKinds(cur => {
+    // Same invariant as every other chip group on the site: the last active one
+    // cannot be switched off. An empty selection renders an empty box whose only
+    // way back is the chip you just used to empty it.
+    if(cur.includes(k)) return cur.length === 1 ? cur : cur.filter(x => x !== k);
+    return SC_KIND_KEYS.filter(x => cur.includes(x) || x === k);
+  });
   const pickRadius = (r) => { setRadius(r); setCustomOpen(false); if(scZipReady(zip)) searchAtRadius(r); };
 
   // Decorate each series with its per-occurrence local days, then apply the
   // optional date filter. A series survives the filter if ANY of its dates lands
   // on the chosen day, and the tile then leads with THAT date rather than the
   // series' natural next one.
-  const dateActive = dateOn && dateFrom;
+  const dateActive = dateOn && dates.length > 0;
+  const dateKey = dates.join(",");
+  const kindKey = kinds.join(",");
   const visible = useMemo(() => {
     if(!results) return results;
+    const wantKinds = kindKey.split(",");
+    const wantDays = dateKey ? new Set(dateKey.split(",")) : null;
     const out = [];
     for(const s of results){
+      if(!wantKinds.includes(scKindOf(s))) continue;
       const occ = (s.occurrences || []).map(o => ({...o, _day: scLocalDay(o.start_datetime, s.timezone)}));
-      const shown = dateActive ? occ.filter(o => o._day === dateFrom) : occ;
+      const shown = (dateActive && wantDays) ? occ.filter(o => wantDays.has(o._day)) : occ;
       if(!shown.length) continue;
       out.push({...s, _occ: occ, _shown: shown, _next: shown[0], _mi: s.distance_mi});
     }
     return out;
-  }, [results, dateActive, dateFrom]);
+  }, [results, dateActive, dateKey, kindKey]);
 
   const isPinned = (k) => pinned.includes(k);
   const togglePin = (k) => setPinned(p => p.includes(k) ? p.filter(x => x !== k) : [...p, k]);
@@ -42388,8 +42997,10 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
     if(zip) u.searchParams.set("sczip", zip);
     if(country) u.searchParams.set("scc", country);
     u.searchParams.set("scdist", String(radius));
-    if(mode !== "all") u.searchParams.set("scmode", mode);
-    if(dateActive) u.searchParams.set("scdate", dateFrom);
+    // Both are csv now, and both omit the default: a bare /?sczip= still means
+    // "everything, no date filter", so an ordinary link stays short.
+    if(!isAll) u.searchParams.set("scmode", kinds.join(","));
+    if(dateActive) u.searchParams.set("scdate", dates.join(","));
     return u.toString();
   };
   const copyLink = async () => {
@@ -42434,13 +43045,24 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
       </div>
     </div>
     ${(!collapsed || expanded) && html`<div class="sc-box-body">
-      <div class="sc-mode-toggle" role="group" aria-label="Event type">
-        <button type="button" class=${"sc-mode-btn"+(mode==="all"?" active":"")}
-          aria-pressed=${mode==="all"} onClick=${()=>pickMode("all")}>All</button>
-        <button type="button" class=${"sc-mode-btn"+(mode==="sc"?" active":"")}
-          aria-pressed=${mode==="sc"} onClick=${()=>pickMode("sc")}>Set Champs</button>
-        <button type="button" class=${"sc-mode-btn"+(mode==="prerelease"?" active":"")}
-          aria-pressed=${mode==="prerelease"} onClick=${()=>pickMode("prerelease")}>Prereleases</button>
+      ${/* ⚠ "All" is a SHORTCUT, not a fourth kind — it lights up when all three
+            are on and its click turns them all on. Modelling it as a member of
+            the set is what makes "all, plus Set Champs" expressible, which is
+            nonsense; and a person who has just unticked Locals should see two
+            chips lit, not a mystery fourth one go dark. */""}
+      <div class="sc-mode-toggle" role="group" aria-label="Event types">
+        <button type="button" class=${"sc-mode-btn sc-mode-all"+(isAll?" active":"")}
+          aria-pressed=${isAll} title="Show every kind of Lorcana event"
+          onClick=${()=>setKinds(SC_KIND_KEYS.slice())}>All</button>
+        ${SC_KINDS.map(k => {
+          const on = kinds.includes(k.key);
+          const last = on && kinds.length === 1;
+          return html`<button key=${k.key} type="button"
+            class=${"sc-mode-btn sc-mode-kind"+(on?" active":"")+(last?" last":"")}
+            aria-pressed=${on} title=${last ? "Keep at least one — press All to show everything" : k.long}
+            onClick=${()=>{ if(!last) toggleKind(k.key); }}>
+            ${uiIcon(on ? "checkboxOn" : "checkbox", 12)} ${k.label}</button>`;
+        })}
       </div>
       <form class="sc-search-row" onSubmit=${e=>{ e.preventDefault(); runSearch(zip, radius); }}>
         ${countryOpts.length > 1 && html`<select class="sc-origin-country" value=${country}
@@ -42482,20 +43104,40 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
           Filter by date
         </label>
         ${dateOn && html`<span class="sc-date-inputs">
-          <input type="date" class="sc-date-input" value=${dateFrom} min=${todayStr}
-            aria-label="On date" onInput=${e=>setDateFrom(e.target.value)}/>
-          ${dateFrom && html`<button type="button" class="sc-date-clear"
-            title="Clear date" onClick=${()=>setDateFrom("")}>×</button>`}
+          ${/* ⚠ The picker ADDS rather than replaces, and its own value stays
+                empty: a controlled date input holding the last pick reads as
+                "the" date, which is the single-date model this replaced. The
+                chips below are the selection. */""}
+          <input type="date" class="sc-date-input" value=""
+            aria-label="Add a date" title="Add a date to the filter"
+            onInput=${e=>{ const v = e.target.value;
+              if(/^\d{4}-\d{2}-\d{2}$/.test(v)) setDates(d => d.includes(v) ? d : [...d, v].sort());
+              e.target.value = ""; }}/>
+          ${dates.map(d => html`<button key=${d} type="button"
+            class=${"sc-date-chip"+(d < todayStr ? " past" : "")}
+            title=${d < todayStr ? `${d} — in the past; remove` : `${d} — remove`}
+            onClick=${()=>setDates(cur => cur.filter(x => x !== d))}>
+            ${scDateChipLabel(d)} <span aria-hidden="true">×</span></button>`)}
+          ${dates.length > 1 && html`<button type="button" class="sc-date-clear"
+            title="Clear every date" onClick=${()=>setDates([])}>Clear</button>`}
         </span>`}
       </div>
+      ${/* ⚠ A past date is pickable but cannot match: lorcana_events is an
+            UPCOMING feed and prunes what has already happened, so the honest
+            thing is to allow the pick and say why it came back empty rather
+            than to clamp the picker and leave a person fighting it. */""}
+      ${dateOn && dates.some(d => d < todayStr) && html`<div class="sc-msg muted sc-date-past">
+        ${uiIcon("warn", 12)} This finds UPCOMING events, so a date before today will always come back empty.</div>`}
       ${err && html`<div class="sc-msg sc-msg-err">${err}</div>`}
       ${loading && html`<div class="sc-msg muted">Finding events…</div>`}
       ${!loading && results && results.length === 0 && html`<div class="sc-msg muted">
         No ${KIND_PLURAL} within ${radius} mi${origin?` of ${origin.city}, ${origin.state}`:""}. Try a wider radius.</div>`}
       ${!loading && results && results.length > 0 && visible.length === 0 && html`<div class="sc-msg muted">
-        No events on that date. Pick another day or turn the filter off.</div>`}
+        ${dateActive
+          ? `No ${isAll ? "events" : KIND_PLURAL} on ${dates.length === 1 ? scDateChipLabel(dates[0]) : `those ${dates.length} dates`}. Pick another day, or turn the date filter off.`
+          : `No ${KIND_PLURAL} in these results. Turn another kind back on above.`}</div>`}
       ${!loading && visibleSorted && visibleSorted.length > 0 && html`<div class="sc-results">
-        ${origin && html`<div class="sc-results-head">${visibleSorted.length}${dateActive?" on "+dateFrom:""} near ${origin.city}, ${origin.state}</div>`}
+        ${origin && html`<div class="sc-results-head">${visibleSorted.length}${dateActive?(dates.length===1?" on "+scDateChipLabel(dates[0]):` on ${dates.length} dates`):""} near ${origin.city}, ${origin.state}</div>`}
         <div class="sc-list">
           ${visibleSorted.map(e => {
             const next = e._next;
@@ -42526,7 +43168,11 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
                     : `${e.occurrence_count} dates`}
                 </span>`}
                 <span class="sc-tile-loc">
-                  ${isAll && html`<span class=${"sc-tile-kind sc-tile-kind--"+(SC_KIND_CLASS[e.kind]||"other")}>${SC_KIND_BADGE[e.kind]||"Event"}</span>`}
+                  ${/* ⚠ Gated on "is this list MIXED", not on isAll. It used to be
+                        isAll, which was the same question while the alternative was
+                        a single kind — with a 2-of-3 selection the list is mixed and
+                        this badge is the only thing telling the two apart. */""}
+                  ${kinds.length > 1 && html`<span class=${"sc-tile-kind sc-tile-kind--"+(SC_KIND_CLASS[e.kind]||"other")}>${SC_KIND_BADGE[e.kind]||"Event"}</span>`}
                   ${e.city}, ${e.state}
                 </span>
               </span>
@@ -42582,6 +43228,13 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
             ${o.capacity != null && html`<div><dt>Capacity</dt><dd>${o.capacity} players</dd></div>`}
             ${cadence && html`<div><dt>Runs</dt><dd>${`${cadence} ${SC_DOW[s.dow]||""} ${scLocalTime12(s.local_time)}`.trim()} · ${s.occurrence_count} upcoming</dd></div>`}
           </dl>
+          ${/* ⚠ The OCCURRENCE's, not the series'. Each date carries its own, and
+                a shop that rewrites the text for one week means the series' first
+                entry would be describing a different night. It arrives truncated
+                at 1,000 characters (see migration 164) — the table keeps it whole,
+                the calendar reads the column direct, and this is the one path
+                that pays per row. */""}
+          <${EventDescription} text=${o.description}/>
           ${/* Scouting rides the same rule everywhere: any real RPH listing.
                get_scout_event is the scope, and since migration 148 its refusal
                is where an out-of-bubble event gets added — so pre-filtering on
@@ -42907,7 +43560,31 @@ const HomePollBox = ({state, user, onSignIn}) => {
 // hide their scrollbars until you're already scrolling. `edge` tracks which
 // ends have content past the fold so the fade + the ⌄ chip appear only when
 // there really is more to see.
-const NewsFeed = ({variant, tiles, panelNav, poll}) => {
+// ⚠ The collapse is REMEMBERED, but it un-remembers itself the moment the
+// content changes: "way to minimize the poll/news tab. maximize it again when
+// something new is posted" (Zaven). So the stored value is not a bare boolean
+// — it is the CONTENT SIGNATURE that was on screen when you minimised it. If
+// what would render now differs from that, the box opens itself.
+//
+// That shape is what makes it safe to forget about: a box you collapsed in
+// March cannot swallow a set announcement in June. A plain boolean would.
+const NEWS_COLLAPSE_LS = "packsink:home:newsCollapsedSig";
+const NewsFeed = ({variant, tiles, panelNav, poll, sig}) => {
+  // "" = expanded. Anything else is the signature that was live when it was
+  // minimised, which doubles as the collapsed flag.
+  const [seenSig, setSeenSig] = useState(() => {
+    try { return localStorage.getItem(NEWS_COLLAPSE_LS) || ""; } catch { return ""; }
+  });
+  // ⚠ Only collapsed while the signature still MATCHES. Comparing here rather
+  // than in an effect means a new tile renders the box open on its very first
+  // paint, with no expanded-then-collapsed flash — and it needs no cleanup
+  // when the two fall back into agreement.
+  const collapsed = !!seenSig && !!sig && seenSig === sig;
+  const setCollapsed = (want) => {
+    const v = want ? (sig || "") : "";
+    setSeenSig(v);
+    try { localStorage.setItem(NEWS_COLLAPSE_LS, v); } catch {}
+  };
   const listRef = useRef(null);
   const [edge, setEdge] = useState("");
   const sync = useCallback(() => {
@@ -42926,15 +43603,28 @@ const NewsFeed = ({variant, tiles, panelNav, poll}) => {
     window.addEventListener("resize", sync);
     return () => { if(ro) ro.disconnect(); window.removeEventListener("resize", sync); };
   }, [sync, tiles.length]);
-  return html`<aside class=${"home-feed home-news-feed home-news-feed--"+variant+(edge?" news-edge-"+edge:"")} aria-label="News">
-    ${poll || null}
-    ${homePanelTitle({cls:"home-feed-title--chase", label:"News", panelKey:"news", panelNav})
-      || html`<div class="home-feed-title--chase">News</div>`}
-    <div class="home-news-feed-scroll">
+  const titleEl = homePanelTitle({cls:"home-feed-title--chase", label:"News", panelKey:"news", panelNav})
+    || html`<div class="home-feed-title--chase">News</div>`;
+  return html`<aside class=${"home-feed home-news-feed home-news-feed--"+variant
+      + (collapsed ? " is-collapsed" : "") + (edge && !collapsed ? " news-edge-"+edge : "")} aria-label="News">
+    ${/* ⚠ The poll sits INSIDE the collapse. It is the tallest thing in this
+          box (~200px of the 578 it measured on a phone), so a collapse that
+          left it standing would not be a collapse. */""}
+    ${!collapsed && (poll || null)}
+    <div class="home-feed-head">
+      ${titleEl}
+      <button class=${"home-feed-collapse-btn"+(collapsed?" is-collapsed":"")}
+        onClick=${() => setCollapsed(!collapsed)}
+        aria-expanded=${collapsed ? "false" : "true"}
+        title=${collapsed ? "Show news and the poll" : "Hide news and the poll — it reopens when something new is posted"}>
+        <span class="home-feed-chev" aria-hidden="true">▾</span>
+      </button>
+    </div>
+    ${!collapsed && html`<div class="home-news-feed-scroll">
       <div class="home-news-feed-list" ref=${listRef} onScroll=${sync}>${tiles}</div>
       <button class="home-news-feed-more" tabIndex=${-1} aria-hidden="true"
         onClick=${() => { const el = listRef.current; if(el) el.scrollBy({top: Math.round(el.clientHeight * 0.75), behavior: "smooth"}); }}>⌄</button>
-    </div>
+    </div>`}
   </aside>`;
 };
 
@@ -43807,6 +44497,23 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     try { localStorage.setItem("packsink:home:sealedKinds", JSON.stringify(sealedKinds)); } catch {}
   }, [sealedKinds]);
   const toggleSealedKind = (k) => setSealedKinds(prev => toggleChipKey(SEALED_MOVER_KIND_ORDER, prev, k));
+  // Which movers row the phone is showing (see MoversPicker). A banner key, or
+  // null for "whichever is first" — null is NOT the same as a stored key that
+  // happens to be first, because the built-in order is hot-aware and moves the
+  // newest-set row to the top during release week. Storing the resolved key on
+  // first paint would freeze a visitor on whatever was top the day they first
+  // opened the site; leaving it null lets the heuristic keep working until
+  // they actually pick something.
+  const [moversPick, setMoversPick] = useState(() => {
+    try {
+      const v = localStorage.getItem("packsink:home:moversPick");
+      return (v === MOVERS_PICK_ALL || HOME_BANNER_KEYS.includes(v)) ? v : null;
+    } catch { return null; }
+  });
+  useEffect(() => {
+    if(!moversPick) return;
+    try { localStorage.setItem("packsink:home:moversPick", moversPick); } catch {}
+  }, [moversPick]);
   const [selectedSealed, setSelectedSealed] = useState(null);
   // History is fetched for EVERY candidate at once, so a chip toggle re-filters
   // and never refetches, and only as far back as the selected window needs:
@@ -44076,6 +44783,25 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     const now = new Date();
     return now >= start && now <= end;
   }, [NEWEST_SET]);
+  // ⚠ A SECOND, longer window, not a widening of the one above. `newestSetIsHot`
+  // ends the Friday after LGS and floats the newest-set banner to the top of
+  // the STACK — a deliberate one-week heuristic that the banner ▲▼ retire.
+  // This one runs a fortnight and decides only which chip the mobile picker
+  // opens on: "the first 2 weeks of a set, set the newest set as the default
+  // mover on mobile instead of chase" (Zaven). Folding them into one constant
+  // would quietly move the banner order too.
+  const newestSetIsNew = useMemo(() => {
+    if(!NEWEST_SET) return false;
+    const dates = SET_RELEASE_DATES[NEWEST_SET];
+    if(!dates?.lgs) return false;
+    const lgs = new Date(dates.lgs + "T00:00:00");
+    if(isNaN(lgs.getTime())) return false;
+    const start = new Date(lgs); start.setDate(start.getDate() - 2);
+    const end = new Date(lgs); end.setDate(end.getDate() + 14);
+    end.setHours(23, 59, 59, 999);
+    const now = new Date();
+    return now >= start && now <= end;
+  }, [NEWEST_SET]);
   const valuableCards = useMemo(()=>{
     if(!raw || !raw.length || !NEWEST_SET) return [];
     const chaseSet  = new Set(["Enchanted","Iconic","Epic"]);
@@ -44273,8 +44999,23 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // ≤1100px, where the rail columns sink below the movers. In the movers
   // loading/error states the rl copy renders full-width so announcements
   // never disappear behind a data hiccup on phones.
+  // ⚠ The signature is what decides whether a collapsed box reopens, so it has
+  // to change when — and only when — there is something NEW to see. Tile KEYS,
+  // not tile count: a set announcement replacing a convention tile is new, and
+  // the count would not move. The poll's id rides along for the same reason.
+  // It must NOT include anything that changes on its own (a countdown, a
+  // price), or the box would reopen on a timer and the minimise would be a lie.
+  const newsSig = useMemo(() => {
+    const keys = newsTiles.map(t => (t && t.key) || "?").join("|");
+    // \u26a0 poll_id, the column `vote_poll` takes \u2014 there is no `id` on this row,
+    // and reading one gave a signature ending "::undefined" that never moved,
+    // so a brand-new poll could not reopen a collapsed box. Deliberately NOT
+    // my_choice or pct: those change when YOU vote, which would pop the box
+    // open at the one moment you have just finished with it.
+    return keys + "::" + (homePoll.poll ? homePoll.poll.poll_id : "-");
+  }, [newsTiles, homePoll.poll]);
   const newsFeedAside = (variant) => (panelCol["news"] != null && (newsTiles.length > 0 || homePoll.poll))
-    ? html`<${NewsFeed} key=${"news-"+variant} variant=${variant} tiles=${newsTiles}
+    ? html`<${NewsFeed} key=${"news-"+variant} variant=${variant} tiles=${newsTiles} sig=${newsSig}
         panelNav=${variant === "rail" ? panelTitleNav : null}
         poll=${html`<${HomePollBox} state=${homePoll} user=${user} onSignIn=${onSignIn}/>`}/>`
     : null;
@@ -44557,9 +45298,6 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
               color:paused?"#fff":"var(--text)",borderRadius:6,cursor:"pointer"}}>
             ${paused?"▶ Resume":"⏸ Pause"}
           </button>
-          <span class="muted" style=${{fontSize:11}}>
-            Top 20 per banner · prior low ≥ $5 in selected window
-          </span>
         </div>
         ${state.loading
           ? html`<div>${newsFeedRl}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>Loading movers…</div></div>`
@@ -44683,6 +45421,69 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                   for(const p of homeLayout){
                     if(p.pair && p.on && p.key !== openPanel) pairedByBanner[p.pair] = p;
                   }
+                  // ── Phone/tablet: ONE row, chosen by a chip strip ─────────
+                  // Measured signed out at 375x812 before this shipped: the
+                  // stack ran 2354px — 51% of a 4622px page — so the calendar
+                  // began at screen 3.3 and the rails at 4.1. Above 1100px the
+                  // three columns sit SIDE BY SIDE, so a column is a spatial
+                  // choice; below it they concatenate and "which rail" quietly
+                  // becomes "how far down". One banner plus a strip is what
+                  // gives a phone its own first screen back.
+                  //
+                  // ⚠ NOT while editing. The ▲▼ reorder bars are interleaved
+                  // INTO this stack, so a collapsed stack would offer arrows
+                  // for one row and hide the rest — you could not reorder what
+                  // you cannot see. Edit mode renders every banner at every
+                  // width, which is also what makes the order legible while
+                  // you change it.
+                  //
+                  // "All" is the way back to the full stack — the pre-2026-09-20
+                  // behaviour, now a deliberate pick. It renders the SAME stack
+                  // the desktop path builds (news back inside .rl-news-row,
+                  // paired panels back beside their banners), with the strip
+                  // above it, so it is genuinely the old page and not a second
+                  // implementation of it that can drift.
+                  let mobilePicker = null;
+                  if(!wideHome && !editing && visibleBannerKeys.length > 0){
+                    const showAll = moversPick === MOVERS_PICK_ALL;
+                    // ⚠ The fortnight default only applies when the user has
+                    // made NO pick. An explicit chip wins, the same contract
+                    // the banner ▲▼ have over the hot-set ordering: a
+                    // heuristic may choose for you, never over you.
+                    const fallback = (newestSetIsNew && visibleBannerKeys.includes("valuable"))
+                      ? "valuable" : visibleBannerKeys[0];
+                    const pick = showAll ? MOVERS_PICK_ALL
+                      : (visibleBannerKeys.includes(moversPick) ? moversPick : fallback);
+                    mobilePicker = html`<${MoversPicker} key="movers-pick"
+                      keys=${visibleBannerKeys} pick=${pick} onPick=${setMoversPick}/>`;
+                    // "All" falls straight through to the ordinary stack
+                    // below, which the picker is prepended to at the return.
+                    if(!showAll){
+                    // ⚠ The Rare–Legendary key carries the news feed with it
+                    // (bannerNodes.rareLeg wraps both in .rl-news-row), and on
+                    // a phone that rl copy is the ONLY one rendered — the rail
+                    // copy is display:none ≤1100px. Show the bare banner and
+                    // lift the news feed out, or picking any other chip would
+                    // delete the news feed from the page with no way back.
+                    const one = (pick === "rareLeg" && newsFeedRl) ? rareLegBanner : bannerNodes[pick];
+                    // Same for a panel the user parked beside a banner: it is
+                    // pulled out and rendered below the movers block whichever
+                    // chip is live. Letting it travel with its own banner would
+                    // make half the page appear and disappear as you tap along
+                    // the strip.
+                    const lifted = [];
+                    if(newsFeedRl) lifted.push(html`<${React.Fragment} key="lift-news">${newsFeedRl}<//>`);
+                    for(const p of Object.values(pairedByBanner)){
+                      const panel = panelNode(p.key);
+                      if(panel) lifted.push(html`<${React.Fragment} key=${"lift-"+p.key}>${panel}<//>`);
+                    }
+                    return html`<${React.Fragment}>
+                      ${mobilePicker}
+                      ${one}
+                      ${lifted}
+                    <//>`;
+                    }
+                  }
                   const stack = [];
                   order.forEach((k) => {
                     let node = bannerNodes[k];
@@ -44733,7 +45534,9 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                   // A fragment, not a wrapper div — the banners must stay
                   // DIRECT children of .home-grid-main so the edit-mode
                   // freeze rule dims each banner while its bar stays live.
-                  return html`<${React.Fragment}>${stack}<//>`;
+                  // mobilePicker is null on desktop and while editing, so this
+                  // is the untouched desktop return in both of those cases.
+                  return html`<${React.Fragment}>${mobilePicker}${stack}<//>`;
                 })()}
         ${mainNodes}
       </div>

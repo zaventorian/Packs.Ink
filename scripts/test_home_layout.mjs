@@ -226,5 +226,59 @@ check("fresh browser: set EV on the left", colOf(fresh, "setEv"), "left");
 check("fresh browser: calendar leads the right rail",
   fresh.filter((p) => p.col === "right")[0].key, "calendar");
 
+// -- The mobile movers picker's chip labels -------------------------------
+// Below 1100px the banner stack renders as ONE banner plus a chip strip, and
+// a chip takes its text from HOME_BANNER_SHORT. A key missing there is not an
+// error -- it falls back to HOME_BANNER_LABELS, a full title like
+// "Newest set - Most Valuable" -- so the strip silently blows its width out
+// and the chips go half-clipped. Nothing on screen says which key was missed.
+const shortSrc = grab("const HOME_BANNER_SHORT = {", "\n};");
+const keysSrc = grab("const HOME_BANNER_KEYS = [", "];");
+const labelsSrc = grab("const HOME_BANNER_LABELS = {", "\n};");
+const rarSrc = grab("const HOME_BANNER_RARITIES = {", "\n};");
+const iconSrc = grab("const RARITY_ICONS = {", "\n};");
+const { HOME_BANNER_SHORT, HOME_BANNER_KEYS, HOME_BANNER_LABELS,
+        HOME_BANNER_RARITIES, RARITY_ICONS } = await import(
+  "data:text/javascript," + encodeURIComponent(
+    [keysSrc, shortSrc, labelsSrc, rarSrc, iconSrc,
+     "export { HOME_BANNER_SHORT, HOME_BANNER_KEYS, HOME_BANNER_LABELS,",
+     "         HOME_BANNER_RARITIES, RARITY_ICONS };"].join("\n")));
+
+for (const k of HOME_BANNER_KEYS) {
+  check('banner "' + k + '" has a short chip label',
+    typeof HOME_BANNER_SHORT[k] === "string" && HOME_BANNER_SHORT[k].length > 0, true);
+}
+check("no short label is left over from a removed banner",
+  Object.keys(HOME_BANNER_SHORT).filter((k) => !HOME_BANNER_KEYS.includes(k)).join(",") || "none",
+  "none");
+// The three rarity-group chips draw RARITY_ICONS instead of a word. A name
+// that is not a canonical rarity renders NOTHING — no error, and no fallback
+// to the word, just an empty chip — so the two maps have to agree.
+for (const [k, rars] of Object.entries(HOME_BANNER_RARITIES)) {
+  check(`rarity chip "${k}" is a real banner`, HOME_BANNER_KEYS.includes(k), true);
+  for (const r of rars) {
+    check(`"${k}" rarity "${r}" has an icon`, typeof RARITY_ICONS[r] === "string", true);
+  }
+  // An icon chip has no text node, so its accessible name comes from the full
+  // label alone. Losing that entry leaves a screen reader with just "button".
+  check(`icon chip "${k}" has a full label to name it`,
+    typeof HOME_BANNER_LABELS[k] === "string", true);
+}
+
+// "All" shares the one localStorage key with the banner keys, so a banner
+// named "all" would make the sentinel unreadable from a stored value: the
+// strip would come back on the wrong chip and there would be no way to tell
+// which the user meant. Nothing enforces the namespace but this.
+const allSentinel = /const MOVERS_PICK_ALL = "([^"]+)";/.exec(src);
+check("MOVERS_PICK_ALL is declared", !!allSentinel, true);
+check("the All sentinel collides with no banner key",
+  allSentinel && HOME_BANNER_KEYS.includes(allSentinel[1]), false);
+
+// The strip is ~347px on a 375px phone; a chip is roughly 7px per character
+// plus 22px of padding. Anything past ~14 characters is a title, not a chip.
+for (const [k, v] of Object.entries(HOME_BANNER_SHORT)) {
+  check('short label "' + v + '" is chip-sized', v.length <= 14, true);
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);

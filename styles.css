@@ -374,6 +374,18 @@ html[data-mode="light"]{ color-scheme: only light; }
 body{margin:0;font-family:'Nunito Sans',sans-serif;font-size:14px;color:var(--text);background-color:var(--bg);
   padding:max(1.5rem,env(safe-area-inset-top)) max(1.5rem,env(safe-area-inset-right)) max(1.5rem,env(safe-area-inset-bottom)) max(1.5rem,env(safe-area-inset-left));
   max-width:1300px;margin:0 auto;min-height:100vh;position:relative;}
+/* ⚠ The column widens on a big monitor rather than the page ZOOMING. CSS zoom
+   is the one-line version of "make it bigger" and it is not usable here:
+   measured, a position:fixed element placed at a getBoundingClientRect() lands
+   194px off under zoom:1.15, and every popover on this site is anchored exactly
+   that way (useCalPopAnchor, the calendar hover card, .gc-caps-tip, the settings
+   pin). So the dead space is spent on CONTENT instead -- at 1920 it was 310px a
+   side doing nothing, and the movers column is what grows into it.
+   Stepped rather than fluid so the breakpoints stay reasonable to reason about,
+   and the rails grow with it: a 240px rail beside a 900px column reads as a
+   margin with words in it. */
+@media (min-width:1500px){body{max-width:1440px;}}
+@media (min-width:1750px){body{max-width:1640px;}}
 body::before{content:'';position:fixed;inset:0;z-index:-2;background:var(--bg);}
 body::after{content:'';position:fixed;inset:0;z-index:-1;opacity:0.5;background:
   radial-gradient(ellipse 600px 600px at 10% 20%, rgba(200,168,70,0.04) 0%, transparent 70%),
@@ -2072,7 +2084,35 @@ html[data-mode="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
    every child <img> at the layer's resolution (visible blur on AVIF cards).
    Instead, two absolutely-positioned gradient overlays fade the left/right
    edges, leaving children's pixels untouched. */
-.movers-wrap{overflow-x:auto;overflow-y:hidden;padding:4px 4px 10px;position:relative;
+/* The banner's title line. It was inline styles on the element; it needs to be
+   a class so the subtitle can be the part that gives when the row is tight.
+   ⚠ NOWRAP on desktop, and that is the whole fix. flex-wrap:wrap breaks lines
+   from each item's CONTENT size and only shrinks within a line afterwards — so
+   flex-shrink on the subtitle could never stop the wrap, which is why making it
+   shrinkable alone did nothing. With nowrap the shrink actually runs, the
+   subtitle ellipses, and the cameras stay on the title's line instead of
+   sitting on a line of their own with the whole width empty beside them.
+   Wrapping comes back on a phone, where there genuinely is no room. */
+.movers-banner-head{display:flex;align-items:center;gap:8px;margin-bottom:3px;flex-wrap:nowrap;}
+/* Only the subtitle gives. Without this the title would shrink and clip first
+   on the banners whose titles are long (the newest set's names the set). */
+.movers-banner-head > *{flex:0 0 auto;}
+@media (max-width:700px){.movers-banner-head{flex-wrap:wrap;}}
+/* ⚠ flex-GROW 0, flex-SHRINK 1. Grow was the first attempt and it made things
+   worse in the exact way being fixed: the subtitle expanded to fill the row and
+   pushed the cameras onto a line of their own. It must take its content width,
+   give ground when the row is tight, and never ask for more.
+   min-width:0 is the other half — without it a flex item will not shrink below
+   its longest word, so the row breaks anyway. */
+.movers-banner-sub{font-size:10px;flex:0 1 auto !important;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.movers-banner-cams{margin-left:auto;display:inline-flex;gap:6px;align-items:center;
+  flex:0 0 auto;}
+/* ⚠ The 10px bottom pad was room for a scrollbar that is styled thin and
+   overlaid; 6 still clears it. Four pixels sounds like nothing, but two banner
+   rows landing 10px past the fold is the difference between "two rows" and
+   "nearly two rows" on a 1080p screen, which is what this is for. */
+.movers-wrap{overflow-x:auto;overflow-y:hidden;padding:4px 4px 6px;position:relative;
   scrollbar-width:thin;
   overscroll-behavior-x:contain;}
 .movers-wrap::before,
@@ -2087,7 +2127,11 @@ html[data-mode="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
    of name length or missing data. Rows: image / name / meta / prices / deltas. */
 .mover-tile{flex:0 0 138px;display:grid;
   grid-template-rows:auto auto auto auto auto;
-  gap:2px;padding:3px 3px 5px;border:1px solid var(--border);border-radius:6px;
+  /* ⚠ 1px gaps and a 3px foot, not 2 and 5. Five inter-row gaps plus the pad
+     is 7px a tile, and 7px x two banner rows is what puts the second row's
+     bottom edge INSIDE a 1080p viewport instead of 2px past it. The card art is
+     deliberately untouched -- it is the thing that was asked to be bigger. */
+  gap:1px;padding:3px 3px 3px;border:1px solid var(--border);border-radius:6px;
   background:var(--stat-bg,transparent);text-decoration:none;color:inherit;
   cursor:pointer;transition:border-color 0.15s ease;}
 .mover-tile:hover{border-color:var(--accent);}
@@ -3048,14 +3092,26 @@ button.graded-home-title{cursor:pointer;}
   cursor:pointer;font-size:12px;line-height:1;padding:3px 7px;border-radius:5px;}
 .sc-collapse-btn:hover{color:var(--accent);background:var(--accent-glow);}
 .sc-box-body{margin-top:8px;}
-.sc-mode-toggle{display:flex;gap:0;margin-bottom:8px;border:1px solid var(--btn-border);
-  border-radius:8px;overflow:hidden;background:var(--bg-solid);}
-.sc-mode-btn{flex:1;padding:6px 8px;font-size:11.5px;font-weight:700;cursor:pointer;
-  border:none;background:transparent;color:var(--text-dim);font-family:inherit;
-  letter-spacing:0.02em;white-space:nowrap;transition:background .12s,color .12s;}
-.sc-mode-btn+.sc-mode-btn{border-left:1px solid var(--btn-border);}
-.sc-mode-btn:hover{color:var(--text);}
-.sc-mode-btn.active{background:var(--accent);color:#fff;}
+/* ⚠ A WRAPPING chip row, not a joined segmented bar. The segmented shape is
+   what a one-of-N control looks like, and this stopped being one when the kinds
+   became a multi-select -- three joined cells all lit reads as broken rather than
+   as three things switched on. Wrapping is also what lets a fourth button exist
+   at all: four joined cells in the calendar tile's ~220px rail gave each 46px. */
+.sc-mode-toggle{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;}
+.sc-mode-btn{flex:0 1 auto;display:inline-flex;align-items:center;gap:4px;
+  padding:5px 10px;font-size:11.5px;font-weight:700;cursor:pointer;
+  border:1px solid var(--btn-border);border-radius:999px;background:var(--btn-bg);
+  color:var(--text-dim);font-family:inherit;letter-spacing:0.02em;white-space:nowrap;
+  transition:background .12s,color .12s,border-color .12s;}
+.sc-mode-btn:hover{color:var(--text);border-color:var(--accent);}
+.sc-mode-btn.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+/* All is a SHORTCUT, not a kind: it carries no tickbox, because there is nothing
+   to untick -- pressing it turns the other three on. */
+.sc-mode-all{font-style:normal;}
+.sc-mode-all.active{background:var(--accent-glow);color:var(--accent);border-color:var(--border-accent);}
+/* The last kind standing cannot be unticked, so it must not offer to be. */
+.sc-mode-kind.last{cursor:default;}
+.sc-mode-kind.last:hover{border-color:var(--accent);}
 .sc-tile-kind{display:inline-block;margin-right:5px;padding:1px 5px;border-radius:4px;
   font-size:9px;font-weight:800;letter-spacing:0.03em;text-transform:uppercase;vertical-align:middle;}
 .sc-tile-kind--sc{background:var(--accent-glow);color:var(--accent);}
@@ -3095,7 +3151,7 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
    of usable width, which is inside the margin of error for a longer future
    label. 4px buys ~24px back and costs nothing — the segment is already full
    width, so the buttons keep their hit area. */
-.sc-box--embed .sc-mode-btn{padding:6px 4px;font-size:11px;}
+.sc-box--embed .sc-mode-btn{padding:4px 7px;font-size:10.5px;gap:3px;}
 /* Shorter than the 340px standalone list: the pins float to the top, so ~4
    tiles is the pinned shops plus a look at what is next, and the rest is a
    scroll rather than a tile that owns the rail. */
@@ -3172,6 +3228,19 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .sc-date-input{padding:3px 6px;font-size:11px;border:1px solid var(--btn-border);
   border-radius:5px;background:var(--bg-solid);color:var(--text);font-family:inherit;}
 .sc-date-input:focus{outline:none;border-color:var(--accent);}
+/* One chip per chosen date. It IS the remove button -- a date you picked on
+   purpose is a thing you take back off, and a separate × on a 60px chip is a
+   target nobody can hit. */
+.sc-date-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;
+  font-size:10.5px;font-weight:700;font-family:inherit;white-space:nowrap;cursor:pointer;
+  border:1px solid var(--border-accent);border-radius:999px;
+  background:var(--accent-glow);color:var(--accent);}
+.sc-date-chip:hover{border-color:var(--red);color:var(--red);background:none;}
+.sc-date-chip span{opacity:0.7;font-weight:800;}
+/* A date in the past can never match (the feed is upcoming-only), so it says so
+   rather than sitting there looking like every other chip. */
+.sc-date-chip.past{border-style:dashed;opacity:0.72;}
+.sc-date-past{display:flex;align-items:center;gap:5px;margin-top:5px;font-size:10.5px;}
 .sc-date-clear{background:none;border:none;color:var(--text-muted);cursor:pointer;
   font-size:15px;line-height:1;padding:0 4px;border-radius:4px;}
 .sc-date-clear:hover{color:var(--red);}
@@ -3434,6 +3503,16 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .home-poll-res-name,.home-poll-res-pct{position:relative;z-index:1;}
 .home-poll-res-name{flex:1;min-width:0;font-weight:600;color:var(--text);}
 .home-poll-res-pct{font-weight:700;font-variant-numeric:tabular-nums;color:var(--text);}
+/* Collapsed news/poll. The head row keeps its chevron; everything else goes.
+   ⚠ `contain:size` has to be released here. In the .rl-news-row pair the box
+   takes its height from the banner beside it and is explicitly told not to
+   size to its contents — so without this, collapsing it leaves a full-height
+   empty rectangle, which is worse than not collapsing at all. */
+.home-news-feed.is-collapsed{padding-bottom:6px;}
+.home-news-feed.is-collapsed .home-feed-head{margin-bottom:0;}
+.rl-news-row > .home-feed.home-news-feed--rl.is-collapsed{contain:none;align-self:start;}
+.home-news-feed .home-feed-head{display:flex;align-items:center;gap:6px;}
+.home-news-feed .home-feed-head > :first-child{flex:1 1 auto;min-width:0;}
 .home-news-feed-scroll{position:relative;}
 /* Viewport-relative cap: a flat pixel cap clipped the list well short of the
    room the row actually had on tall phones. */
@@ -3534,6 +3613,19 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
   .rl-news-row > .home-news-feed--rl > .home-news-feed-scroll{flex:1 1 auto;min-height:88px;
     display:flex;flex-direction:column;}
   .rl-news-row > .home-news-feed--rl .home-news-feed-list{flex:1 1 auto;min-height:0;max-height:none;}
+  /* ⚠ The rl copy LIFTED OUT of the pair row (the mobile movers picker renders
+     it standalone, so it survives whichever chip is live) has nothing bounding
+     it: inside .rl-news-row its height came from the banner beside it, and the
+     520px cap above plus the poll measured 773px on a 812px phone — a whole
+     screen of announcements between the movers row and the calendar. Clipping
+     it is a SUPPORTED state, not a compromise: .news-edge-* already fades the
+     cut edge and shows a ⌄ chip, which is the affordance built for exactly
+     this. Matched by its PARENT — the lifted copy is a direct child of
+     .home-grid-main, the paired one sits inside .rl-news-row — rather than by
+     a new class (which can fall out of step with where the element actually
+     renders) or by a `:not()` carrying a combinator, which is Selectors-4 and
+     wants a newer Safari than the rest of this file assumes. */
+  .home-grid-main > .home-news-feed--rl .home-news-feed-list{max-height:min(40vh,340px);}
 }
 @media (max-width:700px){
   .home-news-feed{padding:5px 7px 3px;}
@@ -3905,7 +3997,68 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .home-grid.hg-no-left{grid-template-columns:minmax(0,1fr) 360px;}
 .home-grid.hg-no-right{grid-template-columns:240px minmax(0,1fr);}
 .home-grid.hg-no-left.hg-no-right{grid-template-columns:minmax(0,1fr);}
+/* ⚠ AFTER .home-grid, not up beside the body width it belongs with: same
+   specificity, so declared first it loses on source order and the rails stay
+   240/360 while the body widens around them. The rails grow with the column
+   because a 240px rail beside a 950px main column reads as a margin with words
+   in it -- and the Set EV / calendar panels in there were tuned for a rail, not
+   for a sliver. */
+@media (min-width:1500px){.home-grid{grid-template-columns:260px minmax(0,1fr) 380px;}}
+@media (min-width:1750px){.home-grid{grid-template-columns:280px minmax(0,1fr) 400px;}}
 .home-grid-main{min-width:0;}
+/* Mobile movers picker — one chip per banner, rendered INSTEAD of the stack
+   below 1100px (HomeView gates it in JS, so these rules only ever meet a
+   phone/tablet DOM). Shares the site's chip metric: 5px 10px / 11.5px / 700 /
+   999px, same as .cal-chip-filter and the region chips.
+   ⚠ The trailing gutter is an ::after CHILD, never container padding —
+   padding on a scroll container is dropped at the end of the scroll range in
+   several engines, which is the standing rule the .tabs-grid note records. */
+.home-movers-pick{display:flex;gap:6px;align-items:center;margin:0 0 10px;padding:0;
+  overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-ms-overflow-style:none;
+  scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;}
+.home-movers-pick::-webkit-scrollbar{display:none;}
+.home-movers-pick::after{content:"";flex:0 0 8px;}
+/* ⚠ Cinzel, like the banner HEADING each chip reveals (.movers-banner-head's
+   title is Cinzel 12/600/accent). The strip and the heading name the same
+   thing two inches apart, so setting the chip in the body face made them read
+   as unrelated controls. Cinzel draws lowercase as small capitals, so
+   "Newest set" renders as small-caps without a text-transform — which is what
+   keeps the accessible name and the ctrl-F text in sentence case while the
+   chip reads as a display label. */
+.home-movers-chip{flex:0 0 auto;scroll-snap-align:start;
+  display:inline-flex;align-items:center;padding:5px 10px;
+  font-family:'Cinzel',serif;font-size:11px;font-weight:700;
+  letter-spacing:0.3px;white-space:nowrap;border:1px solid var(--border);border-radius:999px;
+  background:var(--btn-bg);color:var(--text-muted);cursor:pointer;
+  /* 36px is the top-nav tap floor and reads as a toolbar here; these sit in a
+     dense strip above the row they switch, so they take the chip metric and
+     make the target up with padding instead of height. */
+  min-height:28px;}
+/* "All" is a mode, not a seventh row, so it gets a little air after it — the
+   same grouping cue the deck-action rows use, minus the hairline, which would
+   have to be a pseudo-element and would then scroll oddly in this strip. */
+.home-movers-chip--all{margin-right:4px;}
+/* The three rarity-group rows show their tiers' icons instead of a word (see
+   HOME_BANNER_RARITIES). No text, so the padding comes in and the gap does the
+   separating; 15px is a touch over the 14px .rarity-tag-icon default because
+   these carry the chip on their own rather than sitting beside a label. */
+.home-movers-chip--rar{padding:4px 9px;gap:3px;}
+.home-movers-chip--rar .rarity-tag-icon{width:15px;height:15px;}
+/* ⚠ An icon chip needs a LIGHTER off state than a word chip, not a heavier
+   one. `filter` inherits down, so the base rule's grayscale(0.5) + opacity
+   0.62 already lands on the marks; adding a second grayscale to the <img>
+   stacked on top of it and the three Rare/Super Rare/Legendary gems went to
+   near-invisible dark triangles on a dark chip — checked on screen, which is
+   the only way this shows up. Text survives that treatment because its
+   contrast is carried by shape; a small coloured mark's is carried by colour. */
+.home-movers-chip--rar:not(.on){filter:grayscale(0.3);opacity:0.8;}
+.home-movers-chip:not(.on){filter:grayscale(0.5);opacity:0.62;}
+.home-movers-chip:hover{filter:none;opacity:1;}
+/* The site's one active-chip treatment — `background:var(--accent);color:#fff`,
+   the same pair .home-toolbar .seg-grp button.active uses for the 1D/1W/1M
+   chips sitting directly above this strip. Don't reach for a new token. */
+.home-movers-chip.on{background:var(--accent);border-color:var(--accent);
+  color:#fff;filter:none;opacity:1;}
 .home-left-col{display:flex;flex-direction:column;gap:14px;min-width:0;}
 .home-left-col > .home-feed{align-self:stretch;width:100%;box-sizing:border-box;margin-bottom:0;}
 .home-tourney-list{display:flex;flex-direction:column;gap:10px;}
@@ -3997,22 +4150,62 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
      with align-items:start — each box keeps its natural height; nothing is
      absolutely positioned or height-locked (the reason the previous
      side-by-side tournament layout was ripped out). */
-  .home-left-col{order:3;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
-    gap:12px;align-items:start;}
-  .home-left-col > *{min-width:0;}
+  /* ⚠ FLEX-WRAP, not a 2-column grid. Same two-up result, but a lone item on
+     the last line GROWS to fill it instead of leaving an empty cell — which
+     is what a grid did, and it was visible dead space: signed out the rail
+     renders Following | Tournaments, then the Toolbox alone at 169px with
+     half the screen blank beside it.
+     CSS cannot express "last row, stretch" in a grid: `:last-child:nth-child(odd)`
+     counts DOM position, and the news feed's `--rail` copy is display:none at
+     this width while still occupying child index 1, so the parity is wrong
+     before you start. Flex needs no count — flex-grow does it per line,
+     whatever is hidden, spanning, or absent.
+     ⚠ The track width is `width`, NOT `flex-basis`, and that is measured
+     rather than stylistic: `.home-feed` carries `width:100% !important` at
+     this breakpoint (it exists to stretch panels in the stacked column), and
+     in this container flex-basis loses to it — a hard `flex-basis:160px`
+     still measured 347px, while `width:calc(50% - 6px)` measured 168px and
+     paired correctly. So the basis is set through width, at !important to
+     beat that rule, and flex-grow:1 is what still fills a lone last line.
+     ⚠ And the selector must be `> .home-feed` (0,2,0), not `> *` (0,1,0):
+     against `.home-feed` (0,1,0) the universal form only TIES, and the rule
+     it has to beat is declared in the LATER @media block below, so source
+     order hands the win back to `width:100%` and every panel goes full width
+     again. That is the second way this landed wrong.
+     ⚠ And it is `- 7px` against a 12px gap, not the exact `- 6px`: at 347px
+     the exact half is 167.5, and 167.5 x 2 + 12 = 347.0 — which subpixel
+     rounding tips over the line, so the pair wrapped and every panel sat
+     alone at 168px looking like the fix had done nothing. Leave the slack. */
+  /* ⚠ align-self:stretch is REQUIRED, exactly as it is on .home-grid-right
+     above. .home-grid keeps its base `align-items:start`, and in this column
+     flex container `start` shrink-to-fits a child to its content width — with
+     a 2-col GRID inside that resolved to the available width, but a wrap-flex
+     container's max-content is the sum of every item on one line, so the rail
+     measured 425.7px inside a 347px page and both panels overflowed the
+     viewport. Measured, not theorised: it is what this change did first. */
+  /* ⚠ flex-direction:row is EXPLICIT. The base .home-left-col rule is a
+     `flex-direction:column` stack, and switching only display+wrap here left
+     a COLUMN wrap container — every panel on its own line, at the correct
+     167px width, which reads exactly like the pairing silently not working.
+     Third and last way this landed wrong; the width was never the problem. */
+  .home-left-col{order:3;display:flex;flex-direction:row;flex-wrap:wrap;gap:12px;
+    align-items:flex-start;align-self:stretch;width:100%;box-sizing:border-box;}
+  .home-left-col > *{min-width:0;flex:1 1 auto;box-sizing:border-box;}
+  .home-left-col > .home-feed,
+  .home-left-col > .home-toolbox{width:calc(50% - 7px) !important;}
   .home-left-col > .home-feed{margin-bottom:0 !important;}
   /* ⚠ The calendar spans BOTH columns. The 2-up rail suits Following and
      Tournament Results, whose rows are a name and a number, but a calendar row
      is a date, a countdown and an event title — measured at 375px it got a
      169px box and clipped 6 of 6 meta lines and 5 of 6 titles. Full width is
      the difference between a list you can read and a column of ellipses. */
-  .home-left-col > .home-feed--calendar{grid-column:1 / -1;}
+  .home-left-col > .home-feed--calendar{width:100% !important;}
   /* ⚠ Set EV spans both for the same reason (2026-09-15). It moved into this
      rail when the calendar left it, and a half cell here is 176px — narrower
      than the 240px rail it was tuned for — where even the stacked three-column
      row clipped every price. The toolbox next to it is one column of chips and
      reads fine at 162px, so only this one needs the full width. */
-  .home-left-col > .home-ev-strip{grid-column:1 / -1;}
+  .home-left-col > .home-ev-strip{width:100% !important;}
 }
 @media (max-width:1100px){
   /* Stretch the panel full-width inside the stacked column — desktop's
@@ -4035,8 +4228,10 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 }
 @media (max-width:360px){
   /* Below ~360px half a column can't hold a tournament row at any font size —
-     back to one panel per row. */
-  .home-left-col{grid-template-columns:minmax(0,1fr);}
+     back to one panel per row. A 100% basis, not a grid template: the rail is
+     flex-wrap now (see the ≤1100px block). */
+  .home-left-col > *,
+  .home-left-col > .home-feed{width:100% !important;}
 }
 @media (max-width:640px){
   /* Tighten the page header so it doesn't eat 25% of the viewport. */
@@ -4075,7 +4270,15 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .collection-panel .panel-chart{margin:4px -4px 12px;}
 .collection-panel .panel-movers{border-top:1px solid var(--border);padding-top:10px;}
 .collection-panel .panel-movers-title{font-size:10px;font-weight:600;
-  color:var(--text-muted);letter-spacing:0.5px;text-transform:uppercase;margin-bottom:6px;}
+  color:var(--text-muted);letter-spacing:0.5px;text-transform:uppercase;margin-bottom:6px;
+  display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
+  background:none;border:none;border-radius:0;padding:2px 0;cursor:pointer;
+  font-family:inherit;text-align:left;transition:color 0.12s;}
+.collection-panel .panel-movers-title:hover{color:var(--accent);}
+.collection-panel .panel-movers-caret{font-size:9px;line-height:1;opacity:0.8;}
+/* Collapsed: the border-top is the rule between the chart and this section,
+   so it stays; only the padding under the label goes. */
+.collection-panel .panel-movers.is-min .panel-movers-title{margin-bottom:0;}
 .collection-panel .panel-movers-controls{display:flex;flex-direction:column;gap:5px;margin-bottom:6px;}
 .collection-panel .panel-dir-toggle{display:flex;gap:8px;font-size:11px;}
 .collection-panel .panel-dir-toggle label{display:flex;align-items:center;gap:3px;cursor:pointer;
@@ -9734,7 +9937,23 @@ body:has(.deck-quickadd) .offline-pill{
    STRUCTURAL label is uppercase with tracking (it names a part of the chart, not
    a thing you press — a lane, a column head, a day-of-week). Initialisms keep
    their capitals in both. */
-.cal-chips{display:flex;gap:5px;flex-wrap:wrap;}
+/* ⚠ ONE LINE that scrolls, never a wrap. Wrapped, five chips took two rows
+   (60px) at the top of a page whose whole problem is how far down the calendar
+   starts. Set in Cinzel like the movers picker and the banner headings —
+   Cinzel draws lowercase as small capitals, so these read as the all-caps the
+   site uses for a label without a text-transform, and small caps are narrower
+   than the sentence case they replace, which is what buys the single line.
+   The trailing gutter is an ::after CHILD: padding on a scroll container is
+   dropped at the end of the range in several engines. */
+.cal-chips{display:flex;gap:5px;flex-wrap:nowrap;min-width:0;flex:1 1 auto;
+  overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-ms-overflow-style:none;}
+.cal-chips::-webkit-scrollbar{display:none;}
+.cal-chips::after{content:"";flex:0 0 4px;}
+.cal-chips > .cal-chip-filter{flex:0 0 auto;font-family:'Cinzel',serif;letter-spacing:0.3px;}
+/* ⚠ The count stays in the BODY face. A Cinzel numeral beside a Cinzel word
+   reads as part of the word rather than as a tally — same reason the timeline's
+   lane counts are body-face beside their Cinzel names. */
+.cal-chips > .cal-chip-filter .cal-chip-n{font-family:'Nunito Sans',sans-serif;}
 .cal-chip-filter,.cal-region-chip,.cal-near-chip{display:inline-flex;align-items:center;gap:5px;
   padding:5px 10px;font-size:11.5px;font-weight:700;letter-spacing:0.01em;white-space:nowrap;
   border:1px solid var(--border);border-radius:999px;
@@ -9790,7 +10009,63 @@ body:has(.deck-quickadd) .offline-pill{
   padding:8px 10px;font-size:12px;font-weight:600;text-align:left;border:none;
   border-radius:7px;background:none;color:var(--text);cursor:pointer;text-decoration:none;}
 .cal-add-item:hover{background:var(--bg-surface-hover);color:var(--accent);}
+/* The kind boxes under Follow this store. Indented to the label above them so
+   they read as ITS options, not as three more menu items. */
+.cal-add-store{display:flex;flex-direction:column;}
+.cal-add-check{padding-top:7px;padding-bottom:7px;padding-left:30px;
+  font-size:11.5px;font-weight:600;color:var(--text-muted);}
+/* Tighter than the rows above them reads as "these are ITS options" — but on a
+   finger that has to stay a real target, so touch gets the site's 36px floor. */
+@media (hover:none){.cal-add-check{padding-top:10px;padding-bottom:10px;}}
+.cal-add-check.on{color:var(--text);}
+.cal-add-check.on svg{color:var(--accent);}
+/* The last ticked one cannot be unticked — say so with the cursor, not only the
+   tooltip, or it reads as a dead control. */
+.cal-add-check.last{cursor:default;}
+.cal-add-check.last:hover{background:none;color:var(--text);}
 
+
+/* ── the store's own words about an event ─────────────────────────── */
+.cal-desc{margin-top:12px;padding:9px 11px;border:1px solid var(--border);
+  border-radius:8px;background:var(--bg-surface);}
+.cal-desc-head{display:flex;align-items:center;gap:6px;font-size:10px;font-weight:700;
+  text-transform:uppercase;letter-spacing:0.07em;color:var(--text-muted);margin-bottom:6px;}
+/* ⚠ pre-wrap. These are little agendas -- "Registration 2:30pm / Fire 3:00pm /
+   Fee $13" -- and the line breaks the shop typed ARE the formatting. Collapsing
+   them runs the whole thing into one paragraph and loses the only structure it
+   has. overflow-wrap is the other half: a pasted URL with no spaces in it would
+   otherwise push the modal wider than the screen. */
+.cal-desc-body{margin:0;font-size:12px;line-height:1.5;color:var(--text-dim);
+  white-space:pre-wrap;overflow-wrap:anywhere;}
+/* line-clamp rather than a height, so the cut lands on a line rather than
+   through the middle of one. */
+.cal-desc.is-clamped .cal-desc-body{display:-webkit-box;-webkit-box-orient:vertical;
+  -webkit-line-clamp:6;line-clamp:6;overflow:hidden;}
+.cal-desc-more{margin-top:6px;padding:0;border:none;background:none;font-family:inherit;
+  font-size:11px;font-weight:700;color:var(--accent);cursor:pointer;}
+.cal-desc-more:hover{text-decoration:underline;}
+
+/* ── one day's events, as a list ──────────────────────────────────── */
+/* ⚠ No width override here. One would sit BEFORE .cal-modal in this file and
+   lose to it on source order at equal specificity -- and the day list wants the
+   detail modal's width anyway: they are the two halves of one gesture, and two
+   dialogs of different widths swapping places reads as a jump. */
+.cal-day-list{list-style:none;margin:12px 0 0;padding:0;}
+.cal-day-list li + li{border-top:1px solid var(--border);}
+/* Unsetting all four of the global button paints, or every row reads as a chip
+   and the list stops looking like a list. */
+.cal-day-row{display:flex;align-items:center;gap:9px;width:100%;box-sizing:border-box;
+  padding:9px 4px;border:none;background:none;border-radius:7px;
+  font-family:inherit;text-align:left;cursor:pointer;color:var(--text);}
+.cal-day-row:hover{background:var(--bg-surface-hover);}
+.cal-day-row .cal-ico{width:20px;height:20px;border-radius:4px;}
+.cal-day-row-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
+.cal-day-row-title{font-size:12.5px;font-weight:700;line-height:1.3;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cal-day-row-sub{font-size:10.5px;color:var(--text-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cal-day-row-go{flex:0 0 auto;font-size:15px;color:var(--text-muted);line-height:1;}
+.cal-day-row:hover .cal-day-row-go{color:var(--accent);}
 
 /* ── followed stores ── */
 .cal-follow{margin:0 0 14px;}
@@ -9845,7 +10120,12 @@ body:has(.deck-quickadd) .offline-pill{
   background:var(--bg-surface-hover);color:var(--text);cursor:pointer;text-align:left;}
 .cal-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .cal-chip:hover{background:var(--accent-glow);color:var(--accent);}
-.cal-cell-more{font-size:9px;color:var(--text-muted);padding-left:4px;}
+/* A <button> now, so it needs the global button paint unset -- it is a line of
+   text in a cell, not a control with a box. */
+.cal-cell-more{font-size:9px;color:var(--text-muted);padding-left:4px;
+  border:none;background:none;font-family:inherit;font-weight:600;cursor:pointer;
+  text-align:left;width:100%;}
+.cal-cell-more:hover{color:var(--accent);}
 /* The grouped chip: "CCQ x3". The count is pushed to the chip's right edge so
    the kind word and the number read as two fields rather than one phrase. */
 .cal-chip--group{font-weight:700;}
@@ -9883,9 +10163,18 @@ body:has(.deck-quickadd) .offline-pill{
 .cal-month:not(.cal-month--compact) .cal-chip .cal-ico{width:17px;height:17px;border-radius:3px;
   margin-top:1px;}
 .cal-month:not(.cal-month--compact) .cal-chip .cal-ico-glyph svg{width:15px;height:15px;}
-.cal-month:not(.cal-month--compact) .cal-chip span:not(.cal-ico):not(.cal-chip-x){
-  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;
-  overflow:hidden;text-overflow:ellipsis;white-space:normal;line-height:1.28;}
+/* ⚠ min-width, and that bound is load-bearing. Unscoped, this rule OUT-SPECIFIES
+   the ≤700px `display:none` that is supposed to drop the label on a phone
+   (5 classes + span against 2 classes), so below 700px every chip label became a
+   ZERO-WIDTH box still two lines tall: invisible text costing 10px a chip. A day
+   with three icons then blew its cell past its siblings' and took the whole grid
+   row with it — reported as "dates like 10/16 get broken w/3 icons on it". The
+   label only wraps where there is width to wrap in. */
+@media (min-width:701px){
+  .cal-month:not(.cal-month--compact) .cal-chip span:not(.cal-ico):not(.cal-chip-x){
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;
+    overflow:hidden;text-overflow:ellipsis;white-space:normal;line-height:1.28;}
+}
 
 /* ── The hover card ────────────────────────────────────────────────────────
    ⚠ pointer-events:none. It is positioned over a grid of click targets, and a
@@ -9951,6 +10240,9 @@ body:has(.deck-quickadd) .offline-pill{
 .cal-modal{position:relative;background:var(--bg-modal);border:1px solid var(--border);
   border-radius:12px;padding:20px;max-width:460px;width:100%;
   max-height:88vh;overflow-y:auto;box-shadow:0 20px 50px rgba(0,0,0,0.4);}
+/* Only the release modal, only because it carries the product list. width:100%
+   still caps it on a phone, so this costs narrow screens nothing. */
+.cal-modal--wide{max-width:560px;}
 .cal-modal-close{position:absolute;top:max(8px,env(safe-area-inset-top));right:10px;
   border:none;background:none;font-size:22px;line-height:1;color:var(--text-muted);cursor:pointer;}
 /* ── Official set logos ─────────────────────────────────────────────────────
@@ -10089,8 +10381,18 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
   /* The grid is the secondary view, and this is where it has to shed weight
      rather than break: a 48px cell can show dots, so the chip labels go and the
      dot count becomes the signal. Tapping a day still opens its events. */
-  .cal-cell{min-height:58px;padding:2px;}
-  .cal-chip{padding:3px 2px;justify-content:center;}
+  /* ⚠ These two must carry the FULL-GRID selector as well as the bare one.
+     `.cal-month:not(.cal-month--compact) .cal-cell{min-height:128px}` above is
+     (0,3,0) against this rule's (0,1,0), so on /calendar — which is never
+     `--compact` — the 128px won and a phone drew seven columns of 128px-tall
+     cells, mostly empty, with the tiny centred icons lost in them. Reported as
+     "this looks sad. sizing way off". It is the very trap the note under that
+     rule already describes for the chip LABEL; the height had the same hole. */
+  .cal-cell,
+  .cal-month:not(.cal-month--compact) .cal-cell{min-height:58px;padding:2px;}
+  .cal-chip,
+  .cal-month:not(.cal-month--compact) .cal-chip{padding:3px 2px;justify-content:center;
+    align-items:center;}
   /* Hide the LABEL, never the icon — .cal-ico is a <span> too, and a bare
      `.cal-chip span` rule hid it, leaving featureless grey bars where the
      glyph is the only thing a 48px cell can still say. ⚠ This selector names
@@ -10100,8 +10402,39 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
   .cal-cell-more{font-size:8px;text-align:center;padding:0;}
   .cal-row-when{flex-basis:74px;}
   .cal-form{grid-template-columns:minmax(0,1fr);}
-  .cal-header-actions{width:100%;}
-  .cal-toolbar{align-items:flex-start;}
+  /* ⚠ The lede is a first-visit explanation costing every later visit 40px at
+     the very top of the page. "If you click on the Lorcana Calendar, I want
+     the screen to instantly show you your calendar" (Zaven) — so on a phone
+     the heading stays (it is the page's h1, and its orientation) and the
+     sentence goes. Desktop, which has the room, keeps it. */
+  .cal-lede{display:none;}
+  /* ⚠ FLUID, not a second breakpoint. Measured at 375px: the title's share of
+     the header row is 158px, and "Lorcana Calendar" in Cinzel small caps wants
+     166px at 16 and 156 at 15 — so a fixed 15 fits this phone by two pixels
+     and clips the next one down. 3.6vw gives ~13.5px at 375 (140px, fits) and
+     ~13px at 360 (135 against 143, fits), while a tablet still reads 16.
+     The ellipsis below stays as the backstop, not the plan. */
+  .cal-h1{font-size:clamp(12px, 3.6vw, 16px);}
+  /* ⚠ The heading and its actions share ONE line. `> div` is the h1's wrapper;
+     without flex:1 1 auto + min-width:0 it sizes to the h1's max-content, and
+     at 375px that is just wide enough to push the actions onto a second line —
+     35px of nothing, at the very top of the page this work exists to shorten. */
+  .cal-header{align-items:center;gap:8px;padding:10px 12px;flex-wrap:nowrap;}
+  .cal-header > div{flex:1 1 auto;min-width:0;}
+  /* ⚠ The heading's own glyph goes, not the words. 20px of icon plus its gap
+     is 28px, and without it "Lorcana Calendar" fits the line whole instead of
+     ellipsing to "LORCANA CALEND…" — a clipped page title reads as breakage.
+     The ellipsis stays as the last resort for a narrower phone. */
+  .cal-h1 > svg{display:none;}
+  .cal-h1{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  /* ⚠ nowrap. Left wrapping, the two buttons stacked inside a 143px box and
+     the "one line" header came back at 64px — taller than the two-line one it
+     replaced. The title beside it ellipses instead, which is the right thing
+     to give: it is a fixed word you can read from the tab. */
+  .cal-header-actions{width:auto;flex:0 0 auto;gap:6px;flex-wrap:nowrap;}
+  /* Glyph only. The accessible name is on the button's aria-label. */
+  .cal-act--export span{display:none;}
+  .cal-toolbar{align-items:center;gap:8px;}
 }
 .cal-toolbar-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
 .cal-past{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;
@@ -10340,6 +10673,30 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
   color:var(--text-muted);display:inline-flex;}
 .cal-search-x:hover{color:var(--accent);}
 
+/* The region disclosure. The box wraps the toggle and, when open, the chips —
+   which drop to their own line so opening it never reflows the row above. */
+/* The Filters disclosure, beside the view modes. Shares the region toggle's
+   shape so the two disclosures on this page read as one kind of control. */
+.cal-filtbtn{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;
+  font-family:'Cinzel',serif;font-size:11px;font-weight:700;letter-spacing:0.3px;
+  white-space:nowrap;border:1px solid var(--border);border-radius:999px;
+  background:var(--btn-bg);color:var(--text-muted);cursor:pointer;flex:0 0 auto;}
+/* ⚠ `.on` is "a filter is APPLIED", not "the drawer is open" — the drawer is
+   closed by default, so this badge is the only thing on screen saying the list
+   below has been narrowed. `.open` is the drawer, and stays quiet. */
+.cal-filtbtn.on{border-color:var(--accent);color:var(--accent);}
+.cal-filtbtn em{font-style:normal;font-family:'Nunito Sans',sans-serif;font-size:9.5px;
+  font-weight:700;font-variant-numeric:tabular-nums;background:var(--accent);color:#fff;
+  border-radius:999px;padding:0 5px;line-height:15px;}
+.cal-regbox{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;}
+.cal-regtoggle{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;
+  font-family:'Cinzel',serif;font-size:11px;font-weight:700;letter-spacing:0.3px;
+  white-space:nowrap;border:1px solid var(--border);border-radius:999px;
+  background:var(--btn-bg);color:var(--text-muted);cursor:pointer;}
+/* ⚠ Lit only when a region is actually SELECTED, never merely because the
+   drawer is open. It is the one thing telling you the list below is narrowed. */
+.cal-regtoggle.on{border-color:var(--accent);color:var(--accent);}
+.cal-regbox.open > .cal-regions{flex-basis:100%;}
 .cal-regions{display:flex;align-items:center;gap:5px;flex-wrap:wrap;}
 .cal-region-chip:hover{color:var(--text);border-color:var(--text-muted);}
 .cal-region-chip.on{background:var(--accent);border-color:var(--accent);color:var(--bg);}
@@ -10470,8 +10827,45 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
 .cal-products ul{list-style:none;margin:0;padding:0;}
 .cal-products li{display:flex;align-items:baseline;gap:8px;padding:3px 0;font-size:12px;}
 .cal-products li + li{border-top:1px solid var(--border);}
-.cal-products li span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.cal-products li em{font-style:normal;font-size:10px;color:var(--text-muted);flex:0 0 auto;}
+/* ⚠ WRAPS, and the name carries a flex-basis. Without both, the two buy chips
+   (a fixed 174px) took their width first and left the product NAME 51px on a
+   phone -- the one thing the row exists to say, clipped to nothing, by controls
+   that only matter once you have read it. Basis 150 means the chips drop to
+   their own line the moment the name would be squeezed below that. */
+.cal-products li{align-items:center;flex-wrap:wrap;gap:6px 9px;}
+.cal-products li em{font-style:normal;font-size:10px;color:var(--text-muted);flex:0 0 auto;
+  margin-left:7px;}
+/* ⚠ The well carries the size. ProductPhoto's wrapper is position:absolute;
+   inset:0, so a slot that used to take its height from the <img> inside it
+   collapses to nothing. */
+.cal-prod-art{position:relative;flex:0 0 auto;width:34px;height:34px;border-radius:5px;
+  overflow:hidden;}
+.cal-prod-art img{max-width:100%;max-height:100%;object-fit:contain;}
+.cal-prod-name{flex:1 1 150px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* Where to buy. Outlined and small: this sits inside a list of releases, and a
+   row of filled buttons would out-shout the dates the modal is actually about. */
+/* ⚠ NO margin-left:auto. An auto margin on a flex item absorbs the positive
+   free space BEFORE flex-grow gets any, so the chips sat hard right and the
+   name never grew past its 150px basis -- a wide modal showed "Hyperia City
+   Sleeved Booster ..." with 200px of empty space beside it. Letting the name
+   grow is what pushes the chips to the edge, and on a wrapped second line they
+   start under the name rather than floating right. */
+.cal-buy{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;}
+.cal-buy-link{font-size:9.5px;font-weight:700;white-space:nowrap;text-decoration:none;
+  padding:3px 7px;border-radius:999px;border:1px solid var(--btn-border);
+  color:var(--text-dim);background:var(--btn-bg);}
+.cal-buy-link:hover{border-color:var(--accent);color:var(--accent);}
+.cal-buy-link--amzn:hover{border-color:#f0a33e;color:#f0a33e;}
+.cal-prodbuy{margin-top:12px;}
+.cal-prodbuy .cal-buy-link{font-size:11px;padding:5px 12px;}
+/* Required verbatim, and the FTC wants it NEAR the links rather than only in a
+   footer -- so every surface that renders an Amazon link carries its own. */
+.cal-products-aff{margin:8px 0 0;font-size:9px;line-height:1.4;color:var(--text-muted);}
+/* A product drop's photo is the hero of its modal, so it gets real height. The
+   ground is deliberately NOT painted: ProductPhoto cuts TCGplayer's white sweep
+   to transparency, and what shows through is the modal's own surface. */
+.cal-modal-prodart{position:relative;width:100%;height:150px;margin:0 0 12px;}
+.cal-modal-prodart img{max-width:100%;max-height:100%;object-fit:contain;}
 
 /* dl rows in the detail modal */
 /* Details / Scout inside the calendar's event modal — same folder-tab chrome as
@@ -10546,8 +10940,16 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
 .cal-ico{position:relative;display:inline-flex;align-items:center;justify-content:center;
   width:18px;height:18px;flex:0 0 auto;border-radius:3px;overflow:hidden;}
 .cal-ico-glyph{display:inline-flex;}
-.cal-ico-img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
-  background:var(--bg-surface);}
+/* ⚠ The ground is OPT-IN, and it used to be unconditional. It exists to hide the
+   seam an object-fit:contain letterbox leaves around a white-backed photo --
+   but Ravensburger's own marks are transparent PNGs, so behind one it painted a
+   pale square with a dark shield or hexagon sitting on it. That is what read as
+   "these backgrounds still white", and very likely as "are the shields cut
+   off?" too: the square's corners show past the mark's points, so the mark
+   looks like a crop of something bigger. Same rule ProductPhoto follows -- a
+   ground only for a photo we know is on a studio sweep and have not cut yet. */
+.cal-ico-img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;}
+.cal-ico-img.on-white{background:var(--bg-surface);}
 .cal-modal-kind .cal-ico{width:22px;height:22px;}
 .cal-row-title .cal-ico,.cal-panel-title .cal-ico{margin-right:1px;}
 .cal-chip .cal-ico{width:13px;height:13px;border-radius:2px;}

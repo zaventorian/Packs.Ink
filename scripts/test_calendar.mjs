@@ -86,6 +86,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const SEALED_DISPLAY_TYPE_FOR = {", NL + "};"),
   grab("function deriveSealedDisplayType(item){", NL + "}"),
   grab("const calendarArtIndex = (sealedRows, names) => {", NL + "};"),
+  grab("const calendarEventProduct = (ev, artIndex) => {", NL + "};"),
   grab("const calendarEventArt = (ev, artIndex) => {", NL + "};"),
   grabLine("const CAL_SET_PHASE_ICONS = "),
   grab("const _calSetPhase = (ev) => {", NL + "};"),
@@ -94,7 +95,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const CAL_KIND_SHORT = "),
   grab("const CAL_KIND_PLURAL = {", NL + "};"),
   grabLine("const calGroupKindLabel = "),
-  grab("const calCellItems = (events, art, openGroups, date) => {", NL + "};"),
+  grab("const calCellItems = (events, art, date) => {", NL + "};"),
   grabLine("const calendarHiddenSet = (subs) =>"),
   grab("const calendarApplyHidden = (events, hidden, saved) => {", NL + "};"),
   grab("const CAL_STORE_KINDS = [", NL + "];"),
@@ -157,7 +158,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   " calRegionOf, calRegionless, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore, calTlLabelParts,",
   " osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
   " calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS, CAL_STORE_KIND_KEYS,",
-  " calendarHiddenSet, calendarApplyHidden, calendarArtIndex, calendarEventArt,",
+  " calendarHiddenSet, calendarApplyHidden, calendarArtIndex, calendarEventArt, calendarEventProduct,",
   " CAL_ART_SKIP_TYPES, deriveSealedDisplayType,",
   " CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,",
   " calendarTimeline, calTimelineLane, calTimelineLabels, CAL_TL_MONTHS, CAL_TL_MIN_PX,",
@@ -180,7 +181,7 @@ const {
   calPanelRows, calDayLabel,
   calCellItems, calGroupKindLabel, CAL_KIND_SHORT, CAL_KIND_PLURAL,
   CAL_STORE_KIND_KEYS, calendarHiddenSet, calendarApplyHidden,
-  calendarArtIndex, calendarEventArt, CAL_ART_SKIP_TYPES, deriveSealedDisplayType,
+  calendarArtIndex, calendarEventArt, calendarEventProduct, CAL_ART_SKIP_TYPES, deriveSealedDisplayType,
   CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
   calendarTimeline, calTimelineLane, calTimelineLabels, CAL_TL_MONTHS, CAL_TL_MIN_PX,
   CAL_TL_GROUP_MODES, CAL_TL_CIRCUIT_KINDS, CAL_TL_KIND_LANES, calMonthLabelShort,
@@ -809,8 +810,13 @@ ok("a bad date has no label", calShortDay("nope") === "");
   // ⚠ The plain Booster Pack IS the set's art, and it is the one product every
   // set has. A Case is a distributor carton - a photo of cardboard.
   ok("a set resolves to its booster pack, not its box or case",
-    idx.get("hyperia city") === "pack.jpg", idx.get("hyperia city"));
-  ok("a case is never chosen", [...idx.values()].every(v => v !== "case.jpg"));
+    idx.get("hyperia city").image_url === "pack.jpg", idx.get("hyperia city"));
+  ok("a case is never chosen", [...idx.values()].every(v => v.image_url !== "case.jpg"));
+  // ⚠ The index stores the sealed ROW, not its URL — that is what lets the
+  // detail modal build a TCGplayer link and ask amazonForSealed about the SAME
+  // product the photo came from. A second lookup would be a second answer.
+  ok("the index holds the row, so a buy link can be built from it",
+    !!idx.get("hyperia city").name && idx.get("hyperia city").name.includes("Booster Pack"));
   // ⚠ Everything above this line loses on RANK, not on the skip: a plain
   // Booster Pack is rank 0 and beats a case whatever the skip does. So none of
   // it can tell a live skip from a dead one — and the shipped skip WAS dead for
@@ -830,11 +836,11 @@ ok("a bad date has no label", calShortDay("nope") === "");
     && !CAL_ART_SKIP_TYPES.has(deriveSealedDisplayType(
          {name: "X Booster Pack", product_type: "Booster Pack"})));
   ok("a product resolves to its own photo",
-    idx.get("rapunzel collector's gift set") === "gift.jpg");
+    idx.get("rapunzel collector's gift set").image_url === "gift.jpg");
   ok("a product with no image is absent rather than null",
     !idx.has("some product with no picture"));
   ok("an unmatched name is absent", !idx.has("nothing at all"));
-  ok("one set does not borrow another set's art", idx.get("hyperia city") !== "winter.jpg");
+  ok("one set does not borrow another set's art", idx.get("hyperia city").image_url !== "winter.jpg");
 
   const ev = (k, extra) => ({id: "x", kind: k, title: "Hyperia City", starts_on: "2026-10-16", ...extra});
   ok("a set event finds its art", calendarEventArt(ev("set"), idx) === "pack.jpg");
@@ -854,6 +860,17 @@ ok("a bad date has no label", calShortDay("nope") === "");
   ok("no index means no art", calendarEventArt(ev("set"), null) === null);
   ok("art tolerates nulls", calendarEventArt(null, idx) === null
     && calendarArtIndex(null, null).size === 0);
+  // The row accessor answers for exactly the kinds the art one does, so the
+  // photo and the buy links under it can never describe different products.
+  ok("the row accessor agrees with the art accessor about which kinds have one",
+    ["set","product","dlc","ccq","store"].every(k =>
+      !!calendarEventProduct(ev(k), idx) === (calendarEventArt(ev(k), idx) !== null)));
+  // ⚠ A curated image_url overrides the PICTURE, never the product: a row
+  // corrected to a hand-picked photo still links to the product it matched.
+  ok("a curated image does not erase the matched row",
+    !!calendarEventProduct(ev("set", {image_url: "mine.png"}), idx));
+  ok("the row accessor tolerates nulls",
+    calendarEventProduct(null, idx) === null && calendarEventProduct(ev("set"), null) === null);
 }
 ok("the kinds with no product behind them use drawn glyphs", (() => {
   const by = Object.fromEntries(CALENDAR_KINDS.map(k => [k.key, k.icon]));
@@ -1027,12 +1044,23 @@ ok("an unknown rph_kind falls back to the store glyph, never to a blank",
 
 ok("a DLC and a CCQ carry different official marks",
   calendarEventIcon({kind: "dlc"}).img === LORCANA_MARKS.challengeBadge &&
-  calendarEventIcon({kind: "ccq"}).img === LORCANA_MARKS.lorcanaHex);
+  calendarEventIcon({kind: "ccq"}).img === LORCANA_MARKS.lorcanaHexCcq);
+// ⚠ The qualifier uses the LABELLED hex, not the plain one. The Challenge
+// badge says "LORCANA CHALLENGE" in its own artwork so it identifies itself;
+// the bare hex says nothing, and at chip size "a hexagon" was all a reader
+// got. Both files are referenced, so the plain mark stays shipped and the
+// derivation still has a source.
+ok("and the CCQ one is the hex with CCQ written on it",
+  /lorcana-hex-ccq\.png$/.test(LORCANA_MARKS.lorcanaHexCcq)
+  && LORCANA_MARKS.lorcanaHexCcq !== LORCANA_MARKS.lorcanaHex);
 
 // ⚠ The regression this guards: every set date resolved the same booster-pack
 // photo, which sat ON TOP of the glyph and made the three phases identical
 // again however different their glyphs were.
-const artIdx = new Map([["hyperia city", "https://cdn/pack.png"]]);
+// ⚠ The index holds the sealed ROW, not a bare URL — a fixture that stores a
+// string reads as "no photo" everywhere and every assertion below passes for
+// the wrong reason.
+const artIdx = new Map([["hyperia city", {name: "Hyperia City Booster Pack", image_url: "https://cdn/pack.png"}]]);
 ok("a set date resolves no automatic photo at icon size",
   calendarEventIcon({kind: "set", title: "Hyperia City", subtitle: "Prerelease",
                      set_name: "Hyperia City"}, artIdx).img === null);
@@ -1687,7 +1715,7 @@ ok("an empty list is an empty list", pr([]).length === 0 && pr(null).length === 
 // Both directions are silent. Under-collapsing just looks like the old bug;
 // over-collapsing quietly destroys information and still looks tidy.
 console.log("");
-const cgCell = (list, open, date) => calCellItems(list, null, open, date || "2026-09-19");
+const cgCell = (list, date) => calCellItems(list, null, date || "2026-09-19");
 const cgMk = (id, kind, extra) => Object.assign({id, kind, starts_on: "2026-09-19"}, extra || {});
 
 const cgThree = cgCell([cgMk("a", "ccq", {title: "CCQ Essen"}),
@@ -1718,19 +1746,24 @@ ok("a Challenge and a qualifier stay apart", cgMix.length === 2, cgMix.length);
 const cgOne = cgCell([cgMk("a", "ccq", {title: "One"})]);
 ok("a lone event is never a group", cgOne.length === 1 && !cgOne[0].group && !!cgOne[0].ev);
 
-// Clicking a group expands it back to its members, in the order they arrived.
+// ⚠ A group NEVER expands in place. It used to: clicking "CCQ ×3" replaced one
+// chip with three, which in a 44px cell turns one readable mark into three
+// unreadable ones ("it breaks the big logo into little logos"). Clicking now
+// opens the day's list -- see CalendarDayModal -- so the cell always shows the
+// collapsed form and the answer to "what are these three" is three NAMES.
 const cgKey = cgThree[0].key;
-const cgOpen = cgCell([cgMk("a", "ccq", {title: "CCQ Essen"}),
-                       cgMk("b", "ccq", {title: "Brainwash Cards 2K CCQ"}),
-                       cgMk("c", "ccq", {title: "Utopica Fantasy Festival CCQ"})], new Set([cgKey]));
-ok("an opened group expands to its members",
-  cgOpen.length === 3 && cgOpen.every((it) => !!it.ev), cgOpen.length);
-ok("in the order they arrived",
-  cgOpen.map((it) => it.ev.id).join(",") === "a,b,c", cgOpen.map((it) => it.ev.id).join(","));
+const cgStill = cgCell([cgMk("a", "ccq", {title: "CCQ Essen"}),
+                        cgMk("b", "ccq", {title: "Brainwash Cards 2K CCQ"}),
+                        cgMk("c", "ccq", {title: "Utopica Fantasy Festival CCQ"})]);
+ok("a group stays collapsed however it is asked",
+  cgStill.length === 1 && cgStill[0].group === true, cgStill.length);
+ok("and it still carries every member for the list to render",
+  cgStill[0].events.map((e) => e.id).join(",") === "a,b,c",
+  cgStill[0].events.map((e) => e.id).join(","));
 
-// The key is date-scoped, or opening Sep 19's CCQs would open Sep 26's too.
+// The key is still date-scoped -- the hover card and the day list both key off it.
 const cgOther = cgCell([cgMk("x", "ccq", {title: "A"}), cgMk("y", "ccq", {title: "B"})],
-  null, "2026-09-26");
+  "2026-09-26");
 ok("group keys are scoped to their day", cgOther[0].key !== cgKey, cgOther[0].key);
 
 // A group sits where its first member was rather than sinking to the end.
@@ -1767,5 +1800,381 @@ ok("the compact chip keeps its count",
 ok("the graded tile isolates its version badge",
   /\.gmover-tile\{[^}]*isolation:isolate/.test(cgCSS));
 
+
+// -- the home panel opens on the MONTH grid ---------------------------------
+// Flipped list -> month 2026-09-20. The mode is persisted on every mount, so a
+// plain default change reaches nobody who has ever loaded the home page; the
+// stamp is what moves them, and it has to be ONE-SHOT or a later deliberate
+// pick of List snaps back on the next reload. Both halves fail silently.
+{
+  const body = grab("const calReadPanelViewPref = () => {", NL + "};")
+    .replace("const calReadPanelViewPref = ", "").replace(/;\s*$/, "");
+  // The two key names have to come along: without them the body throws on an
+  // undefined const and its own `catch { return "month"; }` swallows it, so
+  // every case "passes" and the test is measuring nothing.
+  const keys = grabLine("const CAL_PANEL_VIEW_LS = ") + NL + grabLine("const CAL_PANEL_VIEW_MONTH_KEY = ");
+  // ⚠ The fixtures READ the stamp key out of the source. They used to restate
+  // it, so bumping the stamp (which is how you re-fire it for everyone) made
+  // three assertions test an unstamped browser and the "fires once" case pass
+  // vacuously.
+  const STAMP = (/"([^"]+)"/.exec(grabLine("const CAL_PANEL_VIEW_MONTH_KEY = ")) || [])[1];
+  ok("the stamp key was found, so the cases below are really stamped", !!STAMP);
+  const run = (init) => {
+    const st = {...init};
+    const ls = {getItem: (k) => (k in st ? st[k] : null), setItem: (k, v) => { st[k] = String(v); }};
+    return new Function("localStorage", keys + NL + "return (" + body + ")();")(ls);
+  };
+  ok("(the harness really runs the helper, not its catch)",
+    run({"packsink:cal:panelView": "list", [STAMP]: "1"}) !==
+    run({"packsink:cal:panelView": "month", [STAMP]: "1"}));
+  ok("a fresh browser opens on the month grid", run({}) === "month");
+  ok("and a browser holding the old list default is moved once",
+    run({"packsink:cal:panelView": "list"}) === "month");
+  ok("but the stamp fires ONCE - a deliberate list pick sticks",
+    run({"packsink:cal:panelView": "list", [STAMP]: "1"}) === "list");
+  ok("and a deliberate month pick is left alone too",
+    run({"packsink:cal:panelView": "month", [STAMP]: "1"}) === "month");
+}
+
+// -- following a store is a SUBSET, from the result tile ---------------------
+// The finder's Follow was all-or-nothing, so the one control that puts a shop's
+// Set Championship on your calendar also put its weeklies there, and the subset
+// lived two screens away in the drawer. Nothing throws if this regresses - the
+// menu just quietly goes back to one line.
+{
+  const btn = grab("const ScCalendarButton = ({series, subs}) => {", NL + "};");
+  ok("the popover offers the kind boxes", /cal-add-check/.test(btn));
+  ok("built from the one CAL_STORE_KINDS list, not a local copy",
+    /CAL_STORE_KINDS\.map/.test(btn) && /CAL_STORE_KIND_KEYS\.filter/.test(btn));
+  // Absent meta.kinds means everything: that is what keeps every pre-existing
+  // follow working, and what lets a future fourth kind ride along.
+  ok("a plain Follow writes no kinds at all",
+    /subs\.add\(\{kind: "store"/.test(btn) && !/meta: \{[^}]*kinds:/.test(btn));
+  ok("the menu stays open on Follow so the boxes are on screen, and closes on Unfollow",
+    /if\(following\)\{[\s\S]{0,120}setOpen\(false\);[\s\S]{0,160}subs\.remove\("store", storeId\)/.test(btn));
+  ok("the last ticked kind cannot be unticked",
+    /const last = isOn && storeKinds\.length === 1;/.test(btn) && /if\(last\) return;/.test(btn));
+  // The menu GROWS by three rows the moment you follow, and it used to be
+  // placed once at open against a constant - 35px of it fell off a 812x400
+  // screen, taking the .ics row with it.
+  const anchor = grab("const useCalPopAnchor = (open, btnRef", NL + "};");
+  ok("the anchor measures the real popover instead of assuming CAL_POP_H",
+    /popRef && popRef\.current/.test(anchor) && /scrollHeight/.test(anchor));
+  ok("and re-places when the menu grows", /\}, \[open, grow\]\);/.test(anchor));
+  ok("clamping only when neither side fits, so the common case keeps no scrollbar",
+    /h > Math\.max\(below, above\)/.test(anchor));
+  ok("the growing menu passes both", /useCalPopAnchor\(open, btnRef, popRef, following\)/.test(src));
+
+  const css2 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  ok("the kind boxes keep the 36px tap floor on touch",
+    /@media \(hover:none\)\{\.cal-add-check\{padding-top:10px;padding-bottom:10px;\}\}/.test(css2));
+  ok("and are indented under Follow rather than reading as more menu items",
+    /\.cal-add-check\{[^}]*padding-left:30px/.test(css2));
+}
+
+
+// ── the ≤700px month chip drops its LABEL ───────────────────────────────────
+// ⚠ Specificity, and it cost a whole grid row. The two-line clamp added with the
+// bigger icons (2026-09-15) carries 5 classes + an element; the ≤700px
+// `display:none` that is supposed to drop the label on a phone carries 2. So the
+// clamp won, and below 700px every chip label became a ZERO-WIDTH box still two
+// lines tall — invisible text costing 10px a chip. A day with three icons then
+// blew its cell past its siblings' and took the whole week's row with it
+// ("dates like 10/16 get broken w/3 icons on it"). Measured at 375px: chips 33px
+// and a 7px row spread before, 24px and a spread of 0 after.
+{
+  const css2 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  ok("the two-line clamp only applies where there is width to wrap in",
+    /@media \(min-width:701px\)\{[\s\S]{0,400}?\.cal-month:not\(\.cal-month--compact\) \.cal-chip span:not\(\.cal-ico\):not\(\.cal-chip-x\)\{/.test(css2));
+  ok("and the phone rule that hides the label is still there to win",
+    /@media \(max-width:700px\)\{[\s\S]*?\.cal-chip > span:not\(\.cal-ico\)\{display:none;\}/.test(css2));
+  // ⚠ Never the icon. `.cal-ico` is a <span> too, and a bare `.cal-chip span`
+  // rule hid it — featureless grey bars where the glyph is the only thing a
+  // 48px cell can still say.
+  ok("the hide names the icon's class so the glyph survives",
+    /\.cal-chip > span:not\(\.cal-ico\)\{display:none;\}/.test(css2));
+}
+
+// ── a release row says where to buy it ──────────────────────────────────────
+// "Out that day" was a plain text list: it answered what comes out and not what
+// it looks like or where to get it, which are the two things anyone reading a
+// release date is about to ask.
+{
+  const modal = grab("const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {",
+                     NL + "};");
+  const links = grab("const calProductLinks = (row, setName) => {", NL + "};");
+  // ⚠ isUnpricedSealed, not a bare pid check: a jigsaw, a pin and a
+  // retailer-exclusive bundle all carry a SYNTHETIC pid in a reserved band and
+  // have no TCGplayer page at all, so a link built from one is a dead affiliate
+  // link that looks exactly like a live one.
+  ok("the TCGplayer half is gated on the product being purchasable there",
+    /!isUnpricedSealed\(row\)/.test(links));
+  ok("and on it actually having a pid", /row\.tcgplayer_product_id/.test(links));
+  ok("Amazon goes through the one resolver", /amazonForSealed\(row, setName/.test(links));
+  // ⚠ `exact` decides the label: a curated ASIN says "Amazon", a search says
+  // "Find on Amazon", because a search cannot promise the page it lands on.
+  ok("a search link says so rather than promising the product",
+    /az\.exact \? "Amazon/.test(links) && /Find on Amazon/.test(links));
+  ok("every Amazon link is nofollow sponsored",
+    (links.match(/rel="noopener nofollow sponsored"/g) || []).length >= 2);
+  ok("the required Associate disclosure sits with the links, not only in the footer",
+    (modal.match(/As an Amazon Associate I earn from qualifying purchases\./g) || []).length >= 2);
+  // ⚠ ProductPhoto, never a bare <img>: TCGplayer shoots on a WHITE sweep, so
+  // the raw JPEG is a white slab in a dark modal. ProductPhoto cuts it to
+  // transparency and the modal's own surface shows through.
+  ok("the product event's hero photo goes through ProductPhoto",
+    /class="cal-modal-prodart"[\s\S]{0,700}?<\$\{ProductPhoto\}/.test(modal));
+  ok("and so does every row of the release list",
+    /class="cal-prod-art"><\$\{ProductPhoto\}/.test(modal));
+  ok("the release list carries a buy row per product", /\$\{calProductLinks\(pr,/.test(modal));
+  // A product drop is ONE product, so its links sit beside it rather than in a
+  // list of one.
+  ok("a product drop gets its own buy row",
+    /ev\.kind === "product" && calProductLinks\(calendarEventProduct\(ev, art\)/.test(modal));
+  // ⚠ Only real COLUMNS in the select. is_puzzle / is_collectible / is_exclusive
+  // are CLIENT-side flags the catalog transform stamps on, not fields of
+  // sealed_products — asking for one 42703s the whole select, which useSetProducts
+  // swallows into an empty list. Nothing errors; the modal just stops listing
+  // what comes out that day. (Shipped for about ten minutes; caught by probing.)
+  const setProducts = grab("function useSetProducts(setName, enabled){", NL + "}");
+  // The SELECT's own argument, not the function text — the comment above it
+  // names those flags precisely to say they are not columns.
+  const sel = (setProducts.match(/\.select\("([^"]*)"\)/) || [])[1] || "";
+  ok("useSetProducts asks only for columns that exist",
+    !!sel && !/is_puzzle|is_collectible|is_exclusive/.test(sel));
+}
+
+// ── the product photo's well carries the size ───────────────────────────────
+// ⚠ ProductPhoto's wrapper is position:absolute; inset:0, so a slot that used to
+// take its height from the <img> inside it collapses to nothing.
+{
+  const css3 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  ok("the release row's photo well is sized and positioned",
+    /\.cal-prod-art\{position:relative;[^}]*width:34px;height:34px/.test(css3));
+  ok("the hero well is sized and positioned",
+    /\.cal-modal-prodart\{position:relative;[^}]*height:150px/.test(css3));
+  // ⚠ The row WRAPS and the name carries a basis. Without both, the two buy
+  // chips (a fixed 174px) took their width first and left the product NAME 51px
+  // on a phone — the one thing the row exists to say, clipped to nothing by
+  // controls that only matter once you have read it.
+  ok("the release row wraps so the name keeps its width",
+    /\.cal-products li\{[^}]*flex-wrap:wrap/.test(css3));
+  ok("and the name has a basis the chips cannot squeeze past",
+    /\.cal-prod-name\{flex:1 1 150px/.test(css3));
+}
+
+// ── a busy day opens a LIST, never more icons ───────────────────────────────
+// Reported as "it breaks the big logo into little logos": clicking a grouped
+// chip expanded it back into individual chips IN THE CELL, which is the one
+// place with no room for them.
+{
+  const monthView = grab("const CalendarMonthView = ({month, events, today, onOpen, onOpenDay,",
+                         NL + "};");
+  ok("the month view takes an onOpenDay", /onOpenDay/.test(monthView));
+  ok("a grouped chip opens the day rather than expanding in the cell",
+    /onOpenDay\(day\.date, day\.events\)/.test(monthView));
+  ok("and nothing can expand a group in place any more",
+    !/setOpenGroups/.test(monthView) && !/openGroups/.test(monthView));
+  // ⚠ The overflow marker asks the same question, so it opens the same list --
+  // it was the one thing in a full cell you could not click.
+  ok("the +N marker is a button now", /<button type="button" class="cal-cell-more"/.test(monthView));
+  ok("and it opens the same day list",
+    (monthView.match(/onOpenDay\(day\.date, day\.events\)/g) || []).length === 2);
+
+  const dayModal = grab("const CalendarDayModal = ({day, events, onOpen, onClose, art}) => {",
+                        NL + "};");
+  ok("the day list names every event", /events\.map\(ev =>/.test(dayModal));
+  ok("a row opens that event's own modal", /onClick=\$\{\(\) => onOpen\(ev\)\}/.test(dayModal));
+  ok("Esc closes it", /e\.key === "Escape"/.test(dayModal));
+  // ⚠ Only ONE dialog at a time: opening a row swaps the list for the event's
+  // modal rather than stacking, so Esc and the backdrop always belong to one.
+  ok("the list yields to the detail modal rather than stacking under it",
+    (src.match(/\$\{!sel && dayList && html`<\$\{CalendarDayModal\}/g) || []).length === 2);
+  ok("and picking a row closes the list as it opens the event",
+    (src.match(/setDayList\(null\); setSel\(ev\);/g) || []).length === 2);
+  // A <button> with the global button paint left on reads as a chip, and a list
+  // of chips stops looking like a list.
+  const css4 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  ok("the row unsets the global button paint",
+    /\.cal-day-row\{[^}]*border:none;background:none/.test(css4));
+  ok("so does the +N marker", /\.cal-cell-more\{[^}]*border:none;background:none/.test(css4));
+}
+
+// ── the icon ground is OPT-IN ───────────────────────────────────────────────
+// ⚠ It used to be unconditional, which painted a pale square behind
+// Ravensburger's own marks -- they are transparent PNGs, so a dark shield sat on
+// a light tile whose corners showed past its points. Reported as "these
+// backgrounds still white", and it is the likeliest reading of "are the CCQ
+// shields cut off?" too: nothing is clipped (measured -- object-fit:contain
+// paints 14.7x17 inside a 17x17 box), but a square behind a pointed mark makes
+// it look like a crop of something bigger.
+{
+  const css5 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  ok("the bare icon rule paints no ground",
+    /\.cal-ico-img\{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;\}/.test(css5));
+  ok("and the ground is a class the component has to ask for",
+    /\.cal-ico-img\.on-white\{background:var\(--bg-surface\);\}/.test(css5));
+  const dot = grab("const CalendarKindDot = ({kind, ev, art}) => {", NL + "};");
+  // ⚠ cors is true only for a photo proxyImg rewrites, i.e. a CDN catalog shot
+  // where the white studio sweep is the rule. A brand mark is same-origin, so
+  // it never asks for a ground and never goes near the canvas.
+  ok("only an uncut CDN photo asks for one",
+    /photo\.cors && !photo\.cut \? " on-white" : ""/.test(dot));
+  ok("the chip icon goes through the shared cut", /useProductCutUrl\(img\)/.test(dot));
+
+  const hook = grab("const useProductCutUrl = (src) => {", NL + "};");
+  ok("the hook cuts ONLY what proxyImg rewrites",
+    /const u = proxyImg\(src\);/.test(hook) && /u !== src \? u : null/.test(hook));
+  // Both halves, same reason ProductPhoto needs them: a fresh fetch fires
+  // onLoad, but an image already decoded before React attached the handler
+  // never will, and then the effect's `complete` check is all that runs.
+  ok("it covers both ways an image can arrive",
+    /el\.complete && el\.naturalWidth/.test(hook) && /onLoad/.test(hook));
+  ok("and shares ProductPhoto's cache rather than cutting twice",
+    /_productCuts\.get\(proxied\)/.test(hook));
+}
+
+// ── a release modal is wider, because its rows are ──────────────────────────
+// ⚠ At the standard 460px the product NAME got 168px and clipped. And the first
+// fix did not work: margin-left:auto on the buy chips absorbs the positive free
+// space BEFORE flex-grow sees any, so the name never grew past its basis and
+// sat beside 200px of nothing.
+{
+  const css6 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  ok("the release modal gets its own width", /\.cal-modal--wide\{max-width:560px;\}/.test(css6));
+  ok("declared AFTER the base rule it has to beat",
+    css6.indexOf(".cal-modal--wide{") > css6.indexOf(".cal-modal{position:relative"));
+  ok("the buy chips claim no auto margin",
+    !/\.cal-buy\{[^}]*margin-left:auto/.test(css6));
+  const modal2 = grab("const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {",
+                      NL + "};");
+  ok("and only a modal that actually lists products is widened",
+    /const wide = !!\(isSet && products && products\.length > 0\);/.test(modal2));
+}
+
+// ── list / month is ONE button ──────────────────────────────────────────────
+// Two buttons for an A-or-B choice spend two slots of a four-slot header saying
+// what one can, and a pair where only ever one is lit reads as a setting to hunt
+// through rather than a switch.
+{
+  const panel = grab("const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices}) => {",
+                     NL + "};");
+  const tools = panel.slice(panel.indexOf('<div class="cal-panel-tools">'),
+                            panel.indexOf("</div>", panel.indexOf('<div class="cal-panel-tools">')));
+  ok("the panel header has one view control, not two",
+    (tools.match(/cal-panel-tool--view/g) || []).length === 1);
+  ok("and it toggles rather than setting one side",
+    /setMode\(m => m === "month" \? "list" : "month"\)/.test(panel));
+  ok("it shows the view you would GET", /uiIcon\(mode === "month" \? "list" : "calendar"/.test(panel));
+  // ⚠ The icon alone is ambiguous — a calendar glyph could mean "you are on the
+  // calendar" or "go to the calendar" — so the tooltip names BOTH states.
+  ok("and names the current one so the icon is never ambiguous",
+    /Showing the month — switch to the list/.test(panel)
+    && /Showing the list — switch to the month/.test(panel));
+  // The /calendar PAGE keeps its segmented control: three modes is not A-or-B.
+  ok("the page's three-mode control is untouched",
+    (src.match(/CAL_VIEW_MODES = \["list", "month", "timeline"\]/g) || []).length === 1);
+}
+
+// ── the banner's cameras stay on the title's line ───────────────────────────
+// ⚠ The fix is NOWRAP, and two earlier attempts prove why. flex-wrap:wrap breaks
+// lines from each item's CONTENT size and only shrinks WITHIN a line afterwards,
+// so making the subtitle shrinkable could never stop the wrap. And flex-GROW on
+// the subtitle made it worse in the exact way being fixed: it expanded to fill
+// the row and pushed the cameras onto a line of their own, where margin-left:auto
+// left the whole width empty beside them.
+{
+  const css7 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  ok("the banner head does not wrap on desktop",
+    /\.movers-banner-head\{[^}]*flex-wrap:nowrap/.test(css7));
+  ok("but still wraps on a phone, where there is no room",
+    /@media \(max-width:700px\)\{\.movers-banner-head\{flex-wrap:wrap;\}\}/.test(css7));
+  ok("the subtitle shrinks and never grows",
+    /\.movers-banner-sub\{[^}]*flex:0 1 auto/.test(css7));
+  ok("and can go below its longest word",
+    /\.movers-banner-sub\{[^}]*min-width:0/.test(css7));
+  // Only the subtitle gives: the newest set's banner names the set in its title.
+  ok("nothing else in the row is allowed to shrink",
+    /\.movers-banner-head > \*\{flex:0 0 auto;\}/.test(css7));
+}
+
+// ── the desktop column uses the screen ──────────────────────────────────────
+// ⚠ NOT CSS zoom. Measured: with zoom:1.15 on body, a position:fixed element
+// placed at a getBoundingClientRect() lands 194px off — and every popover here is
+// anchored exactly that way (useCalPopAnchor, the hover card, .gc-caps-tip, the
+// settings pin). So the dead space is spent on content instead.
+{
+  const css8 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  // Comments stripped first: the note explaining why zoom is unusable naturally
+  // contains the word, and matching that would fail for saying so.
+  const css8bare = css8.replace(/\/\*[\s\S]*?\*\//g, "");
+  ok("no rule zooms the page", !/[^-]zoom\s*:\s*[0-9.]/.test(css8bare));
+  ok("the column widens on a big monitor",
+    /@media \(min-width:1500px\)\{body\{max-width:1440px;\}\}/.test(css8)
+    && /@media \(min-width:1750px\)\{body\{max-width:1640px;\}\}/.test(css8));
+  ok("and the rails widen with it",
+    /@media \(min-width:1750px\)\{\.home-grid\{grid-template-columns:280px minmax\(0,1fr\) 400px;\}\}/.test(css8));
+  // ⚠ AFTER .home-grid's own declaration: same specificity, so declared first it
+  // loses on source order and the body widens around rails that do not move.
+  ok("the rail override is declared after the rule it has to beat",
+    css8.lastIndexOf("@media (min-width:1750px){.home-grid{") > css8.indexOf(".home-grid{display:grid"));
+  // Two banner rows have to clear a 1080p fold. The art is NOT what gave.
+  ok("the tile's gaps gave, not its art",
+    /\.mover-tile\{[\s\S]{0,600}?gap:1px;padding:3px 3px 3px/.test(css8));
+  ok("the scroller's bottom pad gave too",
+    /\.movers-wrap\{overflow-x:auto;overflow-y:hidden;padding:4px 4px 6px/.test(css8));
+}
+
+// ── the store's own description of its event ────────────────────────────────
+// RPH carries one on ~45% of Lorcana events (59-60% of Set Championships and
+// prereleases, measured against the live API 2026-09-20) and we threw it away
+// for as long as this has shipped. Every failure here is silent: a description
+// that never arrives looks exactly like an event that has none.
+{
+  const css9 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  const comp = grab("const EventDescription = ({text}) => {", NL + "};");
+
+  // ⚠ Rendered as TEXT. The ETL strips HTML on the way in so this CAN be a plain
+  // interpolation, but the defence has to hold on both sides: rows stored before
+  // that cleaning existed are still in the table, and RPH does not sanitise this
+  // field any more than it sanitises store names.
+  ok("the description is never injected as markup",
+    !/dangerouslySetInnerHTML|innerHTML/.test(comp));
+  ok("an empty one renders nothing at all", /if\(!body\) return null;/.test(comp));
+
+  // ⚠ pre-wrap. These are little agendas — "Registration 2:30pm / Fire 3:00pm /
+  // Fee $13" — and the line breaks the shop typed ARE the formatting.
+  ok("the shop's own line breaks survive",
+    /\.cal-desc-body\{[^}]*white-space:pre-wrap/.test(css9));
+  ok("and a pasted URL cannot widen the modal",
+    /\.cal-desc-body\{[^}]*overflow-wrap:anywhere/.test(css9));
+  // CLAMPED, not truncated: the whole text stays in the DOM, so it is selectable
+  // and findable, and the reader can open it. Median is 121 chars but the longest
+  // in the live API is 4,009.
+  ok("long ones clamp by LINE rather than being cut",
+    /\.cal-desc\.is-clamped \.cal-desc-body\{[^}]*line-clamp:6/.test(css9));
+  ok("and the clamp is reversible", /Show less/.test(comp) && /Show more/.test(comp));
+
+  // Both modals that can have one render it.
+  ok("the calendar's event modal shows it", /<\$\{EventDescription\} text=\$\{ev\.description\}\/>/.test(src));
+  // ⚠ The OCCURRENCE's, not the series'. Each date carries its own.
+  ok("and the finder shows the OCCURRENCE's, not the series'",
+    /<\$\{EventDescription\} text=\$\{o\.description\}\/>/.test(src));
+  ok("it rides onto the calendar entry", /description: ev\.description \|\| null,/.test(src));
+
+  // ⚠ The fetch degrades ONCE rather than failing. supabase-js returns
+  // {data, error} rather than throwing, so asking for a column the database does
+  // not have yields data:null with NO exception — the caller's catch never runs
+  // and every followed store's events vanish from the calendar silently.
+  const sel = grab("const calSelectEvents = async (build) => {", NL + "};");
+  ok("the events fetch retries without the column on 42703",
+    /_calDescCol = false;/.test(sel) && /calMissingCol\(r\.error\)/.test(sel));
+  ok("and the retry re-runs the same query rather than a narrower one",
+    /r = await build\(calEventCols\(\)\);/.test(sel));
+  ok("the flag is one-way, so an outage cannot flap it",
+    !/_calDescCol = true;/.test(sel));
+  ok("both event fetches go through it",
+    (src.match(/await calSelectEvents\(\(cols\) =>/g) || []).length === 2);
+}
 console.log(failed ? `\n${failed} FAILED` : "\nall calendar checks passed");
 process.exit(failed ? 1 : 0);

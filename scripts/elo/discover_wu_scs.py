@@ -53,7 +53,7 @@ Usage:
     python discover_wu_scs.py --all-sets --dry-run --json out.json
 """
 from __future__ import annotations
-import argparse, datetime, json, os, re, sys, time, unicodedata, urllib.request, urllib.error
+import argparse, datetime, html, json, os, re, sys, time, unicodedata, urllib.request, urllib.error
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -262,6 +262,38 @@ def _clean_text(s):
     return cleaned or None
 
 
+# The longest description seen in the live API is 4,009 characters; 6,000 is a
+# ceiling on pathological input, not a trim of anything real.
+DESC_MAX = 6000
+# A free-text box people paste into, so ~2% of them (9 of 446 measured) carry
+# HTML. <br> and the block closers become newlines BEFORE the tag strip, or the
+# lines they separate run together into one paragraph.
+_DESC_BREAKS = re.compile(r"<\s*br\s*/?\s*>|</\s*(?:p|div|li|tr|h[1-6])\s*>", re.I)
+_DESC_BLANKS = re.compile(r"\n{3,}")
+
+
+def _clean_desc(s):
+    """What a store wrote about its event, as plain text.
+
+    ⚠ Cleaned HERE rather than at each render site. RPH does not sanitize this
+    field any more than it sanitizes store names (see _clean_text -- a live store
+    name carries a literal <script src=...>), and cleaning once on the way in
+    means every consumer is safe instead of every consumer remembering to be.
+    """
+    if not isinstance(s, str):
+        return None
+    # ⚠ ORDER: unescape, THEN break, THEN strip. Stripping before unescaping
+    # was the first cut and it is backwards -- "&lt;script&gt;alert(1)&lt;/script&gt;"
+    # sails through the tag strip as text and the unescape then turns it INTO
+    # a live tag in the stored value. Verified: that input now stores as empty.
+    # Unescaping first also means a &lt;br&gt; still becomes a line break.
+    t = html.unescape(s)
+    t = _DESC_BREAKS.sub("\n", t)
+    t = re.sub(r"<[^>]*>", "", t)
+    t = _DESC_BLANKS.sub("\n\n", t).strip()
+    return t[:DESC_MAX] or None
+
+
 def _clean_url(u):
     """Only let http(s) links through to the stored website href (block
     javascript:/data: and other href-injection schemes)."""
@@ -388,6 +420,7 @@ def to_row(ev: dict, set_name: str) -> dict:
         "capacity": ev.get("capacity"),
         "cost_cents": ev.get("cost_in_cents"),
         "currency": ev.get("currency"),
+        "description": _clean_desc(ev.get("description")),
         "gameplay_format": gpf_name,
         "display_status": ev.get("display_status"),
         "url": EVENT_URL.format(id=ev["id"]),
