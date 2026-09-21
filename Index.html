@@ -22847,11 +22847,14 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
     if(compareMode === "shared")  return viewerHas;
     return true;
   };
+  // Own key, NOT the Analytics one. This toggle drives the header totals and
+  // the value sort here; sharing a key with MarketView meant flipping it on
+  // this tab silently retargeted EV / Playset Cost / Set Breakdown.
   const [priceMode, setPriceMode] = useState(()=>{
-    try { return localStorage.getItem("packsink:market:priceMode") || "low"; }
+    try { return localStorage.getItem("packsink:sealedColl:priceMode") || "low"; }
     catch { return "low"; }
   });
-  useEffect(()=>{ try { localStorage.setItem("packsink:market:priceMode", priceMode); } catch {} }, [priceMode]);
+  useEffect(()=>{ try { localStorage.setItem("packsink:sealedColl:priceMode", priceMode); } catch {} }, [priceMode]);
   const [hideUnowned, setHideUnowned] = useState(false);
   // Grid (image tiles) vs Compact (text-only rows) — mirrors Graded.
   const [displayMode, setDisplayMode] = useState(()=>{
@@ -35865,13 +35868,12 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
   }, [setSub]);
   // Shared price-source preference: each sub-view renders its own toggle
   // (closer to its filters) but the value is shared so toggling once flips
-  // EV, Playset Cost, Set Breakdown. Persisted because
-  // users generally settle on one source.
-  const [priceMode, setPriceMode] = useState(()=>{
-    try { return localStorage.getItem("packsink:market:priceMode") || "low"; }
-    catch { return "low"; }
-  });
-  useEffect(()=>{ try { localStorage.setItem("packsink:market:priceMode", priceMode); } catch {} }, [priceMode]);
+  // EV, Playset Cost, Set Breakdown.
+  // ⚠ ALWAYS opens on Low, and is deliberately NOT persisted — same as the
+  // Screener. Low is the canonical default; every tool under this tab states a
+  // cost, and which number that cost is built from has to be readable off the
+  // screen on arrival rather than inherited from a toggle flipped elsewhere.
+  const [priceMode, setPriceMode] = useState("low");
 
   // Build a Set of excluded chase rarities once for EV-style helpers.
   const excludeRars = useMemo(()=>{

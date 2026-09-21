@@ -2005,6 +2005,18 @@ The FAQ ("Tracking your collection" section, Help bubble `?`) explains this user
 - **Sub-tabs are `<a href="/analytics?a=…">`** via `navHandler` (SPA-nav convention — modifier-click opens a tool in a new tab). On ≤640px the bar is a single scrolling row (was a 3-row 127px wrap); the trailing gutter is a `::after` flex child per the scroll-container-padding gotcha. The 36px tap floor moved from `.market-subtabs > button` to `> .market-subtab`.
 - **Shared chrome**: `MarketHeader` (the EV header pattern as a component — emits `.ev-header.mkt-header`) + `MarketExplainer` (collapsible "ⓘ How this works", collapsed by default, persisted per tool at `packsink:market:explain:<id>`). Every tool now has the header; the always-on `.market-explainer` walls are gone. `MARKET_SUB_TITLES` gives each sub-tab its own `document.title`.
 - **EV rows carry a `⚄ Sim` chip** (`.ev-row-simbtn`) → `simulateSet(setName)` jumps to Simulator/Box with the set preselected. The set selection is SHARED across the three sim modes: MarketView owns `simSet`, each mode consumes it as `presetSet` in its `useState` initializer (modes remount on switch) and reports picks back via `onSetChange` — so Pack ↔ Box ↔ Odds keeps the set. BoxSim's `onOpenOdds` flips to bulk mode. The EV row's `onKeyDown` guards `e.target===e.currentTarget` so Enter on a focusable child doesn't also fire the row's open-history.
+- **⚠ The Low / NM Market toggle ALWAYS opens on Low, and is NOT persisted** (2026-09-21,
+  Zaven: *"why did price default to nm market? we should always default to low"*).
+  MarketView owns one `priceMode` shared by EV, Playset Cost and Set Breakdown — a plain
+  `useState("low")` now, matching the Screener. It used to persist to
+  `packsink:market:priceMode`, **and the Collection » Sealed tab read and wrote that SAME
+  key**, so flipping the toggle there to value a sealed collection silently retargeted three
+  Analytics tools, on every later visit, with nothing on screen saying why. Sealed has its own
+  `packsink:sealedColl:priceMode` now (beside its `:display` / `:trackCosts` siblings) and
+  still persists — it is a collection-value preference, where every tool under Analytics
+  states a COST and which number that cost is built from has to be readable off the screen on
+  arrival. The old key is orphaned, which is what stops a stale `market` resurfacing; it needs
+  no migration.
 - **The home Toolbox is NOT a mirror of this tab bar.** `HOME_TOOLS` deliberately omits
   **Simulator** (removed 2026-08-27, Zaven) as it omits the Stream Ticker: the toolbox is the
   short list of tools an ordinary visitor opens cold, and a pack sim is somewhere you arrive from
