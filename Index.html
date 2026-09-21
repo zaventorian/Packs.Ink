@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=462">
+<link rel="stylesheet" href="styles.css?v=463">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -11417,7 +11417,15 @@ const fisherYates = (arr) => {
 //   2. COACH_TOURS — per-section coachmarks that spotlight real controls.
 //      Auto-fire once per section (max one per browser session), plus the
 //      🧭 button (until seen) and the Help page list.
-const TOURS_ENABLED = true;
+// OFF (2026-09-21, Zaven: "kill the welcome tour all over the site, i think it's
+// unhelpful"). This one const is the whole switch — it gates the welcome modal
+// (`maybeOpenWelcome`), the per-section auto-tours, the guided site walk, the
+// floating compass launcher and the Help page's tour strip, so there is nothing
+// else to go and find. Everything is LEFT IN PLACE rather than deleted: flipping
+// it back to true restores all of it, and the section tours' selectors are the
+// only record of which controls were worth pointing at. Do not "clean up" the
+// dead branches — that is what makes this reversible.
+const TOURS_ENABLED = false;
 // Welcome screen — ONE screen, not a carousel (reworked 2026-08-21: the
 // 5-step click-through buried the features behind Next-Next-Next). Every
 // feature is visible at a glance as a clickable jump-in row, and the primary
@@ -44218,6 +44226,7 @@ const HOME_TOOLS = [
   {k:"ev",     label:"Expected Value"},
   {k:"trade",  label:"Trade Compare"},
   {k:"avg",    label:"Set Breakdown"},
+  {k:"setval", label:"Playset Cost"},
   {k:"swiss",  label:"Swiss Odds"},
   // Simulator is NOT here (removed 2026-08-27, Zaven) — it still lives in the
   // Analytics tab bar and in the Overview. The toolbox is a shortcut strip on
@@ -45054,7 +45063,17 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
           ${freshCoconut.length > 1 && html`<div class="home-news-sub">
             ${freshCoconut.map(coconutDisplayName).join(" · ")} →
           </div>`}
-          <div class="home-news-cards">
+          ${/* ⚠ The column count is set HERE, from the count, because CSS cannot see
+                it: `auto-fit` alone fills the row and leaves the remainder stranded,
+                so seven cards came out 6+1 in a wide box and 4+3 in a narrow one —
+                equal-sized (which was the ask) but lopsided. Halving instead gives
+                4+3 at any width. Capped by COCONUT_REVEAL_MAX_THUMBS (8), so this is
+                never more than 4 columns and a card never falls under the 44px the
+                rail was measured for. */""}
+          <div class="home-news-cards" style=${{"--news-cols":
+            Math.min(4, Math.max(1, Math.min(freshCoconut.length, COCONUT_REVEAL_MAX_THUMBS) <= 4
+              ? Math.min(freshCoconut.length, COCONUT_REVEAL_MAX_THUMBS)
+              : Math.ceil(Math.min(freshCoconut.length, COCONUT_REVEAL_MAX_THUMBS) / 2)))}}>
             ${freshCoconut.slice(0, COCONUT_REVEAL_MAX_THUMBS).map(c => html`<button key=${c.slug}
               type="button" class="home-news-card" title=${"Open " + coconutDisplayName(c)}
               aria-label=${"Open " + coconutDisplayName(c)}
@@ -54967,15 +54986,24 @@ function App(){
   const TABS_TOP    = canScan
     ? [["collection","Collection"],["cards","Cards"],["decks","Decks"],["scan","Scan"]]
     : [["collection","Collection"],["cards","Cards"],["decks","Decks"]];
-  // ⚠ A FOURTH chip on row 2, which is the documented regression: row 2 is the
-  // one with the long labels (PRICE GRAPHING / ANALYTICS) and adding to it is
-  // what pushed ANALYTICS off the edge on ≤420px phones, and why Scan went in
-  // row 1 instead. It is survivable because `.tabs` is a horizontal SCROLLER
-  // on mobile — nothing is clipped, the row just scrolls — but it does mean a
-  // phone no longer sees the whole nav at rest. Measured after the change; if
-  // a fifth ever lands here, move one to row 1 rather than adding a third row.
-  const TABS_BOTTOM = [["screener","Screener"],["history","Price Graphing"],["market","Analytics"],["calendar","Calendar"]];
-  const renderTab = ([v,l]) => {
+  // ⚠ A FOURTH chip on row 2 — and row 2 is the one with the long labels, so
+  // it did not fit: measured at 375px the tabs box has 211px of usable width
+  // and row 2 wanted 256, leaving CALENDAR hanging 53px past the edge. The row
+  // scrolls, so nothing was lost, but with no affordance a half-drawn "CA…"
+  // just reads as broken (reported 2026-09-21).
+  // ⚠ EIGHT CHIPS DO NOT FIT TWO ROWS ON A PHONE at any legible size, and the
+  // arithmetic is worth not re-deriving: renaming this chip AND tightening every
+  // gutter AND dropping the label to 8px still left row 2 3px over. The width had
+  // to come from the chrome instead — the right cluster is one bubble per row on
+  // mobile now (see `.theme-toggle--install/--link/--help` below 640px in
+  // styles.css), which takes it from 80px to 36 and leaves row 2 19px of SPARE at
+  // full 8.5px type. If a NINTH ever lands here, something has to leave the nav.
+  // The third element is a SHORT label for the chip only: "Price Graphing" is the
+  // one label that wraps to two lines, and it is still the title + aria-label, so
+  // hover and a screen reader say the full name (the SetHeading rule — never drop
+  // the real name out of reach just because the visible text got shorter).
+  const TABS_BOTTOM = [["screener","Screener"],["history","Price Graphing","Graphs"],["market","Analytics"],["calendar","Calendar"]];
+  const renderTab = ([v,l,short]) => {
     // The scanner is a modal, not a routed view — there's no URL to hand a
     // modifier-click, so it's an honest <button> instead of an <a href>.
     if(v === "scan") return html`<button key=${v}
@@ -54990,7 +55018,7 @@ function App(){
       onClick=${navHandler(()=>onTabClick(v))}
       title=${l} aria-label=${l}>
       <span class="nav-tab-icon">${NAV_ICONS[v]}</span>
-      <span class="nav-tab-label">${l}</span>
+      <span class="nav-tab-label">${short || l}</span>
     </a>`;
   };
 
@@ -55059,9 +55087,6 @@ function App(){
       <div class="top-nav-right">
         <div class="top-nav-right-row top-nav-right-row--primary"
           ref=${settingsRef} style=${{position:"relative",display:"inline-flex",gap:4,alignItems:"center"}}>
-          ${!IS_NATIVE_APP && !isStandalone && (isIOS || isAndroid) && html`<button class="theme-toggle theme-toggle--install"
-            onClick=${(e)=>{ e.stopPropagation(); setInstallHelpOpen(true); }}
-            title="Install Packs.Ink as an app" aria-label="Install app">${uiIcon("install", 17)}</button>`}
           ${/* Only in the installed app / native shell — which is exactly where
                 there is no address bar to copy from, and also the one state
                 where the install bubble above is hidden, so row 1 keeps its
@@ -55074,9 +55099,11 @@ function App(){
                 title="Account & settings" aria-expanded=${settingsOpen}>
                 <span class="profile-avatar-wrap">
                   ${avatarSrc
-                    ? html`<img src=${avatarSrc} alt="" onError=${()=>setGoogleAvatarOk(false)}
-                        style=${{width:20,height:20,borderRadius:"50%",objectFit:"cover",objectPosition:"top",background:"var(--bg-surface)"}}/>`
-                    : html`<span style=${{width:20,height:20,borderRadius:"50%",background:"var(--accent-glow)",color:"var(--accent)",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>${avatarInitial}</span>`}
+                    ? html`<span class="avatar-clip" style=${{width:20,height:20}}>
+                        <img class=${"avatar-img"+(avatarCard?" avatar-img--card":"")}
+                          src=${avatarSrc} alt="" onError=${()=>setGoogleAvatarOk(false)}/>
+                      </span>`
+                    : html`<span class="avatar-initial" style=${{width:20,height:20,fontSize:11}}>${avatarInitial}</span>`}
                   <span class="profile-gear-badge" aria-hidden="true">${GEAR_BADGE_ICON}</span>
                   ${unreadAlerts > 0 && html`<span class="profile-alert-badge"
                     aria-hidden="true">${unreadAlerts > 9 ? "9+" : unreadAlerts}</span>`}
@@ -55100,9 +55127,10 @@ function App(){
             </>`}
             ${user && html`<div class="avatar-row">
               ${avatarSrc
-                ? html`<img src=${avatarSrc} alt=""
-                    style=${{width:44,height:44,borderRadius:"50%",objectFit:"cover",objectPosition:"top",background:"var(--bg-surface)"}}/>`
-                : html`<span style=${{width:44,height:44,borderRadius:"50%",background:"var(--accent-glow)",color:"var(--accent)",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:700}}>${avatarInitial}</span>`}
+                ? html`<span class="avatar-clip" style=${{width:44,height:44}}>
+                    <img class=${"avatar-img"+(avatarCard?" avatar-img--card":"")} src=${avatarSrc} alt=""/>
+                  </span>`
+                : html`<span class="avatar-initial" style=${{width:44,height:44,fontSize:20}}>${avatarInitial}</span>`}
               <div class="avatar-row-info">
                 <div class="avatar-row-name">${profile?.display_name || "Set up your display name"}</div>
                 ${user.email && html`<div class="avatar-row-email">${user.email}</div>`}
@@ -55191,6 +55219,27 @@ function App(){
               title="Copy a link to whatever you're looking at right now">
               ${uiIcon("link")} Copy link to this page
             </button>
+            ${/* ⚠ These two are the ONLY route to Help and Install on a phone.
+                  Below 640px the top bar's `?` and install bubbles are hidden, so
+                  the right cluster is one bubble per row and 36px wide instead of
+                  80 — which is the 44px that lets all eight nav chips fit two rows
+                  (see TABS_BOTTOM). Copy-link was already duplicated here and is
+                  why that bubble could go too. Do NOT delete either row without
+                  first putting those bubbles back, or the control is simply gone
+                  on the device most likely to want it: Install is a mobile-browser
+                  affordance, and it is hidden in the installed app anyway. They
+                  render at every width — a second entry point on desktop costs
+                  nothing and keeps one menu, not a per-breakpoint one. */""}
+            <button class="settings-action"
+              onClick=${()=>{ setSettingsOpen(false); onTabClick("faq"); }}
+              title="How Packs.Ink works — where the prices come from, and what each tool does">
+              ${NAV_ICONS.faq} How it works
+            </button>
+            ${!IS_NATIVE_APP && !isStandalone && (isIOS || isAndroid) && html`<button class="settings-action"
+              onClick=${()=>{ setSettingsOpen(false); setInstallHelpOpen(true); }}
+              title="Add Packs.Ink to your home screen">
+              ${uiIcon("install")} Install the app
+            </button>`}
             ${user && html`<button class="settings-action"
               onClick=${()=>{ setSettingsOpen(false); setAlertsOpen(true); }}
               title="Price alerts on your watchlists">
@@ -55213,6 +55262,19 @@ function App(){
           </div>`}
         </div>
         <div class="top-nav-right-row top-nav-right-row--bubbles">
+          ${/* ⚠ In the BUBBLES row, not beside the avatar where it used to live, and
+                that is a width decision rather than a tidy-up: the cluster is as wide
+                as its widest row, and a second control up there takes it from 36px to
+                80 — which is exactly the 44px that makes CALENDAR fall off row 2 of
+                the tabs (see TABS_BOTTOM). Down here it costs nothing, because below
+                640px it TAKES the theme bubble's slot rather than sitting beside it
+                (styles.css) — theme keeps a full section in the ⚙ menu, and an
+                un-installed visitor is the person we most want to reach. It removes
+                itself the moment they install (`!isStandalone`), so the theme bubble
+                comes back on its own with nothing to switch. */""}
+          ${!IS_NATIVE_APP && !isStandalone && (isIOS || isAndroid) && html`<button class="theme-toggle theme-toggle--install"
+            onClick=${(e)=>{ e.stopPropagation(); setInstallHelpOpen(true); }}
+            title="Install Packs.Ink as an app" aria-label="Install app">${uiIcon("install", 17)}</button>`}
           <button class=${"theme-toggle theme-toggle--help"+(view==="faq"?" active":"")}
             onClick=${()=>onTabClick("faq")}
             title="How it works" aria-label="How it works">${NAV_ICONS.faq}</button>
