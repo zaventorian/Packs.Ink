@@ -2839,6 +2839,74 @@ Troves, specials. Ignore packs, puzzles, etc."* `sealedMoverCandidates` → `sea
   Sealed flag when a payload names it, so a Screener last left in Sealed mode opened Chase /
   Rare–Legendary / Promo / Most-Valuable filters on top of the sealed table.
 
+### Mobile: the movers stack is ONE row plus a chip strip (2026-09-20)
+
+Above 1100px the three home columns sit SIDE BY SIDE, so picking a column is a spatial
+choice. Below it they concatenate, and "which rail" quietly becomes "how far down the
+scroll" — which is why the desktop layout reads well and the phone did not. Measured
+signed out at 375x812 before this shipped: the page was **4622px (5.7 screens)**, the
+movers stack **2354px of it (51%)**, the calendar began at screen **3.3** and the rails
+at **4.1**. `MoversPicker` (just above `MoversBanner`) replaces the stack with one banner
+and a chip per row: **3274px, 4.0 screens, calendar at 1.6**.
+
+- **NOT while editing.** The ▲▼ reorder bars are interleaved INTO the stack, so a
+  collapsed stack would offer arrows for one row and hide the rest. Edit mode renders
+  every banner at every width.
+- **⚠ The Rare–Legendary key carries the news feed** (`bannerNodes.rareLeg` wraps both in
+  `.rl-news-row`) and on a phone that rl copy is the ONLY one rendered — the rail copy is
+  `display:none` ≤1100px. So the collapsed branch shows the BARE banner and lifts the news
+  feed out; otherwise tapping any other chip deletes the news feed from the page with no
+  way back. Same for a panel paired to a banner: lifted, whichever chip is live, or half
+  the page appears and disappears as you tap along the strip.
+- **`MOVERS_PICK_ALL` ("all") is a pick like any other** and shares the one localStorage
+  key with the banner keys, so it must never collide with one. It renders the SAME stack
+  the desktop path builds — news back inside its pair row — rather than a second
+  implementation that could drift.
+- **⚠ `MOVERS_PICK_ORDER` is the STRIP's order, deliberately not the STACK's.** The stack
+  follows the ▲▼ and the hot-set heuristic, where the newest set sits last outside release
+  week; as a menu that buries the row people most want (Zaven, 2026-09-20). An unlisted key
+  falls to the end, so a new banner needs no edit here.
+- **`HOME_BANNER_RARITIES`** draws the rarity marks instead of a word on the three
+  rarity-group rows, through the same `RarityTag` accessor the in-banner Epic/Enchanted/
+  Iconic buttons use (`MoverChipGroup`'s `iconOf`). ⚠ An icon chip needs a LIGHTER off
+  state than a word chip: `filter` inherits, so a second grayscale on the `<img>` stacked
+  on the chip's own and took the Rare/Super Rare/Legendary gems to invisible.
+- **⚠ The newest set's chip is its LOGO, and `SetLogo` must be passed `eager`.** A lazy
+  image sized `height:Npx; width:auto` lays out 0px wide before it loads, and in a
+  horizontal scroller that degenerate box never triggers the fetch — the chip rendered as
+  an empty pill with the file serving 200. `lorcanaSetArt()` also returns `{src, mono}`,
+  NOT a url; passing it to an `<img src>` yields "[object Object]" and the silent fallback
+  to the word hides it. A set with no logo yet (the normal state for a new set's first
+  weeks) correctly falls back to the word.
+- **`newestSetIsNew` is a SECOND window, not a widening of `newestSetIsHot`.** That one
+  ends the Friday after LGS and floats the banner to the top of the STACK; this one runs a
+  fortnight and decides only which chip the picker opens on. Folding them together would
+  quietly move the banner order. An explicit pick still wins: a heuristic may choose for
+  you, never over you.
+
+### The news/poll box collapses, and un-collapses itself (2026-09-20)
+
+591px → 45px, desktop and mobile. **⚠ The stored value is not a boolean — it is the
+CONTENT SIGNATURE that was on screen when you minimised it** (`NEWS_COLLAPSE_LS`). If what
+would render now differs, the box opens itself: "maximize it again when something new is
+posted" (Zaven). That shape is what makes it safe to forget — a box collapsed in March
+cannot swallow a set announcement in June, which a plain boolean would.
+
+- Signature = tile **keys** (not count: a new tile replacing an old one is news and the
+  count would not move) + the poll's **`poll_id`**. ⚠ There is no `id` on that row — the
+  first cut read one, the signature ended `::undefined`, never moved, and a brand-new poll
+  could not have reopened anything. It fails silently in exactly one direction.
+- **⚠ Nothing volatile may enter it.** `my_choice`/`pct` change when YOU vote, which would
+  pop the box open at the moment you finished with it; a countdown would reopen it on a
+  timer and make the minimise a lie.
+- The comparison is at RENDER, not in an effect, so new content paints open with no
+  expanded-then-collapsed flash. The poll sits inside the collapse — it is ~200px of the
+  578 and a collapse that left it standing would not be one.
+- **⚠ `contain:size` has to be released** on the `.rl-news-row` copy, which takes its
+  height from the banner beside it: without that, collapsing leaves a full-height empty
+  rectangle.
+- Guarded by the signature section of `node scripts/test_home_layout.mjs`.
+
 ## Mobile top-nav
 
 Whole top bar is a single horizontal scroll container on phones (`overflow-x: auto`). Logo is `position: sticky; left: 0` so it stays pinned to the left edge. Tabs + username pill + theme toggle all scroll together → reclaims width that was previously fixed-right cluster space.

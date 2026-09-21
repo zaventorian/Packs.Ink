@@ -3417,13 +3417,19 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
    weekly reveals inside the 14-day window, so the common case, not an edge one)
    a left-hand thumb column squeezed the title into three wrapped lines. */
 .home-news-thumbs{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px;}
-/* The reveal's full card. ⚠ min-width is what keeps this honest: below ~96px a
-   grayscale beta render stops reading as a card at all, which is the reason the
-   52px thumbs existed. Three reveals inside one 14-day window therefore WRAP
-   rather than shrinking to fit one row. */
+/* The reveal's cards. The 96px floor this rule used to carry — "below ~96px a
+   grayscale beta render stops reading as a card" — was written when at most
+   three showed at 124px. A weekly Beta cadence has since put SEVEN inside one
+   14-day window, and seven at 96px is 700px of cards in a 240px rail.
+   ⚠ So the answer is per-viewport, not one number: a phone shows NONE (the
+   row was most of the tile there), and the rail shows them all at whatever
+   width they divide into, floored at 44px. That is frankly a thumbnail rather
+   than a readable card — the deliberate trade for "all 7 smaller but visible"
+   (Zaven) — and the full art is one tap away on the card page. */
 .home-news-cards{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+@media (max-width:1100px){ .home-news-cards{display:none;} }
 .home-news-cards:not(:has(.home-news-card:not([hidden]))){display:none;}
-.home-news-card{flex:0 1 124px;min-width:96px;max-width:124px;display:block;padding:0;
+.home-news-card{flex:1 1 44px;min-width:44px;max-width:124px;display:block;padding:0;
   border:1px solid var(--border);border-radius:8px;background:var(--bg-card);
   overflow:hidden;cursor:pointer;line-height:0;}
 .home-news-card[hidden]{display:none;}
@@ -4038,11 +4044,34 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
    same grouping cue the deck-action rows use, minus the hairline, which would
    have to be a pseudo-element and would then scroll oddly in this strip. */
 .home-movers-chip--all{margin-right:4px;}
+/* The newest set's chip is its wordmark. Sized by HEIGHT so any set's logo —
+   they vary wildly in aspect — lands on the same optical line as the rarity
+   marks beside it, and the chip's padding tightens because the art carries its
+   own breathing room. ⚠ A logo is a picture of a word, so the button keeps its
+   aria-label; see the brand-art note. */
+.home-movers-chip--logo{padding:3px 9px;}
+/* ⚠ Needs the .set-logo co-class to beat `.set-logo{height:100%}`, which
+   would otherwise stretch the wordmark to the chip's line-height. */
+/* 19px, not the 15 the rarity marks use. CLAUDE.md's standing warning is that
+   a set logo is a WORDMARK and an unreadable smudge at small sizes — true, and
+   the reason this takes every pixel the 28px chip row can spare. It is not
+   trying to be readable type: at 19px it is a recognisable SHAPE, which is how
+   players know a set anyway, and the name is on the title and the aria-label.
+   ⚠ A wide wordmark (a future set's) will come out narrower per unit height
+   than Attack of the Vine!'s stacked mark; max-width is the guard. */
+.home-movers-chip .set-logo.home-movers-logo{height:19px;width:auto;max-width:96px;
+  object-fit:contain;display:block;}
+.home-movers-chip:not(.on) .home-movers-logo{filter:grayscale(0.3);}
 /* The three rarity-group rows show their tiers' icons instead of a word (see
    HOME_BANNER_RARITIES). No text, so the padding comes in and the gap does the
    separating; 15px is a touch over the 14px .rarity-tag-icon default because
    these carry the chip on their own rather than sitting beside a label. */
 .home-movers-chip--rar{padding:4px 9px;gap:3px;}
+/* Rarity marks inside the in-banner Epic/Enchanted/Iconic buttons. The button
+   is a .seg-grp child, so it already has its own type sizing; this only puts
+   the mark on the text's optical line and stops it shrinking. */
+.seg-grp button .rarity-tag{margin-right:4px;vertical-align:-0.18em;}
+.seg-grp button .rarity-tag-icon{width:13px;height:13px;}
 .home-movers-chip--rar .rarity-tag-icon{width:15px;height:15px;}
 /* ⚠ An icon chip needs a LIGHTER off state than a word chip, not a heavier
    one. `filter` inherits down, so the base rule's grayscale(0.5) + opacity
@@ -10896,6 +10925,9 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
    second events box beside it. */
 .cal-act--find{border-style:solid;}
 .cal-act--find:hover{background:var(--accent-glow);}
+/* The finder inside the My-calendar drawer. It heads the drawer's own content,
+   so it needs the gap the list below it would otherwise sit flush against. */
+.cal-follow-find{margin-bottom:10px;}
 /* List-mode pager on the home calendar panel. A footer, not a heading: the rows
    carry their own dates, so this only has to say where in time you are. */
 .cal-panel-page{display:flex;align-items:center;gap:6px;margin-top:6px;padding-top:6px;
