@@ -185,7 +185,7 @@ HISTORY_COLS = (
     "event_id,name,kind,set_name,store_id,store_name,store_website,"
     "start_datetime,end_datetime,timezone,full_address,city,state,country,"
     "latitude,longitude,registered_user_count,capacity,cost_cents,currency,"
-    "gameplay_format,display_status,url,last_seen_at"
+    "gameplay_format,display_status,url,description,last_seen_at"
 )
 
 

@@ -1044,7 +1044,15 @@ ok("an unknown rph_kind falls back to the store glyph, never to a blank",
 
 ok("a DLC and a CCQ carry different official marks",
   calendarEventIcon({kind: "dlc"}).img === LORCANA_MARKS.challengeBadge &&
-  calendarEventIcon({kind: "ccq"}).img === LORCANA_MARKS.lorcanaHex);
+  calendarEventIcon({kind: "ccq"}).img === LORCANA_MARKS.lorcanaHexCcq);
+// ⚠ The qualifier uses the LABELLED hex, not the plain one. The Challenge
+// badge says "LORCANA CHALLENGE" in its own artwork so it identifies itself;
+// the bare hex says nothing, and at chip size "a hexagon" was all a reader
+// got. Both files are referenced, so the plain mark stays shipped and the
+// derivation still has a source.
+ok("and the CCQ one is the hex with CCQ written on it",
+  /lorcana-hex-ccq\.png$/.test(LORCANA_MARKS.lorcanaHexCcq)
+  && LORCANA_MARKS.lorcanaHexCcq !== LORCANA_MARKS.lorcanaHex);
 
 // ⚠ The regression this guards: every set date resolved the same booster-pack
 // photo, which sat ON TOP of the glyph and made the three phases identical
@@ -1805,21 +1813,27 @@ ok("the graded tile isolates its version badge",
   // undefined const and its own `catch { return "month"; }` swallows it, so
   // every case "passes" and the test is measuring nothing.
   const keys = grabLine("const CAL_PANEL_VIEW_LS = ") + NL + grabLine("const CAL_PANEL_VIEW_MONTH_KEY = ");
+  // ⚠ The fixtures READ the stamp key out of the source. They used to restate
+  // it, so bumping the stamp (which is how you re-fire it for everyone) made
+  // three assertions test an unstamped browser and the "fires once" case pass
+  // vacuously.
+  const STAMP = (/"([^"]+)"/.exec(grabLine("const CAL_PANEL_VIEW_MONTH_KEY = ")) || [])[1];
+  ok("the stamp key was found, so the cases below are really stamped", !!STAMP);
   const run = (init) => {
     const st = {...init};
     const ls = {getItem: (k) => (k in st ? st[k] : null), setItem: (k, v) => { st[k] = String(v); }};
     return new Function("localStorage", keys + NL + "return (" + body + ")();")(ls);
   };
   ok("(the harness really runs the helper, not its catch)",
-    run({"packsink:cal:panelView": "list", "packsink:cal:panelViewMonth": "1"}) !==
-    run({"packsink:cal:panelView": "month", "packsink:cal:panelViewMonth": "1"}));
+    run({"packsink:cal:panelView": "list", [STAMP]: "1"}) !==
+    run({"packsink:cal:panelView": "month", [STAMP]: "1"}));
   ok("a fresh browser opens on the month grid", run({}) === "month");
   ok("and a browser holding the old list default is moved once",
     run({"packsink:cal:panelView": "list"}) === "month");
   ok("but the stamp fires ONCE - a deliberate list pick sticks",
-    run({"packsink:cal:panelView": "list", "packsink:cal:panelViewMonth": "1"}) === "list");
+    run({"packsink:cal:panelView": "list", [STAMP]: "1"}) === "list");
   ok("and a deliberate month pick is left alone too",
-    run({"packsink:cal:panelView": "month", "packsink:cal:panelViewMonth": "1"}) === "month");
+    run({"packsink:cal:panelView": "month", [STAMP]: "1"}) === "month");
 }
 
 // -- following a store is a SUBSET, from the result tile ---------------------
@@ -2036,6 +2050,131 @@ ok("the graded tile isolates its version badge",
                       NL + "};");
   ok("and only a modal that actually lists products is widened",
     /const wide = !!\(isSet && products && products\.length > 0\);/.test(modal2));
+}
+
+// ── list / month is ONE button ──────────────────────────────────────────────
+// Two buttons for an A-or-B choice spend two slots of a four-slot header saying
+// what one can, and a pair where only ever one is lit reads as a setting to hunt
+// through rather than a switch.
+{
+  const panel = grab("const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices}) => {",
+                     NL + "};");
+  const tools = panel.slice(panel.indexOf('<div class="cal-panel-tools">'),
+                            panel.indexOf("</div>", panel.indexOf('<div class="cal-panel-tools">')));
+  ok("the panel header has one view control, not two",
+    (tools.match(/cal-panel-tool--view/g) || []).length === 1);
+  ok("and it toggles rather than setting one side",
+    /setMode\(m => m === "month" \? "list" : "month"\)/.test(panel));
+  ok("it shows the view you would GET", /uiIcon\(mode === "month" \? "list" : "calendar"/.test(panel));
+  // ⚠ The icon alone is ambiguous — a calendar glyph could mean "you are on the
+  // calendar" or "go to the calendar" — so the tooltip names BOTH states.
+  ok("and names the current one so the icon is never ambiguous",
+    /Showing the month — switch to the list/.test(panel)
+    && /Showing the list — switch to the month/.test(panel));
+  // The /calendar PAGE keeps its segmented control: three modes is not A-or-B.
+  ok("the page's three-mode control is untouched",
+    (src.match(/CAL_VIEW_MODES = \["list", "month", "timeline"\]/g) || []).length === 1);
+}
+
+// ── the banner's cameras stay on the title's line ───────────────────────────
+// ⚠ The fix is NOWRAP, and two earlier attempts prove why. flex-wrap:wrap breaks
+// lines from each item's CONTENT size and only shrinks WITHIN a line afterwards,
+// so making the subtitle shrinkable could never stop the wrap. And flex-GROW on
+// the subtitle made it worse in the exact way being fixed: it expanded to fill
+// the row and pushed the cameras onto a line of their own, where margin-left:auto
+// left the whole width empty beside them.
+{
+  const css7 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  ok("the banner head does not wrap on desktop",
+    /\.movers-banner-head\{[^}]*flex-wrap:nowrap/.test(css7));
+  ok("but still wraps on a phone, where there is no room",
+    /@media \(max-width:700px\)\{\.movers-banner-head\{flex-wrap:wrap;\}\}/.test(css7));
+  ok("the subtitle shrinks and never grows",
+    /\.movers-banner-sub\{[^}]*flex:0 1 auto/.test(css7));
+  ok("and can go below its longest word",
+    /\.movers-banner-sub\{[^}]*min-width:0/.test(css7));
+  // Only the subtitle gives: the newest set's banner names the set in its title.
+  ok("nothing else in the row is allowed to shrink",
+    /\.movers-banner-head > \*\{flex:0 0 auto;\}/.test(css7));
+}
+
+// ── the desktop column uses the screen ──────────────────────────────────────
+// ⚠ NOT CSS zoom. Measured: with zoom:1.15 on body, a position:fixed element
+// placed at a getBoundingClientRect() lands 194px off — and every popover here is
+// anchored exactly that way (useCalPopAnchor, the hover card, .gc-caps-tip, the
+// settings pin). So the dead space is spent on content instead.
+{
+  const css8 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  // Comments stripped first: the note explaining why zoom is unusable naturally
+  // contains the word, and matching that would fail for saying so.
+  const css8bare = css8.replace(/\/\*[\s\S]*?\*\//g, "");
+  ok("no rule zooms the page", !/[^-]zoom\s*:\s*[0-9.]/.test(css8bare));
+  ok("the column widens on a big monitor",
+    /@media \(min-width:1500px\)\{body\{max-width:1440px;\}\}/.test(css8)
+    && /@media \(min-width:1750px\)\{body\{max-width:1640px;\}\}/.test(css8));
+  ok("and the rails widen with it",
+    /@media \(min-width:1750px\)\{\.home-grid\{grid-template-columns:280px minmax\(0,1fr\) 400px;\}\}/.test(css8));
+  // ⚠ AFTER .home-grid's own declaration: same specificity, so declared first it
+  // loses on source order and the body widens around rails that do not move.
+  ok("the rail override is declared after the rule it has to beat",
+    css8.lastIndexOf("@media (min-width:1750px){.home-grid{") > css8.indexOf(".home-grid{display:grid"));
+  // Two banner rows have to clear a 1080p fold. The art is NOT what gave.
+  ok("the tile's gaps gave, not its art",
+    /\.mover-tile\{[\s\S]{0,600}?gap:1px;padding:3px 3px 3px/.test(css8));
+  ok("the scroller's bottom pad gave too",
+    /\.movers-wrap\{overflow-x:auto;overflow-y:hidden;padding:4px 4px 6px/.test(css8));
+}
+
+// ── the store's own description of its event ────────────────────────────────
+// RPH carries one on ~45% of Lorcana events (59-60% of Set Championships and
+// prereleases, measured against the live API 2026-09-20) and we threw it away
+// for as long as this has shipped. Every failure here is silent: a description
+// that never arrives looks exactly like an event that has none.
+{
+  const css9 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  const comp = grab("const EventDescription = ({text}) => {", NL + "};");
+
+  // ⚠ Rendered as TEXT. The ETL strips HTML on the way in so this CAN be a plain
+  // interpolation, but the defence has to hold on both sides: rows stored before
+  // that cleaning existed are still in the table, and RPH does not sanitise this
+  // field any more than it sanitises store names.
+  ok("the description is never injected as markup",
+    !/dangerouslySetInnerHTML|innerHTML/.test(comp));
+  ok("an empty one renders nothing at all", /if\(!body\) return null;/.test(comp));
+
+  // ⚠ pre-wrap. These are little agendas — "Registration 2:30pm / Fire 3:00pm /
+  // Fee $13" — and the line breaks the shop typed ARE the formatting.
+  ok("the shop's own line breaks survive",
+    /\.cal-desc-body\{[^}]*white-space:pre-wrap/.test(css9));
+  ok("and a pasted URL cannot widen the modal",
+    /\.cal-desc-body\{[^}]*overflow-wrap:anywhere/.test(css9));
+  // CLAMPED, not truncated: the whole text stays in the DOM, so it is selectable
+  // and findable, and the reader can open it. Median is 121 chars but the longest
+  // in the live API is 4,009.
+  ok("long ones clamp by LINE rather than being cut",
+    /\.cal-desc\.is-clamped \.cal-desc-body\{[^}]*line-clamp:6/.test(css9));
+  ok("and the clamp is reversible", /Show less/.test(comp) && /Show more/.test(comp));
+
+  // Both modals that can have one render it.
+  ok("the calendar's event modal shows it", /<\$\{EventDescription\} text=\$\{ev\.description\}\/>/.test(src));
+  // ⚠ The OCCURRENCE's, not the series'. Each date carries its own.
+  ok("and the finder shows the OCCURRENCE's, not the series'",
+    /<\$\{EventDescription\} text=\$\{o\.description\}\/>/.test(src));
+  ok("it rides onto the calendar entry", /description: ev\.description \|\| null,/.test(src));
+
+  // ⚠ The fetch degrades ONCE rather than failing. supabase-js returns
+  // {data, error} rather than throwing, so asking for a column the database does
+  // not have yields data:null with NO exception — the caller's catch never runs
+  // and every followed store's events vanish from the calendar silently.
+  const sel = grab("const calSelectEvents = async (build) => {", NL + "};");
+  ok("the events fetch retries without the column on 42703",
+    /_calDescCol = false;/.test(sel) && /calMissingCol\(r\.error\)/.test(sel));
+  ok("and the retry re-runs the same query rather than a narrower one",
+    /r = await build\(calEventCols\(\)\);/.test(sel));
+  ok("the flag is one-way, so an outage cannot flap it",
+    !/_calDescCol = true;/.test(sel));
+  ok("both event fetches go through it",
+    (src.match(/await calSelectEvents\(\(cols\) =>/g) || []).length === 2);
 }
 console.log(failed ? `\n${failed} FAILED` : "\nall calendar checks passed");
 process.exit(failed ? 1 : 0);

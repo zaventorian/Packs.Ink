@@ -123,11 +123,24 @@ check("no past rows -> no archive write", "archive_write" in calls, False)
 check("...and the sweep still runs", "delete_past" in calls, True)
 
 print("column contract")
-sql = (HERE.parents[1] / "supabase" / "121_lorcana_events_history.sql").read_text(encoding="utf-8")
+# ⚠ The CREATE plus every later `alter table ... add column`. Reading only
+# the CREATE was right until a migration widened the table, and then this failed
+# for a column that genuinely exists -- which is the wrong direction for a guard
+# whose job is catching a column HISTORY_COLS names and the table lacks.
+SUPA = HERE.parents[1] / "supabase"
+sql = (SUPA / "121_lorcana_events_history.sql").read_text(encoding="utf-8")
 body = sql.split("create table if not exists public.lorcana_events_history", 1)[1].split(");", 1)[0]
 sql_cols = set(re.findall(r"^\s{2}([a-z_]+)\s+\S", body, re.M)) - {"archived_at"}
+for f in sorted(SUPA.glob("*.sql")):
+    for col in re.findall(
+            r"alter\s+table\s+(?:public\.)?lorcana_events_history\s+"
+            r"add\s+column\s+(?:if\s+not\s+exists\s+)?([a-z_]+)",
+            f.read_text(encoding="utf-8"), re.I):
+        sql_cols.add(col)
 py_cols = set(de.HISTORY_COLS.split(","))
 check("every archived column exists in the table", sorted(py_cols - sql_cols), [])
+# The other direction is NOT an error: the table may legitimately hold a column
+# the archive does not copy. Only naming one that does not exist loses data.
 check("no table column is missed by the copy", sorted(sql_cols - py_cols), [])
 
 print("grace")

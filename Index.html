@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=443">
+<link rel="stylesheet" href="styles.css?v=457">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2278,6 +2278,14 @@ const LORCANA_CARD_GLYPHS = {
 const LORCANA_MARKS = {
   challengeBadge: LORCANA_ART + "marks/challenge-badge.png",
   lorcanaHex:     LORCANA_ART + "marks/lorcana-hex.png",
+  // ⚠ The hex with CCQ written across it, derived by scripts/derive_ccq_mark.py
+  // from the mark above — which stays untouched, because a derived file that
+  // overwrote its source could never be regenerated. The Challenge badge SAYS
+  // "LORCANA CHALLENGE" in its own artwork so it identifies itself; the plain
+  // hex says nothing, and at the 17-24px a calendar chip gives it "a hexagon"
+  // was all a reader got. RE-RUN that script after any bake_brand_assets.py
+  // run, or this becomes a label on last season's art; `--check` reports it.
+  lorcanaHexCcq:  LORCANA_ART + "marks/lorcana-hex-ccq.png",
   cardBack:       LORCANA_ART + "marks/card-back.webp",
 };
 
@@ -2459,6 +2467,7 @@ const UI_ICON_PATHS = {
   lock:      _icoSvg(html`<rect x="4.5" y="10.5" width="15" height="9.5" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>`),
   trophy:    _icoSvg(html`<path d="M8 3.5h8V9a4 4 0 0 1-8 0z"/><path d="M8 5H5.2a.7.7 0 0 0-.7.7c0 2.4 1.6 4.3 3.9 4.6"/><path d="M16 5h2.8a.7.7 0 0 1 .7.7c0 2.4-1.6 4.3-3.9 4.6"/><path d="M12 13v3.4"/><path d="M8.6 20.5h6.8"/><path d="M10 16.9h4l.7 3.6H9.3z"/>`),
   compass:   _icoSvg(html`<circle cx="12" cy="12" r="8.6"/><path d="M15.4 8.6l-2 4.8-4.8 2 2-4.8z"/>`),
+  filter:    _icoSvg(html`<path d="M3.8 4.5h16.4l-6.4 7.6v6.1l-3.6 1.8v-7.9z"/>`),
   camera:    _icoSvg(html`<path d="M4.5 7.5h3l1.5-2.4h6l1.5 2.4h3A1.5 1.5 0 0 1 21 9v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18V9a1.5 1.5 0 0 1 1.5-1.5z"/><circle cx="12" cy="13" r="3.6"/>`),
   torch:     _icoSvg(html`<path d="M9 2.8h6v3.4l1.5 2v12.5a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1V8.2L9 6.2z"/><path d="M7.5 9.4h9"/><path d="M12 12.4v3"/>`),
   install:   _icoSvg(html`<rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M12 7v7"/><path d="M9 11l3 3 3-3"/><path d="M10.5 18.5h3"/>`),
@@ -2720,7 +2729,7 @@ const calendarEventIcon = (ev, artIndex) => {
   const img = (ev && (ev.image_url
     || (ev.kind === "product" && calendarEventArt(ev, artIndex)))) || null;
   const mark = ev && (ev.kind === "dlc" ? LORCANA_MARKS.challengeBadge
-             : ev.kind === "ccq" ? LORCANA_MARKS.lorcanaHex : null);
+             : ev.kind === "ccq" ? LORCANA_MARKS.lorcanaHexCcq : null);
   return {icon, hue, img: img || mark};
 };
 
@@ -3175,6 +3184,10 @@ const calendarStoreEntry = (ev, extra) => {
     event_id: ev.event_id,
     store_id: ev.store_id != null ? String(ev.store_id) : null,
     rph_kind: ev.kind || "other",
+    // What the shop WROTE about it. ~45% of RPH events carry one (59-60% of
+    // Set Championships and prereleases), and it is where the entry fee, the
+    // start time and the prize split live.
+    description: ev.description || null,
     // For the mini map and the region filter. RPH gives the VENUE's own
     // coordinates, which is finer than the city-level point a curated row has.
     latitude: typeof ev.latitude === "number" ? ev.latitude : null,
@@ -37129,6 +37142,13 @@ const MoverChipGroup = ({ariaLabel, order, labels, selected, onToggle, noun}) =>
 // ⚠ It sets `scrollLeft` directly rather than calling scrollIntoView, which
 // walks every scrollable ancestor — here that is the page, so restoring a
 // pick would silently scroll the home page down past the header.
+// The sentinel for "show every row, stacked" — the pre-2026-09-20 mobile
+// behaviour, kept as a deliberate choice rather than as the only one. It is a
+// pick like any other and persists like any other, so browsing the whole stack
+// on a phone survives a reload.
+// ⚠ It shares one localStorage key with the banner keys, so it must never
+// collide with one; test_home_layout.mjs pins that.
+const MOVERS_PICK_ALL = "all";
 const MoversPicker = ({keys, pick, onPick}) => {
   const wrapRef = useRef(null);
   useEffect(() => {
@@ -37139,11 +37159,29 @@ const MoversPicker = ({keys, pick, onPick}) => {
     wrap.scrollLeft = Math.max(0, on.offsetLeft - (wrap.clientWidth - on.offsetWidth) / 2);
   }, []);
   return html`<div class="home-movers-pick" ref=${wrapRef} role="tablist" aria-label="Movers rows">
-    ${keys.map(k => html`<button key=${"mp-"+k} type="button" role="tab"
-      aria-selected=${k === pick ? "true" : "false"}
-      class=${"home-movers-chip" + (k === pick ? " on" : "")}
-      title=${HOME_BANNER_LABELS[k] || k}
-      onClick=${() => onPick(k)}>${HOME_BANNER_SHORT[k] || HOME_BANNER_LABELS[k] || k}</button>`)}
+    ${/* FIRST, which is where every other "no filter" control on the site sits
+          — the Screener's preset row, the calendar's regions, the graded
+          visibility filter. It is also why the strip can be a single control
+          rather than a strip plus a separate toggle: "all of them" is just
+          another thing the strip can be showing. */""}
+    <button type="button" role="tab" aria-selected=${pick === MOVERS_PICK_ALL ? "true" : "false"}
+      class=${"home-movers-chip home-movers-chip--all" + (pick === MOVERS_PICK_ALL ? " on" : "")}
+      title="Show every movers row, stacked"
+      onClick=${() => onPick(MOVERS_PICK_ALL)}>All</button>
+    ${keys.map(k => {
+      const rars = HOME_BANNER_RARITIES[k];
+      return html`<button key=${"mp-"+k} type="button" role="tab"
+        aria-selected=${k === pick ? "true" : "false"}
+        ${/* The icon chips have no text node at all, so the accessible name has
+              to come from here — and the FULL label, not the short one, since
+              there is no width pressure on a screen reader. */""}
+        aria-label=${HOME_BANNER_LABELS[k] || k}
+        class=${"home-movers-chip" + (rars ? " home-movers-chip--rar" : "") + (k === pick ? " on" : "")}
+        title=${HOME_BANNER_LABELS[k] || k}
+        onClick=${() => onPick(k)}>${rars
+          ? rars.map(r => html`<${RarityTag} key=${r} rarity=${r} hideText=${true}/>`)
+          : (HOME_BANNER_SHORT[k] || HOME_BANNER_LABELS[k] || k)}</button>`;
+    })}
   </div>`;
 };
 
@@ -37269,18 +37307,25 @@ const MoversBanner =({title, subtitle, controls, cards, onTileClick, activeWindo
     };
   }, []);
 
-  return html`<section style=${{margin:"0 0 10px"}}>
-    ${(title || subtitle || controls || cards.length) ? html`<div style=${{display:"flex",alignItems:"center",gap:8,marginBottom:3,flexWrap:"wrap"}}>
+  return html`<section style=${{margin:"0 0 6px"}}>
+    ${(title || subtitle || controls || cards.length) ? html`<div class="movers-banner-head">
       ${title ? (onTitleClick
         ? html`<button class="home-title-link" onClick=${onTitleClick}
             title=${titleHint || "Open Screener with this filter"}
             style=${{fontFamily:"'Cinzel',serif",fontSize:12,fontWeight:600,margin:0,color:"var(--accent)",letterSpacing:0.3,background:"none",border:0,padding:0,cursor:"pointer"}}>${title}</button>`
         : html`<h2 class="title-font" style=${{fontSize:12,fontWeight:600,margin:0,color:"var(--accent)",letterSpacing:0.3}}>${title}</h2>`) : null}
       ${controls ? html`<span>${controls}</span>` : null}
-      ${subtitle ? html`<span class="muted" style=${{fontSize:10}}>${subtitle}</span>` : null}
+      ${/* ⚠ The subtitle is the one thing here allowed to SHRINK, so the camera
+            buttons stay on the title's line. It used to be unshrinkable, so on a
+            ~700px main column the row overflowed, the cams wrapped to a line of
+            their own, and their margin-left:auto left the whole line empty to
+            their left. The subtitle is a restatement of what the chips beside it
+            already say, so an ellipsis there costs the least of anything in the
+            row. */""}
+      ${subtitle ? html`<span class="muted movers-banner-sub">${subtitle}</span>` : null}
       ${/* The banner export paints MoverTile-shaped cards, so it is offered
             only for banners that use it. */""}
-      ${cards.length > 0 && !renderTile && html`<span class="movers-banner-cams" style=${{marginLeft:"auto",display:"inline-flex",gap:6,alignItems:"center"}}>
+      ${cards.length > 0 && !renderTile && html`<span class="movers-banner-cams">
         ${[
           {lo:0, hi:10, lbl:"1–10"},
           ...(cards.length > 10 ? [{lo:10, hi:20, lbl:"11–20"}] : []),
@@ -37515,6 +37560,20 @@ const HOME_BANNER_LABELS = {
 // ⚠ Keep a key here for every HOME_BANNER_KEYS entry — a missing one falls
 // back to the long label, which is not an error, just a chip that blows the
 // strip's width out. scripts/test_home_layout.mjs pins the pairing.
+// Three of the movers rows ARE rarity groups, and a rarity has an icon on this
+// site already — so the chip shows the icons instead of a word. That is not
+// decoration: "Rare-Leg" is an abbreviation a reader has to decode, while the
+// three rarity marks say exactly which tiers the row holds, in less width than
+// the abbreviation took. Precedent is the Screener's own icon-only rarity
+// chips (.chip-rarity-only) and the Cards toolbar's.
+// ⚠ Keys must be CANONICAL rarity names — RARITY_ICONS is keyed by them, and a
+// miss renders nothing at all rather than erroring. Only add a row here whose
+// whole content really is those tiers; everything else keeps its word.
+const HOME_BANNER_RARITIES = {
+  chase:   ["Epic", "Enchanted", "Iconic"],
+  rareLeg: ["Rare", "Super Rare", "Legendary"],
+  promo:   ["Promo"],
+};
 const HOME_BANNER_SHORT = {
   valuable: "Newest set",
   chase:    "Chase",
@@ -39461,6 +39520,26 @@ const calStoreAllows = (sub, evKind) => {
 };
 
 const CAL_EVENT_COLS = "event_id,kind,name,set_name,store_id,store_name,start_datetime,end_datetime,timezone,city,state,country,latitude,longitude,gameplay_format,url";
+// ⚠ `description` is asked for SEPARATELY and degrades once, because this fetch
+// cannot afford to fail: supabase-js returns {data, error} rather than throwing,
+// so selecting a column the database does not have yields data:null with NO
+// exception -- the caller's catch never runs and every followed store's events
+// silently vanish from the calendar. Module-level so the fallback outlives a
+// remount, and one-way so a real outage cannot flap it.
+let _calDescCol = true;
+const calEventCols = () => _calDescCol ? CAL_EVENT_COLS + ",description" : CAL_EVENT_COLS;
+const calMissingCol = (e) => !!e && (e.code === "42703"
+  || /column .*description.* does not exist/i.test(e.message || ""));
+// `build` takes the column list and returns the query; it is called twice on a
+// miss, which is the whole point -- the retry has to re-run the SAME query.
+const calSelectEvents = async (build) => {
+  let r = await build(calEventCols());
+  if(r && r.error && _calDescCol && calMissingCol(r.error)){
+    _calDescCol = false;
+    r = await build(calEventCols());
+  }
+  return r;
+};
 
 // Followed stores + pinned series → calendar entries.
 //
@@ -39501,14 +39580,16 @@ function useStoreCalendarEvents(subs){
       const out = new Map();
       try {
         if(storeIds.length){
-          const {data} = await sbClient.from("lorcana_events").select(CAL_EVENT_COLS)
-            .in("store_id", storeIds).gte("start_datetime", from).lte("start_datetime", to)
-            .order("start_datetime", {ascending: true}).limit(1000);
+          const {data} = await calSelectEvents((cols) =>
+            sbClient.from("lorcana_events").select(cols)
+              .in("store_id", storeIds).gte("start_datetime", from).lte("start_datetime", to)
+              .order("start_datetime", {ascending: true}).limit(1000));
           for(const r of data || []) out.set(r.event_id, r);
         }
         if(eventIds.length){
-          const {data} = await sbClient.from("lorcana_events").select(CAL_EVENT_COLS)
-            .in("event_id", eventIds).order("start_datetime", {ascending: true}).limit(1000);
+          const {data} = await calSelectEvents((cols) =>
+            sbClient.from("lorcana_events").select(cols)
+              .in("event_id", eventIds).order("start_datetime", {ascending: true}).limit(1000));
           for(const r of data || []) out.set(r.event_id, r);
         }
       } catch {/* offline → keep what we had */}
@@ -40520,6 +40601,35 @@ function useSetProducts(setName, enabled){
 // this day" is the question, a group is an artefact of how the icons collapsed,
 // and making the two controls in a cell do the same thing is one fewer rule to
 // learn. A row opens that event's own modal.
+// What the shop wrote about the event, from RPH's `description`.
+//
+// ⚠ Rendered as TEXT, never as markup. The ETL strips HTML on the way in
+// (_clean_desc in discover_wu_scs.py) precisely so this can be a plain
+// interpolation, and ~2% of these arrive carrying <br> — but the defence has to
+// hold on both sides, because rows stored before that cleaning existed are still
+// in the table. htm's ${} escapes; nothing here may become innerHTML.
+//
+// ⚠ CLAMPED, not truncated. The median is 121 characters but the longest seen in
+// the live API is 4,009, and one shop's essay would otherwise own the modal.
+// Clamping keeps the whole text in the DOM (so it is selectable and searchable)
+// and lets the reader open it; truncating would throw the rest away.
+const CAL_DESC_CLAMP_CHARS = 420;
+const EventDescription = ({text}) => {
+  const [open, setOpen] = useState(false);
+  const body = String(text || "").trim();
+  if(!body) return null;
+  // Lines matter here: these are usually a little agenda ("Registration 2:30pm /
+  // Fire 3:00pm / Fee $13"), so a long one-liner and a six-line list want
+  // different treatment. Either one being past the bar is enough to clamp.
+  const longEnough = body.length > CAL_DESC_CLAMP_CHARS || body.split("\n").length > 6;
+  return html`<div class=${"cal-desc" + (longEnough && !open ? " is-clamped" : "")}>
+    <div class="cal-desc-head">${uiIcon("news", 12)} From the store</div>
+    <p class="cal-desc-body">${body}</p>
+    ${longEnough && html`<button type="button" class="cal-desc-more"
+      onClick=${() => setOpen(v => !v)}>${open ? "Show less" : "Show more"}</button>`}
+  </div>`;
+};
+
 const CalendarDayModal = ({day, events, onOpen, onClose, art}) => {
   useEffect(() => {
     const onKey = (e) => { if(e.key === "Escape") onClose(); };
@@ -40637,6 +40747,10 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
         ${end && html`<div><dt>Runs</dt><dd>${calDayDiff(ev.starts_on, end) + 1} days</dd></div>`}
       </dl>
       ${ev.notes && html`<p class="cal-modal-notes">${ev.notes}</p>`}
+      ${/* A store's own words about its event. Only store rows have one — a set
+            release or a Challenge is ours to describe, and `notes` above is where
+            we do it. */""}
+      <${EventDescription} text=${ev.description}/>
 
       ${/* A product drop is ONE product, so its links belong beside it rather than
             in a list of one. */""}
@@ -41310,7 +41424,11 @@ const CAL_PANEL_VIEW_LS = "packsink:cal:panelView";
 // "list" and a plain default change reaches nobody — the same trap the home
 // LAYOUT defaults hit. Hence a one-shot stamp, and STAMPED rather than coerced:
 // a later deliberate pick of List has to stick.
-const CAL_PANEL_VIEW_MONTH_KEY = "packsink:cal:panelViewMonth";
+// ⚠ Bumped to v2 2026-09-20. A stamp fires ONCE, so re-firing it is a new
+// key — which is the point: "I don't want them saved on a list view just bc
+// they opened that default before" (Zaven). Anyone still holding the old
+// default gets moved once more; a deliberate pick of List after this sticks.
+const CAL_PANEL_VIEW_MONTH_KEY = "packsink:cal:panelViewMonth2";
 const calReadPanelViewPref = () => {
   try {
     const raw = localStorage.getItem(CAL_PANEL_VIEW_LS);
@@ -41323,6 +41441,7 @@ const calReadPanelViewPref = () => {
   } catch { return "month"; }
 };
 const CAL_REGION_LS = "packsink:cal:region";
+const CAL_REGIONS_OPEN_LS = "packsink:cal:regionsOpen";
 const calNormRegionPref = (v) => {
   const set = calRegionSet(v);
   if(!set) return String(v || "").trim() === "" ? null : "all";
@@ -41344,6 +41463,19 @@ const calToggleRegion = (region, key) => {
   if(!set) return key;
   if(set.has(key)) return set.size === 1 ? "all" : calNormRegionPref([...set].filter(k => k !== key).join(","));
   return calNormRegionPref([...set, key].join(","));
+};
+// ⚠ The collapsed button NAMES the active region ("Europe", "2 regions"), it
+// does not just say "Region". A filter you cannot see is a search that
+// silently lies — the same rule the event finder's country box follows — and
+// this one hides nine chips behind one control by default.
+const calRegionSummary = (region) => {
+  const set = calRegionSet(region);
+  if(!set) return "All regions";
+  if(set.size === 1){
+    const only = CALENDAR_REGIONS.find(r => set.has(r.key));
+    return only ? only.label : "1 region";
+  }
+  return `${set.size} regions`;
 };
 const CalendarRegionChips = ({region, onChange, counts, compact}) => {
   const set = calRegionSet(region);
@@ -41441,10 +41573,17 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
           onClick=${() => setOpenFilters(v => !v)}>
           ${uiIcon("gear", 12)}${nFilters > 0 && html`<span class="cal-panel-tool-n">${nFilters}</span>`}
         </button>
-        <button type="button" class=${"cal-panel-tool" + (mode === "list" ? " on" : "")}
-          title="List" aria-label="List view" onClick=${() => setMode("list")}>${uiIcon("list", 12)}</button>
-        <button type="button" class=${"cal-panel-tool" + (mode === "month" ? " on" : "")}
-          title="Month" aria-label="Month view" onClick=${() => setMode("month")}>${uiIcon("calendar", 12)}</button>
+        ${/* ⚠ ONE button, not two. List and Month are A-or-B, so two buttons spend
+              two slots of a four-slot header saying what one can — and a pair
+              where only ever one is lit reads as a setting you have to hunt
+              through rather than a switch. It shows the view you would GET, the
+              way a play/pause control does, and names the current one in the
+              tooltip so the icon is never ambiguous. */""}
+        <button type="button" class="cal-panel-tool cal-panel-tool--view"
+          title=${mode === "month" ? "Showing the month — switch to the list" : "Showing the list — switch to the month"}
+          aria-label=${mode === "month" ? "Switch to list view" : "Switch to month view"}
+          onClick=${() => setMode(m => m === "month" ? "list" : "month")}>
+          ${uiIcon(mode === "month" ? "list" : "calendar", 12)}</button>
         ${onFindEvents && html`<button type="button" class="cal-panel-tool"
           title="Find events near you" aria-label="Find events near you"
           onClick=${() => onFindEvents()}>${uiIcon("store", 12)}</button>`}
@@ -41589,6 +41728,31 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   const [dayList, setDayList] = useState(null);     // {day, events} — a busy day's list
   const [editing, setEditing] = useState(null);     // {} = new row, {id,…} = edit
   const [showStores, setShowStores] = useState(false);
+  // The region chips' disclosure. Persisted, so somebody who genuinely filters
+  // by region keeps it open — but it DEFAULTS CLOSED, because nine chips is
+  // the biggest single block between a visitor and the calendar they came for.
+  // ⚠ The stored value can only ever open it: a missing key, a wiped store or
+  // a private window all read as closed, which is the state we want to fail to.
+  // The Filters disclosure. Deliberately NOT persisted, unlike the regions
+  // inside it: this one is the page's front door, and the whole point is that
+  // every visit opens on the calendar. Somebody who filtered once last week
+  // should not be met by a wall of controls today.
+  //
+  // ⚠ null means "follow the viewport", and that is why it is not a plain
+  // boolean. The complaint this answers is a PHONE complaint — 477px of
+  // controls above an 812px screen — and a desktop, where the same row is one
+  // 44px line beside a fully visible calendar, pays none of that cost while
+  // losing the discoverability. So: closed below 1100px, open above, until
+  // the reader says otherwise, after which their choice holds at either size.
+  const [filtersOpen, setFiltersOpen] = useState(null);
+  const calNarrow = useMaxWidth(1100);
+  const showFilters = filtersOpen == null ? !calNarrow : filtersOpen;
+  const [regionsOpen, setRegionsOpen] = useState(() => {
+    try { return localStorage.getItem(CAL_REGIONS_OPEN_LS) === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(CAL_REGIONS_OPEN_LS, regionsOpen ? "1" : "0"); } catch {}
+  }, [regionsOpen]);
   // Off by default: it is an extra geo query, and most of what it finds is at
   // shops you do not go to. The chip is how you ask.
   const [near, setNear] = useState(() => {
@@ -41713,6 +41877,14 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     flashToast(done ? `Exported ${upcoming.length} events` : "Couldn't download the calendar file");
   };
 
+  // ⚠ Counts a DIMENSION, not a chip: "3 of 5 kinds off" is one narrowing, not
+  // three, and a badge that climbs to 9 because you unticked regions reads as
+  // damage rather than as state. Same rule countActiveFilters follows on Cards.
+  const activeFilters = (query.trim() ? 1 : 0)
+    + (region !== "all" ? 1 : 0)
+    + (near ? 1 : 0)
+    + (kinds.length < CALENDAR_KIND_KEYS.length ? 1 : 0);
+
   return html`<div class=${"cal-view" + (mode === "timeline" ? " cal-view--wide" : "")}>
     <header class="ev-header mkt-header cal-header">
       <div>
@@ -41722,12 +41894,29 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           stores you follow.
         </p>
       </div>
+      ${/* ⚠ "Near me" USED to sit here, beside a "SCs near me" chip two rows
+            down — two controls with the same name doing different jobs, which
+            is most of what made this header read as a page of filters. The
+            finder (search RPH, follow shops) is a thing you do to YOUR list of
+            stores, so it moved into the My-calendar drawer, which is the
+            drawer about exactly that. The chip stays where it is: it is a
+            FILTER, and it already opens the finder itself when no postal code
+            is set. */""}
       <div class="cal-header-actions">
-        ${onFindEvents && html`<button type="button" class="cal-act cal-act--find"
-          title="Search Ravensburger Play for events near you, and follow the shops you play at"
-          onClick=${() => onFindEvents()}>${uiIcon("store", 14)} Near me</button>`}
-        <button type="button" class="cal-act" onClick=${exportAll} title="Download everything shown as an .ics file">
-          ${uiIcon("save", 14)} Export .ics</button>
+        <button type="button" class=${"cal-follow-toggle" + (showStores ? " on" : "")}
+          aria-expanded=${showStores ? "true" : "false"}
+          title="The stores you follow, the events you saved, and anything you hid"
+          onClick=${() => setShowStores(v => !v)}>
+          ${uiIcon("store", 12)} My calendar
+          ${followCount > 0 && html`<span class="cal-follow-n">${followCount}</span>`}
+          <span class="cal-follow-caret">${showStores ? "\u2303" : "\u2304"}</span>
+        </button>
+        ${/* The label is a SPAN so a phone can drop it and keep the glyph —
+              a bare text node cannot be hidden in CSS, and this is the one
+              button on the row with a label long enough to force a wrap. */""}
+        <button type="button" class="cal-act cal-act--export" onClick=${exportAll}
+          aria-label="Export .ics" title="Download everything shown as an .ics file">
+          ${uiIcon("save", 14)}<span>Export .ics</span></button>
         ${isAdmin && html`<button type="button" class="cal-act cal-act--admin"
           onClick=${() => setEditing({})}>${uiIcon("edit", 14)} Add event</button>`}
       </div>
@@ -41753,12 +41942,27 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
             title="The whole season on one axis — Challenges, Qualifiers, your shops and the releases">
             ${uiIcon("timeline", 13)} Timeline</button>
         </div>
+        ${/* ⚠ Default CLOSED, and the whole reason this page was rebuilt:
+              "I want the screen to instantly show you your calendar, and then
+              you can drill into it, not a page of filters and text b4"
+              (Zaven). Search, regions, SCs-near-me and Show-past are all
+              drill-down, so they wait behind here. The BADGE is what keeps
+              that honest — a narrowed list with its controls hidden would
+              otherwise read as an empty calendar. */""}
+        <button type="button" class=${"cal-filtbtn" + (showFilters ? " open" : "") + (activeFilters ? " on" : "")}
+          aria-expanded=${showFilters ? "true" : "false"}
+          title="Search, regions, and what counts as near you"
+          onClick=${() => setFiltersOpen(!showFilters)}>
+          ${uiIcon("filter", 12)}<span>Filters</span>
+          ${activeFilters > 0 && html`<em>${activeFilters}</em>`}
+          <span class="cal-follow-caret">${showFilters ? "\u2303" : "\u2304"}</span>
+        </button>
       </div>
     </div>
     ${/* Row two: the dimensions that narrow WHAT is on the chart, kept off the
           row that chooses the chart. The search box leads because it is the one
           control you reach for knowing what you are after. */""}
-    <div class="cal-filters2">
+    ${showFilters && html`<div class="cal-filters2">
       <label class="cal-search">
         ${uiIcon("search", 13)}
         <input type="search" value=${query} placeholder="Search events, stores, cities…"
@@ -41767,7 +41971,21 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
         ${query && html`<button type="button" class="cal-search-x" aria-label="Clear search"
           onClick=${() => setQuery("")}>${uiIcon("close", 11)}</button>`}
       </label>
-      <${CalendarRegionChips} region=${region} counts=${regionCounts} onChange=${setRegion}/>
+      ${/* ⚠ Default CLOSED. Nine region chips is the single biggest block on
+            this page's control stack (93px at 375px) and the answer is "all"
+            for almost everyone, almost always — so it is the first thing that
+            should not be between you and your calendar. The button names the
+            live region, so narrowing can never be invisible. */""}
+      <div class=${"cal-regbox" + (regionsOpen ? " open" : "")}>
+        <button type="button" class=${"cal-regtoggle" + (calRegionSet(region) ? " on" : "")}
+          aria-expanded=${regionsOpen ? "true" : "false"}
+          title="Filter by the region an event is played in"
+          onClick=${() => setRegionsOpen(v => !v)}>
+          ${uiIcon("compass", 12)}<span>${calRegionSummary(region)}</span>
+          <span class="cal-follow-caret">${regionsOpen ? "\u2303" : "\u2304"}</span>
+        </button>
+        ${regionsOpen && html`<${CalendarRegionChips} region=${region} counts=${regionCounts} onChange=${setRegion}/>`}
+      </div>
       ${/* The "SCs local to you" half of the ask. It reuses the finder's saved
             ZIP, so for anyone who has used the finder once this is a single
             click; for anyone who has not, the chip says where to set one. */""}
@@ -41788,20 +42006,11 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
         ${near && nearAdded > 0 && html`<em>${nearAdded}</em>`}
       </button>
       <div class="cal-filters2-end">
-        ${/* The personal drawer lives at the END of this row rather than on a
-              line of its own below it. Stranded on its own row it was the only
-              control on the page with nothing beside it, which read as an
-              afterthought; here it sits with the other things that are about
-              YOUR view of the calendar rather than about the game's. Its BODY
-              still opens below the whole row — see .cal-follow. */""}
-        <button type="button" class=${"cal-follow-toggle" + (showStores ? " on" : "")}
-          aria-expanded=${showStores ? "true" : "false"}
-          title="The stores you follow, the events you saved, and anything you hid"
-          onClick=${() => setShowStores(v => !v)}>
-          ${uiIcon("store", 12)} My calendar
-          ${followCount > 0 && html`<span class="cal-follow-n">${followCount}</span>`}
-          <span class="cal-follow-caret">${showStores ? "⌃" : "⌄"}</span>
-        </button>
+        ${/* ⚠ "My calendar" USED to live here. It moved up into the header
+              row: it is not a filter — it is YOUR list, the one thing on this
+              page you might open every visit — and everything else in this row
+              is now behind the Filters disclosure, which would have buried it.
+              Its BODY still opens below the whole row (see .cal-follow). */""}
         ${mode === "timeline" && html`<div class="seg-toggle cal-spans" role="group" aria-label="Window length">
           ${CAL_TL_SPANS.map(m => html`<button key=${m} type="button" class=${span === m ? "active" : ""}
             title=${`Draw ${m} months at a time`} onClick=${() => setSpan(m)}>${m} mo</button>`)}
@@ -41814,7 +42023,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           onClick=${() => { setQuery(""); setRegion("all"); setNear(false); setKinds(CALENDAR_KIND_KEYS.slice()); }}>
           Reset filters</button>`}
       </div>
-    </div>
+    </div>`}
 
     ${/* ⚠ "My stores + saved events" until 2026-09-14. It named two of the four
           things in the drawer (a pinned series and a hidden event are in here
@@ -41825,6 +42034,14 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           menu already uses, so the two halves of one idea share one word. */""}
     ${showStores && html`<div class="cal-follow">
       <div class="cal-follow-body">
+        ${/* ⚠ The finder lives HERE now, not in the page header. It is the one
+              action that changes which stores are yours, so it belongs in the
+              drawer about your stores — and the empty state below already
+              pointed at it, which is why that state alone used to be the only
+              place it was reachable once you followed anything. */""}
+        ${onFindEvents && followCount > 0 && html`<button type="button" class="cal-act cal-act--find cal-follow-find"
+          title="Search Ravensburger Play for events near you, and follow the shops you play at"
+          onClick=${() => onFindEvents()}>${uiIcon("store", 13)} Find &amp; follow more stores</button>`}
         ${followCount === 0
           ? html`<p class="muted cal-follow-empty">
               Nothing followed yet. <button type="button" class="cal-linkish"
@@ -43011,6 +43228,13 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
             ${o.capacity != null && html`<div><dt>Capacity</dt><dd>${o.capacity} players</dd></div>`}
             ${cadence && html`<div><dt>Runs</dt><dd>${`${cadence} ${SC_DOW[s.dow]||""} ${scLocalTime12(s.local_time)}`.trim()} · ${s.occurrence_count} upcoming</dd></div>`}
           </dl>
+          ${/* ⚠ The OCCURRENCE's, not the series'. Each date carries its own, and
+                a shop that rewrites the text for one week means the series' first
+                entry would be describing a different night. It arrives truncated
+                at 1,000 characters (see migration 164) — the table keeps it whole,
+                the calendar reads the column direct, and this is the one path
+                that pays per row. */""}
+          <${EventDescription} text=${o.description}/>
           ${/* Scouting rides the same rule everywhere: any real RPH listing.
                get_scout_event is the scope, and since migration 148 its refusal
                is where an out-of-bubble event gets added — so pre-filtering on
@@ -43336,7 +43560,31 @@ const HomePollBox = ({state, user, onSignIn}) => {
 // hide their scrollbars until you're already scrolling. `edge` tracks which
 // ends have content past the fold so the fade + the ⌄ chip appear only when
 // there really is more to see.
-const NewsFeed = ({variant, tiles, panelNav, poll}) => {
+// ⚠ The collapse is REMEMBERED, but it un-remembers itself the moment the
+// content changes: "way to minimize the poll/news tab. maximize it again when
+// something new is posted" (Zaven). So the stored value is not a bare boolean
+// — it is the CONTENT SIGNATURE that was on screen when you minimised it. If
+// what would render now differs from that, the box opens itself.
+//
+// That shape is what makes it safe to forget about: a box you collapsed in
+// March cannot swallow a set announcement in June. A plain boolean would.
+const NEWS_COLLAPSE_LS = "packsink:home:newsCollapsedSig";
+const NewsFeed = ({variant, tiles, panelNav, poll, sig}) => {
+  // "" = expanded. Anything else is the signature that was live when it was
+  // minimised, which doubles as the collapsed flag.
+  const [seenSig, setSeenSig] = useState(() => {
+    try { return localStorage.getItem(NEWS_COLLAPSE_LS) || ""; } catch { return ""; }
+  });
+  // ⚠ Only collapsed while the signature still MATCHES. Comparing here rather
+  // than in an effect means a new tile renders the box open on its very first
+  // paint, with no expanded-then-collapsed flash — and it needs no cleanup
+  // when the two fall back into agreement.
+  const collapsed = !!seenSig && !!sig && seenSig === sig;
+  const setCollapsed = (want) => {
+    const v = want ? (sig || "") : "";
+    setSeenSig(v);
+    try { localStorage.setItem(NEWS_COLLAPSE_LS, v); } catch {}
+  };
   const listRef = useRef(null);
   const [edge, setEdge] = useState("");
   const sync = useCallback(() => {
@@ -43355,15 +43603,28 @@ const NewsFeed = ({variant, tiles, panelNav, poll}) => {
     window.addEventListener("resize", sync);
     return () => { if(ro) ro.disconnect(); window.removeEventListener("resize", sync); };
   }, [sync, tiles.length]);
-  return html`<aside class=${"home-feed home-news-feed home-news-feed--"+variant+(edge?" news-edge-"+edge:"")} aria-label="News">
-    ${poll || null}
-    ${homePanelTitle({cls:"home-feed-title--chase", label:"News", panelKey:"news", panelNav})
-      || html`<div class="home-feed-title--chase">News</div>`}
-    <div class="home-news-feed-scroll">
+  const titleEl = homePanelTitle({cls:"home-feed-title--chase", label:"News", panelKey:"news", panelNav})
+    || html`<div class="home-feed-title--chase">News</div>`;
+  return html`<aside class=${"home-feed home-news-feed home-news-feed--"+variant
+      + (collapsed ? " is-collapsed" : "") + (edge && !collapsed ? " news-edge-"+edge : "")} aria-label="News">
+    ${/* ⚠ The poll sits INSIDE the collapse. It is the tallest thing in this
+          box (~200px of the 578 it measured on a phone), so a collapse that
+          left it standing would not be a collapse. */""}
+    ${!collapsed && (poll || null)}
+    <div class="home-feed-head">
+      ${titleEl}
+      <button class=${"home-feed-collapse-btn"+(collapsed?" is-collapsed":"")}
+        onClick=${() => setCollapsed(!collapsed)}
+        aria-expanded=${collapsed ? "false" : "true"}
+        title=${collapsed ? "Show news and the poll" : "Hide news and the poll — it reopens when something new is posted"}>
+        <span class="home-feed-chev" aria-hidden="true">▾</span>
+      </button>
+    </div>
+    ${!collapsed && html`<div class="home-news-feed-scroll">
       <div class="home-news-feed-list" ref=${listRef} onScroll=${sync}>${tiles}</div>
       <button class="home-news-feed-more" tabIndex=${-1} aria-hidden="true"
         onClick=${() => { const el = listRef.current; if(el) el.scrollBy({top: Math.round(el.clientHeight * 0.75), behavior: "smooth"}); }}>⌄</button>
-    </div>
+    </div>`}
   </aside>`;
 };
 
@@ -44246,7 +44507,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   const [moversPick, setMoversPick] = useState(() => {
     try {
       const v = localStorage.getItem("packsink:home:moversPick");
-      return HOME_BANNER_KEYS.includes(v) ? v : null;
+      return (v === MOVERS_PICK_ALL || HOME_BANNER_KEYS.includes(v)) ? v : null;
     } catch { return null; }
   });
   useEffect(() => {
@@ -44522,6 +44783,25 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     const now = new Date();
     return now >= start && now <= end;
   }, [NEWEST_SET]);
+  // ⚠ A SECOND, longer window, not a widening of the one above. `newestSetIsHot`
+  // ends the Friday after LGS and floats the newest-set banner to the top of
+  // the STACK — a deliberate one-week heuristic that the banner ▲▼ retire.
+  // This one runs a fortnight and decides only which chip the mobile picker
+  // opens on: "the first 2 weeks of a set, set the newest set as the default
+  // mover on mobile instead of chase" (Zaven). Folding them into one constant
+  // would quietly move the banner order too.
+  const newestSetIsNew = useMemo(() => {
+    if(!NEWEST_SET) return false;
+    const dates = SET_RELEASE_DATES[NEWEST_SET];
+    if(!dates?.lgs) return false;
+    const lgs = new Date(dates.lgs + "T00:00:00");
+    if(isNaN(lgs.getTime())) return false;
+    const start = new Date(lgs); start.setDate(start.getDate() - 2);
+    const end = new Date(lgs); end.setDate(end.getDate() + 14);
+    end.setHours(23, 59, 59, 999);
+    const now = new Date();
+    return now >= start && now <= end;
+  }, [NEWEST_SET]);
   const valuableCards = useMemo(()=>{
     if(!raw || !raw.length || !NEWEST_SET) return [];
     const chaseSet  = new Set(["Enchanted","Iconic","Epic"]);
@@ -44719,8 +44999,23 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // ≤1100px, where the rail columns sink below the movers. In the movers
   // loading/error states the rl copy renders full-width so announcements
   // never disappear behind a data hiccup on phones.
+  // ⚠ The signature is what decides whether a collapsed box reopens, so it has
+  // to change when — and only when — there is something NEW to see. Tile KEYS,
+  // not tile count: a set announcement replacing a convention tile is new, and
+  // the count would not move. The poll's id rides along for the same reason.
+  // It must NOT include anything that changes on its own (a countdown, a
+  // price), or the box would reopen on a timer and the minimise would be a lie.
+  const newsSig = useMemo(() => {
+    const keys = newsTiles.map(t => (t && t.key) || "?").join("|");
+    // \u26a0 poll_id, the column `vote_poll` takes \u2014 there is no `id` on this row,
+    // and reading one gave a signature ending "::undefined" that never moved,
+    // so a brand-new poll could not reopen a collapsed box. Deliberately NOT
+    // my_choice or pct: those change when YOU vote, which would pop the box
+    // open at the one moment you have just finished with it.
+    return keys + "::" + (homePoll.poll ? homePoll.poll.poll_id : "-");
+  }, [newsTiles, homePoll.poll]);
   const newsFeedAside = (variant) => (panelCol["news"] != null && (newsTiles.length > 0 || homePoll.poll))
-    ? html`<${NewsFeed} key=${"news-"+variant} variant=${variant} tiles=${newsTiles}
+    ? html`<${NewsFeed} key=${"news-"+variant} variant=${variant} tiles=${newsTiles} sig=${newsSig}
         panelNav=${variant === "rail" ? panelTitleNav : null}
         poll=${html`<${HomePollBox} state=${homePoll} user=${user} onSignIn=${onSignIn}/>`}/>`
     : null;
@@ -45003,9 +45298,6 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
               color:paused?"#fff":"var(--text)",borderRadius:6,cursor:"pointer"}}>
             ${paused?"▶ Resume":"⏸ Pause"}
           </button>
-          <span class="muted" style=${{fontSize:11}}>
-            Top 20 per banner · prior low ≥ $5 in selected window
-          </span>
         </div>
         ${state.loading
           ? html`<div>${newsFeedRl}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>Loading movers…</div></div>`
@@ -45144,9 +45436,29 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                   // you cannot see. Edit mode renders every banner at every
                   // width, which is also what makes the order legible while
                   // you change it.
+                  //
+                  // "All" is the way back to the full stack — the pre-2026-09-20
+                  // behaviour, now a deliberate pick. It renders the SAME stack
+                  // the desktop path builds (news back inside .rl-news-row,
+                  // paired panels back beside their banners), with the strip
+                  // above it, so it is genuinely the old page and not a second
+                  // implementation of it that can drift.
+                  let mobilePicker = null;
                   if(!wideHome && !editing && visibleBannerKeys.length > 0){
-                    const pick = visibleBannerKeys.includes(moversPick)
-                      ? moversPick : visibleBannerKeys[0];
+                    const showAll = moversPick === MOVERS_PICK_ALL;
+                    // ⚠ The fortnight default only applies when the user has
+                    // made NO pick. An explicit chip wins, the same contract
+                    // the banner ▲▼ have over the hot-set ordering: a
+                    // heuristic may choose for you, never over you.
+                    const fallback = (newestSetIsNew && visibleBannerKeys.includes("valuable"))
+                      ? "valuable" : visibleBannerKeys[0];
+                    const pick = showAll ? MOVERS_PICK_ALL
+                      : (visibleBannerKeys.includes(moversPick) ? moversPick : fallback);
+                    mobilePicker = html`<${MoversPicker} key="movers-pick"
+                      keys=${visibleBannerKeys} pick=${pick} onPick=${setMoversPick}/>`;
+                    // "All" falls straight through to the ordinary stack
+                    // below, which the picker is prepended to at the return.
+                    if(!showAll){
                     // ⚠ The Rare–Legendary key carries the news feed with it
                     // (bannerNodes.rareLeg wraps both in .rl-news-row), and on
                     // a phone that rl copy is the ONLY one rendered — the rail
@@ -45166,10 +45478,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                       if(panel) lifted.push(html`<${React.Fragment} key=${"lift-"+p.key}>${panel}<//>`);
                     }
                     return html`<${React.Fragment}>
-                      <${MoversPicker} keys=${visibleBannerKeys} pick=${pick} onPick=${setMoversPick}/>
+                      ${mobilePicker}
                       ${one}
                       ${lifted}
                     <//>`;
+                    }
                   }
                   const stack = [];
                   order.forEach((k) => {
@@ -45221,7 +45534,9 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                   // A fragment, not a wrapper div — the banners must stay
                   // DIRECT children of .home-grid-main so the edit-mode
                   // freeze rule dims each banner while its bar stays live.
-                  return html`<${React.Fragment}>${stack}<//>`;
+                  // mobilePicker is null on desktop and while editing, so this
+                  // is the untouched desktop return in both of those cases.
+                  return html`<${React.Fragment}>${mobilePicker}${stack}<//>`;
                 })()}
         ${mainNodes}
       </div>
