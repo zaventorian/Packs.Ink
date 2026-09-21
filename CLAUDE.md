@@ -337,6 +337,16 @@ The same machinery is exactly right for the DECK IMAGE importer, whose poster ce
 the clean renders the index was built from — which is where the 9/8 fix pays off and why
 that importer measures 83/83.
 
+**Ablated it to be sure, same day**: replaying the 400-read baseline through `identify()`
+with `colourRanked: []` instead of the recorded ranking scores **card_id 217/265 (vs 213)
+and name+version 316/400 (vs 319)** — colour is load-bearing on 3 rows and actively hurts
+on 4. So it is net NOTHING on camera reads, not a win to rip out and not a loss to keep;
+the opportunity there is the per-frame CPU, not accuracy. (Split by `identify()` source it
+is more interesting than the total: colour HELPS the `fusion` path 73→70 and HURTS the
+`name` path 228→232, so the leverage is in the fusion-vs-name routing, not in the signal.)
+Reproduce with `scripts/scanner/replay_common.mjs` — run `scoreRows` twice, once passing
+each row's `colour` and once passing `[]`.
+
 ### The matcher has a regression guard — `node scripts/test_scanner_matcher.mjs` (2026-09-20)
 
 Replays **400 real recorded OCR reads** (`scripts/scanner/replay_baseline.json`, frozen out
