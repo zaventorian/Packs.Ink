@@ -80,6 +80,31 @@ CASES = [
      None, "'Top Prize' WITHOUT Challenge context is a Set Championship promo, not a C1 foil"),
     ("2025 DISNEY LORCANA EN C1-LORCANA CHALLENGE PROMO #10 A WHOLE NEW WORLD PSA 10",
      None, "no finish word and no prize tier — must stay unclassified, never guessed"),
+
+    # C1's SECOND prize vocabulary. PSA prints "INFINITY WEEKEND" as the
+    # sub-designation on A Whole New World's non-foil slabs (label photographed
+    # 2026-09-21), and it is the only C1 card that uses these words at all --
+    # every other one says Top Prize / Prize Wall. All 41 such titles in the
+    # table are this card and none already carries a printing, so the token can
+    # only ever fill a NULL.
+    ("A Whole New World 2025 Disney Lorcana Promo #10 Infinity Weekend PSA 10",
+     "Non-Foil", "the distribution name IS the finish here, same as 'Prize Wall'"),
+    ("A Whole New World INFINITY WEEKEND 10/C1 PSA 10",
+     "Non-Foil", "case-insensitive, as sellers copy the label verbatim"),
+    ("A Whole New World Infinity Weekend Cold Foil 10/C1 PSA 10",
+     "Cold Foil", "an EXPLICIT finish still outranks the distribution name"),
+    ("A Whole New World Infinity Weekend NON-FOIL 10/C1 PSA 10",
+     "Non-Foil", "and the explicit negation still wins too"),
+
+    # The foil counterpart is deliberately absent. CGC labels the foil "World
+    # Championship - Rainbow Foil", but only the "Rainbow Foil" half is evidence:
+    # all 9 bare "World Championship" titles are CGC 10s at $145-$200 (the CHEAP
+    # side) and one is already tagged Non-Foil. Reading the event name as a finish
+    # would file sales in the wrong market on a card whose markets differ.
+    ("A Whole New World Tournament Promo 10/C1 World Championship CGC Gem Mint 10",
+     None, "'World Championship' ALONE is an event, not a finish - stay unclassified"),
+    ("A Whole New World Tournament Promo 10/C1 World Championship Rainbow Foil CGC 10",
+     "Foil", "...but 'Rainbow Foil' says foil outright and is read as one"),
 ]
 
 

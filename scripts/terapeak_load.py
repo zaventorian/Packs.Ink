@@ -78,6 +78,25 @@ CHALLENGE_CTX_RE = re.compile(r"\bc[12]\b|/\s*c[12]\b|challenge|continentals|\bd
 TOP_PRIZE_RE = re.compile(r"\btop\s*(?:prize|4|8|16|32|64)\b|\bcontinentals\b", re.I)
 PRIZE_WALL_RE = re.compile(r"\bprize\s*wall\b|\bside\s*event\b", re.I)
 
+# ⚠ C1 has a SECOND prize vocabulary that the Top Prize / Prize Wall pair above
+# cannot read, and A Whole New World (#10) is the only card that uses it. PSA
+# prints "INFINITY WEEKEND" as the sub-designation on its non-foil slabs (label
+# photographed 2026-09-21), and sellers copy the line into their titles — so the
+# distribution name is the finish, the same way "Prize Wall" is.
+#
+# Measured over all 88,912 stored titles: 41 say "Infinity Weekend", ALL 41 are
+# this one card, and NONE already carries a printing — so this can only fill
+# NULLs and can never overwrite a hand correction. At PSA 10 the token separates
+# the markets it should: tagged sales average $213 against $396 untagged.
+#
+# ⚠ The foil counterpart is deliberately NOT here. CGC labels the foil "World
+# Championship - Rainbow Foil", but "Rainbow Foil" already contains "foil" and is
+# caught above, while "World Championship" ALONE is not evidence: all 9 such
+# titles are CGC 10s at $145-$200 (the cheap side, i.e. probably non-foil) and one
+# of them is already tagged Non-Foil. Adding it would guess, and on a split card
+# a wrong finish files the sale in the wrong market.
+INFINITY_WEEKEND_RE = re.compile(r"\binfinity\s*weekend\b", re.I)
+
 # ⚠ A missed "non-foil" does not produce a NULL — it falls through to the bare
 # `"foil" in t` test below and is stored as FOIL, i.e. the exact opposite. On a
 # Challenge card that is not cosmetic: the Top Prize foil and the Prize Wall
@@ -169,6 +188,11 @@ def printing_of(title: str):
     if "foil" in t or "holo" in t:
         return "Foil"
     if PRIZE_WALL_RE.search(t):
+        return "Non-Foil"
+    # Sits with PRIZE_WALL rather than above the finish words, deliberately: an
+    # explicit "foil" in the title still wins, so this only decides a title that
+    # names no finish at all — which is every one of the 41.
+    if INFINITY_WEEKEND_RE.search(t):
         return "Non-Foil"
     if TOP_PRIZE_RE.search(t) and CHALLENGE_CTX_RE.search(t):
         return "Foil"

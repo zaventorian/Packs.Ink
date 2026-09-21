@@ -1621,6 +1621,92 @@ Guarded by `python scripts/test_variant_printing.py`, which also pins that the
 `SPLIT_CARD_PRINTING_OPTIONS` in Index.html. Drift there is silent: the sales
 just pile into the wrong bucket.
 
+### The DISPLAYED price never crosses a split — `makeGradedPrintingLookup` (2026-09-21)
+
+Reported by a beta user (via Zaven): adding the **foil** A Whole New World came up
+at the **non-foil's** price. Six surfaces each carried their own copy of the same
+ladder — try the stored printing, then `Normal` → `Holofoil` → `Cold Foil`. That
+ladder is REQUIRED on an ordinary card (a foil-only chase card's slots are stamped
+`Normal` by the migration-50 backfill, and a strict match drops them to $0) and
+WRONG on a split card, where the rungs are two different markets. There is now ONE
+ladder and every read-side caller goes through it: the header total, the owned
+grid, the value chart, set-goal completion value, the tracked-tile quick-add, the
+owned-slot pills and the add modal. (`gradedOwnedDeltaIndex` and `priceByKey` are
+the WRITE side — two-pass and already split-aware; leave them.)
+
+- **⚠ The split test is the rollup's printing VOCABULARY, not a count of labelled
+  buckets.** `gradedKnownBuckets` needs ≥2 labelled printings, which is right for
+  the portfolio chart and misses this card entirely: AWNW PSA 10 is ONE labelled
+  tier (`Non-Foil`, 1 sale, $290) beside **78 unclassified sales** ($245), so the
+  count says "not split" — and `priceByKey`'s pass 2 writes that $290 row under
+  BOTH `Non-Foil` and `Normal`, which is the exact hop the user hit. The rollup
+  already says it outright: `""` = one market, `"Unknown"` = split but
+  unclassified, anything else = split and classified.
+- **⚠ But the curated flag is OVER-BROAD, so the CATALOG has to corroborate it.**
+  `cards.split_printing` is `true` on all TEN Challenge Promo (C1) cards and only
+  **FOUR** have both printings (Kuzco, Baymax, Cinderella, Rapunzel). Invited to
+  the Ball, Elsa's Ice Palace, Gold Mickey, Dragon Fire and Let It Go exist **only
+  as the Top Prize foil** (Zaven, 2026-09-21) — and Invited to the Ball has three
+  PSA 9 sales mis-tagged `Non-Foil`, so trusting the flag alone made a foil-only
+  card "split" and then refused to price the only printing it has. Two real slabs
+  went to $0. Same failure CLAUDE.md already records in the other direction (2x
+  Elsa SoW Enchanted PSA 10 read $89.10 against a ~$3,000 market off a mislabelled
+  handful), so it gets the same answer: a single-market card is single-market
+  whatever a seller wrote in a title.
+- **⚠ That catalog test is the FOIL AXIS ONLY.** A variant split (Genie *Two
+  Swords*, Peter Pan *Text Error*) lives entirely inside ONE catalog printing — the
+  card's single Enchanted foil — so requiring two printings there would un-split
+  two genuinely different markets ($400 Text Error vs $269 Normal). A variant label
+  is its own evidence; `Foil`/`Non-Foil` is the one a seller can type by mistake.
+- **⚠ Only raw rows with a real `tcgplayer_product_id` count as a printing.** The
+  transform emits a pid-less placeholder for some cards, and on C1 that is exactly
+  the wrong signal: Dragon Fire and Let It Go each get a synthetic `Normal` row
+  with `pid: null`, and both are foil-only.
+- **A price taken from the unclassified tier is LABELLED, not passed off as this
+  printing's.** Rows carry `rollup_printing` as provenance; `gradedPriceNote()`
+  turns that into "blended across printings — N sales were never labelled". Where
+  a split card has no tier for the slot's printing at all, the add modal says **"No
+  Top Prize sales recorded at PSA 9"** rather than borrowing the other side's
+  number, and the slot tooltip says the same.
+- **⚠ Do NOT synthesise the missing side of a split set in the add modal's picker.**
+  Tried and reverted the same day: offering both printings for anything in
+  `SPLIT_BY_PRINTING_SETS_GLOBAL` invents a Prize Wall option on the five C1 cards
+  that are foil-only. The catalog already knows which printings exist.
+
+Guarded by `node scripts/test_graded_slot_series.mjs` (26 → 54 assertions), which
+pins the foil-only case in BOTH directions — over-tightening zeroes real slabs as
+surely as under-tightening mis-prices them.
+
+### ⚠ C1 has TWO prize vocabularies, and only one was readable (2026-09-21)
+
+`printing_of()` reads `Top Prize` / `Prize Wall`, and that covers most of the set —
+but **A Whole New World uses a completely different pair and is the only card that
+does**, which is why 78 of its PSA 10 sales sat unclassified while Cinderella's and
+Rapunzel's classified cleanly. Meanwhile Kuzco (135), Baymax (176), Dragon Fire
+(360) and Invited to the Ball (23) carry **no printing token at all** — 694 sales
+with nothing to read, and for the two genuinely two-sided ones that is still open.
+
+- **`INFINITY_WEEKEND_RE` → Non-Foil.** PSA prints `INFINITY WEEKEND` as the
+  sub-designation on that card's non-foil slabs (label photographed), and sellers
+  copy the line into titles — so the distribution name is the finish, exactly as
+  `Prize Wall` is. Measured over all 88,912 stored titles: **41 say it, all 41 are
+  this one card, and NONE already carries a printing**, so it can only fill NULLs
+  and can never overwrite a hand correction. At PSA 10 it separates what it should:
+  $213 tagged vs $396 untagged.
+- **⚠ The foil counterpart is deliberately NOT a rule.** CGC labels the foil
+  `World Championship - Rainbow Foil`, and it is tempting to read the event name —
+  but only the "Rainbow Foil" half is evidence, and that already contains "foil" so
+  the existing test catches it. All 9 bare `World Championship` titles are CGC 10s
+  at **$145–$200 (the CHEAP side)** and one is **already tagged `Non-Foil`**.
+  Adding it would guess, and on a split card a wrong finish files the sale in the
+  wrong market.
+- It sits beside `PRIZE_WALL_RE`, below the explicit finish words, so an explicit
+  "foil"/"non-foil" in the title still wins — the token only decides a title that
+  names no finish at all, which is every one of the 41.
+- Apply to stored rows with `python scripts/backfill_graded_printing.py --commit`
+  (dry run by default; only ever fills NULLs). Both directions are pinned in
+  `python scripts/test_printing_of.py` (23 → 29 cases).
+
 ### Price Graphing "By Graded" mode
 
 Ported off the frozen legacy feed onto `graded_sales` 2026-07-29 (it had been graphing lines that all flat-lined at 2026-06-30 for every user).
