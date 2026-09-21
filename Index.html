@@ -41024,17 +41024,43 @@ const CAL_CELL_MAX = 2;
 // The full grid's cell is taller, and since the day number moved out of the flow
 // and into the corner it has one more row to spend - see .cal-cell in styles.css.
 const CAL_CELL_MAX_FULL = 4;
+// ⚠ A DENSE cell is not "the rail's cell" — it is any cell too narrow to carry a
+// label, and the phone's FULL grid is one: 47px wide at 375px against the rail's
+// 45. It had been wearing the DESKTOP cell instead (128px tall, four stacked
+// chips), so a month on a phone was six rows of 128px each holding one 17px mark
+// at the top of an otherwise empty column — and the
+// `@media (max-width:700px){.cal-cell{min-height:58px}}` written to prevent
+// exactly that had never once applied, out-specified by
+// `.cal-month:not(...) .cal-cell{min-height:128px}` further down the file.
+// So the two classes say two different things now: `--compact` shrinks the
+// RAIL's chrome (month bar, weekday row, gutters), `--dense` is the CELL, and
+// the rail wears both.
+//
+// ⚠ CAL_DENSE_PX is the same 700 the stylesheet hides the chip label at, and it
+// has to stay that way. A gap between them is a width where the label is hidden
+// and the cell is NOT dense — a 47px cell drawing four chips of nothing, which
+// is the bug this replaces. `useMaxWidth` builds the identical
+// `(max-width: Npx)` query, so they flip on the same pixel rather than near it.
+const CAL_DENSE_PX = 700;
 const CalendarMonthView = ({month, events, today, onOpen, onOpenDay, onMonth, compact, art}) => {
   const m = /^(\d{4})-(\d{2})$/.exec(month);
   const weeks = useMemo(() => m ? calendarMonthGrid(+m[1], +m[2], events) : [], [month, events]);
   // ⚠ Above the early return — hook order. Nothing bails before this today, and
   // anything added that does has to go below it.
   const hover = useCalHoverCard(art);
+  // ⚠ Also above the early return — hook order. And `useMaxWidth` is called
+  // UNCONDITIONALLY: written `compact || useMaxWidth(...)` the || short-circuits
+  // the hook away on every render where compact is true, which is a rules-of-
+  // hooks violation that happens not to crash only because `compact` is a fixed
+  // prop per mount. It would the day anything made it dynamic.
+  const narrow = useMaxWidth(CAL_DENSE_PX);
+  const dense = compact || narrow;
   // A grouped chip cannot honestly mean "open the first of the three", so it
   // opens the DAY -- see CalendarDayModal. It used to expand in place, which put
   // three unreadable marks where one readable one had been.
   if(!m) return null;
-  return html`<div class=${"cal-month" + (compact ? " cal-month--compact" : "")}>
+  return html`<div class=${"cal-month" + (compact ? " cal-month--compact" : "")
+    + (dense ? " cal-month--dense" : "")}>
     <div class="cal-month-bar">
       <button type="button" class="cal-month-nav" aria-label="Previous month"
         onClick=${() => onMonth(calShiftMonth(month, -1))}>‹</button>
@@ -41056,7 +41082,7 @@ const CalendarMonthView = ({month, events, today, onOpen, onOpenDay, onMonth, co
         // whole week by 7px. The marker is out of flow now (a corner badge), so
         // the cap is flat and the one-row invariant holds by construction.
         const items = calCellItems(day.events, art, day.date);
-        const cap = compact ? CAL_CELL_MAX : CAL_CELL_MAX_FULL;
+        const cap = dense ? CAL_CELL_MAX : CAL_CELL_MAX_FULL;
         const shown = items.slice(0, cap);
         // ⚠ Compact draws ONE number and it is the day's TOTAL, never what is
         // hidden. A `×3` group mark hides nothing, so a hidden-count reads "0"
@@ -41066,7 +41092,7 @@ const CalendarMonthView = ({month, events, today, onOpen, onOpenDay, onMonth, co
         // label, where a two-field phrase has the room to read as one.
         const hiddenEvents = day.events.length
           - shown.reduce((a, it) => a + (it.group ? it.events.length : 1), 0);
-        const cellCount = compact
+        const cellCount = dense
           ? (day.events.length > shown.length ? String(day.events.length) : "")
           : (hiddenEvents > 0 ? "+" + hiddenEvents + " more" : "");
         return html`<div key=${day.date}
