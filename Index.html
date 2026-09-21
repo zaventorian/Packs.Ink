@@ -4873,6 +4873,128 @@ function makeGradedRollupValue(rows){
   };
 }
 
+// How many distinct printing BUCKETS the catalog actually offers per card_id.
+// This is the authority on whether a card has two markets at all, and it is the
+// same thing the add modal's printing picker offers — so a card you can only
+// log one printing of can never be treated as split when pricing it.
+// ⚠ Only rows with a real tcgplayer_product_id count. The transform emits a
+// pid-less placeholder printing for some cards, and on Challenge Promo (C1) that
+// is exactly the wrong signal: Dragon Fire and Let It Go each get a synthetic
+// "Normal" row with pid null, and both of those cards exist ONLY as the Top Prize
+// foil. Counting the placeholder would call them split and then refuse to price
+// the one printing they have.
+function gradedCatalogBuckets(rawRows){
+  const m = new Map();
+  for(const r of (rawRows || [])){
+    if(!r || !r.card_id || r.tcgplayer_product_id == null) continue;
+    let s = m.get(r.card_id); if(!s){ s = new Set(); m.set(r.card_id, s); }
+    s.add(gradedSlotBucket(r.tcg_printing) || "Non-Foil");
+  }
+  return m;
+}
+
+// Which (card, grader, grade) tiers are SPLIT — i.e. their printings are
+// separate markets and a price may not hop between them. TWO things must agree.
+//
+// 1. The ROLLUP's printing vocabulary, which encodes the curated
+//    cards.split_printing / foil_split flags through graded_sale_pkey:
+//      ""        → not split; every printing is the same market
+//      "Unknown" → split, but this sale was never classified
+//      "Foil" / "Non-Foil" / "Text Error" / … → split, and classified
+//    So a single non-empty printing is proof the FLAG is set. Note this is
+//    deliberately not gradedKnownBuckets' "2+ labelled buckets" count, which
+//    misses A Whole New World (C1) PSA 10: one labelled tier (Non-Foil, 1 sale,
+//    $290) beside 78 unclassified sales, so the count says "not split" and the
+//    ladder walks a foil copy onto the $290 — the 2026-09-20 report.
+//
+// 2. ⚠ The CATALOG actually carrying two printings — because the flag is
+//    over-broad. `split_printing` is true on all TEN Challenge Promo (C1) cards
+//    but only FOUR have both sides (Kuzco, Baymax, Cinderella, Rapunzel);
+//    Invited to the Ball, Elsa's Ice Palace, Gold Mickey, Dragon Fire and Let It
+//    Go exist only as the Top Prize foil (Zaven, 2026-09-21). On those, the
+//    rollup's Foil/Non-Foil labels are seller noise — Invited to the Ball has
+//    three PSA 9 sales mis-tagged Non-Foil — and trusting the flag alone would
+//    make a foil-only card "split" and then refuse to price the only printing it
+//    has. That is the same failure CLAUDE.md records in the other direction (2x
+//    Elsa SoW Enchanted PSA 10 read $89.10 against a ~$3,000 market off a
+//    mislabelled handful), so it gets the same answer: a single-market card is
+//    single-market whatever a seller wrote in a title.
+// ⚠ The catalog test applies to the FOIL axis ONLY. A variant split (Genie Two
+// Swords, Peter Pan Text Error) lives entirely inside ONE catalog printing — the
+// card's single Enchanted foil — so requiring two printings there would un-split
+// a pair of genuinely different markets ($400 Text Error vs $269 Normal). A
+// variant label is its own evidence; Foil/Non-Foil/Unknown is the one a seller
+// can write by mistake, so that is the one the catalog has to corroborate.
+const GRADED_FOIL_AXIS = new Set(["Foil", "Non-Foil"]);
+function gradedSplitTiers(rows, catalogBuckets){
+  const s = new Set();
+  for(const r of (rows || [])){
+    if(r.grade == null || !r.printing) continue;
+    const b = gradedSlotBucket(r.printing);          // null for "Unknown"
+    const onFoilAxis = b == null || GRADED_FOIL_AXIS.has(b);
+    if(onFoilAxis && catalogBuckets && (catalogBuckets.get(r.card_id)?.size || 0) < 2) continue;
+    s.add(`${r.card_id}|${(r.grader||"").toLowerCase()}|${r.grade}`);
+  }
+  return s;
+}
+
+// The ONE printing-fallback ladder for a graded slab's displayed price.
+//
+// Every surface used to carry its own copy of the same loop — try the stored
+// printing, then Normal / Holofoil / Cold Foil until something answers. That
+// ladder is REQUIRED on an ordinary card (a foil-only chase card's owned slots
+// are stamped printing='Normal' by the migration-50 backfill, and a strict match
+// silently drops them to $0) and WRONG on a split card, where the rungs are two
+// different markets: it walks a Foil slot straight onto the Non-Foil tier.
+//
+// Reported 2026-09-20: A Whole New World (C1) PSA 10 holds a 1-sale Non-Foil
+// tier at $290 and a 78-sale unclassified tier at $245, and priceByKey's pass 2
+// writes that $290 row under BOTH "Non-Foil" and "Normal". A foil copy therefore
+// priced at the non-foil's $290 — a confident wrong number beside a buy button.
+//
+// Returns {row, split, exact}:
+//   row   — the priceByKey row to display, or null when nothing may price it
+//   split — this (card, grader, grade) has 2+ labelled printings, so the ladder
+//           was confined to the slot's own bucket
+//   exact — row came from THIS printing's own tier. False means it came from the
+//           card's unclassified ("Unknown") tier, which on a split card is a
+//           blend of both markets and must be LABELLED rather than presented as
+//           this printing's price. Callers render gradedPriceNote() for it.
+// splitTiers is gradedSplitTiers(rollup) — see that function for why the split
+// test is the rollup's printing VOCABULARY and not a count of labelled buckets.
+function makeGradedPrintingLookup(priceByKey, splitTiers){
+  const LADDER = ["Normal", "Holofoil", "Cold Foil"];
+  const MISS = {row: null, split: false, exact: false};
+  return (pid, cardId, grader, grade, stored) => {
+    if(!priceByKey || pid == null) return MISS;
+    const gk = (grader||"").toLowerCase();
+    const split = !!splitTiers?.has(`${cardId}|${gk}|${grade}`);
+    const want = stored || "Normal";
+    const wantB = gradedSlotBucket(want) || "Non-Foil";
+    const at = (pr) => priceByKey.get(pid + "|" + pr + "|" + grader + "|" + grade) || null;
+    for(const pr of [want, ...LADDER]){
+      // On a split card the ladder may only walk rungs that mean the same
+      // market — Holofoil and Cold Foil are both "Foil", Normal is not.
+      if(split && (gradedSlotBucket(pr) || "Non-Foil") !== wantB) continue;
+      const p = at(pr);
+      if(!p) continue;
+      const rb = gradedSlotBucket(p.rollup_printing);
+      // A row carrying the OTHER side's label can never price this slot, even
+      // on a rung whose own name matched (priceByKey writes Non-Foil tiers
+      // under "Normal" too, which is the exact hop that caused the report).
+      if(split && rb && rb !== wantB) continue;
+      return {row: p, split, exact: !split || rb === wantB};
+    }
+    return {row: null, split, exact: false};
+  };
+}
+// Why a shown price isn't this printing's own — null when it is (or when the
+// card isn't split, where the distinction doesn't arise).
+const gradedPriceNote = (hit) =>
+  hit && hit.row && hit.split && !hit.exact
+    ? `Blended across printings — ${hit.row.sale_count || 0} sale${hit.row.sale_count === 1 ? "" : "s"} for this card were never labelled with a printing, so this is both markets together.`
+    : null;
+
 // Fold slabs the per-sale window MISSED back into a {date,value} portfolio
 // series, as a flat line at their range-independent price.
 //
@@ -24021,7 +24143,7 @@ const GRADED_RARITY_OPTIONS = ["Common","Uncommon","Rare","Super Rare","Legendar
 // Portfolio-value chart for the Graded tab. Mirrors the raw-collection
 // chart on the Home panel but pulls from graded_prices_daily and keys
 // per (tcgplayer_product_id, grader, grade) slot instead of (pid, printing).
-const GradedValueChart = ({items, cardById, priceByKey, knownBuckets, rangeKey, setRangeKey, premium, basis}) => {
+const GradedValueChart = ({items, cardById, priceByKey, knownBuckets, splitTiers, rangeKey, setRangeKey, premium, basis}) => {
   const [historyRows, setHistoryRows] = useState(null);
   const [state, setState] = useState({loading: false, error: null});
   // Which lines to draw. Premium has both Last-sold and Avg-of-5 histories; show
@@ -24034,31 +24156,36 @@ const GradedValueChart = ({items, cardById, priceByKey, knownBuckets, rangeKey, 
   // have a product id for).
   const slots = useMemo(() => {
     const out = [];
-    // Resolve each slot's printing against graded_prices_latest: try the
-    // stored printing first, fall back to Normal / Holofoil / Cold Foil
-    // until we find one with data. Mirrors the lookupGradedPx fallback in
-    // the header total so the chart sums the same slots the header values.
-    // Without this, Holofoil-only cards (Enchanteds, Iconics) whose owned
-    // items default to printing='Normal' (migration 50 backfill) find no
-    // matching rows and silently drop out of the chart.
-    const resolvePrinting = (pid, grader, grade, stored) => {
+    // Resolve each slot's printing against the rollup: try the stored printing
+    // first, then Normal / Holofoil / Cold Foil until we find one with data.
+    // Without this, Holofoil-only cards (Enchanteds, Iconics) whose owned items
+    // default to printing='Normal' (migration 50 backfill) find no matching rows
+    // and silently drop out of the chart. Routed through the shared ladder so it
+    // stops at the split boundary exactly as the header total does — resolving a
+    // Foil slot onto "Normal" here would hand addUnsoldSlabsToSeries the other
+    // market's price for any slab the window missed.
+    const resolvePrinting = (pid, cardId, grader, grade, stored) => {
       if(!priceByKey) return stored || "Normal";
-      const tryOrder = [stored || "Normal", "Normal", "Holofoil", "Cold Foil"];
-      for(const pr of tryOrder){
+      const gk = (grader||"").toLowerCase();
+      const split = !!splitTiers?.has(`${cardId}|${gk}|${grade}`);
+      const want = stored || "Normal";
+      const wantB = gradedSlotBucket(want) || "Non-Foil";
+      for(const pr of [want, "Normal", "Holofoil", "Cold Foil"]){
+        if(split && (gradedSlotBucket(pr) || "Non-Foil") !== wantB) continue;
         if(priceByKey.has(pid + "|" + pr + "|" + grader + "|" + grade)) return pr;
       }
-      return stored || "Normal";
+      return want;
     };
     for(const it of (items || [])){
       const meta = cardById.get(it.card_id);
       if(!meta || !meta.tcgplayer_product_id) continue;
-      const printing = resolvePrinting(meta.tcgplayer_product_id, it.grader, it.grade, it.printing);
+      const printing = resolvePrinting(meta.tcgplayer_product_id, it.card_id, it.grader, it.grade, it.printing);
       out.push({pid: meta.tcgplayer_product_id, printing, card_id: it.card_id,
         grader: it.grader, grade: it.grade, qty: it.quantity || 0,
         acquired_date: it.acquired_date || null});
     }
     return out;
-  }, [items, cardById, priceByKey]);
+  }, [items, cardById, priceByKey, splitTiers]);
 
   const slotsKey = useMemo(() => slots.map(s => `${s.pid}|${s.printing}|${s.grader}|${s.grade}|${s.qty}`).sort().join(","), [slots]);
 
@@ -24184,7 +24311,7 @@ const GRADED_OWNED_SORTS = {
 // foil badge is never shown for them — it's reserved for the foil copy of a
 // normal card that exists in both Normal and Cold Foil.
 const GRADED_CHASE_RARITIES = new Set(["Epic","Enchanted","Iconic","Promo"]);
-const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen, basis}) => {
+const GradedOwnedGrid = ({items, cardById, priceByKey, splitTiers, raw, theme, onOpen, basis}) => {
   const gradedPremium = useContext(GradedPremiumContext);
   // All sort + filter selections persist to localStorage so the view is the
   // same next time you open it.
@@ -24202,16 +24329,14 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen, basis
   useEffect(()=>{ try { localStorage.setItem("packsink:gradedOwned:separate", separateBySet?"1":"0"); } catch {} }, [separateBySet]);
   useEffect(()=>{ try { localStorage.setItem("packsink:gradedOwned:filter", serializeFilter(drawerFilter)); } catch {} }, [drawerFilter]);
 
-  const pxRowOf = (it, meta) => {
-    if(!meta || !meta.tcgplayer_product_id) return null;
-    for(const pr of [it.printing || meta.tcg_printing || "Normal", "Normal", "Holofoil", "Cold Foil"]){
-      const p = priceByKey.get(meta.tcgplayer_product_id + "|" + pr + "|" + it.grader + "|" + it.grade);
-      if(p && gradedRowValue(p, basis) != null) return p;
-    }
-    return null;
-  };
+  // Shared ladder — never crosses a split (see makeGradedPrintingLookup).
+  const hitFor = useMemo(() => makeGradedPrintingLookup(priceByKey, splitTiers), [priceByKey, splitTiers]);
+  const pxHitOf = (it, meta) => meta && meta.tcgplayer_product_id
+    ? hitFor(meta.tcgplayer_product_id, it.card_id, it.grader, it.grade, it.printing || meta.tcg_printing)
+    : null;
+  const pxRowOf = (it, meta) => pxHitOf(it, meta)?.row || null;
   // The graded value (eBay average), or null when this card has no graded-sales
-  // data — callers fall back to rawPlaceholderPx.
+  // data for this printing — callers fall back to rawPlaceholderPx.
   const valueOf = (it, meta) => gradedRowValue(pxRowOf(it, meta), basis);
   // Premium rollup rows also carry the most-recent sale price (graded_sales_rollup).
   const lastSoldOf = (it, meta) => {
@@ -25003,6 +25128,13 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   // gradedKnownBuckets. Built from the same rollup rows priceByKey uses.
   const gradedKnownBucketsMap = useMemo(() =>
     rollup ? gradedKnownBuckets(rollup) : null, [rollup]);
+  // Which tiers are split, for the displayed-price ladder — see gradedSplitTiers
+  // for why this is a different test from gradedKnownBucketsMap above, and why
+  // it needs the catalog to corroborate the curated flag.
+  const gradedCatalogBucketsMap = useMemo(() => gradedCatalogBuckets(raw), [raw]);
+  const gradedSplitTiersSet = useMemo(() =>
+    rollup ? gradedSplitTiers(rollup, gradedCatalogBucketsMap) : null,
+    [rollup, gradedCatalogBucketsMap]);
 
   // Index raw by card_id for metadata join (we need name/set/image/rarity).
   const cardById = useMemo(() => {
@@ -25056,9 +25188,14 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       // rollup's printing is "" (non-split → price every printing the same),
       // "Unknown" (split but unclassified → fallback for any), or a real variant.
       const SYN = {"Foil": ["Foil", "Holofoil", "Cold Foil"], "Non-Foil": ["Non-Foil", "Normal"], "Cold Foil": ["Cold Foil"]};
+      // rollup_printing is the row's PROVENANCE, not a lookup key: a row written
+      // under "Cold Foil" may have come from the card's Unknown (unclassified)
+      // tier, and on a split card that is a blend of two markets rather than
+      // this printing's price. gradedPrintingLookup reads it to tell the two
+      // apart; every other consumer ignores it.
       const rowOf = (r, meta, v) => ({ebay_avg_1d: v, ebay_avg_30d: v, ebay_avg_7d: v,
         last_sold_price: r.last_sold_price, avg_last_5: r.avg_last_5,
-        last_sold_date: r.last_sold_date, sale_count: r.sale_count,
+        last_sold_date: r.last_sold_date, sale_count: r.sale_count, rollup_printing: r.printing || "",
         grader: (r.grader||"").toLowerCase(), grade: r.grade, tcgplayer_product_id: meta.tcgplayer_product_id});
       const val = (r) => r.avg_last_5 != null ? Number(r.avg_last_5)
                        : r.last_sold_price != null ? Number(r.last_sold_price) : null;
@@ -25081,6 +25218,10 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       return m;
     }
   }, [rollup, cardById]);
+  // THE ladder for every displayed graded price in this view — set-goal tiles,
+  // owned-slot pills, the header total. Never crosses a split.
+  const gradedHit = useMemo(() => makeGradedPrintingLookup(priceByKey, gradedSplitTiersSet),
+    [priceByKey, gradedSplitTiersSet]);
   // Group cards in raw by set so the goal flow + main render can lay them out.
   const cardsBySetId = useMemo(() => {
     const m = new Map();
@@ -25257,16 +25398,11 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       });
       bySet.get(sid).push({card: meta, slots: arr, printing: entry.printing});
     }
-    // Helper to grab the best graded price for a (pid, printing, grader,
-    // grade) — falls back across printings (matches lookupGradedPx in totals).
-    const tryPrintings = ["Normal", "Holofoil", "Cold Foil"];
-    const bestPx = (pid, pref, grader, grade) => {
-      for(const pr of [pref || "Normal", ...tryPrintings]){
-        const p = priceByKey.get(pid + "|" + pr + "|" + grader + "|" + grade);
-        if(p) return gradedRowValue(p, valueBasis) ?? 0;
-      }
-      return 0;
-    };
+    // Best graded price for a (card, printing, grader, grade) via the shared
+    // ladder, so a set's completion value can't be inflated by pricing one
+    // printing's tiles off the other printing's market.
+    const bestPx = (pid, cardId, pref, grader, grade) =>
+      gradedRowValue(gradedHit(pid, cardId, grader, grade, pref).row, valueBasis) ?? 0;
     const setEntries = Array.from(bySet.entries()).map(([sid, cards]) => {
       let ownedTiles = 0, totalTiles = 0, ownedValue = 0;
       for(const c of cards){
@@ -25275,7 +25411,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
         if(ownedSlots.length) ownedTiles++;
         for(const s of ownedSlots){
           // Graded price → raw-price placeholder (cards with no graded sales yet).
-          const px = bestPx(c.card.tcgplayer_product_id, c.printing || s.printing, s.grader, s.grade) || rawPlaceholderPx(c.card) || 0;
+          const px = bestPx(c.card.tcgplayer_product_id, c.card.card_id, c.printing || s.printing, s.grader, s.grade) || rawPlaceholderPx(c.card) || 0;
           ownedValue += px * (s.qty || 0);
         }
       }
@@ -25328,23 +25464,15 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     if(!items) return {totalCopies: 0, uniqueCards: 0, slots: 0, value: 0};
     let totalCopies = 0, slots = 0, value = 0;
     const uniqueCardIds = new Set();
-    // graded_collection_items doesn't yet track printing — look up under
-    // the card's known printing first, then fall back to "Normal", then any
-    // printing that has data. Single-printing cards naturally hit on first
-    // try; split-printing cards bias to whichever printing the catalog
-    // associates with the card.
-    const lookupGradedPx = (pid, grader, grade, preferredPrinting) => {
-      const tryPrintings = [preferredPrinting || "Normal", "Normal", "Holofoil", "Cold Foil"];
-      for(const pr of tryPrintings){
-        const p = priceByKey.get(pid + "|" + pr + "|" + grader + "|" + grade);
-        if(p){
-          // A matched row with no price must NOT shadow a later printing
-          // (e.g. Holofoil) that does carry one — keep trying.
-          const v = gradedRowValue(p, valueBasis);
-          if(v != null) return v;
-        }
-      }
-      return null;
+    // Printing fallback via the shared ladder, which refuses to cross a split
+    // (see makeGradedPrintingLookup). A single-printing card still falls back
+    // freely, so migration-50 'Normal' slots on foil-only chase cards keep
+    // valuing; a split card's Foil slot can no longer be valued off its
+    // Non-Foil tier, which is what put the wrong number on the add modal.
+    const hitFor = makeGradedPrintingLookup(priceByKey, gradedSplitTiersSet);
+    const lookupGradedPx = (pid, cardId, grader, grade, preferredPrinting) => {
+      const hit = hitFor(pid, cardId, grader, grade, preferredPrinting);
+      return hit.row ? gradedRowValue(hit.row, valueBasis) : null;
     };
     for(const it of items){
       slots++;
@@ -25354,12 +25482,12 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       if(meta){
         // Graded average → raw-price placeholder for cards with no graded sales
         // yet, so they still count toward collection value (not $0).
-        const px = lookupGradedPx(meta.tcgplayer_product_id, it.grader, it.grade, it.printing || meta.tcg_printing) ?? rawPlaceholderPx(meta);
+        const px = lookupGradedPx(meta.tcgplayer_product_id, it.card_id, it.grader, it.grade, it.printing || meta.tcg_printing) ?? rawPlaceholderPx(meta);
         if(px) value += px * it.quantity;
       }
     }
     return {totalCopies, uniqueCards: uniqueCardIds.size, slots, value};
-  }, [items, cardById, priceByKey]);
+  }, [items, cardById, priceByKey, gradedSplitTiersSet, valueBasis]);
 
   // Mutations — write through Supabase, then reload locally on success.
   // Migration 50 added printing to the PK; callers that don't supply it
@@ -25775,13 +25903,14 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       </div>
     </div>
     ${!readOnly && html`<${GradedValueChart} items=${items} cardById=${cardById}
-      priceByKey=${priceByKey} knownBuckets=${gradedKnownBucketsMap}
+      priceByKey=${priceByKey} knownBuckets=${gradedKnownBucketsMap} splitTiers=${gradedSplitTiersSet}
       premium=${gradedPremium} basis=${valueBasis}
       rangeKey=${chartRange} setRangeKey=${setChartRange}/>`}
     <div class="graded-collection-body">
       <div class="graded-collection-main">
         ${gradedView === "owned"
           ? html`<${GradedOwnedGrid} items=${items} cardById=${cardById} priceByKey=${priceByKey}
+              splitTiers=${gradedSplitTiersSet}
               raw=${raw} theme=${theme} onOpen=${openCardAt} basis=${valueBasis}/>`
           : grouped.length === 0
           ? html`<div class="gc-empty">
@@ -25927,16 +26056,11 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                                 return html`<span key=${si} class="gc-slot gc-slot-tracked" title="Tracked — variant has no graded market"
                                   onClick=${e=>e.stopPropagation()}>Tracking</span>`;
                               }
-                              // Tile's printing wins — for C1 Foil tile, look
-                              // up Holofoil PSA 10; for Normal tile, Normal.
-                              let refP = priceByKey.get(card.tcgplayer_product_id + "|" + tilePrinting + "|psa|10");
-                              if(!refP){
-                                for(const pr of ["Normal", "Holofoil", "Cold Foil"]){
-                                  if(pr === tilePrinting) continue;
-                                  refP = priceByKey.get(card.tcgplayer_product_id + "|" + pr + "|psa|10");
-                                  if(refP) break;
-                                }
-                              }
+                              // Tile's printing wins — for a C1 Foil tile, look
+                              // up Holofoil PSA 10; for a Normal tile, Normal.
+                              // Via the shared ladder, so a Prize Wall tile is
+                              // never quoted the Top Prize's number.
+                              const refP = gradedHit(card.tcgplayer_product_id, card.card_id, "psa", "10", tilePrinting).row;
                               const refPx = gradedRowValue(refP, valueBasis);
                               return html`<button key=${si} class="gc-slot gc-slot-tracked gc-slot-quickadd"
                                 type="button"
@@ -25958,19 +26082,15 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                             }
                             // Use the slot's printing (which matches the tile).
                             const slotPrinting = s.printing || tilePrinting;
-                            let p = null;
-                            if(!isCustomVariant){
-                              p = priceByKey.get(card.tcgplayer_product_id + "|" + slotPrinting + "|" + s.grader + "|" + s.grade);
-                              if(!p){
-                                for(const pr of ["Normal", "Holofoil", "Cold Foil"]){
-                                  if(pr === slotPrinting) continue;
-                                  p = priceByKey.get(card.tcgplayer_product_id + "|" + pr + "|" + s.grader + "|" + s.grade);
-                                  if(p) break;
-                                }
-                              }
-                            }
+                            const pHit = isCustomVariant ? null
+                              : gradedHit(card.tcgplayer_product_id, card.card_id, s.grader, s.grade, slotPrinting);
+                            const p = pHit?.row || null;
                             const px = gradedRowValue(p, valueBasis);
                             const slotTipParts = [(s.grader||"").toUpperCase() + " " + s.grade];
+                            // Say so when the number isn't this printing's own.
+                            const pNote = gradedPriceNote(pHit);
+                            if(pNote) slotTipParts.push(pNote);
+                            else if(pHit && pHit.split && !p) slotTipParts.push("No sales recorded for this printing yet.");
                             if(s.acquired_date) slotTipParts.push("Acquired " + s.acquired_date);
                             if(s.amount_paid != null) slotTipParts.push("Paid $" + Number(s.amount_paid).toLocaleString(undefined,{maximumFractionDigits:2}));
                             const slotArmKey = card.card_id + "|" + slotPrinting + "|" + s.grader + "|" + s.grade;
@@ -26212,7 +26332,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
         aria-haspopup="menu" aria-expanded=${fabMenuOpen}>+</button>
     </div>`}
     ${addOpen && html`<${GradedCollectionAddModal}
-      raw=${raw} cardById=${cardById} priceByKey=${priceByKey}
+      raw=${raw} cardById=${cardById} priceByKey=${priceByKey} splitTiers=${gradedSplitTiersSet}
       preselectCardId=${addPreselectCardId}
       preselectPrinting=${addPreselectPrinting}
       onClose=${()=>{ setAddOpen(false); setAddPreselectCardId(null); setAddPreselectPrinting(null); }}
@@ -26253,7 +26373,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
 
 // Modal for adding a graded card to the collection. Search → pick a card →
 // pick grader/grade → validate against graded_prices_latest → save.
-const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, preselectPrinting, onClose, onAdd, queueMode, onSendToQueue}) => {
+const GradedCollectionAddModal = ({raw, cardById, priceByKey, splitTiers, preselectCardId, preselectPrinting, onClose, onAdd, queueMode, onSendToQueue}) => {
   useEscToClose(onClose);
   const [query, setQuery] = useState("");
   const [pickedId, setPickedId] = useState(preselectCardId || null);
@@ -26285,6 +26405,12 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
     for(const p of (SPLIT_CARD_PRINTING_OPTIONS[pickedId] || [])){
       if(!seen.has(p)){ seen.add(p); out.push(p); }
     }
+    // ⚠ Do NOT offer both sides just because the card is in a split set. Only 4
+    // of Challenge Promo (C1)'s 10 cards have both printings — Invited to the
+    // Ball, Elsa's Ice Palace, Gold Mickey, Dragon Fire and Let It Go exist ONLY
+    // as the Top Prize foil (Zaven, 2026-09-21), and the catalog is right about
+    // that: their pid carries one printing and always has. Synthesising the
+    // missing side here would invite people to log a card that doesn't exist.
     return out;
   }, [pickedRows, pickedId]);
   // Auto-pick when only one printing exists; honor preselect when multiple.
@@ -26333,19 +26459,29 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
   }, [raw, query, pickedId]);
 
   const picked = pickedId ? cardById.get(pickedId) : null;
-  // Picked printing wins for the price lookup; fall back to alternate
-  // printings only if no row exists for the user's selection (so a
-  // mistakenly-picked Holofoil for a Normal-only card still shows data).
-  let priceRow = null;
-  if(picked){
-    const tryOrder = [printing || picked.tcg_printing || "Normal", "Normal", "Holofoil", "Cold Foil"];
-    for(const pr of tryOrder){
-      const k = picked.tcgplayer_product_id + "|" + pr + "|" + grader + "|" + grade;
-      if(priceByKey.has(k)){ priceRow = priceByKey.get(k); break; }
-    }
-  }
+  // Picked printing wins for the price lookup; fall back to alternate printings
+  // only if no row exists for the user's selection (so a mistakenly-picked
+  // Holofoil for a Normal-only card still shows data) — but never ACROSS a
+  // split, where the rungs are two different markets. See
+  // makeGradedPrintingLookup; this is the screen the 2026-09-20 report came from.
+  const hitFor = useMemo(() => makeGradedPrintingLookup(priceByKey, splitTiers), [priceByKey, splitTiers]);
+  const priceHit = picked
+    ? hitFor(picked.tcgplayer_product_id, picked.card_id, grader, grade, printing || picked.tcg_printing)
+    : null;
+  const priceRow = priceHit?.row || null;
   const hasPriceData = !!priceRow;
   const priceVal = priceRow && gradedRowValue(priceRow, "avg5");
+  const priceNote = gradedPriceNote(priceHit);
+  // A split card with no sales under THIS printing says so, rather than
+  // borrowing the other side's number.
+  const priceBlocked = !priceRow && !!priceHit?.split;
+  // C1's two sides are named Top Prize / Prize Wall, and those words are keyed
+  // on the BUCKET — passing "Cold Foil" straight to PRINTING_VARIANT_LABEL
+  // returns nothing and silently drops the one label on this screen worth
+  // thousands of dollars.
+  const printingLabel = (p) => (picked && SPLIT_BY_PRINTING_SETS_GLOBAL.has(picked.Set))
+    ? (gradedVariantLabel(gradedSlotBucket(p), picked.Set) || p)
+    : (PRINTING_VARIANT_LABEL[p] || p);
 
   return html`<div class="modal-backdrop" onClick=${onClose}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:560}}>
@@ -26390,7 +26526,7 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
               ${availablePrintings.map(p => html`<button key=${p} type="button"
                 class=${"chip" + (printing === p ? " active" : "")}
                 onClick=${()=>setPrinting(p)}
-                style=${{padding:"5px 14px",fontSize:12,flex:1}}>${PRINTING_VARIANT_LABEL[p] || p}</button>`)}
+                style=${{padding:"5px 14px",fontSize:12,flex:1}}>${printingLabel(p)}</button>`)}
             </div>
             <div class="muted" style=${{fontSize:10,marginTop:4}}>This card has distinct printings/variants — pick the one you own.</div>
           </label>`}
@@ -26464,7 +26600,11 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
             fontSize:12,marginBottom:14,lineHeight:1.5}}>
             ${hasPriceData
               ? html`<span style=${{color:"var(--accent)",fontWeight:700}}>✓ Price data available</span>
-                  · ${grader.toUpperCase()} ${grade} latest avg: <strong>$${Number(priceVal||0).toLocaleString(undefined,{maximumFractionDigits:2})}</strong>`
+                  · ${grader.toUpperCase()} ${grade} latest avg: <strong>$${Number(priceVal||0).toLocaleString(undefined,{maximumFractionDigits:2})}</strong>
+                  ${priceNote && html`<div class="muted" style=${{fontSize:11,marginTop:4}}>${uiIcon("warn", 11)} ${priceNote}</div>`}`
+              : priceBlocked
+              ? html`<span style=${{color:"var(--red)",fontWeight:700}}>${uiIcon("warn", 12)} No ${printingLabel(printing || "Normal")} sales recorded at ${grader.toUpperCase()} ${grade}</span>
+                  · This card's printings are separate markets, so we won't price it off the other one. You can still save it; portfolio value will exclude this slot until a ${printingLabel(printing || "Normal")} sale is recorded.`
               : html`<span style=${{color:"var(--red)",fontWeight:700}}>${uiIcon("warn", 12)} No price data for this grader/grade</span>
                   · You can still save it; portfolio value will exclude this slot until a sale is recorded.`}
           </div>
@@ -41473,8 +41613,6 @@ const calReadViewPref = (seed) => {
     return CAL_VIEW_MODES.includes(raw) ? raw : "month";
   } catch { return "month"; }
 };
-// How much of the season the timeline draws at once. 12 is one competitive
-// season; 6 is a quarter-by-quarter read and 24 spans a rotation.
 // How much of the season the timeline draws at once. 12 is one competitive
 // season; 6 is a quarter-by-quarter read and 24 spans a rotation.
 const CAL_TL_SPANS = [6, 12, 24];
