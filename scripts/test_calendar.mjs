@@ -96,6 +96,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const CAL_KIND_PLURAL = {", NL + "};"),
   grabLine("const calGroupKindLabel = "),
   grab("const calCellItems = (events, art, date) => {", NL + "};"),
+  grabLine("const CAL_CELL_MAX = "),
   grabLine("const calendarHiddenSet = (subs) =>"),
   grab("const calendarApplyHidden = (events, hidden, saved) => {", NL + "};"),
   grab("const CAL_STORE_KINDS = [", NL + "];"),
@@ -166,7 +167,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   " calendarSetEstimates, calendarEstimatedSetEntries, calEstimated, calTimelineSkip,",
   " UPCOMING_SET_NAMES, SET_CADENCE_DAYS, SET_RELEASE_DATES, calSetOrdinal, calSetOrdinalLabel,",
   " CAL_TL_LABEL_PX, CAL_TL_MAX_STORE_LANES, CAL_TL_STORE_ROWS, CAL_TL_STORE_REST,",
-  " calCellItems, calGroupKindLabel, CAL_KIND_SHORT, CAL_KIND_PLURAL,",
+  " calCellItems, calGroupKindLabel, CAL_KIND_SHORT, CAL_KIND_PLURAL, CAL_CELL_MAX,",
   " calPanelRows, calDayLabel};",
 ].join(NL)));
 
@@ -179,7 +180,7 @@ const {
   osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
   calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS,
   calPanelRows, calDayLabel,
-  calCellItems, calGroupKindLabel, CAL_KIND_SHORT, CAL_KIND_PLURAL,
+  calCellItems, calGroupKindLabel, CAL_KIND_SHORT, CAL_KIND_PLURAL, CAL_CELL_MAX,
   CAL_STORE_KIND_KEYS, calendarHiddenSet, calendarApplyHidden,
   calendarArtIndex, calendarEventArt, calendarEventProduct, CAL_ART_SKIP_TYPES, deriveSealedDisplayType,
   CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
@@ -1791,11 +1792,32 @@ ok("and the anchor element is kept for it to ask about",
   /const next = \{evs, rect, el, day\}/.test(cgHook));
 ok("a trigger that has gone away still closes", /isConnected/.test(cgHook));
 
-// The count has to survive the compact chip's label hide, or a 44px rail cell
-// shows one medal and no number - the same bug, with an extra step.
+// ── the count has to survive the chip's label hide ────────────────────────
+// Both icon-only grids hide `> span:not(.cal-ico)`, which takes `.cal-chip-x`
+// with it -- so a day holding three qualifiers draws one anonymous mark and no
+// number anywhere. Silent both ways, and the count is the entire point of a
+// grouped chip. They answer it differently and both answers are pinned.
 const cgCSS = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
-ok("the compact chip keeps its count",
-  /\.cal-month--compact \.cal-cell-events > \.cal-chip > span\.cal-chip-x\{[^}]*display:inline/.test(cgCSS));
+// Compact: the count is the CELL's, out of flow in the corner, and the per-chip
+// `×N` stays hidden -- inline it was a 10px sibling of a 13px mark in an 18px
+// box, so it overflowed by 3px and squeezed the mark it was describing.
+ok("the compact cell's count is out of flow",
+  /\.cal-month--compact \.cal-cell-more\{[^}]*position:absolute/.test(cgCSS));
+ok("and it is opaque, so it can sit on a mark",
+  /\.cal-month--compact \.cal-cell-more\{[^}]*background:var\(--bg-modal\)/.test(cgCSS));
+ok("the compact chip's own count stays hidden",
+  /\.cal-month--compact \.cal-cell-events > \.cal-chip > span\.cal-chip-x\{display:none/.test(cgCSS));
+// ⚠ The mark is sized off the SHORTER axis. 72% of EACH axis gave a 13x25 box
+// in a shared cell, and object-fit:contain renders at the min -- a 13px mark
+// with 12px of height thrown away.
+ok("the compact mark is a height-driven square, not 72% of each axis",
+  /\.cal-month--compact \.cal-chip \.cal-ico\{width:auto;height:\d+%;aspect-ratio:1;max-width:100%/.test(cgCSS));
+// The phone's full grid hides the same label, and answers with a per-chip
+// badge: there the mark is centred in a wide row, so a corner badge is free.
+ok("the phone grid puts the count back as a corner badge",
+  /\.cal-month:not\(\.cal-month--compact\) \.cal-chip > span\.cal-chip-x\{[\s\S]{0,80}position:absolute/.test(cgCSS));
+ok("and gives it something to be positioned against",
+  /\.cal-month:not\(\.cal-month--compact\) \.cal-chip\{position:relative;?\}/.test(cgCSS));
 // And the version badge that used to paint over everything is contained.
 ok("the graded tile isolates its version badge",
   /\.gmover-tile\{[^}]*isolation:isolate/.test(cgCSS));
@@ -2088,6 +2110,28 @@ ok("the graded tile isolates its version badge",
   ok("the +N marker is a button now", /<button type="button" class="cal-cell-more"/.test(monthView));
   ok("and it opens the same day list",
     (monthView.match(/onOpenDay\(day\.date, day\.events\)/g) || []).length === 2);
+
+  // ── what the corner count SAYS ──────────────────────────────────────────
+  // ⚠ Compact reads the day's TOTAL, never what is hidden. A `×3` group mark
+  // hides nothing, so a hidden-count reads "0" over a cell holding three
+  // qualifiers -- and the whole reason the count exists is that one mark is
+  // standing for three things. Wrong either way it is a plausible number
+  // beside the right marks, which is the worst kind of wrong available here.
+  ok("the compact count is the day's total",
+    /compact\s*\?\s*\(day\.events\.length > shown\.length \? String\(day\.events\.length\)/.test(monthView));
+  // ⚠ ...and the full grid's "+N more" counts EVENTS, not chips: a hidden
+  // `×2` group is two more events, and "+1 more" under-reports it.
+  ok("the full grid's +N counts events, not chips",
+    /shown\.reduce\(\(a, it\) => a \+ \(it\.group \? it\.events\.length : 1\), 0\)/.test(monthView));
+  ok("and that is what the +N branch reads",
+    /hiddenEvents > 0 \? "\+" \+ hiddenEvents \+ " more"/.test(monthView));
+  // ⚠ TWO marks, measured: three share a ~45px cell at 13px each, too small to
+  // tell a shield from a hexagon, which is the one thing a mark is for. The cap
+  // can be flat now because the count is out of flow -- it used to have to drop
+  // by one whenever the overflow marker took a slot of its own.
+  ok("a compact cell draws two marks", CAL_CELL_MAX === 2, CAL_CELL_MAX);
+  ok("and the cap no longer shrinks for the marker",
+    !/cap = compact && items\.length > max/.test(monthView));
 
   const dayModal = grab("const CalendarDayModal = ({day, events, onOpen, onClose, art}) => {",
                         NL + "};");

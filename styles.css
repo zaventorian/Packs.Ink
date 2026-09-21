@@ -10515,6 +10515,15 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
      the icon's class, so renaming that class silently reintroduces exactly
      that: measured at 375px the chips went to 41x4 with all 17 icons hidden. */
   .cal-chip > span:not(.cal-ico){display:none;}
+  /* ⚠ Hiding the label takes the `×N` with it -- it is a span too -- so a day
+     holding three qualifiers drew one anonymous mark and no number anywhere.
+     It comes back as a corner badge, the idiom the compact grid uses, and here
+     it occludes nothing: the mark is a 17px square centred in a 37px row, so
+     the badge sits in the empty space beside it (measured at 375px). */
+  .cal-month:not(.cal-month--compact) .cal-chip{position:relative;}
+  .cal-month:not(.cal-month--compact) .cal-chip > span.cal-chip-x{
+    display:block;position:absolute;right:2px;bottom:1px;margin:0;font-size:8px;
+    line-height:1.3;font-weight:800;opacity:0.85;font-variant-numeric:tabular-nums;}
   .cal-cell-more{font-size:8px;text-align:center;padding:0;}
   .cal-row-when{flex-basis:74px;}
   .cal-form{grid-template-columns:minmax(0,1fr);}
@@ -10939,15 +10948,28 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
    row, it just also lets them grow to use the row's full height and width. */
 .cal-month--compact .cal-cell-events{position:absolute;inset:0;flex-direction:row;
   flex-wrap:wrap;justify-content:center;align-content:stretch;align-items:stretch;gap:1px;}
-.cal-month--compact .cal-chip{padding:2px;justify-content:center;align-items:center;
-  flex:1 1 30%;min-width:0;background:transparent;}
+.cal-month--compact .cal-chip{padding:1px;justify-content:center;align-items:center;
+  flex:1 1 30%;min-width:0;background:transparent;position:relative;}
 .cal-month--compact .cal-chip > span:not(.cal-ico){display:none;}
-/* The icon fills most of its chip's box (a chip that's the only one in the row
-   IS the row, so its icon nearly fills the whole cell); capped so a lone icon
-   in a wide rail doesn't blow past a sane glyph size. */
-.cal-month--compact .cal-chip .cal-ico{width:72%;height:72%;max-width:30px;max-height:30px;}
-.cal-month--compact .cal-cell-more{font-size:7px;text-align:center;padding:0;
-  flex:1 1 30%;display:flex;align-items:center;justify-content:center;color:var(--text-muted);}
+/* ⚠ The mark is sized off the SHORTER axis, and 72%-of-each-axis was not that.
+   A chip sharing its cell is TALL AND NARROW -- 21x38 with two of them -- so
+   72% of each gave a 13x25 box, and `.cal-ico-img` is object-fit:contain, which
+   renders at the min: a 13px mark with 12px of height thrown away. Driving a
+   square off the height and clamping it with max-width means the box is
+   min(width, 88% height) on its short side either way, so the mark takes
+   everything the chip has: 21px shared, ~33px alone (measured, 375px wide).
+   No max-width cap needed now -- the height is the cap. */
+.cal-month--compact .cal-chip .cal-ico{width:auto;height:88%;aspect-ratio:1;max-width:100%;}
+/* ⚠ The count is OUT OF FLOW, and that is what buys the marks their size: as a
+   flex child it took a third of the row and left every mark 13px. It reads the
+   day's TOTAL rather than what is hidden -- one mark standing for three
+   qualifiers still has to say three. --bg-modal, not --bg-surface: it sits ON a
+   mark, and --bg-surface is translucent in the dark themes. */
+.cal-month--compact .cal-cell-more{position:absolute;right:1px;bottom:1px;z-index:2;
+  width:auto;flex:none;padding:0 3px;font-size:8px;font-weight:800;line-height:1.3;
+  text-align:center;border-radius:999px;background:var(--bg-modal);color:var(--text-muted);
+  box-shadow:0 0 0 1px var(--border);font-variant-numeric:tabular-nums;}
+.cal-month--compact .cal-cell-more:hover{color:var(--accent);}
 
 /* ── the mini map ─────────────────────────────────────────────────────────── */
 .cal-map{margin-top:14px;}
@@ -11101,8 +11123,12 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
 .cal-modal-kind .cal-ico{width:22px;height:22px;}
 .cal-row-title .cal-ico,.cal-panel-title .cal-ico{margin-right:1px;}
 .cal-chip .cal-ico{width:13px;height:13px;border-radius:2px;}
-/* The compact chip hides its label (`> span:not(.cal-ico)`), which would take
-   the count with it - and the count is the entire point of a grouped chip in a
-   44px cell. Four classes so it wins outright rather than on source order. */
-.cal-month--compact .cal-cell-events > .cal-chip > span.cal-chip-x{
-  display:inline;margin-left:1px;font-size:8px;}
+/* ⚠ The per-chip `×N` stays HIDDEN in a compact cell -- the cell's own corner
+   badge is the count there, and it already covers this case: a lone group of
+   three is one mark over a total of three. Inline it was a 10px sibling of a
+   13px mark inside an 18px box, so it overflowed the chip by 3px and squeezed
+   the mark it was describing. Two numbers in one 45px cell is the other way to
+   get this wrong: with the cap at two marks, a `×N` on the second chip lands in
+   the same corner as the cell badge. The `> span:not(.cal-ico)` rule above does
+   the hiding; this note is here so nobody "restores" the count that moved. */
+.cal-month--compact .cal-cell-events > .cal-chip > span.cal-chip-x{display:none;}

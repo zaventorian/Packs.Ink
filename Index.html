@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=463">
+<link rel="stylesheet" href="styles.css?v=465">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -41015,8 +41015,12 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
 // Seven columns on a 390px phone gives each day ~48px, which fits a dot and
 // nothing else — fine for "when is it", useless for "what is it". The list
 // answers both, and this is a phone feature first.
-// How many events a month cell draws before it collapses the rest into "+N".
-const CAL_CELL_MAX = 3;
+// How many marks a month cell draws before the rest becomes a corner count.
+// ⚠ TWO, not three, and the number is measured. A compact cell is ~45px wide, so
+// three marks share it at 13px each — too small to tell a shield from a hexagon,
+// which is the one thing a mark is for. Two read at ~21px. Dropping to two costs
+// nothing, because the count no longer occupies a slot (see .cal-cell-more).
+const CAL_CELL_MAX = 2;
 // The full grid's cell is taller, and since the day number moved out of the flow
 // and into the corner it has one more row to spend - see .cal-cell in styles.css.
 const CAL_CELL_MAX_FULL = 4;
@@ -41045,14 +41049,26 @@ const CalendarMonthView = ({month, events, today, onOpen, onOpenDay, onMonth, co
     </div>
     <div class="cal-grid">
       ${weeks.map((week, wi) => week.map(day => {
-        // ⚠ A rail cell is ~44px wide and holds THREE dots, or two dots and a
-        // "+N" — never three and a "+N". The 19th has four events, so the "+1"
-        // wrapped to a second line and, because a grid row takes the height of
-        // its tallest cell, inflated that entire week by 7px. Capping at two
-        // when there is an overflow marker keeps every week the same height.
+        // The old cap had to drop by one whenever there was an overflow marker,
+        // because the marker was a flex child: a rail cell fits three dots, or
+        // two dots and a "+N", never both, and the 19th wrapped to a second line
+        // and — a grid row taking the height of its tallest cell — inflated that
+        // whole week by 7px. The marker is out of flow now (a corner badge), so
+        // the cap is flat and the one-row invariant holds by construction.
         const items = calCellItems(day.events, art, day.date);
-        const max = compact ? CAL_CELL_MAX : CAL_CELL_MAX_FULL;
-        const cap = compact && items.length > max ? max - 1 : max;
+        const cap = compact ? CAL_CELL_MAX : CAL_CELL_MAX_FULL;
+        const shown = items.slice(0, cap);
+        // ⚠ Compact draws ONE number and it is the day's TOTAL, never what is
+        // hidden. A `×3` group mark hides nothing, so a hidden-count reads "0"
+        // over a cell holding three qualifiers — and the whole reason the count
+        // exists is that one mark is standing for three things. The full grid
+        // keeps "+N more": there its marks carry their own `×N` inline, beside a
+        // label, where a two-field phrase has the room to read as one.
+        const hiddenEvents = day.events.length
+          - shown.reduce((a, it) => a + (it.group ? it.events.length : 1), 0);
+        const cellCount = compact
+          ? (day.events.length > shown.length ? String(day.events.length) : "")
+          : (hiddenEvents > 0 ? "+" + hiddenEvents + " more" : "");
         return html`<div key=${day.date}
         class=${"cal-cell" + (day.inMonth ? "" : " out") + (day.date === today ? " today" : "")}>
         <div class="cal-cell-num">${day.day}</div>
@@ -41061,7 +41077,7 @@ const CalendarMonthView = ({month, events, today, onOpen, onOpenDay, onMonth, co
                 together — two boxes, one of them the unstyled single line this
                 replaced. The name stays reachable without a mouse through
                 aria-label, which is what it was really there for. */""}
-          ${items.slice(0, cap).map(it => it.group
+          ${shown.map(it => it.group
             ? html`<button key=${it.key} type="button" class="cal-chip cal-chip--group"
                 aria-label=${calGroupKindLabel(it.kind, it.events.length) + " on " + calDayLabel(day.date) + " - list them"}
                 ...${hover.bindMany(it.events, day.date)}
@@ -41077,10 +41093,10 @@ const CalendarMonthView = ({month, events, today, onOpen, onOpenDay, onMonth, co
           ${/* The overflow marker asks the same question the grouped chip does, so
                 it opens the same list rather than being the one thing in the cell
                 you cannot click. */""}
-          ${items.length > cap && html`<button type="button" class="cal-cell-more"
+          ${cellCount && html`<button type="button" class="cal-cell-more"
             aria-label=${`${day.events.length} events on ${calDayLabel(day.date)} - list them`}
             onClick=${() => { hover.close(); onOpenDay && onOpenDay(day.date, day.events); }}
-            >+${items.length - cap}${compact ? "" : " more"}</button>`}
+            >${cellCount}</button>`}
         </div>
       </div>`;
       }))}
