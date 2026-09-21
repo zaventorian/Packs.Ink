@@ -3895,6 +3895,26 @@ BEFORE the digest for the same reason `catalog-watch.yml` tests its ack layer fi
 drifted constant or a blown embed limit fails by posting something wrong, not by failing.
 
 
+## The guards RUN now — `.github/workflows/guards.yml` (2026-09-21)
+
+The repo carries **52 guard tests** (35 `scripts/test_*.mjs`, 17 `scripts/test_*.py` +
+`scripts/elo/test_*.py`) and until this workflow **nothing executed a single one of them**
+— every one was "run it when you remember", which for a file this size means a silent
+regression ships between the day a guard is written and the day someone thinks to run it.
+It runs all 52 on every push and PR.
+
+- **All 52 were green when it landed**, so it starts from a true baseline rather than
+  normalising a red build — which is the failure this repo already names elsewhere ("a red
+  job everyone learns to ignore is worse than a script you run when you touch the catalog").
+- **⚠ Every guard is offline BY CONSTRUCTION, and that is the entry requirement.** No
+  network, no secrets. The nine Python guards that name `SUPABASE_*` set them via
+  `os.environ.setdefault()` with stub values. A guard needing a real key is one that goes
+  red for reasons nobody can fix from a PR, so don't add one.
+- **It reports EVERY failure, not the first.** Both steps loop, print the failing guard's
+  tail, emit a `::error` annotation, and exit non-zero at the end — stopping early means a
+  second broken guard hides behind the first for another round.
+- The Python step is `if: always()`, so a node failure doesn't hide the Python results.
+
 ## Ops
 
 ### ETL reliability (post 2026-05-24 rework)
