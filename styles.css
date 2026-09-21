@@ -3385,7 +3385,20 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .sc-msg-err{color:var(--red);}
 .sc-results{margin-top:8px;}
 .sc-results-head{font-size:10px;text-transform:uppercase;letter-spacing:0.4px;
-  color:var(--text-muted);font-weight:700;margin-bottom:5px;}
+  color:var(--text-muted);font-weight:700;margin-bottom:5px;
+  display:flex;align-items:center;gap:8px;}
+/* The count is the part that gives: a long "near Downtown Toronto (CN Tower…)"
+   must not push the toggle off the edge of the embedded tile. */
+.sc-results-count{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sc-viewtoggle{display:flex;flex:0 0 auto;gap:0;border:1px solid var(--border);
+  border-radius:999px;overflow:hidden;margin-left:auto;}
+.sc-viewtoggle-btn{background:none;border:0;border-radius:0;cursor:pointer;
+  padding:3px 9px;font:inherit;font-size:9.5px;font-weight:700;letter-spacing:0.4px;
+  text-transform:uppercase;color:var(--text-muted);}
+.sc-viewtoggle-btn.on{background:var(--accent);color:#fff;}
+.sc-viewtoggle-btn:not(.on):hover{color:var(--text);}
+/* Hidden, not unmounted — see the note at the render site. */
+.sc-results--map .sc-list{display:none;}
 .sc-list{display:flex;flex-direction:column;gap:4px;max-height:340px;overflow-y:auto;}
 /* A tile is one SERIES (a store's recurring slot), so it stacks: the summary row
    on top, then the optional expanded date list beneath it. */
@@ -11041,6 +11054,48 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
   transform:translate(-50%,-50%);background:var(--accent);
   border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.5);pointer-events:none;}
 .cal-map-credit{font-size:9px;color:var(--text-muted);margin-top:3px;text-align:right;}
+
+/* The event finder's map view. Shares CalendarMiniMap's tile treatment — the
+   dark-theme filter especially, or the map is a bright rectangle in a dark
+   page — but its pins are BUTTONS, not decoration, so they take a hit area. */
+.sc-map{margin-top:10px;}
+.sc-map-box{position:relative;overflow:hidden;border-radius:8px;
+  border:1px solid var(--border);background:var(--bg-surface);width:100%;}
+.sc-map-box img{position:absolute;display:block;border:0;max-width:none;image-rendering:auto;}
+html[data-mode="dark"] .sc-map-box img{filter:brightness(0.82) saturate(0.85);}
+.sc-map-pin{position:absolute;transform:translate(-50%,-50%);
+  /* 22px, not the 13px the calendar's decorative pin uses: this one is tapped,
+     and the site's documented mobile floor is 36px of hit area — which the
+     padding-free box cannot give, so the ::after below extends it. */
+  min-width:22px;height:22px;padding:0 5px;border-radius:999px;
+  background:var(--accent);color:#fff;border:2px solid #fff;
+  box-shadow:0 1px 4px rgba(0,0,0,0.5);cursor:pointer;z-index:1;
+  font-size:11px;font-weight:700;line-height:1;display:flex;align-items:center;
+  justify-content:center;font-variant-numeric:tabular-nums;}
+.sc-map-pin::after{content:"";position:absolute;left:50%;top:50%;
+  width:36px;height:36px;transform:translate(-50%,-50%);}
+.sc-map-pin.many{background:var(--accent);}
+.sc-map-pin.on{z-index:3;transform:translate(-50%,-50%) scale(1.25);
+  box-shadow:0 0 0 3px var(--bg-modal),0 2px 8px rgba(0,0,0,0.6);}
+.sc-map-pin:hover,.sc-map-pin:focus-visible{z-index:2;}
+.sc-map-callout{margin-top:6px;border:1px solid var(--border);border-radius:8px;
+  background:var(--bg-modal);overflow:hidden;max-height:168px;overflow-y:auto;}
+.sc-map-callout-row{display:flex;width:100%;align-items:center;gap:8px;
+  padding:8px 10px;background:none;border:0;border-radius:0;cursor:pointer;
+  text-align:left;color:var(--text);font:inherit;font-size:12px;}
+.sc-map-callout-row+.sc-map-callout-row{border-top:1px solid var(--border);}
+.sc-map-callout-row:hover{background:var(--bg-surface);}
+.sc-map-callout-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
+.sc-map-callout-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* The line that makes two rows from one shop distinguishable — see the note at
+   subOf. Muted, but never dropped on narrow widths for that reason. */
+.sc-map-callout-sub{font-size:10px;color:var(--text-muted);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;}
+.sc-map-callout-go{color:var(--accent);flex:0 0 auto;}
+.sc-map-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.sc-map-foot .cal-map-credit{margin-left:auto;}
+.sc-map-missing{font-size:10px;color:var(--text-muted);}
+.sc-map-empty{padding:18px 10px;text-align:center;font-size:12px;color:var(--text-muted);}
 
 /* ── what comes out that day ──────────────────────────────────────────────── */
 .cal-products{margin-top:14px;padding:9px 11px;border:1px solid var(--border);

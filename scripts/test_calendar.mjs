@@ -58,6 +58,11 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab('const searchNorm = (s) => (s||"")', '/g, "");'),
   grab("const calMatchesQuery = (ev, q) => {", NL + "};"),
   grabLine("const OSM_TILE_PX = "),
+  // osmTileLayout projects through osmWorldFrac, so both come with it. The map
+  // geometry's own cases live in test_event_map.mjs; these stay because the
+  // calendar is what renders a map today.
+  grabLine("const OSM_LAT_MAX = "),
+  grab("const osmWorldFrac = (lat, lng) => {", NL + "};"),
   grab("const osmTileLayout = (lat, lng, zoom, w, h) => {", NL + "};"),
   grabLine("const osmTileUrl = "),
   grabLine("const osmViewUrl = "),
