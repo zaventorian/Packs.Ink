@@ -1836,6 +1836,114 @@ ok("the graded tile isolates its version badge",
     run({"packsink:cal:panelView": "month", [STAMP]: "1"}) === "month");
 }
 
+// -- the PAGE opens on the month grid too -----------------------------------
+// Same flip, same trap, one day later: the mode is persisted on every mount, so
+// the default reaches nobody who has ever opened /calendar. Three ways this
+// fails silently — the stamp never fires, the stamp fires every time (so a
+// deliberate List pick snaps back on the next reload), or a shared ?cv=list
+// link spends somebody else's one free move on its way past.
+{
+  const body = grab("const calReadViewPref = (seed) => {", NL + "};")
+    .replace("const calReadViewPref = ", "").replace(/;\s*$/, "");
+  // The consts have to come along, or the body throws on an undefined name and
+  // its own `catch { return "month"; }` swallows it — every case would then
+  // "pass" while measuring nothing.
+  const keys = grabLine("const CAL_VIEW_LS = ") + NL
+    + grabLine("const CAL_VIEW_MODES = ") + NL
+    + grabLine("const CAL_VIEW_MONTH_KEY = ");
+  const STAMP = (/"([^"]+)"/.exec(grabLine("const CAL_VIEW_MONTH_KEY = ")) || [])[1];
+  ok("the page's stamp key was found, so the cases below are really stamped", !!STAMP);
+  const run = (init, seed) => {
+    const st = {...init};
+    const ls = {getItem: (k) => (k in st ? st[k] : null), setItem: (k, v) => { st[k] = String(v); }};
+    return {v: new Function("localStorage", "seed", keys + NL + "return (" + body + ")(seed);")(ls, seed),
+            st};
+  };
+  ok("(the harness really runs the helper, not its catch)",
+    run({"packsink:cal:view": "timeline", [STAMP]: "1"}).v !==
+    run({"packsink:cal:view": "month", [STAMP]: "1"}).v);
+  ok("a fresh visitor opens on the month grid", run({}).v === "month");
+  ok("and a browser holding the old list default is moved once",
+    run({"packsink:cal:view": "list"}).v === "month");
+  ok("but the stamp fires ONCE - a deliberate list pick sticks",
+    run({"packsink:cal:view": "list", [STAMP]: "1"}).v === "list");
+  ok("timeline is left alone as well",
+    run({"packsink:cal:view": "timeline", [STAMP]: "1"}).v === "timeline");
+  // ⚠ A ?cv= link wins AND must not burn the stamp on the way through, or
+  // sending someone a list link permanently costs them the new default.
+  const seeded = run({}, "list");
+  ok("a ?cv= link still wins", seeded.v === "list");
+  ok("and it does not spend the one free move", !seeded.st[STAMP]);
+  ok("an unknown ?cv= falls through to the default rather than rendering nothing",
+    run({}, "grid").v === "month");
+}
+
+// -- "follow a store" sits beside "SCs near me" -----------------------------
+// The two halves of "which shops are mine": a radius applied once, and a shop
+// added for good. The action lived only inside the My-calendar drawer, one
+// click out of sight, which is the whole reason it was asked for.
+{
+  const view = grab("function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){", NL + "}");
+  // ⚠ Anchored on the chip's own markup, not on the words: the header
+  // carries a COMMENT saying "SCs near me" too, and matching that one makes the
+  // gap test below meaningless.
+  const near = view.indexOf("<span>SCs near me</span>");
+  const follow = view.indexOf("cal-follow-add");
+  ok("the button is rendered on the page", follow > 0);
+  ok("immediately after the near chip, not in some other row",
+    near > 0 && follow > near && view.slice(near, follow).split("</button>").length === 2);
+  ok("it opens the finder", /cal-follow-add[\s\S]{0,420}onFindEvents\(\)/.test(view));
+  // ⚠ Gated: without a finder to open it is a dead control, and nothing
+  // errors — it just does nothing when clicked.
+  ok("and is gated on there being a finder to open",
+    /\$\{onFindEvents && html`<button[^`]*cal-follow-add/.test(view));
+  // The drawer keeps its own copy: that is where you go to MANAGE the list.
+  ok("the drawer's own find button is untouched", /cal-follow-find/.test(view));
+}
+
+// -- htm does not decode HTML entities --------------------------------------
+// The drawer's button literally read "Find &amp; follow more stores" on screen,
+// and had since it shipped: htm is a template tag, not an HTML parser, so an
+// entity written in a template is five characters of text. Nothing errors, and
+// the same trap already cost this page its collapse arrows once.
+{
+  const view = grab("function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){", NL + "}");
+  ok("no HTML entity is written into the calendar's markup",
+    !/&(amp|times|nbsp|mdash|rarr|lt|gt|quot|#\d+);/.test(view));
+  // The other half of the same trap: htm COLLAPSES the newline between a
+  // closing tag and the word after it, so a link at the end of a line ran
+  // straight into the next word: "Sign inand they follow you to your phone".
+  // ${" "} is the fix, and the page already used it elsewhere.
+  ok("and a sentence never loses the space after a link",
+    !/<\/(button|a|strong|code)>[\r\n]+ *[A-Za-z]/.test(view));
+}
+
+// -- one casing rule for the page's controls --------------------------------
+// Cinzel draws lowercase as small capitals, so this is what makes "SCs near me"
+// read as SCS NEAR ME without a text-transform, and what stops one row of
+// controls looking like three unrelated widgets. Failure is purely visual, so
+// nothing else would ever catch it.
+{
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  const rule = /\.cal-near-chip,[^{]*\{\s*font-family:'Cinzel',serif;[^}]*\}/.exec(css);
+  ok("the calendar's controls share one face", !!rule);
+  for(const sel of [".cal-near-chip", ".cal-region-chip", ".cal-follow-toggle", ".cal-act",
+                    ".cal-modes button", ".cal-month-today"])
+    ok("  " + sel + " is in it", rule && rule[0].includes(sel));
+  // ⚠ A Cinzel numeral beside a Cinzel word reads as part of the word
+  // rather than as a tally, and that rule has to be declared AFTER the one it
+  // takes the face back from.
+  const body = css.indexOf(".cal-chip-n,.cal-region-n,.cal-near-chip em,.cal-follow-n,");
+  ok("the counts take the body face back", body > 0);
+  ok("and do it after the rule they have to beat", rule && body > rule.index);
+  // ⚠ CONTENT never joins in. A store's name is a proper noun set as it is
+  // written -- the timeline's lane names already follow this.
+  ok("the lede and the event titles stay in the body face",
+    !/\.cal-lede[^{]*\{[^}]*Cinzel/.test(css) && !/\.cal-row-title[^{]*\{[^}]*Cinzel/.test(css));
+  ok("and so does a followed shop's name",
+    !/\.cal-follow-line[^{]*\{[^}]*Cinzel/.test(css));
+}
+
 // -- following a store is a SUBSET, from the result tile ---------------------
 // The finder's Follow was all-or-nothing, so the one control that puts a shop's
 // Set Championship on your calendar also put its weeklies there, and the subset

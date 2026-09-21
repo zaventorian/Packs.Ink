@@ -4948,8 +4948,17 @@ the plain name says what the page is to somebody who has never seen it.
 product drops not tied to a set, Disney Lorcana Challenge weekends, Challenge
 Championship Qualifiers, plus every event at the stores you follow. List view and
 month grid, timeline, five filter chips, `.ics` + Google Calendar export.
-Guarded by `node scripts/test_calendar.mjs` (355 checks).
+Guarded by `node scripts/test_calendar.mjs` (507 checks).
 
+- **⚠ The page OPENS ON THE MONTH GRID** (2026-09-21, Zaven), as the home panel
+  has since 2026-09-20. Same flip, same trap: `mode` is persisted on every mount,
+  so a plain default change reaches NOBODY who has ever opened `/calendar` — the
+  home LAYOUT defaults' lesson. `calReadViewPref` is the one-shot stamp
+  (`packsink:cal:viewMonth`), and it is **STAMPED rather than coerced** so a later
+  deliberate pick of List sticks. **⚠ A `?cv=` link is checked BEFORE the stamp is
+  spent**, or sending somebody a list link would permanently cost them the new
+  default. Pinned in `test_calendar.mjs` beside the panel's copy — every way this
+  fails is silent.
 - **Two sources that NEVER mix.** `calendar_events` (migration 139) is curated by
   hand; `lorcana_events` is the live RPH feed and contributes **only** what you
   followed. There are ~17k upcoming events — a month grid carrying every Tuesday
@@ -5715,6 +5724,31 @@ saved events' — the lack of consistancy in cases. make it more visually asteti
   a STRUCTURAL label is uppercase with tracking** (it names a part of the chart,
   not a thing you press — a lane, a column head, a day-of-week). Initialisms keep
   their capitals on both sides (DLCs, CCQs, SCs, .ics).
+  - **⚠ SUPERSEDED FOR THIS PAGE 2026-09-21** (Zaven: *"make it all caps and match
+    the font — same with all text on this page actually, where it makes sense"*).
+    The sentence-case half only ever held in the SOURCE: the kind chips, the
+    Filters button and the region toggle were already set in **Cinzel**, whose
+    lowercase glyphs are drawn as small capitals, so they RENDERED as caps while
+    the mode buttons, the near chip, the header actions, Today, the day-of-week
+    row and the drawer's chips sat beside them in Nunito sentence case. One row,
+    three different-looking widgets. Every control and structural label on
+    `/calendar` now shares that face (one rule, declared under `.cal-near-chip` in
+    styles.css), which is why **"SCs near me" reads SCS NEAR ME with no
+    `text-transform`** — the stutter the lane-label note below worries about is a
+    `text-transform:uppercase` problem, and small caps do not have it.
+  - **⚠ CONTENT never joins in**, and that half of the old rule stands: event
+    titles, a followed shop's name, the lede, the search box and the prose links
+    inside sentences all stay in the body face. A shop's name is a proper noun set
+    as it is written — the same rule the timeline's lane names follow.
+  - **⚠ A NUMBER never joins in either.** A Cinzel numeral beside a Cinzel word
+    reads as part of the word rather than as a tally, so every count takes the body
+    face back — and that rule has to be declared AFTER the one it is taking it
+    from. `.cal-spans` ("6 mo / 12 mo / 24 mo") is two thirds numeral and is left
+    out of the Cinzel set entirely.
+  - Cinzel's small caps sit wider than Nunito at the same size, so the tightest
+    controls give ~1px back. Measured after: no horizontal overflow at 360 / 375 /
+    desktop, and "Follow a store" wraps to its own line at 375 rather than pushing
+    the row off the edge.
 - **"My stores + saved events" is now "My calendar"**, and it moved from a line of
   its own into the END of the filter row. It named two of the four things in the
   drawer (a pinned series and a hidden event are in there too), it was the longest
@@ -5727,6 +5761,14 @@ saved events' — the lack of consistancy in cases. make it more visually asteti
   uppercase, and "SCS NEAR ME" is an initialism the rule turns into a stutter. The
   chip that switches the lane on still says "SCs near me", and the exported
   picture's caption names the radius.
+- **"Follow a store" sits beside the "SCs near me" chip** (2026-09-21, Zaven). The
+  two are the same question answered opposite ways round — a radius applied once
+  against a shop added for good — so as a PAIR they explain each other. It opens
+  the same finder `onFindEvents()` the drawer's "Find & follow more stores" opens,
+  and the drawer keeps its copy: that is where you go to MANAGE the list, not to
+  add to it. **This does not reopen the name-alike problem the header note above
+  describes** — that was two controls both called some variant of "near me"; these
+  two say different things.
 - **The home panel's title is two lines in a 240px rail, on purpose.** "LORCANA
   CALENDAR" does not fit one line beside four tool buttons, and both alternatives
   are worse: wrapping the TOOLS costs more height than the second line, and

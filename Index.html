@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=461">
+<link rel="stylesheet" href="styles.css?v=462">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -21794,7 +21794,7 @@ function GradedTosModal({onAccept, onDismiss}){
         The data is aggregated from public marketplace sales, provided “as is” for
         informational purposes (it may be inaccurate or incomplete), and access may be
         revoked at any time. Full terms are on our ${" "}
-        <a href="/privacy#graded-data" target="_blank" rel="noopener">privacy &amp; terms page</a>.
+        <a href="/privacy#graded-data" target="_blank" rel="noopener">privacy & terms page</a>.
       </p>
       <label class="graded-tos-check">
         <input type="checkbox" checked=${agree} onChange=${e=>setAgree(e.target.checked)}/>
@@ -41445,6 +41445,28 @@ const CalendarAdminModal = ({row, onClose, onSaved}) => {
 const CAL_KINDS_LS = "packsink:cal:kinds";
 const CAL_VIEW_LS = "packsink:cal:view";
 const CAL_VIEW_MODES = ["list", "month", "timeline"];
+// ⚠ Default flipped list → MONTH 2026-09-21 (Zaven), the same call the home
+// panel took the day before. The mode is persisted on every mount, so a plain
+// default change reaches NOBODY who has ever opened this page — the same trap
+// the home LAYOUT defaults hit. Hence a one-shot stamp, and STAMPED rather than
+// coerced: a later deliberate pick of List has to stick.
+// ⚠ A ?cv= link still wins, and is checked BEFORE the stamp is spent — a
+// shared list link must not silently burn somebody else's one free move.
+const CAL_VIEW_MONTH_KEY = "packsink:cal:viewMonth";
+const calReadViewPref = (seed) => {
+  if(CAL_VIEW_MODES.includes(seed)) return seed;
+  try {
+    const raw = localStorage.getItem(CAL_VIEW_LS);
+    if(!localStorage.getItem(CAL_VIEW_MONTH_KEY)){
+      localStorage.setItem(CAL_VIEW_MONTH_KEY, "1");
+      if(raw !== "month") localStorage.setItem(CAL_VIEW_LS, "month");
+      return "month";
+    }
+    return CAL_VIEW_MODES.includes(raw) ? raw : "month";
+  } catch { return "month"; }
+};
+// How much of the season the timeline draws at once. 12 is one competitive
+// season; 6 is a quarter-by-quarter read and 24 spans a rotation.
 // How much of the season the timeline draws at once. 12 is one competitive
 // season; 6 is a quarter-by-quarter read and 24 spans a rotation.
 const CAL_TL_SPANS = [6, 12, 24];
@@ -41764,10 +41786,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   // Same treatment the Cards browser gives its filter: a keystroke paints at
   // once and the (whole-calendar) re-filter lands a frame later.
   const dQuery = React.useDeferredValue(query);
-  const [mode, setMode] = useState(() => {
-    const raw = seed.cv || (() => { try { return localStorage.getItem(CAL_VIEW_LS); } catch { return null; } })();
-    return CAL_VIEW_MODES.includes(raw) ? raw : "list";
-  });
+  const [mode, setMode] = useState(() => calReadViewPref(seed.cv));
   const [month, setMonth] = useState(() =>
     /^\d{4}-\d{2}$/.test(seed.cm || "") ? seed.cm : calMonthOf(calTodayYmd()));
   const [sel, setSel] = useState(null);
@@ -41940,14 +41959,15 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           stores you follow.
         </p>
       </div>
-      ${/* ⚠ "Near me" USED to sit here, beside a "SCs near me" chip two rows
+      ${/* ⚠ "Near me" USED to sit HERE, beside a "SCs near me" chip two rows
             down — two controls with the same name doing different jobs, which
-            is most of what made this header read as a page of filters. The
-            finder (search RPH, follow shops) is a thing you do to YOUR list of
-            stores, so it moved into the My-calendar drawer, which is the
-            drawer about exactly that. The chip stays where it is: it is a
-            FILTER, and it already opens the finder itself when no postal code
-            is set. */""}
+            is most of what made this header read as a page of filters. It is
+            back on the page as "Follow a store" (2026-09-21, Zaven), but in
+            the filters row NEXT TO that chip rather than up here: the two
+            answer the same question opposite ways round, so as a pair they
+            explain each other, where as a name-alike two rows apart they only
+            competed. The drawer keeps its own copy — that is where you go to
+            MANAGE the list, not to add to it. */""}
       <div class="cal-header-actions">
         <button type="button" class=${"cal-follow-toggle" + (showStores ? " on" : "")}
           aria-expanded=${showStores ? "true" : "false"}
@@ -42051,6 +42071,19 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
         ${uiIcon("trophy", 12)}<span>SCs near me</span>
         ${near && nearAdded > 0 && html`<em>${nearAdded}</em>`}
       </button>
+      ${/* ⚠ The finder's twin, beside the chip that answers the same
+            question the other way round: "SCs near me" is every shop within a
+            radius for ONE event type, this is how a shop becomes permanently
+            yours. It reads as a pair, which is why it sits here and not only
+            in the My-calendar drawer — the drawer hides it behind a click,
+            and following a shop is the single thing that makes this page
+            personal. Not a duplicate label: the old "Near me" button that used
+            to be in the header WAS one. */""}
+      ${onFindEvents && html`<button type="button" class="cal-near-chip cal-follow-add"
+        title="Search Ravensburger Play for events near you, and follow the shops you play at"
+        onClick=${() => onFindEvents()}>
+        ${uiIcon("store", 12)}<span>Follow a store</span>
+      </button>`}
       <div class="cal-filters2-end">
         ${/* ⚠ "My calendar" USED to live here. It moved up into the header
               row: it is not a filter — it is YOUR list, the one thing on this
@@ -42087,7 +42120,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
               place it was reachable once you followed anything. */""}
         ${onFindEvents && followCount > 0 && html`<button type="button" class="cal-act cal-act--find cal-follow-find"
           title="Search Ravensburger Play for events near you, and follow the shops you play at"
-          onClick=${() => onFindEvents()}>${uiIcon("store", 13)} Find &amp; follow more stores</button>`}
+          onClick=${() => onFindEvents()}>${uiIcon("store", 13)} Find & follow more stores</button>`}
         ${followCount === 0
           ? html`<p class="muted cal-follow-empty">
               Nothing followed yet. <button type="button" class="cal-linkish"
@@ -42143,7 +42176,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
                   onClick=${() => subs.remove("hide", s.ref)}>×</button></li>`)}
             </ul>`}
         ${!user && followCount > 0 && html`<p class="muted cal-follow-signin">
-          Saved on this device only. <button type="button" class="cal-linkish" onClick=${onSignIn}>Sign in</button>
+          Saved on this device only. <button type="button" class="cal-linkish" onClick=${onSignIn}>Sign in</button>${" "}
           and they follow you to your phone.</p>`}
       </div>
     </div>`}
@@ -42176,7 +42209,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
                 The last thing was <strong>${last.title}</strong> on ${calDayLabel(last.starts_on)} —
                 <button type="button" class="cal-linkish" onClick=${() => setShowPast(true)}>show past events</button>.</p>`}
               ${isAdmin && html`<p class="muted">
-                <button type="button" class="cal-linkish" onClick=${() => setEditing({})}>Add the next set's dates</button>
+                <button type="button" class="cal-linkish" onClick=${() => setEditing({})}>Add the next set's dates</button>${" "}
                 as soon as Ravensburger announces them.</p>`}
             </div>`;
           })()
