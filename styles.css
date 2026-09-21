@@ -608,13 +608,51 @@ input[type="checkbox"]:disabled{opacity:0.4;cursor:not-allowed;}
   .profile-btn-name{display:none;}
   /* Fill the button properly instead of leaving a small disc in a big circle. */
   .profile-btn .profile-avatar-wrap{width:28px;height:28px;}
-  .profile-btn .profile-avatar-wrap > img,
-  .profile-btn .profile-avatar-wrap > span{width:28px !important;height:28px !important;}
+  /* ⚠ Names the avatar's own two elements. It used to read `> img, > span`,
+     and the BADGES are spans too — so `width:28px !important` blew the 13px
+     gear up to 28x28, a circle as big as the avatar sitting on top of it.
+     That was most of what "move the gear off the image" was reacting to
+     (measured 2026-09-21: 28x28 against an intended 13x13). Never widen this
+     back to `> span`. */
+  .profile-btn .profile-avatar-wrap > .avatar-clip,
+  .profile-btn .profile-avatar-wrap > .avatar-initial{width:28px !important;height:28px !important;}
   /* Badge tucks onto the avatar's corner rather than hanging outside the
      button — an overhang is what made the row look wider than it measured. */
-  .profile-btn .profile-gear-badge{top:-2px;right:-2px;}
+  .profile-btn .profile-gear-badge{bottom:-2px;left:-2px;top:auto;right:auto;}
   .top-nav-right .theme-toggle{min-height:36px;width:36px;padding:0;font-size:14px;
     display:inline-flex;align-items:center;justify-content:center;}
+  /* ⚠ BELOW `.top-nav-right .theme-toggle` on purpose — that rule is the SAME
+     specificity (0,2,0) and sets `display:inline-flex`, so declared above it
+     this lost on source order and every bubble stayed visible with nothing to
+     show for the change. Cost a debugging pass; don't move it back up. */
+  /* ⚠ ONE bubble per row on a phone, and this is load-bearing for the TABS,
+     not a tidy-up: the cluster's width is the widest of its two rows, so two
+     bubbles anywhere made it 80px, and at 375px that left the tabs 211px
+     against a row 2 that wanted 256 — CALENDAR hung 53px past the edge. At
+     36px (avatar over theme) row 2 has 19px of SPARE at unchanged 8.5px type.
+     Measured; shortening labels and tightening gutters could not do it alone.
+     ⚠ All three have a row in the settings popover (the avatar opens it) and
+     MUST keep one — hiding a control whose only other home is this bubble
+     makes it unreachable on the device it exists for. Install is gone from
+     row 1 too, not just the copy-link: leaving it there keeps that row two
+     wide in a mobile BROWSER, which is every visitor who has not installed,
+     so the fix would have worked only inside the installed app.
+     Desktop keeps all three — there the cluster is one row and has the room. */
+  .top-nav-right .theme-toggle--link,
+  .top-nav-right .theme-toggle--help{display:none;}
+  /* ⚠ Install is the ONE bubble that stays on a phone — it is the whole point
+     of the top bar for someone who has not installed yet, and it removes itself
+     the moment they do (`!isStandalone`), so it costs the installed app nothing.
+     To keep the cluster 36px it TAKES the theme bubble's slot instead of sitting
+     beside it: two bubbles in either row is the 80px that pushes CALENDAR off
+     the tabs. Theme keeps a whole section in the ⚙ menu and its own
+     `showTopBarTheme` pref, so nothing is lost — and the trade is temporary by
+     construction, since it ends at install. */
+  .top-nav-right-row--bubbles:has(.theme-toggle--install)
+    > .theme-toggle:not(.theme-toggle--install):not(.theme-toggle--help){display:none;}
+  /* Painted in the accent so it reads as an invitation rather than one more
+     grey circle — it is the only conversion control in the bar. */
+  .top-nav-right .theme-toggle--install{color:var(--accent);border-color:var(--accent);}
   /* Pin the settings popover to the viewport on mobile so it isn't clipped
      by ancestor overflow rules. Coordinates anchored to top-right of screen,
      not the avatar button. `top` and `right` honor safe-area-inset so the
@@ -2919,7 +2957,33 @@ button.graded-home-title{cursor:pointer;}
    home layout, offline images, sign-out) live behind the same button. Purely
    decorative — the button is still the only click target. */
 .profile-avatar-wrap{position:relative;display:inline-flex;flex-shrink:0;}
-.profile-gear-badge{position:absolute;top:-4px;right:-5px;
+/* ⚠ The avatar is a 5:7 CARD in a circle, and `object-fit:cover` alone cannot
+   keep the name plate out: cover shows 5/7 = 71.4% of the card's height while
+   the art only runs to ~57%, so even `object-position:top` (the most art-ward
+   a cover crop can be) still catches the plate and the ink band under it —
+   which is what "centre the bubble over the card art, not the name of card and
+   yellow space" was describing (Zaven, 2026-09-21). The fix is to ZOOM, which
+   needs a clipping box the image can be bigger than, hence `.avatar-clip`.
+   At width:150% the card is 2.1 boxes tall, so the square shows 47.6% of it,
+   and top:-15% lands that window on roughly 7%-55% — the art, ending just
+   above the plate. ⚠ Only for a CARD (`--card`): a Google photo is already a
+   square portrait and a 150% zoom would crop someone's face off.
+   ⚠ The clip stays INSIDE `.profile-avatar-wrap` and the badges OUTSIDE it —
+   the wrap is what the gear and the alert dot are positioned against, so
+   clipping the wrap itself would cut both of them in half. */
+.avatar-clip{position:relative;display:block;flex:0 0 auto;overflow:hidden;
+  border-radius:50%;background:var(--bg-surface);}
+.avatar-clip > img{position:absolute;left:0;top:0;width:100%;height:100%;
+  object-fit:cover;object-position:center;}
+.avatar-clip > img.avatar-img--card{width:150%;height:auto;left:-25%;top:-15%;}
+.avatar-initial{border-radius:50%;background:var(--accent-glow);color:var(--accent);
+  display:inline-flex;align-items:center;justify-content:center;font-weight:700;
+  flex:0 0 auto;}
+/* ⚠ BOTTOM-LEFT, off the art (Zaven, 2026-09-21) — at the top-right it sat
+   over the character's face, which is the half of a card avatar worth seeing.
+   The alert dot is top-LEFT, so the two corners stay apart; don't move either
+   onto the other's side. */
+.profile-gear-badge{position:absolute;bottom:-4px;left:-5px;
   width:13px;height:13px;border-radius:50%;box-sizing:border-box;
   background:var(--bg-surface);border:1px solid var(--border);color:var(--muted);
   display:flex;align-items:center;justify-content:center;}
@@ -3426,10 +3490,23 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
    width they divide into, floored at 44px. That is frankly a thumbnail rather
    than a readable card — the deliberate trade for "all 7 smaller but visible"
    (Zaven) — and the full art is one tap away on the card page. */
-.home-news-cards{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+/* ⚠ GRID, not wrap-flex, and that is the whole fix for "make these cards all
+   same size" (Zaven, 2026-09-21): as flex items they carried `flex-grow:1`, so
+   a last row holding fewer cards SHARED THE SAME WIDTH BETWEEN FEWER OF THEM —
+   seven cards rendered as five small ones over two big ones. Equal tracks can't
+   do that. `auto-fit` (not auto-fill) is what keeps the few-card case honest:
+   with 1-3 reveals the empty tracks collapse and the cards still fill the row
+   up to their 124px cap, exactly as before; auto-fill would leave them stranded
+   at 44px in a row of phantom columns. ⚠ The track COUNT comes from the card
+   count as `--news-cols` (set where the tile renders), not from auto-fit: with
+   auto-fit the row fills and the remainder is stranded, so seven cards read 6+1
+   in a wide box. Halving gives 4+3 at any width. A missing variable falls back
+   to 4, which is the value every count of 7-8 resolves to anyway. */
+.home-news-cards{display:grid;gap:6px;margin-top:8px;
+  grid-template-columns:repeat(var(--news-cols,4),minmax(44px,1fr));}
 @media (max-width:1100px){ .home-news-cards{display:none;} }
 .home-news-cards:not(:has(.home-news-card:not([hidden]))){display:none;}
-.home-news-card{flex:1 1 44px;min-width:44px;max-width:124px;display:block;padding:0;
+.home-news-card{min-width:0;max-width:124px;display:block;padding:0;
   border:1px solid var(--border);border-radius:8px;background:var(--bg-card);
   overflow:hidden;cursor:pointer;line-height:0;}
 .home-news-card[hidden]{display:none;}
@@ -3683,15 +3760,25 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .home-toolbox{padding:8px 8px 9px;}
 .home-toolbox-title{text-decoration:none;display:block;}
 .home-toolbox-title:hover{text-decoration:underline;}
-.home-toolbox-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;}
-/* ⚠ ONE column in the left rail, which is 240px against the right rail's 360.
-   Two columns there give a chip 108px and its label 64, and the labels want up
-   to 83 — so "Expected Value", "Trade Compare" and "Set Breakdown" all ellipsed,
-   and a clipped name on a NAVIGATION chip is the one thing it cannot afford.
-   Scoped to the column rather than a container query because the rail is a
-   fixed width: moved anywhere wider, the chips pair up again. It costs ~100px
-   of height at the foot of the longest column, which is below the fold anyway. */
-.home-left-col .home-toolbox-grid{grid-template-columns:minmax(0,1fr);}
+/* ⚠ The column count follows the panel's OWN width, not its column, because
+   the panel's width is decided by LAYOUT and no selector can see it: at
+   ≤1100px `.home-left-col` is a wrap-flex whose children carry
+   `width:calc(50% - 7px)` AND `flex-grow:1`, so the toolbox is half a phone
+   wide when it shares a line and the FULL width when it is alone on one.
+   It was `.home-left-col .home-toolbox-grid{1 column}` — written for the
+   240px desktop rail, where two columns give a chip 108px against labels that
+   want up to 83, and a clipped name on a NAVIGATION chip is the one thing it
+   cannot afford. Alone on a mobile line that same rule drew six 333px chips
+   276px tall (reported 2026-09-21, "too spacious"). auto-fit answers both:
+   measured on a 375px phone it is 2 columns at 164px and 159px tall, with 0 of
+   6 labels clipped, and it still resolves to ONE column in the 240px rail
+   (2x150+6 = 306 > 240) and TWO in the 360px right rail, which is what those
+   two already did. ⚠ Do NOT raise the 150px floor past ~165 or the phone's
+   full-width case drops back to one column; do NOT lower it past ~125 or the
+   240px rail starts pairing and ellipsing again. 3-up was measured too and is
+   out: 107px chips clip 5 of the 6 labels. */
+.home-toolbox-grid{display:grid;gap:6px;
+  grid-template-columns:repeat(auto-fit,minmax(150px,1fr));}
 /* ── /gear — the Amazon directory page ─────────────────────────────────── */
 .gear-page{max-width:1080px;}
 .gear-hero{margin:0 0 14px;}
