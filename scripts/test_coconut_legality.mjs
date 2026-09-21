@@ -303,7 +303,16 @@ check("the reveal tile pictures the card", /class="home-news-cards"/.test(tile),
 check("it uses the full card render", /src=\$\{coconutArtUrl\(/.test(tile), true);
 check("it caps how many it pictures",
   /slice\(0,\s*COCONUT_REVEAL_MAX_THUMBS\)/.test(tile), true);
-check("the cap is a small number", COCONUT_REVEAL_MAX_THUMBS >= 1 && COCONUT_REVEAL_MAX_THUMBS <= 4, true);
+// ⚠ Still a CEILING, just a higher one (3 -> 8, 2026-09-20). A weekly Beta
+// cadence has put seven reveals inside one 14-day window, and "have all 7
+// smaller but visible" on desktop is the ask — but this must stay bounded, or
+// a freak run of announcements turns the rail into a wall of thumbnails.
+check("the cap is bounded", COCONUT_REVEAL_MAX_THUMBS >= 1 && COCONUT_REVEAL_MAX_THUMBS <= 10, true);
+// ⚠ And it is DESKTOP-only: the row is display:none below 1100px, which is
+// the half of the change that keeps a phone's tile short. Losing this rule
+// puts seven cards back on the surface they were removed from.
+check("the cards row is hidden on mobile",
+  /@media \(max-width:1100px\)\{\s*\.home-news-cards\{display:none;?\}\s*\}/.test(CSS), true);
 // ⚠ The documented Chrome trap: a no-cors response for this URL is cached
 // separately, and a later canvas-bound request for the SAME url reuses it and
 // fails with naturalWidth 0. Every <img> on coconut art carries this, even the
@@ -326,10 +335,15 @@ check("[hidden] beats the card's own display:block",
   /\.home-news-card\[hidden\]\{display:none;?\}/.test(CSS), true);
 check("the row collapses when every render failed",
   /\.home-news-cards:not\(:has\(\.home-news-card:not\(\[hidden\]\)\)\)\{display:none;?\}/.test(CSS), true);
-// ⚠ The floor is what keeps this honest. Below ~96px a grayscale beta render
-// stops reading as a card at all — the reason the 52px thumbs existed — so
-// three reveals in one window must WRAP, never shrink to share a row.
-check("the card has a min-width floor", /\.home-news-card\{[^}]*min-width:96px/.test(CSS), true);
+// ⚠ There is STILL a floor, it is just no longer 96px. The old number came
+// from "below ~96px a grayscale beta render stops reading as a card", which
+// was written when at most three showed; seven at 96px is 700px inside a 240px
+// rail, so the rail's cards are now frankly thumbnails and the floor only has
+// to stop them collapsing to nothing. The phone, which is where a too-small
+// card would actually mislead, shows none at all.
+check("the card still has a min-width floor",
+  /\.home-news-card\{[^}]*min-width:(\d+)px/.test(CSS)
+    && Number(/\.home-news-card\{[^}]*min-width:(\d+)px/.exec(CSS)[1]) >= 40, true);
 check("and the row wraps rather than squeezing",
   /\.home-news-cards\{[^}]*flex-wrap:wrap/.test(CSS), true);
 

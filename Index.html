@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=457">
+<link rel="stylesheet" href="styles.css?v=461">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2175,14 +2175,19 @@ const lorcanaSetArt = (setName) => {
 // A set logo, sized by its container's height. Renders nothing at all when the
 // set has no logo yet, so a caller can drop it in beside a text title and let
 // the title carry the meaning on its own.
-const SetLogo = ({set, klass, title}) => {
+// ⚠ `eager` exists because a lazy logo sized `height:Npx; width:auto` lays out
+// 0px wide before it loads, and in a horizontal scroller that degenerate box
+// never triggers the fetch — the movers picker's chip rendered as an empty
+// pill, with the file serving 200 the whole time. Pass it for any logo that is
+// on screen at first paint and sized by height.
+const SetLogo = ({set, klass, title, eager}) => {
   const art = lorcanaSetArt(set);
   if(!art) return null;
   // The onError is written out rather than reusing hideBrokenImg, which is
   // declared ~11k lines below this point. It would in fact resolve by the time
   // anything renders, but a reader here cannot tell that without going to look.
   return html`<img class=${"set-logo" + (art.mono ? " set-logo--mono" : "") + (klass ? " " + klass : "")}
-    src=${art.src} alt="" aria-hidden="true" title=${title || set} loading="lazy"
+    src=${art.src} alt="" aria-hidden="true" title=${title || set} loading=${eager ? "eager" : "lazy"}
     onError=${e => { e.currentTarget.style.visibility = "hidden"; }}/>`;
 };
 
@@ -2415,6 +2420,7 @@ const NAV_ICONS = {
     <rect x="11" y="9"  width="3" height="10" rx="0.4"/>
     <rect x="16" y="5"  width="3" height="14" rx="0.4"/>`),
   // ? help — question mark in a circle (paired with the icon tabs)
+  calendar:  _navSvg(html`<rect x="3.4" y="5" width="17.2" height="15.6" rx="2.4"/><path d="M3.4 9.6h17.2"/><path d="M8 3v3.6"/><path d="M16 3v3.6"/><path d="M7.6 13.4h2"/><path d="M11 13.4h2"/><path d="M14.4 13.4h2"/><path d="M7.6 16.8h2"/><path d="M11 16.8h2"/>`),
   faq: _navSvg(html`
     <circle cx="12" cy="12" r="9"/>
     <path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 1-1 1.7"/>
@@ -37115,17 +37121,23 @@ const AutoScrollStrip = ({items, renderItem, keyFor, wrapClass}) => {
 // The last active chip can't be turned off: an empty selection renders an
 // empty banner whose only way back is the very chip you just used to empty it.
 // `noun` fills the tooltips ("Hide Epic movers", "Show Cold Foil printings").
-const MoverChipGroup = ({ariaLabel, order, labels, selected, onToggle, noun}) =>
+// `iconOf(key)` is optional and returns a node drawn before the label. The
+// Chase group passes the rarity marks through it, so the in-banner Epic /
+// Enchanted / Iconic buttons carry the same icons the mobile picker's chip
+// does — the two controls name the same three tiers a centimetre apart, and
+// only one of them was saying so in pictures.
+const MoverChipGroup = ({ariaLabel, order, labels, selected, onToggle, noun, iconOf}) =>
   html`<div class="seg-grp" role="group" aria-label=${ariaLabel} style=${{padding:2}}>
     ${order.map(k => {
       const on = selected.includes(k);
       const label = labels ? labels[k] : k;
+      const ico = iconOf ? iconOf(k) : null;
       return html`<button key=${k} class=${on?"active":""} aria-pressed=${on}
         onClick=${()=>onToggle(k)}
         title=${(on && selected.length === 1)
           ? `Showing ${label} ${noun} only — turn another on before hiding this one`
           : `${on?"Hide":"Show"} ${label} ${noun}`}
-        style=${{fontSize:11,padding:"3px 8px"}}>${label}</button>`;
+        style=${{fontSize:11,padding:"3px 8px"}}>${ico}${label}</button>`;
     })}
   </div>`;
 
@@ -37149,7 +37161,25 @@ const MoverChipGroup = ({ariaLabel, order, labels, selected, onToggle, noun}) =>
 // ⚠ It shares one localStorage key with the banner keys, so it must never
 // collide with one; test_home_layout.mjs pins that.
 const MOVERS_PICK_ALL = "all";
-const MoversPicker = ({keys, pick, onPick}) => {
+// ⚠ The STRIP's order, which is deliberately not the STACK's. The stack is
+// ordered by the banner ▲▼ (and the hot-set heuristic), where "the newest
+// set's most valuable" sits last outside release week; as a menu that buries
+// the row people most want between Amazon and nothing. "Put newest set after
+// promo — in this view, in terms of clicking" (Zaven), so the chips read
+// rarity-ish first, then the set, then the shopping rows. `gowned` still
+// leads, for the same reason it leads the stack: they are YOUR slabs.
+// A key missing here falls to the end in stack order, so a new banner works
+// without being listed.
+const MOVERS_PICK_ORDER = ["gowned","chase","rareLeg","promo","valuable","sealed","amazon","graded"];
+const moversPickOrder = (keys) => keys.slice().sort((a, b) => {
+  const ia = MOVERS_PICK_ORDER.indexOf(a), ib = MOVERS_PICK_ORDER.indexOf(b);
+  return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+});
+// ⚠ `setLogo` is a PROP, not looked up here: NEWEST_SET is a useMemo inside
+// HomeView, so this module-scope component cannot see it (it threw
+// "NEWEST_SET is not defined" the first time). Resolving it at the call site
+// also keeps this component free of any opinion about which chip is a set.
+const MoversPicker = ({keys, pick, onPick, setLogo}) => {
   const wrapRef = useRef(null);
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -37170,17 +37200,33 @@ const MoversPicker = ({keys, pick, onPick}) => {
       onClick=${() => onPick(MOVERS_PICK_ALL)}>All</button>
     ${keys.map(k => {
       const rars = HOME_BANNER_RARITIES[k];
+      // ⚠ The newest set's chip is its LOGO, not the words "Newest set".
+      // Set logos are wordmarks (see the brand-art note) and unreadable as
+      // type at chip height — but as a SHAPE a set's mark is the thing a
+      // player recognises fastest, and the full name is on the title and the
+      // aria-label. lorcanaSetArt returns null for a set with no logo yet,
+      // which is the normal state for the first weeks of a set — exactly when
+      // this chip matters most — so the word is the fallback, never a gap.
+      // ⚠ `setLogo` is the set NAME, and SetLogo resolves it. An earlier cut
+      // passed lorcanaSetArt()'s return straight to an <img src> — but that is
+      // an OBJECT ({src, mono}), so the src was "[object Object]", every load
+      // errored, and the silent fallback to the word hid it completely. Going
+      // through SetLogo also picks up the dark-theme inversion the one
+      // line-art logo (The First Chapter) needs.
+      const logo = (k === "valuable" && setLogo && lorcanaSetArt(setLogo)) ? setLogo : null;
       return html`<button key=${"mp-"+k} type="button" role="tab"
         aria-selected=${k === pick ? "true" : "false"}
         ${/* The icon chips have no text node at all, so the accessible name has
               to come from here — and the FULL label, not the short one, since
               there is no width pressure on a screen reader. */""}
         aria-label=${HOME_BANNER_LABELS[k] || k}
-        class=${"home-movers-chip" + (rars ? " home-movers-chip--rar" : "") + (k === pick ? " on" : "")}
+        class=${"home-movers-chip" + (rars ? " home-movers-chip--rar" : "") + (logo ? " home-movers-chip--logo" : "") + (k === pick ? " on" : "")}
         title=${HOME_BANNER_LABELS[k] || k}
         onClick=${() => onPick(k)}>${rars
           ? rars.map(r => html`<${RarityTag} key=${r} rarity=${r} hideText=${true}/>`)
-          : (HOME_BANNER_SHORT[k] || HOME_BANNER_LABELS[k] || k)}</button>`;
+          : logo
+            ? html`<${SetLogo} set=${logo} klass="home-movers-logo" eager=${true}/>`
+            : (HOME_BANNER_SHORT[k] || HOME_BANNER_LABELS[k] || k)}</button>`;
     })}
   </div>`;
 };
@@ -44856,8 +44902,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     <button class=${valuableMode==="chase"?"active":""} onClick=${()=>setValuableMode("chase")} style=${{fontSize:11,padding:"3px 8px"}}>Chase</button>
   </div>`;
 
+  // CHASE_RAR_ORDER holds canonical rarity names, so RarityTag resolves each
+  // one straight off RARITY_ICONS — the same accessor the picker's chips use.
   const chaseControls = html`<${MoverChipGroup} ariaLabel="Chase rarities"
-    order=${CHASE_RAR_ORDER} selected=${chaseRars} onToggle=${toggleChaseRar} noun="movers"/>`;
+    order=${CHASE_RAR_ORDER} selected=${chaseRars} onToggle=${toggleChaseRar} noun="movers"
+    iconOf=${r => html`<${RarityTag} rarity=${r} hideText=${true}/>`}/>`;
   const chaseLabel = CHASE_RAR_ORDER.filter(r => chaseRars.includes(r)).join(" · ");
 
   const rareLegControls = html`<${MoverChipGroup} ariaLabel="Rare–Legendary printing"
@@ -45455,7 +45504,8 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                     const pick = showAll ? MOVERS_PICK_ALL
                       : (visibleBannerKeys.includes(moversPick) ? moversPick : fallback);
                     mobilePicker = html`<${MoversPicker} key="movers-pick"
-                      keys=${visibleBannerKeys} pick=${pick} onPick=${setMoversPick}/>`;
+                      keys=${moversPickOrder(visibleBannerKeys)} pick=${pick} onPick=${setMoversPick}
+                      setLogo=${NEWEST_SET}/>`;
                     // "All" falls straight through to the ordinary stack
                     // below, which the picker is prepended to at the return.
                     if(!showAll){
@@ -45717,7 +45767,11 @@ const COCONUT_REVEAL_NEWS_DAYS = 14;
 // the window is a fortnight, so two is routine and three is reachable; past
 // that the thumbs would outweigh the words in a 150px column, and the sub-line
 // already names every card whether or not it drew one.
-const COCONUT_REVEAL_MAX_THUMBS = 3;
+// ⚠ Raised from 3 and now a DESKTOP-only cap: "remove the card images from the
+// preview on mobile, takes up too much room. on desktop, have all 7 smaller but
+// visible" (Zaven). The row is display:none below 1100px, so this number only
+// ever governs the rail copy. 8 is a ceiling against a freak week, not a target.
+const COCONUT_REVEAL_MAX_THUMBS = 8;
 const COCONUT_CARDS = [
   {slug:"ariel-spectacular-singer", cn:2, name:"Ariel", version:"Spectacular Singer",
    ink:"Amber", artist:"Alice Pisoni", associated:"Ariel - Spectacular Singer",
@@ -54880,7 +54934,14 @@ function App(){
   const TABS_TOP    = canScan
     ? [["collection","Collection"],["cards","Cards"],["decks","Decks"],["scan","Scan"]]
     : [["collection","Collection"],["cards","Cards"],["decks","Decks"]];
-  const TABS_BOTTOM = [["screener","Screener"],["history","Price Graphing"],["market","Analytics"]];
+  // ⚠ A FOURTH chip on row 2, which is the documented regression: row 2 is the
+  // one with the long labels (PRICE GRAPHING / ANALYTICS) and adding to it is
+  // what pushed ANALYTICS off the edge on ≤420px phones, and why Scan went in
+  // row 1 instead. It is survivable because `.tabs` is a horizontal SCROLLER
+  // on mobile — nothing is clipped, the row just scrolls — but it does mean a
+  // phone no longer sees the whole nav at rest. Measured after the change; if
+  // a fifth ever lands here, move one to row 1 rather than adding a third row.
+  const TABS_BOTTOM = [["screener","Screener"],["history","Price Graphing"],["market","Analytics"],["calendar","Calendar"]];
   const renderTab = ([v,l]) => {
     // The scanner is a modal, not a routed view — there's no URL to hand a
     // modifier-click, so it's an honest <button> instead of an <a href>.

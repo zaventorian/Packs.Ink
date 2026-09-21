@@ -265,6 +265,36 @@ for (const [k, rars] of Object.entries(HOME_BANNER_RARITIES)) {
     typeof HOME_BANNER_LABELS[k] === "string", true);
 }
 
+// ── The news/poll collapse signature ─────────────────────────────────────
+// The collapse is remembered as the CONTENT SIGNATURE that was on screen when
+// it was minimised, so the box reopens itself when something new is posted.
+// ⚠ Every failure here is silent in the same direction — the box just never
+// reopens — and one already shipped: the signature read `poll.id`, which does
+// not exist on that row, so it ended "::undefined", never moved, and a brand
+// new poll could not have reopened anything. Caught only by reading the stored
+// string. These assertions are that bug, written down.
+const sigFn = grab("const newsSig = useMemo(() => {", "}, [newsTiles, homePoll.poll]);");
+check("the signature keys off tile KEYS, not their count",
+  /\.key\b/.test(sigFn) && !/\.length/.test(sigFn), true);
+check("the signature reads poll_id, not the nonexistent poll.id",
+  /homePoll\.poll\.poll_id/.test(sigFn), true);
+// ⚠ The other direction: anything that changes on its own would make the box
+// reopen on a timer, and anything that changes when YOU act would pop it open
+// at the moment you finished with it. Voting is the live example.
+// ⚠ Strip comments first. The memo's own comment SAYS "deliberately not
+// my_choice or pct", so a raw substring test reads the reasoning as the code
+// and fails on a correct file — which it did on the first run.
+const sigCode = sigFn.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+for (const vol of ["my_choice", "pct", "Date.now", "nowMs"]) {
+  check(`the signature excludes ${vol}`, sigCode.includes(vol), false);
+}
+// The stored key must survive an aux-cache wipe, or a collapse silently
+// un-collapses for everyone on the next AUX_CACHE_VERSION bump. It lives
+// under packsink:home:, which is preferences, not the packsink:home:tourneys:
+// cache prefix — note the trailing colon that keeps those apart.
+check("the collapse key is a preference, not an evictable cache key",
+  /const NEWS_COLLAPSE_LS = "packsink:home:newsCollapsedSig";/.test(src), true);
+
 // "All" shares the one localStorage key with the banner keys, so a banner
 // named "all" would make the sentinel unreadable from a stored value: the
 // strip would come back on the wrong chip and there would be no way to tell
