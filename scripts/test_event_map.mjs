@@ -635,8 +635,12 @@ section("15. deep-link param registration");
   // or the Copy link button quietly shares a list.
   ok(grabLine("const SC_DEEP_PARAMS = ").includes('"scview"'),
      "scview is an event-finder deep-link param");
-  ok(src.includes('u.searchParams.set("scview", "map")'),
-     "and the finder's share link writes it");
+  // /!\ Written BOTH ways, not just for the map. This URL only ever comes from
+  // the Copy link button, so it is always a link somebody is SENDING -- and a
+  // reader whose own saved view is the map would otherwise be handed a map by a
+  // sender who was looking at a list.
+  ok(src.includes('u.searchParams.set("scview", mapOn ? "map" : "list")'),
+     "the finder's share link writes the view either way");
   ok(src.includes('if(pView) return pView === "map";'),
      "and the map toggle reads it, so a shared map arrives as a map");
 
@@ -651,9 +655,29 @@ section("15. deep-link param registration");
 
   // /!\ Written in map mode ONLY. A `cmap` left behind after switching to List
   // is a stale anchor that silently repoints the map on the way back.
-  ok(src.includes('(onMap && mapFocus) ? url.searchParams.set("cmap"'),
-     "cmap is written only in map mode");
+  ok(src.includes("const aimed = onMap && !!mapFocus;"),
+     "cmap is written only for a map that is actually pointed somewhere");
   ok(src.includes('url.searchParams.delete("cmap")'), "and deleted otherwise");
+
+  // /!\ A POINTED map link is COMPLETE -- defaults included. This is a bug that
+  // shipped in this very commit's first cut and was caught by opening the link
+  // as somebody else: "omit the default" is only safe when the reader's
+  // fallback IS the default, and here the fallback is the reader's own stored
+  // preference. A sender on "All events" (default, omitted) sending a
+  // set-champs map to a reader whose saved scope is "Just mine" reproduced as a
+  // map of the shops THAT READER follows -- for most people none, so the shared
+  // map arrived EMPTY, at the right place, with nothing on screen to say a
+  // filter had been swapped underneath it.
+  ok(src.includes('aimed ? url.searchParams.set("cms", mapScope)'),
+     "a pointed map link states its scope even when it is the default");
+  ok(src.includes('aimed ? url.searchParams.set("cmk", mapStoreKinds.join(","))'),
+     "and its kinds even when they are all of them");
+  // ...and the reader has to prefer the link over their own stored value, or
+  // writing it changes nothing.
+  ok(src.includes('if(seed.cms) return seed.cms === "mine" ? "mine" : "all";'),
+     "and the reader takes the link's scope over their own");
+  ok(src.includes("if(seed.cmk) return scParseKinds(seed.cmk);"),
+     "and the link's kinds over their own");
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed");

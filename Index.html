@@ -43396,16 +43396,28 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
       // does nothing where you are and silently repoints the map when you go
       // back — the same trap `cm` is already guarded against one line above.
       //
-      // ⚠ Defaults are omitted, so an ordinary "here is the season" map link
-      // stays `/calendar?cv=map` and the filters only show up when somebody set
-      // them. Radius rides only when it can matter: a "Just mine" map does not
-      // run the nearby query at all.
+      // ⚠ A POINTED map link is COMPLETE — defaults included. "Omit the
+      // default" is only safe when the reader's fallback IS the default, and
+      // here it is the reader's own stored preference, which can be anything.
+      // Measured: a sender on "All events" (the default, so omitted) sending a
+      // set-champs map at their ZIP to somebody whose saved scope is "Just
+      // mine" reproduced as a map of the shops THAT READER follows — which for
+      // most people is none, so the shared map arrived EMPTY, at the right
+      // place, with no error and nothing on screen to say a filter had been
+      // swapped underneath it.
+      //
+      // `cmap` is what separates the two kinds of link. A map somebody AIMED is
+      // the thing that gets sent, so it carries its whole state; a bare
+      // `?cv=map` — the home tile's own Map button — is "open MY map", where
+      // inheriting your own preferences is exactly right, so it stays short.
       const onMap = mode === "map";
-      (onMap && mapFocus) ? url.searchParams.set("cmap", calMapFocusParam(mapFocus)) : url.searchParams.delete("cmap");
-      (onMap && mapScope === "mine") ? url.searchParams.set("cms", "mine") : url.searchParams.delete("cms");
-      (onMap && mapStoreKinds.length && mapStoreKinds.length < CAL_STORE_KIND_KEYS.length)
-        ? url.searchParams.set("cmk", mapStoreKinds.join(",")) : url.searchParams.delete("cmk");
-      (onMap && mapFocus && mapScope === "all")
+      const aimed = onMap && !!mapFocus;
+      aimed ? url.searchParams.set("cmap", calMapFocusParam(mapFocus)) : url.searchParams.delete("cmap");
+      aimed ? url.searchParams.set("cms", mapScope) : url.searchParams.delete("cms");
+      aimed ? url.searchParams.set("cmk", mapStoreKinds.join(",")) : url.searchParams.delete("cmk");
+      // Radius rides only when it can matter: a "Just mine" map runs no nearby
+      // query at all, so a radius on it would describe nothing.
+      (aimed && mapScope === "all")
         ? url.searchParams.set("cmr", String(mapNearRadius)) : url.searchParams.delete("cmr");
       if(url.toString() !== location.href) history.replaceState(history.state, "", url.toString());
     } catch {}
@@ -44789,9 +44801,11 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
     if(!isAll) u.searchParams.set("scmode", kinds.join(","));
     if(dateActive) u.searchParams.set("scdate", dates.join(","));
     // ⚠ Which VIEW, because a map is the thing being shared — not a preference
-    // laid over it. Omitted for the list, which is the default either way, so an
-    // ordinary link stays as short as it has always been.
-    if(mapOn) u.searchParams.set("scview", "map");
+    // laid over it. Written BOTH ways, not just for the map: this URL only ever
+    // comes from the Copy link button, so it is always a link somebody is
+    // SENDING, and a reader whose own saved view is the map would otherwise be
+    // handed a map by a sender who was looking at a list. The link says which.
+    u.searchParams.set("scview", mapOn ? "map" : "list");
     return u.toString();
   };
   const copyLink = async () => {
