@@ -46,16 +46,17 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const scLabelW = (text) => {", NL + "};"),
   grabLine("const SC_PIN_MIN_W = "),
   grab("const scPinR = (count) => {", NL + "};"),
+  grab("const scPanCenter = (center, zoom, dx, dy) => {", NL + "};"),
   grabLine("const _scBoxHit = "),
   grab("const scPlacePinLabels = (pins, w, h) => {", NL + "};"),
   "export {osmWorldFrac, osmFracLat, osmTileLayout, osmFitLayout, OSM_FIT_PAD,"
   + " scMergePins, SC_PIN_MERGE_PX, scLabelW, scPlacePinLabels,"
-  + " SC_PIN_R, SC_LBL_GAP, SC_LBL_H, scPinR};",
+  + " SC_PIN_R, SC_LBL_GAP, SC_LBL_H, scPinR, scPanCenter};",
 ].join(NL)));
 
 const { osmWorldFrac, osmFracLat, osmTileLayout, osmFitLayout, OSM_FIT_PAD,
         scMergePins, SC_PIN_MERGE_PX, scLabelW, scPlacePinLabels,
-        SC_PIN_R, SC_LBL_GAP, SC_LBL_H, scPinR } = mod;
+        SC_PIN_R, SC_LBL_GAP, SC_LBL_H, scPinR, scPanCenter } = mod;
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; } else { fail++; console.log("  FAIL: " + msg); } };
@@ -466,6 +467,65 @@ section("12. osmFitLayout focus");
   // Every event still comes back, in frame or not — the box clips, the layout
   // does not drop.
   ok(focused.pins.length === fitted.pins.length, "a focus hides nothing from the layout");
+}
+
+// 13. scPanCenter — dragging the map
+//
+// Silent failures again: a sign error pans the wrong way (which reads as the
+// map fighting you), degrees instead of world pixels drifts worse the further
+// from the equator you are, and an unwrapped longitude comes out at -181, which
+// osmFitLayout rejects as out of range — so a drag west past the antimeridian
+// would empty the map of every pin rather than erroring.
+section("13. scPanCenter");
+{
+  const CHI = { lat: 41.88, lng: -87.63 };
+  const Z = 9;
+
+  ok(scPanCenter(null, Z, 10, 10) === null, "no centre, no answer");
+  ok(scPanCenter(CHI, NaN, 10, 10) === null, "no zoom, no answer");
+
+  const still = scPanCenter(CHI, Z, 0, 0);
+  near(still.lat, CHI.lat, 1e-9, "a zero drag does not move the centre");
+  near(still.lng, CHI.lng, 1e-9, "in either axis");
+
+  // ⚠ Dragging the tiles RIGHT shows what was to the WEST, so the centre's
+  // longitude DECREASES. Getting this backwards is a map that fights the hand.
+  const right = scPanCenter(CHI, Z, 120, 0);
+  ok(right.lng < CHI.lng, "dragging right moves the centre west");
+  const down = scPanCenter(CHI, Z, 0, 120);
+  ok(down.lat > CHI.lat, "dragging down moves the centre north");
+
+  // The same pixel drag is worth FOUR times as much world at four times the
+  // scale — this is why it is done in world pixels, not degrees.
+  const coarse = scPanCenter(CHI, Z - 2, 120, 0);
+  near((CHI.lng - coarse.lng) / (CHI.lng - right.lng), 4, 0.01,
+       "two zoom levels out, one pixel is worth four times the longitude");
+
+  // A pixel of drag round-trips: pan out and back lands where it started.
+  const there = scPanCenter(CHI, Z, 200, -90);
+  const back = scPanCenter(there, Z, -200, 90);
+  near(back.lat, CHI.lat, 1e-6, "panning back returns the latitude");
+  near(back.lng, CHI.lng, 1e-6, "and the longitude");
+
+  // ⚠ The antimeridian. A drag west from Tokyo must come out a legal longitude,
+  // or osmFitLayout drops every pin and the map goes blank.
+  const tok = { lat: 35.68, lng: 139.77 };
+  let c = tok;
+  for (let i = 0; i < 40; i++) c = scPanCenter(c, 4, -400, 0);
+  ok(c.lng >= -180 && c.lng <= 180, "longitude stays legal across the antimeridian");
+  ok(Math.abs(c.lat) <= 90, "and latitude stays legal");
+
+  // ⚠ Latitude CLAMPS instead of wrapping — there is nothing past the pole, and
+  // Mercator has no tiles there.
+  let p2 = { lat: 60, lng: 0 };
+  for (let i = 0; i < 60; i++) p2 = scPanCenter(p2, 3, 0, 600);
+  ok(p2.lat <= 90 && p2.lat >= -90, "dragging past the pole stays on the planet");
+  ok(isFinite(p2.lat) && isFinite(p2.lng), "and never goes non-finite");
+
+  // End to end: the panned centre is one osmFitLayout will actually accept.
+  const l = osmFitLayout([P(CHI.lat, CHI.lng)], W, H,
+                         { focus: { lat: c.lat, lng: c.lng, zoom: 4 } });
+  ok(!!l && l.pins.length === 1, "a panned centre is a focus osmFitLayout accepts");
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed");

@@ -11095,6 +11095,16 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
 .sc-map{margin-top:10px;}
 .sc-map-box{position:relative;overflow:hidden;border-radius:8px;
   border:1px solid var(--border);background:var(--bg-surface);width:100%;}
+/* ⚠ touch-action:none, which is what a map is — a drag pans it rather than
+   scrolling the page. The cost is real and accepted: on a phone you scroll the
+   page from above or below the map, not across it. That is why the map is
+   shorter at ≤640px, so there is always page either side to grab. */
+.sc-map-box--drag{cursor:grab;touch-action:none;}
+.sc-map-box--dragging{cursor:grabbing;}
+/* One transformed layer holding the tiles AND the pins, so they move together.
+   No transition: it has to track the finger exactly. */
+.sc-map-pan{position:absolute;inset:0;}
+.sc-map-box--dragging .sc-map-pin{pointer-events:none;}
 .sc-map-box img{position:absolute;display:block;border:0;max-width:none;image-rendering:auto;}
 html[data-mode="dark"] .sc-map-box img{filter:brightness(0.82) saturate(0.85);}
 .sc-map-pin{position:absolute;transform:translate(-50%,-50%);
@@ -11182,6 +11192,12 @@ html[data-mode="dark"] .sc-map-box img{filter:brightness(0.82) saturate(0.85);}
   font-size:11.5px;color:var(--text-muted);}
 .cal-map-radius select{font:inherit;font-size:11.5px;padding:4px 6px;border-radius:6px;
   border:1px solid var(--border);background:var(--bg-modal);color:var(--text);}
+.cal-map-kinds{display:inline-flex;flex:0 0 auto;gap:4px;}
+.cal-map-kind{padding:5px 10px;border-radius:999px;cursor:pointer;font:inherit;
+  font-size:11px;font-weight:700;letter-spacing:0.02em;white-space:nowrap;
+  border:1px solid var(--btn-border);background:var(--btn-bg);color:var(--text-dim);}
+.cal-map-kind:hover{color:var(--text);border-color:var(--accent);}
+.cal-map-kind.on{background:var(--accent);color:#fff;border-color:var(--accent);}
 .cal-map-note{font-size:11px;flex:0 0 auto;}
 .cal-map-note--err{color:var(--danger,#e0685f);}
 @media (max-width:640px){
@@ -11193,6 +11209,10 @@ html[data-mode="dark"] .sc-map-box img{filter:brightness(0.82) saturate(0.85);}
      site's mobile floor rather than the 28px a desktop pointer is happy with. */
   .cal-map-zoom button{width:44px;height:36px;font-size:16px;}
   .cal-map-go{padding:8px 15px;}
+  .cal-map-kind{padding:7px 11px;}
+  /* Shorter, so the page can still be scrolled from above and below it — see
+     the touch-action note on .sc-map-box--drag. */
+  .cal-map-view .sc-map-box{height:340px !important;}
 }
 
 /* ── what comes out that day ──────────────────────────────────────────────── */

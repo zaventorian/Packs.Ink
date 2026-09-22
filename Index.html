@@ -41639,6 +41639,28 @@ const scPinR = (count) => {
   const d = count > 1 ? String(count).length : 0;
   return (d ? Math.max(SC_PIN_MIN_W, SC_PIN_CHROME + SC_PIN_DIGIT * d) : SC_PIN_MIN_W) / 2;
 };
+// ── Dragging the map ─────────────────────────────────────────────────
+// Dragging the tiles right by dx means the CENTRE moved left by dx, so the sign
+// is inverted — and both axes are in world-pixel space, which is `256 * 2^zoom`
+// wide, not degrees. Doing it in degrees is the Mercator error the fit already
+// documents: a pixel is worth more latitude near the poles than at the equator.
+//
+// ⚠ Longitude WRAPS and latitude CLAMPS. Dragging west past the antimeridian is
+// an ordinary thing to do and must come out at +179, not -181 (which osmFitLayout
+// would reject as out of range and drop every pin); dragging past the pole has
+// nowhere to go, and Mercator has no tiles there anyway.
+const scPanCenter = (center, zoom, dx, dy) => {
+  if(!center) return null;
+  const z = Math.round(Number(zoom));
+  if(!isFinite(z)) return null;
+  const world = Math.pow(2, Math.max(0, Math.min(19, z))) * OSM_TILE_PX;
+  const f = osmWorldFrac(center.lat, center.lng);
+  let fx = f.fx - (Number(dx) || 0) / world;
+  let fy = f.fy - (Number(dy) || 0) / world;
+  fx = ((fx % 1) + 1) % 1;
+  fy = Math.max(0, Math.min(1, fy));
+  return {lat: osmFracLat(fy), lng: fx * 360 - 180};
+};
 const _scBoxHit = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
 // pins: [{left, top, text, rank, r}] -> a parallel array of "r" | "l" | null.
 // `r` is the dot's own horizontal half-width (scPinR); it defaults to the plain
@@ -41679,7 +41701,7 @@ const scPlacePinLabels = (pins, w, h) => {
   }
   return out;
 };
-const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf, height, fit, focus, focusEmpty}) => {
+const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf, height, fit, focus, focusEmpty, onPan}) => {
   const wrapRef = useRef(null);
   const [w, setW] = useState(0);
   // ⚠ The open callout is keyed on the GROUP's position, never its index, and
@@ -41723,6 +41745,41 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf,
   // an event we could not place never renumbers the ones after it.
   const groups = useMemo(() => layout ? scMergePins(layout.pins) : [], [layout]);
   const gKey = (g) => g.left + ":" + g.top;
+  // ⚠ The tiles MOVE under the finger and the layout is only recomputed on
+  // release. Refetching a tile set per pointermove is a request storm and a
+  // visibly stuttering map; a transform is one compositor property and costs
+  // nothing. `pan` is that live offset, always {0,0} except mid-drag.
+  const [pan, setPan] = useState(null);
+  const dragRef = useRef(null);
+  const panBy = useCallback((dx, dy) => {
+    if(!layout || !onPan) return;
+    const c = scPanCenter(layout.center, layout.zoom, dx, dy);
+    if(c) onPan({lat: c.lat, lng: c.lng, zoom: layout.zoom});
+  }, [layout, onPan]);
+  const onDragStart = useCallback((e) => {
+    // ⚠ Left button only, and never from a pin — a pin is a button and its
+    // click is the whole point of the callout.
+    if(!onPan || e.button > 0 || (e.target && e.target.closest && e.target.closest(".sc-map-pin"))) return;
+    dragRef.current = {x0: e.clientX, y0: e.clientY, moved: false, id: e.pointerId};
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+  }, [onPan]);
+  const onDragMove = useCallback((e) => {
+    const d = dragRef.current;
+    if(!d || d.id !== e.pointerId) return;
+    const dx = e.clientX - d.x0, dy = e.clientY - d.y0;
+    // The movers banner's 5px threshold, for the same reason: it is what keeps a
+    // click on a pin a click rather than a one-pixel drag.
+    if(!d.moved && Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
+    d.moved = true;
+    setPan({dx, dy});
+  }, []);
+  const onDragEnd = useCallback((e) => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+    setPan(null);
+    if(d && d.moved) panBy(e.clientX - d.x0, e.clientY - d.y0);
+  }, [panBy]);
   // One label per MARKER, not per event: a merged pin is one place, and the
   // date it shows is the first one under it — the count on the dot is what says
   // there are more, and the callout is what names them.
@@ -41772,7 +41829,17 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf,
           : "None of these events has a location on file yet."}
     </div>`}
     ${layout && html`<${React.Fragment}>
-      <div class="sc-map-box" style=${{height: H + "px"}}>
+      <div class=${"sc-map-box" + (onPan ? " sc-map-box--drag" : "") + (pan ? " sc-map-box--dragging" : "")}
+        style=${{height: H + "px"}}
+        onPointerDown=${onPan ? onDragStart : undefined}
+        onPointerMove=${onPan ? onDragMove : undefined}
+        onPointerUp=${onPan ? onDragEnd : undefined}
+        onPointerCancel=${onPan ? onDragEnd : undefined}>
+        ${/* ⚠ ONE transformed layer, not a transform per tile and per pin: the
+             pins are positioned in the same pixel space as the tiles, so moving
+             their shared parent keeps them on the streets they belong to. */""}
+        <div class="sc-map-pan" style=${pan
+          ? {transform: `translate3d(${pan.dx}px, ${pan.dy}px, 0)`} : undefined}>
         ${/* ⚠ NOT loading="lazy". Chrome defers lazy images in more situations
              than the documented backgrounded-tab one, and a deferred tile is a
              blank map with pending requests and no error — the same bug the
@@ -41799,8 +41866,9 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf,
             ${side && html`<span class=${"sc-map-pin-d sc-map-pin-d--" + side} aria-hidden="true">${day}</span>`}
           </button>`;
         })}
+        </div>
       </div>
-      ${focus && focusEmpty && inFrame === 0 && html`<div class="sc-map-note">${focusEmpty}</div>`}
+      ${focus && focusEmpty && inFrame === 0 && !pan && html`<div class="sc-map-note">${focusEmpty}</div>`}
       ${/* The callout is what makes a merged pin honest: every event under it is
            named and separately clickable, so nothing is reachable only by
            zooming in to a level the tiles may not even have. */
@@ -42750,6 +42818,7 @@ const CAL_MAP_VIEW_H = 480;
 // suburbs fit, which is the scale "what is near me" is asked at.
 const CAL_MAP_FOCUS_Z = 9, CAL_MAP_FOCUS_MIN = 3, CAL_MAP_FOCUS_MAX = 13;
 const CAL_MAP_SCOPE_LS = "packsink:cal:mapScope";
+const CAL_MAP_KINDS_LS = "packsink:cal:mapKinds";
 // ⚠ Default flipped list → MONTH 2026-09-21 (Zaven), the same call the home
 // panel took the day before. The mode is persisted on every mount, so a plain
 // default change reaches NOBODY who has ever opened this page — the same trap
@@ -43127,6 +43196,20 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   // "near me" is the same trap as two postal-code boxes: they drift, and the
   // person gets different answers on two surfaces for one question.
   const [mapNearRadius, setMapNearRadius] = useState(() => calNearOrigin().radius);
+  // ⚠ The RPH kind (Set Champs / Prereleases / Locals) is a DIFFERENT axis from
+  // the chips above, which are the calendar's own kinds (sets, products, DLCs,
+  // CCQs, my stores). A store event is one row under "My stores" whether it is a
+  // Set Championship or a Thursday league night, so narrowing between those
+  // three needs its own control — the same three the finder has.
+  const [mapStoreKinds, setMapStoreKinds] = useState(() => {
+    try {
+      const raw = (localStorage.getItem(CAL_MAP_KINDS_LS) || "").split(",").filter(Boolean)
+        .filter(k => CAL_STORE_KIND_KEYS.includes(k));
+      return raw.length ? raw : CAL_STORE_KIND_KEYS.slice();
+    } catch { return CAL_STORE_KIND_KEYS.slice(); }
+  });
+  useEffect(() => { try { localStorage.setItem(CAL_MAP_KINDS_LS, mapStoreKinds.join(",")); } catch {} },
+    [mapStoreKinds]);
   const [mapBusy, setMapBusy] = useState(false);
   const [mapErr, setMapErr] = useState(null);
   const mapSeq = useRef(0);
@@ -43288,9 +43371,17 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   // circuit and your own shops are the calendar, and dropping them the moment
   // you zoom would answer a narrower question than the one you asked. The merge
   // keys on event_id, so a shop you follow is not drawn twice.
-  const mapRows = useMemo(() => (mapScope === "all" && mapFocus)
-    ? calendarMergeStore(listed, mapNear.rows.filter(e => !hidden.has(e.id)))
-    : listed, [mapScope, mapFocus, listed, mapNear.rows, hidden]);
+  const mapRows = useMemo(() => {
+    const base = (mapScope === "all" && mapFocus)
+      ? calendarMergeStore(listed, mapNear.rows.filter(e => !hidden.has(e.id)))
+      : listed;
+    // ⚠ Only STORE rows carry an rph_kind, and only they are filtered. A DLC, a
+    // CCQ and a set release are not "locals" and must not vanish because the
+    // Locals chip is off — the chips above own those.
+    if(mapStoreKinds.length === CAL_STORE_KIND_KEYS.length) return base;
+    const keep = new Set(mapStoreKinds);
+    return base.filter(e => e.kind !== "store" || keep.has(e.rph_kind || "other"));
+  }, [mapScope, mapFocus, listed, mapNear.rows, hidden, mapStoreKinds]);
   const byMonth = useMemo(() => {
     const m = new Map();
     for(const ev of listed){
@@ -43632,6 +43723,25 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
                   ${[10, 25, 50, 100, 200].map(r => html`<option key=${r} value=${String(r)}>${r} mi</option>`)}
                 </select>
               </label>`}
+              ${/* ⚠ The last active chip cannot be switched off — the movers
+                   chip-group rule, and the calendar's own. A filter that can
+                   empty the map leaves you with nothing on screen to undo it
+                   except the control you just used. */""}
+              <span class="cal-map-kinds" role="group" aria-label="Kinds of store event">
+                ${CAL_STORE_KINDS.map(k => {
+                  const on = mapStoreKinds.includes(k.key);
+                  const last = on && mapStoreKinds.length === 1;
+                  return html`<button key=${k.key} type="button"
+                    class=${"cal-map-kind" + (on ? " on" : "")}
+                    aria-pressed=${on}
+                    title=${last ? "Keep at least one — turn another on first" : k.long}
+                    onClick=${() => { if(last) return;
+                      setMapStoreKinds(p => p.includes(k.key)
+                        ? p.filter(x => x !== k.key)
+                        : CAL_STORE_KIND_KEYS.filter(x => p.includes(x) || x === k.key)); }}>
+                    ${k.label}</button>`;
+                })}
+              </span>
               ${mapNear.busy && html`<span class="cal-map-note muted">Finding events…</span>`}
               ${mapNear.err && html`<span class="cal-map-note cal-map-note--err"
                 title=${mapNear.err}>Couldn't load nearby events</span>`}
@@ -43644,7 +43754,15 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
                every filter above mean the same thing here as they do there, and
                a map can never quietly hold a different set of events from the
                view you switched away from. */""}
+          ${/* ⚠ A drag lands you in FOCUS mode even from the fitted season view —
+               the moment you move the map by hand, "fit everything" is no longer
+               what you asked for, and snapping back on the next render would
+               undo the drag in front of you. The label becomes the coordinates'
+               own, since there is no town behind a drag. */""}
           <${EventMapView} events=${mapRows} height=${CAL_MAP_VIEW_H} fit=${CAL_MAP_FIT} focus=${mapFocus}
+            onPan=${(c) => setMapFocus(f => ({lat: c.lat, lng: c.lng,
+              zoom: (f && f.zoom) || c.zoom || CAL_MAP_FOCUS_Z,
+              label: (f && f.label) || "this area"}))}
             dateOf=${(e) => calShortDay(e && e.starts_on)}
             labelOf=${(e) => calEventTitle(e)}
             subLabelOf=${(e) => [calDayLabel(e && e.starts_on), e && e.location].filter(Boolean).join(" · ")}
