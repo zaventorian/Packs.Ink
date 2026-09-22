@@ -405,7 +405,7 @@ ok("most gear rows have a photo", gearIds.length >= 30, "only " + gearIds.length
 ok("every gear section names a fallback glyph", m.LORCANA_GEAR.every((s) => typeof s.glyph === "string" && s.glyph));
 
 // ── The home shelf ──────────────────────────────────────────────────────────
-const shelfSets = {wu: "Wilds Unknown", aotv: "Attack of the Vine!", az: "Azurite Sea"};
+const shelfSets = {wu: "Wilds Unknown", aotv: "Attack of the Vine!", az: "Azurite Sea", hyp: "Hyperia City"};
 const sRow = (pid, set, type, name, mkt, low) => ({tcgplayer_product_id: pid, set_id: set, product_type: type,
   name: "Disney Lorcana: " + name, market_price: mkt, low_price: low, price_date: "2026-09-10",
   image_url: "https://tcgplayer-cdn.tcgplayer.com/product/" + pid + "_200w.jpg"});
@@ -420,18 +420,29 @@ const shelfRows = [
   sRow(8, "wu", "Promo Single", "Wilds Unknown Puzzle Insert (Top Left)", 0.1, 0.1),
   sRow(9, "wu", "Booster Pack", "Wilds Unknown Sleeved Booster Pack Art Bundle [Set of 3]", 39.36, 30),
   sRow(10, "az", "Trove", "Azurite Sea Illumineer's Trove", null, 70),
+  // The newest set is normally PRE-RELEASE: TCGplayer lists its sealed months
+  // early and we carry it from the day the set is announced, so the newest-set
+  // search lane has to be exercised on a set that is not out yet. That is the
+  // steady state, not an edge case -- a released set has curated ASINs instead.
+  sRow(11, "hyp", "Booster Box", "Hyperia City Booster Box", null, null),
+  sRow(12, "hyp", "Booster Box", "Hyperia City Booster Box Case", null, null),
 ];
 const shelf = m.amazonShelfItems(shelfRows, shelfSets);
 const shelfNames = shelf.map((it) => it.name);
 ok("the shelf carries curated listings",
   shelfNames.includes("Wilds Unknown Booster Box") && shelfNames.includes("Stitch Collector's Gift Set"), shelfNames.join(" | "));
 ok("…the newest set's box as a search, labelled as one",
-  shelf.some((it) => it.name === "Attack of the Vine! Booster Box" && it.exact === false), shelfNames.join(" | "));
+  shelf.some((it) => it.name === "Hyperia City Booster Box" && it.exact === false), shelfNames.join(" | "));
+// ⚠ A pre-order box has no TCGplayer price yet and must STILL reach the shelf --
+// dropping price-less rows would empty the one lane the newest set contributes.
+ok("…even before TCGplayer prices it",
+  (shelf.find((it) => it.name === "Hyperia City Booster Box") || {}).price == null,
+  JSON.stringify(shelf.find((it) => it.name === "Hyperia City Booster Box")));
 ok("…and never a case, a promo single or a multi-unit bundle",
   !shelfNames.some((n) => /case|insert|set of 3/i.test(n)), shelfNames.join(" | "));
 ok("a search for anything else stays off the shelf",
   !shelfNames.includes("Attack of the Vine! Collection Starter Set - Rapunzel Edition"), shelfNames.join(" | "));
-check("the shelf opens on the newest set", shelf[0].setName, "Attack of the Vine!");
+check("the shelf opens on the newest set", shelf[0].setName, "Hyperia City");
 ok("product types alternate rather than bunching", shelf[1].type !== shelf[0].type,
   shelf.slice(0, 3).map((it) => it.type).join(", "));
 const azTrove = shelf.find((it) => it.name === "Azurite Sea Illumineer's Trove");
