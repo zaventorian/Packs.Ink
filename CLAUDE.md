@@ -5219,6 +5219,63 @@ so `?cv=map` needed no routing change at all.
   an anchor that does nothing there and silently moves the Month view on arrival.
 - The glyph is a FOLDED MAP, not a pin: this names a view, and a pin says "location".
 
+### Getting TO the map, and getting DOWN to a town (2026-09-22)
+
+Two reports from Zaven, both true, and both about the same gap: the map existed
+and there was no ordinary way to reach or aim it.
+
+- **"I don't see the button for it on the home page."** The finder's List/Map
+  toggle lives inside `.sc-results-head`, which cannot render until a search has
+  RESULTS — so a visitor who has never typed a postal code sees no map entry
+  point on the home page at all. **`cal-panel-tools` gains a map glyph** beside
+  List and Month: always visible, an `<a href="/calendar?cv=map">` + `navHandler`
+  per the SPA-nav convention.
+  - **⚠ The mode travels through the STORED preference, not the URL.**
+    CalendarView reads `?cv=` out of `location.search` in a **mount-time**
+    `useMemo`, and App writes the pathname only after the view changes — so a
+    param set at click time is not on the URL yet when it is read. The click
+    writes `CAL_VIEW_LS` and navigates, the same handoff shape as
+    `?a=sealed` → Screener. The `href` still carries `?cv=map` so a
+    modifier-click opens the right thing.
+  - It reuses `panelNav("calendar", …)`, which resolves at every width because
+    `calendar` is in `HOME_ALWAYS_SECTION`.
+- **"On calendar, I don't see a way to pop in a zip code and zoom in."** The
+  calendar map opens on a whole season across four continents, which is its job,
+  and had no way down. `.cal-map-bar` is a place box + a **zoom stepper**.
+  - **⚠ It shares `packsink:scZip` / `scCountry` with the event finder** rather
+    than keeping a second one, and resolves through **`scResolveOrigin`** — so it
+    takes a postal code or a town in every country that box does. "Where are you"
+    is one question; two boxes that can disagree is how someone ends up on the
+    wrong Dublin on one surface and the right one on the other.
+  - **A STEPPER, not a slider or a pinch.** The map is static `<img>` tiles with
+    no pan, so the honest control is the one that re-renders it at a new zoom.
+    `CAL_MAP_FOCUS_Z` 9 (a metro), bounded 3-13. 44x36 at ≤640px — it is the one
+    control here you press repeatedly.
+  - The lookup is **sequenced** (`mapSeq`) like the finder's own search: two
+    lookups can overlap and a stale FAILURE landing last would wipe a good
+    answer, which is the bug that box already had once.
+
+**`osmFitLayout` grows an optional `focus` {lat, lng, zoom}.** It overrides the
+centre and the zoom and **shares every line below it deliberately** — the
+wrap-to-nearest-copy and the pin subtraction are the two places a pin can drift
+off its tile, and a second copy of either is exactly how that happens.
+
+- **⚠ The fit's `minZoom`/`maxZoom` do NOT apply to a focus.** Someone who pressed
+  + chose that zoom; only the 0..19 that tiles exist for bounds it.
+- **⚠ It reads coordinates through `coord`, never a bare `Number()` — Null Island
+  again.** A focus half-built from a lookup that returned nothing (`{lat: null}`)
+  is a perfectly finite 0N 0E, so "zoom to my town" would have centred the
+  Atlantic. Four half-built focuses now fall back to the fit; the guard test
+  caught this, not a screenshot.
+- **⚠ Zooming somewhere EMPTY is the common outcome, not an edge case.** The
+  calendar holds the circuit plus the shops you follow — follow none and a zoom
+  to your own town is correctly, completely empty, and an empty map with no
+  explanation reads as broken software. `EventMapView` counts what landed inside
+  the frame and renders `focusEmpty` over the tiles with the two ways out: turn
+  on "SCs near me", or open the finder, **which is the map that does hold every
+  local event**. Pins outside the frame are clipped by `overflow:hidden`, which
+  is right, but silent.
+
 ### How the finder itself works
 
 `UpcomingSCsBox` (Index.html). ZIP/postal + radius + optional date, three modes: **All / Set Champs / Prereleases**. Reworked 2026-07-30 so **All means literally every Lorcana event RPH lists** — locals, league nights, draft nights — not just the two classified subsets.
