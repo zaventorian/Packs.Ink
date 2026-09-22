@@ -6967,6 +6967,24 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
+- **`supabase/168_curators_cc2.sql`** — **STAGED 2026-09-22, needs a paste.** Creates
+  `set_curators_cc2` — "Curator's Collection: Beauty and the Beast" (code **CC2**), the second
+  Curator's Collection drop (see 107 for CC1, Heroines). Announced at D23 2026, six premium foil
+  reprints at ~$99.99 from a handful of Disney locations starting 2026-10-01; not on TCGplayer at
+  authoring time, so `tcgplayer_group_id` is null like CC1's. **After the migration lands, run
+  `python scripts/patch_pid_overrides.py`** — the six `REPRINT_PROMOS` entries added the same day
+  (Be Our Guest 1/CC2, Mrs. Potts - Enchanted Teapot 2/CC2, Belle - Hidden Archer 3/CC2, Lumiere -
+  Fiery Friend 4/CC2, Gaston - Intellectual Powerhouse 5/CC2, Beast - Tragic Hero 6/CC2 — bases
+  confirmed against Lorcast: Fabled #31/#121, Ursula's Return #52, Rise of the Floodborn
+  #72/#147/#173) are what actually inserts the six card rows; the migration only creates the set
+  they hang off. Each carries a repo-local art crop (`Logos/cards/*-cc2-N.jpg`, pulled from the
+  D23 reveal video, same "read off the announcement photo" call as PD1 #18/#19) since there's no
+  TCGplayer pid yet — fill in the pid and drop the art path once it's listed, same card_id so no
+  collection marks move. Added to `SET_ORDER` (after PD1), `UNIFIED_TILE_SETS` and
+  `PROMO_RARITY_SETS` (single-printing, promo rarity, same as CC1), plus a `POP_SET_ALIASES`
+  entry (`"cc2-"`) for PSA pop parity. The sealed $99.99 box needs no code — same as CC1, the
+  generic `"curator's collection" → Collector's Edition` bucket in `load_sealed_products.py`
+  picks it up automatically once TCGplayer lists it, per that function's own comment.
 - ~~`supabase/163_raw_sales.sql`~~ — **APPLIED 2026-09-20 by Zaven**, and the backfill is
   **loaded**: 78 raw sales across 18 cards, back to 2023-10. `raw_sales` + `raw_sales_rollup` +
   `refresh_raw_sales_rollup()`. **⚠ Its `statement_timeout` is a function-level `SET` clause,
