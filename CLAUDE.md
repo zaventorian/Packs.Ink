@@ -5194,7 +5194,7 @@ effects DO: for anyone with no saved search, the first time the gate turns true 
 
 `EventMapView` (beside `scMergePins` in Index.html) draws many events on one OSM map.
 Same tiles-as-plain-`<img>` deal as `CalendarMiniMap` — no library, no script, no cookie —
-over `osmFitLayout`. Guarded by `node scripts/test_event_map.mjs` (184 checks).
+over `osmFitLayout`. Guarded by `node scripts/test_event_map.mjs` (240 checks).
 
 **It needed no migration, no RPC change, no new query and no `_headers` change.**
 `get_nearby_lorcana_events` already aggregates lat/lng per series, calendar rows carry
@@ -5383,6 +5383,83 @@ off its tile, and a second copy of either is exactly how that happens.
   on "SCs near me", or open the finder, **which is the map that does hold every
   local event**. Pins outside the frame are clipped by `overflow:hidden`, which
   is right, but silent.
+
+### The pins wear the calendar's marks, and the map lists what is on screen (2026-09-22)
+
+Zaven: *"instead of yellow dots, can we use the logos that corrispond with the
+calendar?"* and *"below map, a list view of all events on screen."*
+
+- **A pin carries the same `{icon, hue, img}` the calendar draws beside that event
+  everywhere else** — the Challenge shield, the qualifier hexagon, a trophy for a
+  Set Championship, a shopfront for a league night. `KindIcon` is split out of
+  `CalendarKindDot` so both surfaces draw from ONE stack: a Challenge shield on the
+  calendar and an anonymous yellow dot on the map for the same event is the two
+  surfaces disagreeing about what the thing IS. The finder's marks go through
+  `calendarEventIcon` with a synthetic store row (`scSeriesIcon`) rather than a
+  second icon table — a finder result and the calendar row for one shop night are
+  the same event seen from two pages.
+- **⚠ A MERGED pin only wears a mark when every event under it AGREES.** Taking the
+  first one's would state, in a picture, that the pin is a Challenge when half of it
+  is a league night. Measured near Chicago with every kind on: 65 pins, 38 marked,
+  27 mixed and correctly left as plain counts.
+- **⚠ An icon pin INVERTS** — a light disc carrying the kind's colour, not the
+  colour as the disc. The DLC and CCQ marks are IMAGES with their own palette and go
+  to mud on a saturated ground, and a white glyph on a pale hue is unreadable at
+  that size. On the dark themes `--bg-modal` makes it a dark disc with a coloured
+  glyph, which is what separates it at a glance from the gold count-only pin.
+
+**⚠ AN ICON PIN IS WIDER, AND `scPinR` HAS TO BE TOLD — this shipped wrong once.**
+`SC_PIN_ICON` asked for 14px while `.cal-ico` (the shared glyph stack it borrows)
+declares its own **18px** box and is declared LATER in styles.css at equal
+specificity — so the cascade gave it 18 and the reservation was 4px short on every
+marked pin. **It passed a live sweep anyway**: `SC_LBL_BLEED`'s 1px of slack
+happened to cover most of the shortfall, and that pixel exists to absorb the
+`translateY` rounding, not a systematic error. The same class of bug is already
+recorded here at 2.5px, where it *did* put a chip corner over a click target.
+
+- Both halves had to move: `SC_PIN_ICON` is **18**, and
+  **`.sc-map-pin .sc-map-pin-ico` carries TWO classes** so it out-specifies
+  `.cal-ico` and the number is enforced rather than merely stated.
+- The chrome term now over-reserves by ~2px, which is the SAFE direction — the same
+  call `scLabelW` already makes.
+- **The guard parses the rule out of styles.css** and asserts its width, height and
+  flex-basis all equal `SC_PIN_ICON`, plus that the selector still carries two
+  classes while `.cal-ico` sizes itself. Verified it fails on drift (reverting the
+  CSS to 14 gives 3 failures) rather than passing vacuously.
+
+**The list under the map** is the same events in date order, scoped to what is ON
+SCREEN — panning and zooming narrow it, which is what makes it a reading of the map
+rather than a second copy of the list beside it.
+
+- **⚠ Derived from the SAME in-frame test the pins use** (`inFramePins`, with
+  `inFrame` as its length). Two ways of answering "is this one showing" is how a
+  list ends up naming an event the map is not drawing. Sorted by the pin's `i` — the
+  caller's own order, date-sorted on both surfaces — never by pin position, which
+  orders a list of dates by latitude.
+- **⚠ Capped at `SC_MAP_LIST_CAP` (40) with a "Show N more", and the cap is
+  MEASURED**: the calendar map at a metro with every kind on is **65 pins but 232
+  events** — a merged pin is several league nights — and 232 rows is about ten
+  screens of page hanging under a 480px map. The header always states the true
+  count, so the cap hides nothing it does not name, and the button names the
+  REMAINDER ("Show 192 more" beside 40 rows), because "Show all 232" next to 40
+  visible rows reads as though 232 more are hidden.
+- **⚠ Expanding is NOT reset when the events or the frame change.** Somebody who
+  asked for the whole list and then nudged the map has not changed their mind.
+- **⚠ No inner scroll.** The finder's map lives inside a scrolling overlay, and a
+  scroll box inside a scrolling parent is the peephole the print-proxy dialog had to
+  have taken out of it.
+- **⚠ `mapIconOf` is declared BELOW the `art` index it closes over.** A `useCallback`
+  evaluates its dependency array at its own declaration point, so higher up it is a
+  TDZ ReferenceError into the error boundary — the `screenerPayload` trap. Pinned by
+  source position in the test.
+
+**What "Whole season" does, since the name only says half of it**: it clears the
+focus, so the map re-FITS to everything it holds (not a zoom step — it frames the
+pins, which for the circuit is the world) **and drops the local events entirely**,
+because `useMapNearbyEvents` is gated on having a focus. Measured: 65 pins / 232
+events at a Chicago focus becomes **24 pins / 28 events**, the circuit plus the
+shops you follow. That is the right meaning of the word, but it is a bigger action
+than "zoom out".
 
 ### A map you can SEND — `?scview` and `?cmap` (2026-09-22)
 
