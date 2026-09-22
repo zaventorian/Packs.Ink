@@ -3112,6 +3112,32 @@ pixels.
   `fonts.gstatic.com/**` in Playwright and fulfil them from a shell `curl`, which does have
   egress.
 
+## ⚠ A hover preview must be MOUSE-ONLY (2026-09-21)
+
+Touch fires a synthetic `mouseenter` and **never a matching `mouseleave`**, so any
+hover preview opened by a tap floats over the page until something else is tapped —
+scrolling does not clear it, and the thing it covers is the list you were reading.
+Reported from the Collection set-detail rows: nudging a card's `+` left a full card
+image parked over the rows, because the counter sits inside `.sd-row`, whose
+`onMouseEnter` fired from the tap.
+
+- **`mouseHoverOnly(fn)`** (beside `uiIcon`) is the one accessor: it wraps the ENTER
+  and MOVE halves and runs them only for `e.pointerType === "mouse"`. The LEAVE half
+  stays **unwrapped**, so anything that did somehow open can always close itself.
+- Same rule the calendar's `useCalHoverCard` already followed; this generalises it.
+- Converted: the Collection set-detail row (`.sd-row-preview`), the Screener's row
+  thumbnail, the deck editor's list row, the deck quick-add row, and the graded-sales
+  admin table. **⚠ The quick-add row's `setCursor(i)` rides the same gate** — a touch
+  has no cursor to move, and its tap already adds the card.
+- **⚠ Not every `onMouseEnter` is this bug.** `Tip` is deliberately tap-toggleable with
+  its own 4s auto-hide, the smart-search dropdown's is a keyboard-cursor highlight, and
+  the movers marquees' `hoverRef` pause is wanted on touch. Only a FLOATING PREVIEW that
+  nothing on screen can dismiss needs the gate.
+- **⚠ Verify it by dispatching `pointerover`/`pointerenter`, not `mouseenter`** — React
+  simulates enter/leave from the over/out pair, so a bare `pointerenter` reaches nothing.
+  Measured in the live page: touch leaves no `.deck-hover-preview`, mouse creates one,
+  and `pointerout` removes it.
+
 ## CSS pitfalls
 
 - **`mask-image` on a container softens child `<img>`s** by forcing offscreen compositing. Use absolutely-positioned gradient pseudo-elements for edge fades. Same caution: `will-change: transform`, `filter: blur(0)`, `transform: translateZ(0)`, `opacity: 0.99`.

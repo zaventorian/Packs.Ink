@@ -2541,6 +2541,14 @@ const uiIcon = (key, size) => {
   return f ? f(size) : null;
 };
 
+// ⚠ A HOVER PREVIEW MUST BE MOUSE-ONLY. Touch fires a synthetic mouseenter
+// and never a matching mouseleave, so a preview opened by a tap floats over the
+// page until something else is tapped — scrolling does not clear it. Reported
+// 2026-09-21 from the Collection set-detail list, where nudging a +/- counter
+// left a full card image parked over the rows. Wrap the ENTER and MOVE halves;
+// leave the LEAVE half unwrapped so anything that did open can still close.
+const mouseHoverOnly = (fn) => (e) => { if(e.pointerType === "mouse") fn(e); };
+
 // ── Lorcana Calendar ────────────────────────────────────────────────────────
 // What is coming for the GAME (set releases, product drops, championship
 // weekends, qualifiers) plus what is coming at YOUR stores. Two data sources
@@ -8096,9 +8104,9 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
           ${tableSales.slice(0, 200).map(s => { const priv = s.source_query==="private_sale"; return html`<tr key=${s.item_id}
             class=${"gs-table-row"+(sel?.item_id===s.item_id?" sel":"")+(priv?" gs-private":"")}
             onClick=${()=>setSel({...s})}
-            onMouseEnter=${e=> safeHttpUrl(s.image_url) && setHoverImg({src:safeHttpUrl(s.image_url), x:e.clientX, y:e.clientY})}
-            onMouseMove=${e=> setHoverImg(p=> p ? {...p, x:e.clientX, y:e.clientY} : p)}
-            onMouseLeave=${()=> setHoverImg(null)}>
+            onPointerEnter=${mouseHoverOnly(e=> safeHttpUrl(s.image_url) && setHoverImg({src:safeHttpUrl(s.image_url), x:e.clientX, y:e.clientY}))}
+            onPointerMove=${mouseHoverOnly(e=> setHoverImg(p=> p ? {...p, x:e.clientX, y:e.clientY} : p))}
+            onPointerLeave=${()=> setHoverImg(null)}>
             <td>${dstr(s.sold_date)}</td>
             <td class="gs-table-title" title=${s.title||""}>${s.title||""}</td>
             <td style=${{color: GRADER_COLOR[(s.grader||'').toLowerCase()]||"inherit"}}>${(s.grader||"").toUpperCase()}</td>
@@ -18699,7 +18707,8 @@ const SetDetailListRow = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, 
     : inkTint(inkList[0] || group.ink, theme);
   return html`<div class=${rowClass} style=${{background: rowBg}}
       onClick=${onOpen}
-      onMouseEnter=${onEnter} onMouseMove=${onMove} onMouseLeave=${onLeave}>
+      onPointerEnter=${mouseHoverOnly(onEnter)} onPointerMove=${mouseHoverOnly(onMove)}
+      onPointerLeave=${onLeave}>
     ${onlyFoil
       ? html`<${InlineCounter} qty=${foilQty}   onChange=${onFoil}/>`
       : onlyNormal
@@ -34574,9 +34583,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
               <td class="td-img">${img
                 ? html`<img src=${img} loading="lazy" alt="" style=${{cursor:"pointer"}}
                     onClick=${openThisRow}
-                    onMouseEnter=${(e) => setHoverPreview({src: r.image_normal || img, x: e.clientX, y: e.clientY})}
-                    onMouseMove=${(e) => setHoverPreview(p => p ? {...p, x: e.clientX, y: e.clientY} : p)}
-                    onMouseLeave=${() => setHoverPreview(null)}/>`
+                    onPointerEnter=${mouseHoverOnly((e) => setHoverPreview({src: r.image_normal || img, x: e.clientX, y: e.clientY}))}
+                    onPointerMove=${mouseHoverOnly((e) => setHoverPreview(p => p ? {...p, x: e.clientX, y: e.clientY} : p))}
+                    onPointerLeave=${() => setHoverPreview(null)}/>`
                 : null}</td>
               <td class="td-name">
                 <div class="td-name-main">
@@ -50703,9 +50712,9 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard, defaultInk
                 role="button" tabIndex=${-1}
                 title=${full ? (g["Product Name"] || "card") + " — already at the limit of " + max
                              : "Add " + (g["Product Name"] || "card") + " to the deck"}
-                onMouseEnter=${(e) => { setCursor(i); hover(e); }}
-                onMouseMove=${hover}
-                onMouseLeave=${() => onHoverCard && onHoverCard(null)}
+                onPointerEnter=${mouseHoverOnly((e) => { setCursor(i); hover(e); })}
+                onPointerMove=${mouseHoverOnly(hover)}
+                onPointerLeave=${() => onHoverCard && onHoverCard(null)}
                 onClick=${() => bump(g, 1)}>
                 ${/* NOT loading="lazy": at most 30 rows, all one scroll apart, and a
                       deferred lazy image renders this row as a blank slot where the
@@ -51943,7 +51952,8 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         const qtyText = (coconutCard && item.quantity === 1) ? "" : item.quantity + "×";
         return html`<div key=${k} class=${"deck-row"+dimClass+(overLimit?" coconut-over":"")}
           style=${rowBg ? {background: rowBg} : undefined}
-          onMouseEnter=${onRowEnter} onMouseMove=${onRowMove} onMouseLeave=${onRowLeave}>
+          onPointerEnter=${mouseHoverOnly(onRowEnter)} onPointerMove=${mouseHoverOnly(onRowMove)}
+          onPointerLeave=${onRowLeave}>
           <span class=${"deck-row-qty"+(overLimit?" over":"")}
             title=${overLimit ? `${item.quantity} copies — ${COCONUT_SET_NAME} allows ${cocoLimit === Infinity ? "any number" : cocoLimit}` : null}>
             ${overLimit ? html`<span class="coconut-over-flag" aria-label="Over the Coconut copy limit">${uiIcon("warn", 11)}</span>` : ""}${qtyText}
