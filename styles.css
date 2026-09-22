@@ -10270,15 +10270,15 @@ body:has(.deck-quickadd) .offline-pill{
    trade the rail makes in reverse. The icon sits at the top of the chip
    (align-items:flex-start) rather than centered, so it stays level with the
    FIRST line rather than drifting to the vertical middle of two. */
-.cal-month:not(.cal-month--compact) .cal-cell{position:relative;min-height:128px;}
-.cal-month:not(.cal-month--compact) .cal-cell-num{position:absolute;top:3px;right:5px;
+.cal-month:not(.cal-month--dense) .cal-cell{position:relative;min-height:128px;}
+.cal-month:not(.cal-month--dense) .cal-cell-num{position:absolute;top:3px;right:5px;
   font-size:9.5px;line-height:1;pointer-events:none;}
-.cal-month:not(.cal-month--compact) .cal-cell-events > .cal-chip:first-child{padding-right:20px;}
-.cal-month:not(.cal-month--compact) .cal-chip{padding:3px 5px;font-size:10.5px;
+.cal-month:not(.cal-month--dense) .cal-cell-events > .cal-chip:first-child{padding-right:20px;}
+.cal-month:not(.cal-month--dense) .cal-chip{padding:3px 5px;font-size:10.5px;
   align-items:flex-start;}
-.cal-month:not(.cal-month--compact) .cal-chip .cal-ico{width:17px;height:17px;border-radius:3px;
+.cal-month:not(.cal-month--dense) .cal-chip .cal-ico{width:17px;height:17px;border-radius:3px;
   margin-top:1px;}
-.cal-month:not(.cal-month--compact) .cal-chip .cal-ico-glyph svg{width:15px;height:15px;}
+.cal-month:not(.cal-month--dense) .cal-chip .cal-ico-glyph svg{width:15px;height:15px;}
 /* ⚠ min-width, and that bound is load-bearing. Unscoped, this rule OUT-SPECIFIES
    the ≤700px `display:none` that is supposed to drop the label on a phone
    (5 classes + span against 2 classes), so below 700px every chip label became a
@@ -10287,7 +10287,7 @@ body:has(.deck-quickadd) .offline-pill{
    row with it — reported as "dates like 10/16 get broken w/3 icons on it". The
    label only wraps where there is width to wrap in. */
 @media (min-width:701px){
-  .cal-month:not(.cal-month--compact) .cal-chip span:not(.cal-ico):not(.cal-chip-x){
+  .cal-month:not(.cal-month--dense) .cal-chip span:not(.cal-ico):not(.cal-chip-x){
     display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;
     overflow:hidden;text-overflow:ellipsis;white-space:normal;line-height:1.28;}
 }
@@ -10494,28 +10494,26 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
 .cal-panel-empty{font-size:12px;padding:8px 2px;}
 
 @media (max-width:700px){
-  /* The grid is the secondary view, and this is where it has to shed weight
-     rather than break: a 48px cell can show dots, so the chip labels go and the
-     dot count becomes the signal. Tapping a day still opens its events. */
-  /* ⚠ These two must carry the FULL-GRID selector as well as the bare one.
-     `.cal-month:not(.cal-month--compact) .cal-cell{min-height:128px}` above is
-     (0,3,0) against this rule's (0,1,0), so on /calendar — which is never
-     `--compact` — the 128px won and a phone drew seven columns of 128px-tall
-     cells, mostly empty, with the tiny centred icons lost in them. Reported as
-     "this looks sad. sizing way off". It is the very trap the note under that
-     rule already describes for the chip LABEL; the height had the same hole. */
-  .cal-cell,
-  .cal-month:not(.cal-month--compact) .cal-cell{min-height:58px;padding:2px;}
-  .cal-chip,
-  .cal-month:not(.cal-month--compact) .cal-chip{padding:3px 2px;justify-content:center;
-    align-items:center;}
-  /* Hide the LABEL, never the icon — .cal-ico is a <span> too, and a bare
-     `.cal-chip span` rule hid it, leaving featureless grey bars where the
-     glyph is the only thing a 48px cell can still say. ⚠ This selector names
-     the icon's class, so renaming that class silently reintroduces exactly
-     that: measured at 375px the chips went to 41x4 with all 17 icons hidden. */
-  .cal-chip > span:not(.cal-ico){display:none;}
-  .cal-cell-more{font-size:8px;text-align:center;padding:0;}
+  /* ⚠ The month GRID is not styled here any more — below this width it is
+     `--dense` (see CalendarMonthView's CAL_DENSE_PX, which is this same 700),
+     and the dense block near the bottom of the file owns the cell, the chips,
+     the label hide and the count.
+
+     What stood here was a CORRECT fix and is superseded rather than reverted.
+     It duplicated each rule onto `.cal-month:not(.cal-month--compact)` so the
+     (0,1,0) bare selector could beat the (0,3,0) desktop cell below — the hole
+     that let a phone draw seven columns of 128px cells ("this looks sad. sizing
+     way off"). That got the height down to 58px, and left the rest: the chips
+     still STACK there, so the marks stay 17px, and a day with four of them is
+     silently clipped by the cell's own overflow:hidden. Dense answers all three
+     — marks in a ROW at 32px, capped at two, with the count out of flow in the
+     corner — and it does it by opting the whole grid out of the desktop cell
+     instead of racing it selector for selector.
+
+     ⚠ So do not put a `.cal-cell` or `.cal-chip` rule back here. The dense
+     block is (0,2,0); a rule here carrying the full-grid selector is (0,3,0)
+     and would quietly win, which is how the 58px cell would come back on top
+     of a layout that no longer expects it. */
   .cal-row-when{flex-basis:74px;}
   .cal-form{grid-template-columns:minmax(0,1fr);}
   /* ⚠ The lede is a first-visit explanation costing every later visit 40px at
@@ -10917,37 +10915,61 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
 .cal-panel-list button.cal-panel-row:hover{background:var(--bg-surface-hover);}
 .cal-panel-list button.cal-panel-row:hover .cal-panel-title{color:var(--accent);}
 
-/* A month grid inside a ~240px rail: the day number used to own its own row —
-   same waste the full grid's cell had, fixed the same way (see .cal-cell
-   above): it goes absolute in the corner, translucent and click-through, so
-   the icon(s) get the WHOLE box instead of what's left under a date line.
-   `.cal-chip` grows to fill the freed space — one icon nearly fills the cell,
-   two or three share it — rather than sitting fixed-size in the middle of it. */
+/* ── the narrow month grid ────────────────────────────────────────────────
+   TWO classes, and the split is the point. `--compact` is the RAIL's chrome:
+   a ~240px panel has to shrink its month bar and weekday row, and a full-width
+   page does not. `--dense` is the CELL, and it goes on any grid whose cells are
+   too narrow to carry a label — the rail's 45px AND the phone's full grid at
+   47px, which for months wore the 128px desktop cell instead and drew one 17px
+   mark at the top of an empty column. The rail wears both; the phone wears only
+   `--dense`; a desktop page wears neither. Anything about a cell belongs below,
+   anything about the chrome above, or the phone grid gets the wrong half.
+
+   The day number used to own its own row — the same waste the desktop cell had,
+   fixed the same way (see .cal-cell above): absolute in the corner, translucent
+   and click-through, so the mark(s) get the WHOLE box rather than what is left
+   under a date line. `.cal-chip` grows into the freed space instead of sitting
+   fixed-size in the middle of it. */
 .cal-month--compact .cal-month-label{font-size:12px;}
 .cal-month--compact .cal-month-nav{width:22px;height:22px;font-size:13px;}
 .cal-month--compact .cal-month-today{padding:3px 7px;font-size:10px;}
 .cal-month--compact .cal-grid-dow{font-size:8px;padding-bottom:2px;}
 .cal-month--compact .cal-grid,.cal-month--compact .cal-grid-head{gap:2px;}
-.cal-month--compact .cal-cell{min-height:40px;padding:0;border-radius:5px;position:relative;}
-.cal-month--compact .cal-cell-num{position:absolute;top:2px;right:3px;font-size:8.5px;
+.cal-month--dense .cal-cell{min-height:40px;padding:0;border-radius:5px;position:relative;}
+.cal-month--dense .cal-cell-num{position:absolute;top:2px;right:3px;font-size:8.5px;
   line-height:1;opacity:0.5;pointer-events:none;z-index:1;}
 /* ⚠ Dots ACROSS, not down. Stacked, a day with three CCQs was three rows tall
    and a CSS grid row takes the height of its tallest cell — so one busy day
    inflated that whole week, which is what the 19th was doing. Across, three
    dots are ~42px in a ~44px cell and every week stays the same height. That
-   invariant survives the fill: `flex:1 1 30%` still lets 1-3 chips share ONE
-   row, it just also lets them grow to use the row's full height and width. */
-.cal-month--compact .cal-cell-events{position:absolute;inset:0;flex-direction:row;
+   invariant survives the fill: `flex:1 1 30%` still lets the chips share ONE
+   row, it just also lets them grow to use the row's full height and width —
+   and with the cap at two marks and the count out of flow, nothing is left
+   that could wrap. */
+.cal-month--dense .cal-cell-events{position:absolute;inset:0;flex-direction:row;
   flex-wrap:wrap;justify-content:center;align-content:stretch;align-items:stretch;gap:1px;}
-.cal-month--compact .cal-chip{padding:2px;justify-content:center;align-items:center;
-  flex:1 1 30%;min-width:0;background:transparent;}
-.cal-month--compact .cal-chip > span:not(.cal-ico){display:none;}
-/* The icon fills most of its chip's box (a chip that's the only one in the row
-   IS the row, so its icon nearly fills the whole cell); capped so a lone icon
-   in a wide rail doesn't blow past a sane glyph size. */
-.cal-month--compact .cal-chip .cal-ico{width:72%;height:72%;max-width:30px;max-height:30px;}
-.cal-month--compact .cal-cell-more{font-size:7px;text-align:center;padding:0;
-  flex:1 1 30%;display:flex;align-items:center;justify-content:center;color:var(--text-muted);}
+.cal-month--dense .cal-chip{padding:1px;justify-content:center;align-items:center;
+  flex:1 1 30%;min-width:0;background:transparent;position:relative;}
+.cal-month--dense .cal-chip > span:not(.cal-ico){display:none;}
+/* ⚠ The mark is sized off the SHORTER axis, and 72%-of-each-axis was not that.
+   A chip sharing its cell is TALL AND NARROW -- 21x38 with two of them -- so
+   72% of each gave a 13x25 box, and `.cal-ico-img` is object-fit:contain, which
+   renders at the min: a 13px mark with 12px of height thrown away. Driving a
+   square off the height and clamping it with max-width means the box is
+   min(width, 88% height) on its short side either way, so the mark takes
+   everything the chip has: 21px shared, ~33px alone (measured, 375px wide).
+   No max-width cap needed now -- the height is the cap. */
+.cal-month--dense .cal-chip .cal-ico{width:auto;height:88%;aspect-ratio:1;max-width:100%;}
+/* ⚠ The count is OUT OF FLOW, and that is what buys the marks their size: as a
+   flex child it took a third of the row and left every mark 13px. It reads the
+   day's TOTAL rather than what is hidden -- one mark standing for three
+   qualifiers still has to say three. --bg-modal, not --bg-surface: it sits ON a
+   mark, and --bg-surface is translucent in the dark themes. */
+.cal-month--dense .cal-cell-more{position:absolute;right:1px;bottom:1px;z-index:2;
+  width:auto;flex:none;padding:0 3px;font-size:8px;font-weight:800;line-height:1.3;
+  text-align:center;border-radius:999px;background:var(--bg-modal);color:var(--text-muted);
+  box-shadow:0 0 0 1px var(--border);font-variant-numeric:tabular-nums;}
+.cal-month--dense .cal-cell-more:hover{color:var(--accent);}
 
 /* ── the mini map ─────────────────────────────────────────────────────────── */
 .cal-map{margin-top:14px;}
@@ -11101,8 +11123,12 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
 .cal-modal-kind .cal-ico{width:22px;height:22px;}
 .cal-row-title .cal-ico,.cal-panel-title .cal-ico{margin-right:1px;}
 .cal-chip .cal-ico{width:13px;height:13px;border-radius:2px;}
-/* The compact chip hides its label (`> span:not(.cal-ico)`), which would take
-   the count with it - and the count is the entire point of a grouped chip in a
-   44px cell. Four classes so it wins outright rather than on source order. */
-.cal-month--compact .cal-cell-events > .cal-chip > span.cal-chip-x{
-  display:inline;margin-left:1px;font-size:8px;}
+/* ⚠ The per-chip `×N` stays HIDDEN in a compact cell -- the cell's own corner
+   badge is the count there, and it already covers this case: a lone group of
+   three is one mark over a total of three. Inline it was a 10px sibling of a
+   13px mark inside an 18px box, so it overflowed the chip by 3px and squeezed
+   the mark it was describing. Two numbers in one 45px cell is the other way to
+   get this wrong: with the cap at two marks, a `×N` on the second chip lands in
+   the same corner as the cell badge. The `> span:not(.cal-ico)` rule above does
+   the hiding; this note is here so nobody "restores" the count that moved. */
+.cal-month--dense .cal-cell-events > .cal-chip > span.cal-chip-x{display:none;}

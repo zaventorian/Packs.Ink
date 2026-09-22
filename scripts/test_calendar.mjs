@@ -96,6 +96,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const CAL_KIND_PLURAL = {", NL + "};"),
   grabLine("const calGroupKindLabel = "),
   grab("const calCellItems = (events, art, date) => {", NL + "};"),
+  grabLine("const CAL_CELL_MAX = "),
   grabLine("const calendarHiddenSet = (subs) =>"),
   grab("const calendarApplyHidden = (events, hidden, saved) => {", NL + "};"),
   grab("const CAL_STORE_KINDS = [", NL + "];"),
@@ -166,7 +167,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   " calendarSetEstimates, calendarEstimatedSetEntries, calEstimated, calTimelineSkip,",
   " UPCOMING_SET_NAMES, SET_CADENCE_DAYS, SET_RELEASE_DATES, calSetOrdinal, calSetOrdinalLabel,",
   " CAL_TL_LABEL_PX, CAL_TL_MAX_STORE_LANES, CAL_TL_STORE_ROWS, CAL_TL_STORE_REST,",
-  " calCellItems, calGroupKindLabel, CAL_KIND_SHORT, CAL_KIND_PLURAL,",
+  " calCellItems, calGroupKindLabel, CAL_KIND_SHORT, CAL_KIND_PLURAL, CAL_CELL_MAX,",
   " calPanelRows, calDayLabel};",
 ].join(NL)));
 
@@ -179,7 +180,7 @@ const {
   osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
   calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS,
   calPanelRows, calDayLabel,
-  calCellItems, calGroupKindLabel, CAL_KIND_SHORT, CAL_KIND_PLURAL,
+  calCellItems, calGroupKindLabel, CAL_KIND_SHORT, CAL_KIND_PLURAL, CAL_CELL_MAX,
   CAL_STORE_KIND_KEYS, calendarHiddenSet, calendarApplyHidden,
   calendarArtIndex, calendarEventArt, calendarEventProduct, CAL_ART_SKIP_TYPES, deriveSealedDisplayType,
   CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
@@ -1791,11 +1792,55 @@ ok("and the anchor element is kept for it to ask about",
   /const next = \{evs, rect, el, day\}/.test(cgHook));
 ok("a trigger that has gone away still closes", /isConnected/.test(cgHook));
 
-// The count has to survive the compact chip's label hide, or a 44px rail cell
-// shows one medal and no number - the same bug, with an extra step.
+// ── the narrow cell: one treatment, two grids ─────────────────────────────
+// ⚠ `--compact` is the RAIL's chrome, `--dense` is the CELL. The phone's full
+// grid is dense but NOT compact, and while the cell rules were spelled
+// `--compact` it wore the 128px desktop cell instead: six rows of it holding
+// one 17px mark apiece. Every assertion below names `--dense` for that reason;
+// a rule that drifts back to `--compact` takes the phone grid with it and
+// nothing errors -- it just silently goes back to the tall empty column.
 const cgCSS = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
-ok("the compact chip keeps its count",
-  /\.cal-month--compact \.cal-cell-events > \.cal-chip > span\.cal-chip-x\{[^}]*display:inline/.test(cgCSS));
+ok("the dense cell's count is out of flow",
+  /\.cal-month--dense \.cal-cell-more\{[^}]*position:absolute/.test(cgCSS));
+ok("and it is opaque, so it can sit on a mark",
+  /\.cal-month--dense \.cal-cell-more\{[^}]*background:var\(--bg-modal\)/.test(cgCSS));
+// The per-chip `×N` stays hidden: inline it was a 10px sibling of a 13px mark
+// in an 18px box, so it overflowed by 3px and squeezed what it was describing.
+ok("the dense chip's own count stays hidden",
+  /\.cal-month--dense \.cal-cell-events > \.cal-chip > span\.cal-chip-x\{display:none/.test(cgCSS));
+// ⚠ The mark is sized off the SHORTER axis. 72% of EACH axis gave a 13x25 box
+// in a shared cell, and object-fit:contain renders at the min -- a 13px mark
+// with 12px of height thrown away.
+ok("the dense mark is a height-driven square, not 72% of each axis",
+  /\.cal-month--dense \.cal-chip \.cal-ico\{width:auto;height:\d+%;aspect-ratio:1;max-width:100%/.test(cgCSS));
+// ⚠ And the DESKTOP cell has to opt out of `--dense`, not `--compact`, or it
+// out-specifies everything above on the one grid that needed it most.
+ok("the desktop cell opts out of dense",
+  /\.cal-month:not\(\.cal-month--dense\) \.cal-cell\{position:relative;min-height:128px/.test(cgCSS));
+// ⚠ Comment-stripped, or this passes/fails on PROSE: the note explaining what
+// the superseded `:not(--compact)` rules used to do contains the selector.
+const cgRules = cgCSS.replace(/\/\*[\s\S]*?\*\//g, "");
+ok("and nothing styles a cell by :not(--compact) any more",
+  !/\.cal-month:not\(\.cal-month--compact\)/.test(cgRules));
+// ⚠ The JS breakpoint and the CSS one are the SAME 700. A gap between them is a
+// width where the chip label is hidden and the cell is not dense -- a 47px cell
+// drawing four chips of nothing, which is the bug this replaces.
+{
+  const px = +(/const CAL_DENSE_PX = (\d+);/.exec(src) || [])[1];
+  ok("the dense breakpoint is a named constant", px > 0, px);
+  ok("and the stylesheet hides the chip label at the same width",
+    new RegExp("@media \\(max-width:" + px + "px\\)").test(cgCSS) &&
+    new RegExp("@media \\(min-width:" + (px + 1) + "px\\)").test(cgCSS), px);
+  // ⚠ The hook is called UNCONDITIONALLY. Written `compact || useMaxWidth(...)`
+  // the || short-circuits it away whenever compact is true -- a rules-of-hooks
+  // violation that only fails to crash because `compact` is a fixed prop per
+  // mount, and would the day anything made it dynamic.
+  ok("the rail is dense too, so it keeps the cell it was tuned with",
+    /const narrow = useMaxWidth\(CAL_DENSE_PX\);[\s\S]{0,40}const dense = compact \|\| narrow;/.test(src));
+  ok("and the cap and the count both follow dense, not compact",
+    /const cap = dense \? CAL_CELL_MAX : CAL_CELL_MAX_FULL/.test(src) &&
+    /const cellCount = dense\s/.test(src));
+}
 // And the version badge that used to paint over everything is contained.
 ok("the graded tile isolates its version badge",
   /\.gmover-tile\{[^}]*isolation:isolate/.test(cgCSS));
@@ -1993,9 +2038,16 @@ ok("the graded tile isolates its version badge",
 {
   const css2 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
   ok("the two-line clamp only applies where there is width to wrap in",
-    /@media \(min-width:701px\)\{[\s\S]{0,400}?\.cal-month:not\(\.cal-month--compact\) \.cal-chip span:not\(\.cal-ico\):not\(\.cal-chip-x\)\{/.test(css2));
-  ok("and the phone rule that hides the label is still there to win",
-    /@media \(max-width:700px\)\{[\s\S]*?\.cal-chip > span:not\(\.cal-ico\)\{display:none;\}/.test(css2));
+    /@media \(min-width:701px\)\{[\s\S]{0,400}?\.cal-month:not\(\.cal-month--dense\) \.cal-chip span:not\(\.cal-ico\):not\(\.cal-chip-x\)\{/.test(css2));
+  // ⚠ This one used to read `@media (max-width:700px){[\s\S]*?.cal-chip > span...`
+  // with an UNBOUNDED lazy gap, so once the label hide moved into the dense
+  // block it went on passing by matching a rule hundreds of lines outside the
+  // media query it names. Anchor on the rule that actually does the hiding.
+  ok("and the rule that hides the label is still there to win",
+    /\.cal-month--dense \.cal-chip > span:not\(\.cal-ico\)\{display:none;\}/.test(css2));
+  // The clamp cannot reach it: dense covers <=700 and the clamp starts at 701.
+  ok("so the clamp and the hide can never both apply",
+    /@media \(min-width:701px\)/.test(css2) && !/@media \(max-width:70[1-9]px\)/.test(css2));
   // ⚠ Never the icon. `.cal-ico` is a <span> too, and a bare `.cal-chip span`
   // rule hid it — featureless grey bars where the glyph is the only thing a
   // 48px cell can still say.
@@ -2088,6 +2140,28 @@ ok("the graded tile isolates its version badge",
   ok("the +N marker is a button now", /<button type="button" class="cal-cell-more"/.test(monthView));
   ok("and it opens the same day list",
     (monthView.match(/onOpenDay\(day\.date, day\.events\)/g) || []).length === 2);
+
+  // ── what the corner count SAYS ──────────────────────────────────────────
+  // ⚠ Compact reads the day's TOTAL, never what is hidden. A `×3` group mark
+  // hides nothing, so a hidden-count reads "0" over a cell holding three
+  // qualifiers -- and the whole reason the count exists is that one mark is
+  // standing for three things. Wrong either way it is a plausible number
+  // beside the right marks, which is the worst kind of wrong available here.
+  ok("the dense count is the day's total",
+    /dense\s*\?\s*\(day\.events\.length > shown\.length \? String\(day\.events\.length\)/.test(monthView));
+  // ⚠ ...and the full grid's "+N more" counts EVENTS, not chips: a hidden
+  // `×2` group is two more events, and "+1 more" under-reports it.
+  ok("the full grid's +N counts events, not chips",
+    /shown\.reduce\(\(a, it\) => a \+ \(it\.group \? it\.events\.length : 1\), 0\)/.test(monthView));
+  ok("and that is what the +N branch reads",
+    /hiddenEvents > 0 \? "\+" \+ hiddenEvents \+ " more"/.test(monthView));
+  // ⚠ TWO marks, measured: three share a ~45px cell at 13px each, too small to
+  // tell a shield from a hexagon, which is the one thing a mark is for. The cap
+  // can be flat now because the count is out of flow -- it used to have to drop
+  // by one whenever the overflow marker took a slot of its own.
+  ok("a dense cell draws two marks", CAL_CELL_MAX === 2, CAL_CELL_MAX);
+  ok("and the cap no longer shrinks for the marker",
+    !/cap = compact && items\.length > max/.test(monthView));
 
   const dayModal = grab("const CalendarDayModal = ({day, events, onOpen, onClose, art}) => {",
                         NL + "};");
