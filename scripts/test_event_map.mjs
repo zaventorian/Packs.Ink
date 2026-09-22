@@ -37,12 +37,25 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const osmFitLayout = (points, w, h, opts) => {", NL + "};"),
   grabLine("const SC_PIN_MERGE_PX = "),
   grab("const scMergePins = (pins) => {", NL + "};"),
+  grabLine("const SC_PIN_R = "),
+  grabLine("const SC_LBL_GAP = "),
+  grabLine("const SC_LBL_H = "),
+  grabLine("const SC_LBL_PAD = "),
+  grabLine("const SC_LBL_CHAR = "),
+  grabLine("const SC_LBL_BLEED = "),
+  grab("const scLabelW = (text) => {", NL + "};"),
+  grabLine("const SC_PIN_MIN_W = "),
+  grab("const scPinR = (count) => {", NL + "};"),
+  grabLine("const _scBoxHit = "),
+  grab("const scPlacePinLabels = (pins, w, h) => {", NL + "};"),
   "export {osmWorldFrac, osmFracLat, osmTileLayout, osmFitLayout, OSM_FIT_PAD,"
-  + " scMergePins, SC_PIN_MERGE_PX};",
+  + " scMergePins, SC_PIN_MERGE_PX, scLabelW, scPlacePinLabels,"
+  + " SC_PIN_R, SC_LBL_GAP, SC_LBL_H, scPinR};",
 ].join(NL)));
 
 const { osmWorldFrac, osmFracLat, osmTileLayout, osmFitLayout, OSM_FIT_PAD,
-        scMergePins, SC_PIN_MERGE_PX } = mod;
+        scMergePins, SC_PIN_MERGE_PX, scLabelW, scPlacePinLabels,
+        SC_PIN_R, SC_LBL_GAP, SC_LBL_H, scPinR } = mod;
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; } else { fail++; console.log("  FAIL: " + msg); } };
@@ -274,6 +287,124 @@ section("10. scMergePins");
   const g2 = scMergePins(l.pins);
   ok(g2.reduce((n, g) => n + g.items.length, 0) === l.pins.length,
      "grouped pin count equals placed pin count");
+}
+
+// 11. scPlacePinLabels — the date chip beside the dot
+//
+// Every failure here is silent in the way the rest of this file is about: a
+// label drawn over another label is unreadable but present, a label drawn over
+// a DOT hides something clickable, and a label drawn past the edge of the frame
+// is simply gone with nothing on screen to say it existed.
+section("11. scPlacePinLabels");
+{
+  const lp = (left, top, text, rank) => ({ left, top, text, rank });
+  const CHIP = (text) => scLabelW(text);
+  const DAY = "Sep 27";
+  const wide = 800, tall = 400;
+
+  ok(scLabelW("") === 0 && scLabelW(null) === 0 && scLabelW(undefined) === 0,
+     "no text is no width, so a pin with no date is never placed");
+  ok(scLabelW("Sep 7") < scLabelW("Sep 27"), "width grows with the label");
+
+  const one = scPlacePinLabels([lp(400, 200, DAY, 0)], wide, tall);
+  ok(one.length === 1 && one[0] === "r", "a lone pin is labelled to its right");
+
+  // Against the right edge it flips rather than clipping — the whole point of
+  // trying two sides.
+  const atRight = scPlacePinLabels([lp(wide - 20, 200, DAY, 0)], wide, tall);
+  ok(atRight[0] === "l", "a pin near the right edge flips its label to the left");
+
+  // In a frame too narrow for either side it is DROPPED, not clipped.
+  const noRoom = scPlacePinLabels([lp(20, 20, DAY, 0)], 40, 40);
+  ok(noRoom[0] === null, "a label with no room on either side is dropped");
+
+  // ⚠ Two pins side by side is NOT a clash — the second simply takes the other
+  // side, which is what having two sides is for. A real clash needs one side
+  // already occupied and the other off the frame: two shops a few streets apart
+  // near the left edge, which is an ordinary cluster and not a contrived one.
+  const narrow = 380;
+  const clash = scPlacePinLabels([lp(60, 200, DAY, 0), lp(60, 215, DAY, 1)], narrow, tall);
+  ok(clash.filter(Boolean).length === 1, "two labels that would overlap do not both draw");
+  ok(clash[0] === "r" && clash[1] === null,
+     "the first-ranked pin is the one that keeps its label");
+
+  // Rank, not array order, decides who wins.
+  const ranked = scPlacePinLabels([lp(60, 200, DAY, 9), lp(60, 215, DAY, 0)], narrow, tall);
+  ok(ranked[1] !== null && ranked[0] === null,
+     "the better-ranked pin keeps its label whatever order it arrives in");
+
+  // And the loser is still a PIN — losing a label never loses an event, which
+  // is the whole licence for dropping one.
+  ok(clash.length === 2, "a dropped label still has its pin in the answer");
+
+  // ⚠ A MERGED pin is physically wider than a plain one — it carries a count —
+  // and reserving the plain width for it lets a neighbour's chip clip its edge.
+  // Found live at 2.5px, which is invisible in a screenshot and still covers a
+  // click target.
+  ok(scPinR(1) === SC_PIN_R, "a single pin reserves the plain radius");
+  ok(scPinR(12) > SC_PIN_R, "a two-digit count reserves more than a plain pin");
+  ok(scPinR(120) > scPinR(12), "and a three-digit count more again");
+  ok(scPinR(0) === SC_PIN_R && scPinR(undefined) === SC_PIN_R,
+     "no count is the plain radius, never NaN");
+  {
+    // A chip that just clears a PLAIN neighbour must be refused once that
+    // neighbour is merged and therefore wider.
+    const gap = SC_PIN_R + SC_LBL_GAP;
+    const mk = (r) => scPlacePinLabels(
+      [lp(300, 200, DAY, 0), Object.assign(lp(300 - gap - CHIP(DAY) - SC_PIN_R, 200, "", 1), { r })],
+      wide, tall);
+    ok(mk(SC_PIN_R)[0] !== null, "the chip fits beside a plain neighbour");
+    ok(mk(scPinR(12))[0] !== "l", "and is refused that side once the neighbour is merged");
+  }
+
+  // A chip may never cover another event's DOT, labelled or not — that hides a
+  // click target. Put a second, label-less pin exactly where the first pin's
+  // right-hand chip would go.
+  const overDot = scPlacePinLabels(
+    [lp(300, 200, DAY, 0), lp(300 + SC_PIN_R + SC_LBL_GAP + 10, 200, "", 1)], wide, tall);
+  ok(overDot[0] === "l", "a chip that would cover another pin's dot goes the other way");
+
+  // Clear in y, both draw: the placement is a 2D fit, not a column test.
+  const stacked = scPlacePinLabels([lp(300, 100, DAY, 0), lp(300, 100 + SC_LBL_H + 4, DAY, 1)],
+                                   wide, tall);
+  ok(stacked.every(Boolean), "labels clear in y both draw");
+
+  // Degenerate inputs must not throw — the map renders before it is measured.
+  ok(scPlacePinLabels([], 0, 0).length === 0, "no pins, no sides");
+  ok(scPlacePinLabels([lp(10, 10, DAY, 0)], 0, 400)[0] === null, "an unmeasured box places nothing");
+  ok(scPlacePinLabels(null, wide, tall).length === 0, "null pins is an empty answer");
+  ok(scPlacePinLabels([lp(10, 10, DAY)], wide, tall).length === 1,
+     "a missing rank falls back to array order rather than NaN");
+
+  // End to end over a real layout: no placed chip overlaps another chip, any
+  // dot, or the edge of the frame.
+  const pts = [P(41.88, -87.63), P(41.95, -87.68), P(42.05, -88.0), P(41.7, -87.7),
+               P(41.9, -88.3), P(42.2, -87.8)];
+  const lay = osmFitLayout(pts, W, H);
+  const gs = scMergePins(lay.pins);
+  const cand = gs.map((g, i) => lp(g.left, g.top, DAY, i));
+  const sides = scPlacePinLabels(cand, W, H);
+  const boxes = [];
+  sides.forEach((side, i) => {
+    if (!side) return;
+    const tw = CHIP(DAY), q = cand[i];
+    const x0 = side === "r" ? q.left + SC_PIN_R + SC_LBL_GAP
+                            : q.left - SC_PIN_R - SC_LBL_GAP - tw;
+    boxes.push([x0, q.top - SC_LBL_H / 2, x0 + tw, q.top + SC_LBL_H / 2]);
+  });
+  const hit = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+  let bad = 0;
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) if (hit(boxes[i], boxes[j])) bad++;
+    for (const q of cand) {
+      const dot = [q.left - SC_PIN_R, q.top - SC_PIN_R, q.left + SC_PIN_R, q.top + SC_PIN_R];
+      if (hit(boxes[i], dot)) bad++;
+    }
+  }
+  ok(bad === 0, "over a real layout no chip overlaps another chip or any dot");
+  ok(boxes.every((b) => b[0] >= 0 && b[1] >= 0 && b[2] <= W && b[3] <= H),
+     "every placed chip is fully inside the frame");
+  ok(sides.some(Boolean), "a real layout still labels something");
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed");

@@ -5135,6 +5135,90 @@ effects DO: for anyone with no saved search, the first time the gate turns true 
   against the real bug rather than assumed: re-adding `zip` to the deps, or dropping the
   guard from one `catch`, each fails the run.
 
+## The event map — two surfaces, one component (2026-09-22)
+
+`EventMapView` (beside `scMergePins` in Index.html) draws many events on one OSM map.
+Same tiles-as-plain-`<img>` deal as `CalendarMiniMap` — no library, no script, no cookie —
+over `osmFitLayout`. Guarded by `node scripts/test_event_map.mjs` (90 checks).
+
+**It needed no migration, no RPC change, no new query and no `_headers` change.**
+`get_nearby_lorcana_events` already aggregates lat/lng per series, calendar rows carry
+city-level coordinates from `143_calendar_geo.sql`, and `tile.openstreetmap.org` was
+already in BOTH CSP directives for the calendar's mini-map. Worth remembering before
+anyone scopes a "map feature" as large.
+
+- **The finder's map and the calendar's map are DIFFERENT MAPS**, which is why `height`
+  and `fit` are props rather than constants. The finder answers *"which way do I drive"* —
+  a 50-mile radius, zoom 11-13. The calendar answers *"where is the season"* — the circuit
+  is ~17 Challenges across four continents, so `CAL_MAP_FIT` opens it to `minZoom: 2`.
+  One shared range serves neither: capped at 13 the world map cannot fit Tokyo and Chicago
+  on one screen at all, and floored at 2 the finder opens on a view of Europe.
+- **In the home TILE the Map button pops the box out** (`setMapOn(true)` + `setExpanded(true)`,
+  and the chip carries a ⤴). The rail is 240-360px against a 330px-tall map, which is a
+  smudge you cannot read a date off — and the expanded card is the same component with the
+  same filters, so "pop it up" costs two flags and no new UI. Expanded, or in the App
+  overlay, it switches in place.
+  - **⚠ `mapHere` (`mapOn && !inTile`) is a different question from `mapOn`**, and both are
+    load-bearing. `.sc-results--map` hides `.sc-list` by CSS, so a tile that stored a map
+    preference would hide its list and draw nothing in its place — a dead surface with the
+    Map button lit over it.
+- **⚠ `CAL_MAP_H` was already taken** by the calendar's own mini-map height (150). The
+  view's is `CAL_MAP_VIEW_H`. A duplicate `const` at module scope is a SyntaxError that
+  takes the whole app to a blank page, and it is not caught by any test — only by loading it.
+
+### The date on the pin, and why placement is a FIT
+
+A bare dot says "an event is here", which the list beside it already said. The date is what
+turns the map into a plan. But **a label is ~5x the footprint of its dot**, so two shops
+whose DOTS clear each other comfortably have labels that overlap completely — `scMergePins`
+(11px) cannot catch that, because they are genuinely different places.
+
+`scPlacePinLabels(pins, w, h)` decides per pin: a chip to the right, to the left, or none.
+
+- **⚠ A label that will not fit is DROPPED, never stacked or shrunk.** The dot survives and
+  the callout still names every event under it, so a dropped label costs a glance — where a
+  chip drawn half off the edge is simply gone with nothing on screen to say it existed
+  (the `.scanner-qa-rowinfo` rule, and the timeline's).
+- **⚠ Right THEN left, the left one drawn BACKWARDS from its dot.** Without the flip, no pin
+  in the right-hand third of the map could ever be labelled — a whole edge going quiet.
+- **⚠ EVERY dot is reserved before anything is placed**, labelled or not: a chip may never
+  cover another event's pin, which would hide something clickable.
+- **⚠ A MERGED pin is WIDER than a plain one** — it carries a count. Reserving 22px for it
+  let a chip clip its edge by 2.5px, measured live: invisible in a screenshot, and still
+  over a click target. `scPinR(count)` derives the real width from the pin's own CSS
+  (`min-width:22px`, 5px padding and a 2px border each side, plus the digits).
+- **⚠ Every reserved box is inflated by `SC_LBL_BLEED` (1px).** The chip is centred by
+  `top:50%` + `translateY(-50%)` inside a bordered parent, so where it lands can differ from
+  the arithmetic by a rounding — measured at exactly 1px, which was enough to put one chip's
+  corner over a neighbouring pin. A pixel of slack costs a marginal label and buys the
+  guarantee the function exists for.
+- **Ties go to whoever the LIST ranks first** — the finder sorts pinned-then-soonest, the
+  calendar by date — so the surviving label is the one the reader was going to look at first.
+- `scLabelW` over-estimates slightly (52 against a measured 49.7), which is the SAFE
+  direction: it reserves more than it uses.
+- **⚠ A pin's date is SHORT** (`scPinDay` → "Sep 27", never `fmtSCDate`'s "Sat, Sep 27").
+  Every character it does not need is a pin that keeps its label instead of falling back to
+  a dot. Verified live: 40 pins → 17 chips, 0 chip-chip, 0 chip-dot and 0 out-of-frame.
+
+### `/calendar?cv=map`, the fourth mode
+
+Beside List / Month / Timeline, rendering **`listed`** — the same array the list renders, so
+"Show past" and every filter above mean the same thing there as here, and a map can never
+quietly hold a different set of events from the view you switched away from. `cv` was
+already validated against `CAL_VIEW_MODES` and registered in `dirtyParams` + `VIEW_OWNED`,
+so `?cv=map` needed no routing change at all.
+
+- **⚠ "Not on the map" is TWO facts and they must not be added up.** A set or product
+  release is WORLDWIDE — in no place by definition, the same reason the timeline gives
+  releases a rail of their own — while a store event with no coordinates is a GAP in the
+  data. Counted together, the calendar permanently reported *"11 events have no location on
+  file"*, which reads as broken software rather than as the truth. `worldwideOf` splits
+  them; the live footer reads **"11 releases are worldwide · 1 event has no location on
+  file"**. Filtered to releases alone the map says so instead of looking empty.
+- **⚠ Map does not write `cm`.** It ignores `month` entirely, so a link off it would carry
+  an anchor that does nothing there and silently moves the Month view on arrival.
+- The glyph is a FOLDED MAP, not a pin: this names a view, and a pin says "location".
+
 ### How the finder itself works
 
 `UpcomingSCsBox` (Index.html). ZIP/postal + radius + optional date, three modes: **All / Set Champs / Prereleases**. Reworked 2026-07-30 so **All means literally every Lorcana event RPH lists** — locals, league nights, draft nights — not just the two classified subsets.

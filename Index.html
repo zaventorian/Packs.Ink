@@ -654,6 +654,156 @@ const gradedVariantLabel = (printing, setName) => {
   return variantBadge(printing);                            // Two Swords / Text Error / null
 };
 
+// ── PSA population ──────────────────────────────────────────
+// How many of this card exist, and at what grade. `graded_sales` says what
+// people paid; this says what the supply is, and the two only mean something
+// together — a PSA 10 that is 1-of-3 is a different asset from one that is
+// 1-of-900 at the same price.
+//
+// Rows arrive exactly as PSA publishes them (migration 165 deliberately stores
+// no card_id) and are joined to the catalog HERE, in memory, the same joinback
+// the Screener does against price_movers. That is what stops a stored mapping
+// drifting from the catalog, and it means a card we start cataloguing tomorrow
+// picks up its pops with no re-load.
+let _gradedPop = null, _gradedPopPromise = null;
+const EMPTY_POP = {byCard: new Map(), setGem: new Map()};
+
+// ⚠ A STRONGER fold than searchNorm, which only handles diacritics and
+// apostrophes. PSA's spelling differs from Lorcast's in four ways and all four
+// are load-bearing: case ("DR. Facilier", "on Human Legs"), diacritics
+// ("TE KA" for Te Kā), punctuation ("Loud Mouthed" for Loud-Mouthed) and
+// stray double spaces ("Jafar  - Keeper of Secrets"). Folding all four takes
+// The First Chapter from 142/146 to 146/146, so nothing here is decorative.
+const popNameKey = (s) => searchNorm(String(s || "").toLowerCase())
+  .replace(/[^a-z0-9]+/g, " ").trim();
+
+// PSA names a set its own way: "Disney Lorcana EN 5-Shimmering Skies". The
+// mainline ones parse generically off the dash, so a new set needs no edit; only
+// the ones whose name is not ours are listed, and they are matched by PREFIX
+// because PSA appends things ("CC1-Curator's Collection: Heroines Edition").
+// ⚠ Targets are DISPLAY names — the standing rule that every in-code set
+// comparison uses what SET_DISPLAY_NAMES renders, not what Lorcast stores.
+const POP_SET_ALIASES = [
+  ["1-demo deck", "The First Chapter"],   // ⚠ a provenance, not a set: all 35 of
+                                          // its rows are The First Chapter cards
+  ["p1-promo", "Promo Set 1"],
+  ["p2-promo", "Promo Set 2"],
+  ["p3-promo", "Promo Set 3"],
+  ["pd1-promo", "PD1"],
+  ["c1-", "Lorcana Challenge Promo (C1)"],
+  ["c2-", "Lorcana Challenge Promo (C2)"],
+  ["d23-", "D23 Collection"],
+  ["dis-magical places", "Magical Places Promos"],
+  ["cc1-", "Curator's Collection: Heroines"],
+  // ⚠ The two Illumineer's Quest headings have a SPACE where every other
+  // label has a dash ("EN Q1 Illuminers Quest Deep Trouble"), so the generic
+  // split below returns null for them and all 40 of their rows would vanish
+  // without a word. Matched on "q1 "/"q2 " rather than the full phrase because
+  // PSA spells it "Illuminers", and a typo they may fix should not break this.
+  // Our catalogue files these under EXTRAS_SET_NAME with a Deep Trouble /
+  // Palace Heist variant label -- it currently holds 9 of PSA's 40, so most
+  // will not join until the rest are catalogued, which is exactly the case
+  // resolving client-side is meant to handle.
+  ["q1 ", "Extras & Oddities"],
+  ["q2 ", "Extras & Oddities"],
+];
+const popSetName = (label) => {
+  const m = /disney lorcana\s+en\s+(.+)$/i.exec(String(label || "").trim());
+  if(!m) return null;
+  const rest = m[1].trim(), key = rest.toLowerCase();
+  for(const [frag, ours] of POP_SET_ALIASES) if(key.startsWith(frag)) return ours;
+  const dash = rest.indexOf("-");
+  return dash > 0 ? rest.slice(dash + 1).trim() : null;
+};
+// ⚠ The set is part of the key, not decoration. Reprint sets share both a name
+// and a collector number with the set they reprint — measured on the real data,
+// Fabled alone collides with Into the Inklands on 8 cards — so a key of
+// (name, number) alone silently attributes one set's pops to another.
+const popCardKey = (setName, productName, cn) =>
+  popNameKey(setName) + "|" + popNameKey(productName) + "|" + String(cn == null ? "" : cn).trim();
+
+async function fetchGradedPop(){
+  if(_gradedPop) return _gradedPop;
+  if(_gradedPopPromise) return _gradedPopPromise;
+  _gradedPopPromise = sbFetchAll("graded_pop", {
+    select: "spec_id,heading_id,set_label,subject_name,card_number,variety,total,pop_10,pop_9,grades",
+    order: "spec_id.asc",
+  }).then(rows => {
+    const byCard = new Map(), setTot = new Map();
+    for(const r of (rows || [])){
+      const set = popSetName(r.set_label);
+      if(!set) continue;
+      const k = popCardKey(set, r.subject_name, r.card_number);
+      if(!byCard.has(k)) byCard.set(k, []);
+      byCard.get(k).push(r);
+      // Running totals so a card's gem rate can be read against its own set's,
+      // which is the only thing that makes the number mean anything: 63% is
+      // unremarkable in The First Chapter and excellent in a set averaging 40%.
+      const t = setTot.get(set) || {total: 0, ten: 0};
+      t.total += r.total || 0; t.ten += r.pop_10 || 0;
+      setTot.set(set, t);
+    }
+    const setGem = new Map();
+    for(const [set, t] of setTot) if(t.total > 0) setGem.set(set, t.ten / t.total);
+    _gradedPop = {byCard, setGem};
+    return _gradedPop;
+  }).catch(() => {
+    // ⚠ Empty, never a throw and never a retry. Before migration 165 is applied
+    // this 404s on every graded surface, and none of them may break — or even
+    // look different — because an optional extra source is not deployed. Cached,
+    // so it is asked exactly once per session.
+    _gradedPop = EMPTY_POP;
+    return _gradedPop;
+  });
+  return _gradedPopPromise;
+}
+
+// PSA's Variety does THREE jobs in one field — finish (Foil, Errata), rarity
+// (Enchanted, Epic, Iconic) and provenance (Top Prize, Prize Wall Exclusive,
+// League Promo, Disney Cruise). Only the finish half maps onto our printings, so
+// only that half is mapped; everything else returns null and is shown under
+// PSA's own word rather than being forced into a bucket it does not belong in.
+const POP_FOIL_VARIETY = new Set(["foil", "foil-errata", "foil-oversized", "top prize"]);
+const POP_NONFOIL_VARIETY = new Set(["", "errata", "prize wall exclusive"]);
+const gradedPopBucket = (variety) => {
+  const v = String(variety || "").toLowerCase().trim();
+  if(POP_FOIL_VARIETY.has(v)) return "Foil";
+  if(POP_NONFOIL_VARIETY.has(v)) return "Non-Foil";
+  return null;
+};
+
+// One PSA row's numbers, plus the reads that make them mean something.
+//  * gemRate is the share of graded copies that came back a 10 — the closest
+//    thing to "how hard is this card to grade". Low rate + high price is a
+//    genuinely scarce 10; high rate says the 10 is the common outcome.
+//  * popHigher(grade) is the standard slab read: how many copies exist ABOVE
+//    yours. A PSA 9 with 40,000 above it is a different object from one with 3.
+// ⚠ Half grades and qualifiers are counted in `total` by PSA but are NOT part
+// of gemRate's numerator: a 10 is a straight 10. They are surfaced separately
+// because a qualified card (OC, ST, MK) trades at a discount to a clean one.
+const gradedPopStats = (row) => {
+  if(!row) return null;
+  const g = row.grades || {};
+  const num = (k) => Number(g[k]) || 0;
+  const total = Number(row.total) || 0;
+  const ten = Number(row.pop_10) || 0, nine = Number(row.pop_9) || 0;
+  // Everything strictly above a given grade, for the "N higher" read.
+  const ladder = Object.keys(g)
+    .filter(k => /^\d+(\.\d+)?$/.test(k))
+    .map(k => ({grade: parseFloat(k), n: num(k)}))
+    .sort((a, b) => b.grade - a.grade);
+  const popHigher = (grade) => ladder.reduce((s, x) => s + (x.grade > grade ? x.n : 0), 0);
+  const qualified = Object.keys(g).reduce((s, k) => s + (/Q$/.test(k) ? num(k) : 0), 0);
+  const half = Object.keys(g).reduce((s, k) => s + (/^\d+\.5$/.test(k) ? num(k) : 0), 0);
+  return {
+    total, ten, nine, ladder, popHigher, qualified, half,
+    gemRate: total > 0 ? ten / total : null,
+    nineUp: total > 0 ? (ten + nine) / total : null,
+    // The number people actually want when they are holding a 10.
+    tenIsOneOf: ten,
+  };
+};
+
 // ── Raw (ungraded) eBay sales ────────────────────────────────────────────────
 // The last real sold price for the ~24 high-end promos TCGplayer cannot price.
 // `card_prices_latest` is an INNER JOIN on a TCGplayer product, so a card it has
@@ -2520,6 +2670,7 @@ const UI_ICON_PATHS = {
   // to mush at this size.
   calendar:  _icoSvg(html`<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 9.8h17"/><path d="M8 3.5v3"/><path d="M16 3.5v3"/>`),
   timeline:  _icoSvg(html`<path d="M3.5 20h17"/><path d="M5.5 6.5h9"/><path d="M10.5 13h9"/>`),
+  map:       _icoSvg(html`<path d="M9 4.5 3.5 7v12.5L9 17l6 2.5 5.5-2.5V4.5L15 7z"/><path d="M9 4.5V17"/><path d="M15 7v12.5"/>`),
   calendarPlus: _icoSvg(html`<path d="M20.5 12.2V7a2 2 0 0 0-2-2h-13a2 2 0 0 0-2 2v11.5a2 2 0 0 0 2 2h7.3"/><path d="M3.5 9.8h17"/><path d="M8 3.5v3"/><path d="M16 3.5v3"/><path d="M17.5 15v6"/><path d="M14.5 18h6"/>`),
   store:     _icoSvg(html`<path d="M4 9.5h16v9.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 19z"/><path d="M3 9.5L4.8 4.3A1 1 0 0 1 5.8 3.5h12.4a1 1 0 0 1 1 .8L21 9.5a2.6 2.6 0 0 1-4.5 1.8 2.6 2.6 0 0 1-4.5 0 2.6 2.6 0 0 1-4.5 0A2.6 2.6 0 0 1 3 9.5z"/>`),
   // Calendar event types that have no product behind them. Drawn, not the
@@ -8465,6 +8616,94 @@ const GradedPrivateSaleModal = ({cardId, cardName, onClose, onAdded}) => {
 // style delta grid (6 windows × LOW/MKT), the current Low / Market price, and a
 // per-variant "Buy on TCGplayer" affiliate link. Live-modal only (the copy-image
 // poster draws its own rows on a canvas in buildCardPosterBlob).
+// PSA population for the open card, under the price block. The point of
+// putting it HERE rather than on a page of its own is that a population only
+// means something next to a price: the same $400 is a bargain on a PSA 10 that
+// is 1-of-9 and a bad trade on one that is 1-of-900.
+// Population is a count, never money, so it formats with thousands separators
+// and no currency -- reading "$42,865" where 42,865 COPIES is meant would be a
+// category error on a panel that sits directly under a price block.
+const fmtInt = (n) => Number(n || 0).toLocaleString(undefined, {maximumFractionDigits: 0});
+const GradedPopPanel = ({group}) => {
+  const [pop, setPop] = useState(null);
+  const setName = group && group.Set, name = group && group["Product Name"], num = group && group.Number;
+  useEffect(() => {
+    let live = true;
+    // ⚠ Lazy and once per session: fetchGradedPop caches its own result, and
+    // before migration 165 lands it resolves to empty rather than throwing, so
+    // this panel simply does not render. A card page must not change shape
+    // because an optional source is not deployed.
+    fetchGradedPop().then(p => {
+      if(!live) return;
+      const rows = p.byCard.get(popCardKey(setName, name, num)) || [];
+      setPop({rows, setGem: p.setGem.get(setName) == null ? null : p.setGem.get(setName)});
+    });
+    return () => { live = false; };
+  }, [setName, name, num]);
+
+  if(!pop || !pop.rows.length) return null;
+  // Biggest population first: that is the printing most people hold.
+  const rows = pop.rows.slice().sort((x, y) => (y.total || 0) - (x.total || 0));
+  const grand = rows.reduce((n, r) => n + (r.total || 0), 0);
+  const grandTen = rows.reduce((n, r) => n + (r.pop_10 || 0), 0);
+  const pct = (n, d) => d > 0 ? Math.round(1000 * n / d) / 10 : null;
+
+  return html`<div class="cd-pop">
+    <div class="cd-pop-head">
+      <span>PSA Population</span>
+      <span class="cd-pop-grand">${fmtInt(grand)} graded${grandTen > 0
+        ? html` · ${fmtInt(grandTen)} at PSA 10` : ""}</span>
+    </div>
+    ${rows.map(r => {
+      const st = gradedPopStats(r);
+      if(!st || !st.total) return null;
+      // A variety we can map is shown in OUR vocabulary; one we cannot is shown
+      // in PSA's own words rather than forced into a printing it may not be.
+      // See gradedPopBucket -- Variety carries finish, rarity and provenance.
+      const label = gradedPopBucket(r.variety) || r.variety || "Base";
+      const rest = Math.max(0, st.total - st.ten - st.nine - (Number((r.grades||{})["8"]) || 0));
+      const seg = (n) => ({width: (100 * n / st.total).toFixed(2) + "%"});
+      const eight = Number((r.grades || {})["8"]) || 0;
+      return html`<div key=${r.spec_id} class="cd-pop-row">
+        <div class="cd-pop-row-top">
+          <span class="cd-pop-label">${label}</span>
+          <span class="cd-pop-nums">
+            <b>${fmtInt(st.total)}</b> graded
+            ${st.ten > 0 && html`<span class="cd-pop-ten">${fmtInt(st.ten)} at 10</span>`}
+            ${st.gemRate != null && html`<span class="cd-pop-gem"
+              title=${`${fmtInt(st.ten)} of ${fmtInt(st.total)} graded copies came back a straight 10`}>
+              ${pct(st.ten, st.total)}% gem</span>`}
+          </span>
+        </div>
+        <div class="cd-pop-bar" role="img"
+          aria-label=${`${fmtInt(st.ten)} at PSA 10, ${fmtInt(st.nine)} at 9, ${fmtInt(eight)} at 8, ${fmtInt(rest)} lower`}>
+          ${st.ten > 0 && html`<i class="ten" style=${seg(st.ten)} title=${`PSA 10 · ${fmtInt(st.ten)}`}/>`}
+          ${st.nine > 0 && html`<i class="nine" style=${seg(st.nine)}
+            title=${`PSA 9 · ${fmtInt(st.nine)} (${fmtInt(st.popHigher(9))} higher)`}/>`}
+          ${eight > 0 && html`<i class="eight" style=${seg(eight)}
+            title=${`PSA 8 · ${fmtInt(eight)} (${fmtInt(st.popHigher(8))} higher)`}/>`}
+          ${rest > 0 && html`<i class="rest" style=${seg(rest)} title=${`7 and below · ${fmtInt(rest)}`}/>`}
+        </div>
+        ${(st.qualified > 0 || st.half > 0) && html`<div class="cd-pop-extra">
+          ${st.half > 0 && html`<span>${fmtInt(st.half)} half-grade${st.half === 1 ? "" : "s"}</span>`}
+          ${st.qualified > 0 && html`<span title="A qualifier (OC, ST, MK, PD) marks a specific flaw and trades at a discount to a clean copy of the same grade">
+            ${fmtInt(st.qualified)} qualified</span>`}
+        </div>`}
+      </div>`;
+    })}
+    <div class="cd-pop-foot">
+      ${/* ⚠ One line, not two: htm collapses the newline between two adjacent
+           expressions, so a break here renders "against75.3%". Same trap the
+           calendar hit with its started-ago chip. */""}
+      ${pop.setGem != null && grand > 0 && html`<span>
+        ${`${pct(grandTen, grand)}% of this card grades 10, against ${Math.round(1000 * pop.setGem) / 10}% across ${setName}.`}
+      </span>`}
+      <span class="muted">PSA, English printings only. Population counts every copy PSA has
+      ever graded, so it only grows.</span>
+    </div>
+  </div>`;
+};
+
 const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, standing, rawSale}) => {
   const buyUrl = tcgUrl(productId, printing);
   // A raw eBay sold price, for the handful of promos TCGplayer cannot price.
@@ -9324,6 +9563,11 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
         Individual sales are the amber dots on the price history below.
       </div>`}
     </div>`}
+
+    ${/* Under the price block on purpose: a population only means something
+         next to a price. Renders nothing at all when PSA has never graded this
+         card, or before migration 165 is applied. */""}
+    <${GradedPopPanel} group=${group}/>
 
     <div class="card-detail-history-section">
       ${!gradedPremium && html`<div class="card-detail-tabs">
@@ -41044,6 +41288,10 @@ const CalendarMiniMap = ({lat, lng, label, zoom}) => {
 // cookie — over osmFitLayout, which picks the centre and zoom (see its note for
 // why the mean and the degree midpoint are both wrong).
 const SC_MAP_H = 330;
+// The expanded card is min(720px, 100%) inside a SCROLLING backdrop, so height
+// here costs nothing a reader cannot scroll to — and a taller frame is what
+// gives the date chips room to be placed rather than dropped.
+const SC_MAP_H_BIG = 460;
 // Two shops a few hundred metres apart are drawn on the same pixel, and at that
 // point a second pin under the first is not a pin, it is a hidden event. Pins
 // within this many pixels become ONE marker with a count, and the callout below
@@ -41060,7 +41308,89 @@ const scMergePins = (pins) => {
   }
   return groups;
 };
-const EventMapView = ({events, onPick, labelOf, subLabelOf}) => {
+
+// ── The date ON the pin ──────────────────────────────────────────────────
+// A bare dot says only "an event is here", which the list beside it already
+// said. The date is what turns the map into a plan — which weekend is the north
+// side, which one is the drive to Indiana — so a pin carries its date beside it.
+//
+// ⚠ A label is roughly five times the footprint of the dot it belongs to, so it
+// cannot simply be drawn: two shops whose DOTS clear each other comfortably have
+// labels that overlap completely. Placement is a FIT, not a render.
+//
+// ⚠ And a label that will not fit is DROPPED, never stacked or shrunk. The dot
+// survives, and the callout under it still names every event — so a dropped
+// label costs a glance and nothing else, where a label drawn half off the edge
+// is simply gone with nothing on screen to say it existed (the rule the
+// scanner's chip row and the timeline's labels both already follow).
+const SC_PIN_R = 11;      // the dot's radius — matches .sc-map-pin
+const SC_LBL_GAP = 4;     // dot -> chip
+const SC_LBL_H = 18;
+const SC_LBL_PAD = 7;     // chip padding each side, plus its 1px border
+const SC_LBL_CHAR = 6.3;  // 11px bold with tabular numerals, measured
+// ⚠ Every reserved box is inflated by a pixel before it is tested. The chip is
+// centred by `top:50%` + `translateY(-50%)` inside a bordered parent, so where
+// it actually lands can differ from the arithmetic by a rounding — measured
+// live at exactly 1px, which was enough to put the corner of one chip over the
+// edge of a neighbouring pin. A pixel of slack costs a marginal label and buys
+// the guarantee the whole function exists for.
+const SC_LBL_BLEED = 1;
+const scLabelW = (text) => {
+  const n = String(text == null ? "" : text).length;
+  return n ? Math.round(SC_LBL_PAD * 2 + SC_LBL_CHAR * n) : 0;
+};
+// ⚠ A MERGED pin is WIDER than a plain one, and reserving 22px for it lets a
+// chip clip its edge — measured live: a two-digit count renders 27px, so 2.5px
+// of the dot sat outside its own reservation and a neighbour's label was placed
+// over it. The pin is `min-width:22px` with 5px of padding and a 2px border
+// each side, so the width is those plus the digits; the HEIGHT is fixed, which
+// is why only the horizontal half changes.
+const SC_PIN_MIN_W = 22, SC_PIN_CHROME = 14, SC_PIN_DIGIT = 6.4;
+const scPinR = (count) => {
+  const d = count > 1 ? String(count).length : 0;
+  return (d ? Math.max(SC_PIN_MIN_W, SC_PIN_CHROME + SC_PIN_DIGIT * d) : SC_PIN_MIN_W) / 2;
+};
+const _scBoxHit = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+// pins: [{left, top, text, rank, r}] -> a parallel array of "r" | "l" | null.
+// `r` is the dot's own horizontal half-width (scPinR); it defaults to the plain
+// pin's, so a caller that does not merge need not think about it.
+//
+// ⚠ Sides are tried right THEN left, and the left one is drawn BACKWARDS from
+// its dot — without it no pin in the right-hand third of the map could ever be
+// labelled, which is a whole edge of the frame going quiet.
+const scPlacePinLabels = (pins, w, h) => {
+  const rows = pins || [];
+  const out = rows.map(() => null);
+  if(!(w > 0) || !(h > 0)) return out;
+  // ⚠ EVERY dot is reserved before anything is placed, labelled or not: a chip
+  // may never cover another event's pin, which would hide something clickable.
+  const rOf = (p) => (p && Number.isFinite(p.r)) ? p.r : SC_PIN_R;
+  const taken = rows.map(p => [p.left - rOf(p), p.top - SC_PIN_R,
+                               p.left + rOf(p), p.top + SC_PIN_R]);
+  // Ties go to whoever the LIST ranks first — the finder sorts pinned-then-
+  // soonest, the calendar sorts by date — so when two labels compete the one
+  // that survives is the one the reader was going to look at first anyway.
+  const rk = (p, i) => (p && Number.isFinite(p.rank)) ? p.rank : i;
+  const order = rows.map((p, i) => i).sort((a, b) => (rk(rows[a], a) - rk(rows[b], b)) || (a - b));
+  for(const i of order){
+    const p = rows[i];
+    const tw = scLabelW(p && p.text);
+    if(!tw) continue;
+    const y0 = p.top - SC_LBL_H / 2, y1 = p.top + SC_LBL_H / 2;
+    for(const side of ["r", "l"]){
+      const x0 = side === "r" ? p.left + rOf(p) + SC_LBL_GAP
+                              : p.left - rOf(p) - SC_LBL_GAP - tw;
+      const box = [x0 - SC_LBL_BLEED, y0 - SC_LBL_BLEED, x0 + tw + SC_LBL_BLEED, y1 + SC_LBL_BLEED];
+      if(box[0] < 0 || box[1] < 0 || box[2] > w || box[3] > h) continue;
+      if(taken.some(t => _scBoxHit(box, t))) continue;
+      taken.push(box);
+      out[i] = side;
+      break;
+    }
+  }
+  return out;
+};
+const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf, height, fit}) => {
   const wrapRef = useRef(null);
   const [w, setW] = useState(0);
   // ⚠ The open callout is keyed on the GROUP's position, never its index, and
@@ -41084,17 +41414,43 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf}) => {
     return () => ro.disconnect();
   }, []);
   const rows = events || [];
+  // ⚠ The FIT is per surface, not a constant. The finder draws a 50-mile radius
+  // and wants to be zoomed into it; the calendar draws a season that spans
+  // continents and must be allowed all the way out. A single range serves
+  // neither — capped at 13 the world map cannot fit Tokyo and Chicago on one
+  // screen at all, and floored at 2 the finder opens on a view of Europe.
+  const H = height || SC_MAP_H;
+  const fitOpts = fit || {maxZoom: 13, fallbackZoom: 11};
   const layout = useMemo(() => w > 40
-    ? osmFitLayout(rows.map(e => ({lat: e.latitude, lng: e.longitude})), w, SC_MAP_H,
-                   {maxZoom: 13, fallbackZoom: 11})
-    : null, [rows, w]);
+    ? osmFitLayout(rows.map(e => ({lat: e.latitude, lng: e.longitude})), w, H, fitOpts)
+    : null, [rows, w, H, fitOpts.minZoom, fitOpts.maxZoom, fitOpts.fallbackZoom]);
   // A pin's `i` is its index in `rows` — osmFitLayout preserves it precisely so
   // an event we could not place never renumbers the ones after it.
   const groups = useMemo(() => layout ? scMergePins(layout.pins) : [], [layout]);
   const gKey = (g) => g.left + ":" + g.top;
+  // One label per MARKER, not per event: a merged pin is one place, and the
+  // date it shows is the first one under it — the count on the dot is what says
+  // there are more, and the callout is what names them.
+  const labelSides = useMemo(() => scPlacePinLabels(groups.map(g => {
+    const first = g.items.reduce((a, b) => (b.i < a.i ? b : a), g.items[0]);
+    return {left: g.left, top: g.top, rank: first.i, r: scPinR(g.items.length),
+            text: dateOf ? (dateOf(rows[first.i]) || "") : ""};
+  }), w, H), [groups, rows, dateOf, w, H]);
 
-  const placed = layout ? layout.pins.length : 0;
-  const missing = rows.length - placed;
+  // ⚠ "Not on the map" is TWO different facts and they must not be added up.
+  // A set or product release is worldwide — it is in no place by definition, the
+  // same reason the timeline gives releases a rail of their own — while a store
+  // event with no coordinates is a GAP in the data. Counted together, a calendar
+  // showing the circuit would permanently report "11 events have no location on
+  // file", which reads as broken software rather than as the truth.
+  const placedIdx = useMemo(() => {
+    const set = new Set();
+    for(const pin of (layout ? layout.pins : [])) set.add(pin.i);
+    return set;
+  }, [layout]);
+  const unplaced = rows.map((_, i) => i).filter(i => !placedIdx.has(i));
+  const worldwide = worldwideOf ? unplaced.filter(i => worldwideOf(rows[i])).length : 0;
+  const missing = unplaced.length - worldwide;
   const nameOf = (p) => (labelOf ? labelOf(rows[p.i]) : (rows[p.i] && rows[p.i].store_name)) || "Event";
   // ⚠ A name is NOT an identity here. One shop runs several series — a Set
   // Championship, a Thursday league night, a prerelease — so a callout listing
@@ -41107,10 +41463,13 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf}) => {
 
   return html`<div class="sc-map" ref=${wrapRef}>
     ${!layout && html`<div class="sc-map-empty">
-      ${w > 40 ? "None of these events has a location on file yet." : ""}
+      ${w <= 40 ? ""
+        : worldwide === rows.length && rows.length > 0
+          ? "These are releases — they happen everywhere at once, so there is nothing to put on a map. Switch a kind back on to see events."
+          : "None of these events has a location on file yet."}
     </div>`}
     ${layout && html`<${React.Fragment}>
-      <div class="sc-map-box" style=${{height: SC_MAP_H + "px"}}>
+      <div class="sc-map-box" style=${{height: H + "px"}}>
         ${/* ⚠ NOT loading="lazy". Chrome defers lazy images in more situations
              than the documented backgrounded-tab one, and a deferred tile is a
              blank map with pending requests and no error — the same bug the
@@ -41118,15 +41477,25 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf}) => {
           layout.tiles.map(t => html`<img key=${t.key} src=${osmTileUrl(t)} alt=""
             width=${layout.size} height=${layout.size} draggable="false" loading="eager"
             style=${{left: t.left + "px", top: t.top + "px"}}/>`)}
-        ${groups.map((g) => html`<button key=${gKey(g)} type="button"
-          class=${"sc-map-pin" + (selKey === gKey(g) ? " on" : "") + (g.items.length > 1 ? " many" : "")}
-          style=${{left: g.left + "px", top: g.top + "px"}}
-          onClick=${() => setSelKey(k => k === gKey(g) ? null : gKey(g))}
-          aria-label=${g.items.length > 1
-            ? `${g.items.length} events here: ${g.items.map(fullOf).join("; ")}`
-            : fullOf(g.items[0])}>
-          ${g.items.length > 1 ? g.items.length : ""}
-        </button>`)}
+        ${groups.map((g, gi) => {
+          const side = labelSides[gi];
+          const first = g.items.reduce((a, b) => (b.i < a.i ? b : a), g.items[0]);
+          const day = dateOf ? (dateOf(rows[first.i]) || "") : "";
+          return html`<button key=${gKey(g)} type="button"
+            class=${"sc-map-pin" + (selKey === gKey(g) ? " on" : "") + (g.items.length > 1 ? " many" : "")}
+            style=${{left: g.left + "px", top: g.top + "px"}}
+            onClick=${() => setSelKey(k => k === gKey(g) ? null : gKey(g))}
+            aria-label=${g.items.length > 1
+              ? `${g.items.length} events here: ${g.items.map(fullOf).join("; ")}`
+              : fullOf(g.items[0])}>
+            ${g.items.length > 1 ? g.items.length : ""}
+            ${/* ⚠ The chip is a CHILD of the pin button, so it shares the hit
+                 area and can never become a click target that does nothing, and
+                 aria-hidden because the button's own label already carries the
+                 date inside the full label. */""}
+            ${side && html`<span class=${"sc-map-pin-d sc-map-pin-d--" + side} aria-hidden="true">${day}</span>`}
+          </button>`;
+        })}
       </div>
       ${/* The callout is what makes a merged pin honest: every event under it is
            named and separately clickable, so nothing is reachable only by
@@ -41145,8 +41514,10 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf}) => {
         ${/* An event with no coordinates is simply absent from a map, and a map
              quietly showing fewer events than the list beside it is a lie the
              reader has no way to catch. Say the number. */
-          missing > 0 && html`<span class="sc-map-missing">
-          ${missing} ${missing === 1 ? "event has" : "events have"} no location on file</span>`}
+          (missing > 0 || worldwide > 0) && html`<span class="sc-map-missing">
+          ${[worldwide > 0 ? `${worldwide} ${worldwide === 1 ? "release is" : "releases are"} worldwide` : null,
+             missing > 0 ? `${missing} ${missing === 1 ? "event has" : "events have"} no location on file` : null
+            ].filter(Boolean).join(" · ")}</span>`}
         <span class="cal-map-credit">© OpenStreetMap contributors</span>
       </div>
     </>`}
@@ -42065,7 +42436,15 @@ const CalendarAdminModal = ({row, onClose, onSaved}) => {
 
 const CAL_KINDS_LS = "packsink:cal:kinds";
 const CAL_VIEW_LS = "packsink:cal:view";
-const CAL_VIEW_MODES = ["list", "month", "timeline"];
+const CAL_VIEW_MODES = ["list", "month", "timeline", "map"];
+// ⚠ Global, not the finder's 50-mile fit. The circuit is ~17 Challenges across
+// four continents, so the map has to be allowed all the way out — and a single
+// event (one DLC left in the window) must not fill the frame with one city.
+const CAL_MAP_FIT = {minZoom: 2, maxZoom: 11, fallbackZoom: 4};
+const CAL_MAP_VIEW_H = 480;
+// A metro, not a street and not a continent: at 9 a whole conurbation and its
+// suburbs fit, which is the scale "what is near me" is asked at.
+const CAL_MAP_FOCUS_Z = 9, CAL_MAP_FOCUS_MIN = 3, CAL_MAP_FOCUS_MAX = 13;
 // ⚠ Default flipped list → MONTH 2026-09-21 (Zaven), the same call the home
 // panel took the day before. The mode is persisted on every mount, so a plain
 // default change reaches NOBODY who has ever opened this page — the same trap
@@ -42463,7 +42842,10 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
       region === "all" ? url.searchParams.delete("cr") : url.searchParams.set("cr", region);
       query.trim() ? url.searchParams.set("cq", query.trim()) : url.searchParams.delete("cq");
       (mode !== "timeline" || span === CAL_TL_MONTHS) ? url.searchParams.delete("cspan") : url.searchParams.set("cspan", String(span));
-      (mode === "list" || month === calMonthOf(today)) ? url.searchParams.delete("cm") : url.searchParams.set("cm", month);
+      // ⚠ Map ignores `month` entirely (it draws `listed`), so it must not write
+      // one — a link off the map would otherwise carry an anchor that does
+      // nothing here and silently moves the Month view when you switch to it.
+      (mode === "list" || mode === "map" || month === calMonthOf(today)) ? url.searchParams.delete("cm") : url.searchParams.set("cm", month);
       near ? url.searchParams.set("cn", "1") : url.searchParams.delete("cn");
       (mode !== "timeline" || group === "packed") ? url.searchParams.delete("cg") : url.searchParams.set("cg", group);
       if(url.toString() !== location.href) history.replaceState(history.state, "", url.toString());
@@ -42626,6 +43008,9 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           <button type="button" class=${mode === "timeline" ? "active" : ""} onClick=${() => setMode("timeline")}
             title="The whole season on one axis — Challenges, Qualifiers, your shops and the releases">
             ${uiIcon("timeline", 13)} Timeline</button>
+          <button type="button" class=${mode === "map" ? "active" : ""} onClick=${() => setMode("map")}
+            title="Where the season is — Challenges, Qualifiers and your shops on one map">
+            ${uiIcon("map", 13)} Map</button>
         </div>
         ${/* ⚠ Default CLOSED, and the whole reason this page was rebuilt:
               "I want the screen to instantly show you your calendar, and then
@@ -42808,7 +43193,20 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
       <button type="button" class="cal-linkish" onClick=${() => setNear(false)}>Turn it off</button>
     </div>`}
 
-    ${mode === "timeline"
+    ${mode === "map"
+      ? html`<div class="cal-map-view">
+          ${/* ⚠ `listed`, the same array the list renders — so "Show past" and
+               every filter above mean the same thing here as they do there, and
+               a map can never quietly hold a different set of events from the
+               view you switched away from. */""}
+          <${EventMapView} events=${listed} height=${CAL_MAP_VIEW_H} fit=${CAL_MAP_FIT}
+            dateOf=${(e) => calShortDay(e && e.starts_on)}
+            labelOf=${(e) => calEventTitle(e)}
+            subLabelOf=${(e) => [calDayLabel(e && e.starts_on), e && e.location].filter(Boolean).join(" · ")}
+            worldwideOf=${(e) => e && (e.kind === "set" || e.kind === "product")}
+            onPick=${setSel}/>
+        </div>`
+      : mode === "timeline"
       ? html`<${CalendarTimelineView} fromMonth=${month} months=${span} events=${shown}
           today=${today} onOpen=${setSel} onMonth=${setMonth} art=${art} caption=${filterCaption}
           group=${group} onGroup=${setGroup}
@@ -42892,6 +43290,10 @@ const SC_RADII = [10, 50, 100];
 // ratio in the panel, on the surface with the least room for it.
 const SC_ZIP_TITLE = "Postal codes go to zippopotam.us to become a map location; a town name is matched against our own event list. Neither is stored with your account.";
 const scLocalDay = (iso, tz) => { try { return new Date(iso).toLocaleDateString("en-CA", {timeZone: tz||undefined}); } catch { return (iso||"").slice(0,10); } }; // YYYY-MM-DD in the event's local tz, sortable + matches the displayed day
+// ⚠ A pin's date is SHORT — "Sep 27", never fmtSCDate's "Sat, Sep 27". The chip
+// is placed only if it fits, so every character it does not need is a pin that
+// keeps its label instead of falling back to a bare dot.
+const scPinDay = (iso, tz) => { try { return new Date(iso).toLocaleDateString("en-US", {timeZone: tz||undefined, month:"short", day:"numeric"}); } catch { return ""; } };
 const fmtSCDate = (iso, tz) => { try { return new Date(iso).toLocaleDateString("en-US", {timeZone: tz||undefined, weekday:"short", month:"short", day:"numeric"}); } catch { return (iso||"").slice(0,10); } };
 const fmtSCTime = (iso, tz) => { try { return new Date(iso).toLocaleTimeString("en-US", {timeZone: tz||undefined, hour:"numeric", minute:"2-digit", timeZoneName:"short"}); } catch { return ""; } };
 const fmtSCMiles = (m) => m < 1 ? "<1 mi" : Math.round(m) + " mi";
@@ -43728,6 +44130,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   // ⚠ It keys on `embed && !expanded` — expanding the embedded box makes it the
   // floating full-screen card, which must shed every one of those decisions.
   const inTile = embed && !expanded;
+  const mapHere = mapOn && !inTile;
   const scBox = html`<section class=${"sc-box"+(collapsed&&!expanded?" sc-collapsed":"")+(expanded?" sc-box--expanded":"")+(inTile?" sc-box--embed":"")}
     onClick=${expanded ? (e=>e.stopPropagation()) : undefined}>
     <div class="sc-box-head">
@@ -43843,24 +44246,39 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
         ${dateActive
           ? `No ${isAll ? "events" : KIND_PLURAL} on ${dates.length === 1 ? scDateChipLabel(dates[0]) : `those ${dates.length} dates`}. Pick another day, or turn the date filter off.`
           : `No ${KIND_PLURAL} in these results. Turn another kind back on above.`}</div>`}
-      ${!loading && visibleSorted && visibleSorted.length > 0 && html`<div class=${"sc-results" + (mapOn ? " sc-results--map" : "")}>
+      ${/* ⚠ `mapHere` and `mapOn` are different questions. The tile never draws
+            a map, so it must never hide its list either — and its toggle must
+            read List, or a stored map preference lights the Map button over a
+            list nobody switched back to. */""}
+      ${!loading && visibleSorted && visibleSorted.length > 0 && html`<div class=${"sc-results" + (mapHere ? " sc-results--map" : "")}>
         <div class="sc-results-head">
           ${origin && html`<span class="sc-results-count">${visibleSorted.length}${dateActive?(dates.length===1?" on "+scDateChipLabel(dates[0]):` on ${dates.length} dates`):""} near ${origin.city}, ${origin.state}</span>`}
           ${/* ⚠ The toggle is OUTSIDE the `origin &&` guard on purpose: with
                results on screen and no resolved origin (a pinned series, say)
                the old head rendered nothing at all, and a control that vanishes
                with its label is a view you cannot get back out of. */""}
+          ${/* ⚠ In the home tile the Map button POPS THE BOX OUT rather than
+                drawing a map in place. The rail is 240-360px and the map is 330
+                tall, which is a smudge you cannot read a date off — and the
+                full-screen card is the same component with the same filters, so
+                "pop it up" costs nothing but setting the two flags together.
+                Expanded (or in the App overlay) it switches in place. */""}
           <div class="sc-viewtoggle" role="group" aria-label="Result view">
-            <button type="button" class=${"sc-viewtoggle-btn" + (!mapOn ? " on" : "")}
-              aria-pressed=${!mapOn} onClick=${() => setMapOn(false)}>List</button>
-            <button type="button" class=${"sc-viewtoggle-btn" + (mapOn ? " on" : "")}
-              aria-pressed=${mapOn} onClick=${() => setMapOn(true)}>Map</button>
+            <button type="button" class=${"sc-viewtoggle-btn" + (!mapHere ? " on" : "")}
+              aria-pressed=${!mapHere} onClick=${() => setMapOn(false)}>List</button>
+            <button type="button" class=${"sc-viewtoggle-btn" + (mapHere ? " on" : "")}
+              aria-pressed=${mapHere}
+              title=${inTile ? "Open the map full screen" : "Show these results on a map"}
+              onClick=${() => { setMapOn(true); if(inTile) setExpanded(true); }}>
+              Map${inTile ? html` <span aria-hidden="true">⤴</span>` : ""}</button>
           </div>
         </div>
         ${/* The map is a SIBLING of the list and the list is hidden by CSS rather
              than unmounted, so switching back does not lose which series you had
              expanded (openSeries) or scroll position. */""}
-        ${mapOn && html`<${EventMapView} events=${visibleSorted}
+        ${mapHere && html`<${EventMapView} events=${visibleSorted}
+          height=${expanded ? SC_MAP_H_BIG : SC_MAP_H}
+          dateOf=${(e) => e && e._next ? scPinDay(e._next.start_datetime, e.timezone) : ""}
           labelOf=${(e) => e && e.store_name}
           subLabelOf=${(e) => e && e._next
             ? fmtSCDate(e._next.start_datetime, e.timezone)
@@ -53415,7 +53833,7 @@ function App(){
         history:    new Set(["g","hm","hr","hs"]),
         cards:      new Set(["q","set","ink","rarity","cost","type","inkable","legal","owned","card"]),
         home:       new Set(["panel"]),
-        // ?ck= the type chips, ?cv= list/month/timeline, ?cm= the window anchor,
+        // ?ck= the type chips, ?cv= list/month/timeline/map, ?cm= the window anchor,
         // ?cr= which regions (a csv), ?cq= the search box, ?cspan= how many
         // months the timeline draws, ?cn= pull in the Set Championships inside
         // the event finder's saved radius.
