@@ -45,7 +45,8 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const SC_LBL_BLEED = "),
   grab("const scLabelW = (text) => {", NL + "};"),
   grabLine("const SC_PIN_MIN_W = "),
-  grab("const scPinR = (count) => {", NL + "};"),
+  grabLine("const SC_PIN_ICON = "),
+  grab("const scPinR = (count, hasIcon) => {", NL + "};"),
   grab("const scPanCenter = (center, zoom, dx, dy) => {", NL + "};"),
   grabLine("const _scBoxHit = "),
   grab("const scPlacePinLabels = (pins, w, h) => {", NL + "};"),
@@ -57,6 +58,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   "export {osmWorldFrac, osmFracLat, osmTileLayout, osmFitLayout, OSM_FIT_PAD,"
   + " scMergePins, SC_PIN_MERGE_PX, scLabelW, scPlacePinLabels,"
   + " SC_PIN_R, SC_LBL_GAP, SC_LBL_H, scPinR, scPanCenter,"
+  + " SC_PIN_MIN_W, SC_PIN_ICON, SC_PIN_ICON_GAP, SC_PIN_CHROME, SC_PIN_DIGIT,"
   + " calParseMapFocus, calMapFocusParam, CAL_MAP_ANY_LABEL,"
   + " CAL_MAP_FOCUS_MIN, CAL_MAP_FOCUS_MAX, CAL_MAP_LABEL_MAX};",
 ].join(NL)));
@@ -64,6 +66,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
 const { osmWorldFrac, osmFracLat, osmTileLayout, osmFitLayout, OSM_FIT_PAD,
         scMergePins, SC_PIN_MERGE_PX, scLabelW, scPlacePinLabels,
         SC_PIN_R, SC_LBL_GAP, SC_LBL_H, scPinR, scPanCenter,
+        SC_PIN_MIN_W, SC_PIN_ICON, SC_PIN_ICON_GAP, SC_PIN_CHROME, SC_PIN_DIGIT,
         calParseMapFocus, calMapFocusParam, CAL_MAP_ANY_LABEL,
         CAL_MAP_FOCUS_MIN, CAL_MAP_FOCUS_MAX, CAL_MAP_LABEL_MAX } = mod;
 
@@ -678,6 +681,139 @@ section("15. deep-link param registration");
      "and the reader takes the link's scope over their own");
   ok(src.includes("if(seed.cmk) return scParseKinds(seed.cmk);"),
      "and the link's kinds over their own");
+}
+
+// 16. A pin that wears its kind's mark is WIDER
+//
+// Zaven: "instead of yellow dots, can we use the logos that corrispond with the
+// calendar?" -- so a pin now carries the same {icon, hue, img} the calendar
+// draws beside that event everywhere else.
+//
+// /!\ scPinR is not cosmetic. scPlacePinLabels reserves each pin's REAL box so
+// no date chip is ever drawn over another event's dot, and CLAUDE.md already
+// records a 2.5px under-reservation putting a chip corner over a click target.
+// Adding a 14px glyph inside the pin without telling scPinR reproduces exactly
+// that bug, silently, on every pin that has a mark.
+section("16. icon pins widen the reservation");
+{
+  // The plain pin is unchanged -- every existing call passes no second argument,
+  // so a regression here would quietly move every label on both maps.
+  ok(scPinR(1) === SC_PIN_MIN_W / 2, "a lone dot is still the 22px minimum");
+  ok(scPinR(1, false) === SC_PIN_MIN_W / 2, "and explicitly icon-less is the same");
+  ok(scPinR(3) === Math.max(SC_PIN_MIN_W, SC_PIN_CHROME + SC_PIN_DIGIT) / 2,
+     "a one-digit count is unchanged");
+  ok(scPinR(12) === Math.max(SC_PIN_MIN_W, SC_PIN_CHROME + SC_PIN_DIGIT * 2) / 2,
+     "and a two-digit count is unchanged");
+
+  // With a mark it grows, and by the glyph's real width.
+  ok(scPinR(1, true) > scPinR(1), "a mark makes a lone pin wider");
+  ok(scPinR(1, true) === (SC_PIN_CHROME + SC_PIN_ICON) / 2,
+     "by exactly the glyph plus the pin's own chrome");
+  // A merged pin with a mark carries BOTH, with a gap between them.
+  ok(scPinR(3, true) === (SC_PIN_CHROME + SC_PIN_ICON + SC_PIN_ICON_GAP + SC_PIN_DIGIT) / 2,
+     "a merged marked pin reserves glyph + gap + digit");
+  ok(scPinR(3, true) > scPinR(3, false), "which is wider than the same count bare");
+  ok(scPinR(12, true) > scPinR(3, true), "and two digits wider still");
+
+  // Monotonic in both arguments -- the property the label placer relies on.
+  for (const c of [1, 2, 9, 10, 99, 100]) {
+    ok(scPinR(c, true) >= scPinR(c, false), "count " + c + ": a mark never shrinks the box");
+    ok(scPinR(c, true) >= SC_PIN_MIN_W / 2, "count " + c + ": never below the tap minimum");
+    ok(isFinite(scPinR(c, true)), "count " + c + ": finite");
+  }
+
+  // /!\ End to end: a row of marked pins must still place labels that cover no
+  // dot. This is the assertion that would have caught reserving the plain width.
+  const W = 800, H = 420;
+  const pins = [];
+  for (let k = 0; k < 8; k++) {
+    pins.push({ left: 60 + k * 90, top: 100 + (k % 3) * 60, rank: k, r: scPinR(2, true),
+                text: "Sep 2" + k });
+  }
+  const sides = scPlacePinLabels(pins, W, H);
+  ok(sides.length === pins.length, "every marked pin gets a verdict");
+  // No chip may overlap any pin's real (wider) box.
+  let clash = 0;
+  for (let a = 0; a < pins.length; a++) {
+    if (!sides[a]) continue;
+    const lw = scLabelW(pins[a].text);
+    const x0 = sides[a] === "r" ? pins[a].left + pins[a].r + SC_LBL_GAP
+                                : pins[a].left - pins[a].r - SC_LBL_GAP - lw;
+    const box = { x0, x1: x0 + lw, y0: pins[a].top - SC_LBL_H / 2, y1: pins[a].top + SC_LBL_H / 2 };
+    ok(box.x0 >= 0 && box.x1 <= W, "chip " + a + " stays in frame");
+    for (let b = 0; b < pins.length; b++) {
+      const d = pins[b];
+      if (box.x1 > d.left - d.r && box.x0 < d.left + d.r
+          && box.y1 > d.top - d.r && box.y0 < d.top + d.r) clash++;
+    }
+  }
+  ok(clash === 0, "no chip covers a marked pin's dot (" + clash + " clashes)");
+}
+
+// 17. The marks and the on-screen list, at source
+//
+// These are wiring rules, not geometry, and every one of them fails by looking
+// completely normal: a pin wearing the wrong kind's mark, a list naming an event
+// the map is not drawing, or a second icon table quietly disagreeing with the
+// calendar's.
+section("17. marks + on-screen list wiring");
+{
+  const view = grab("const EventMapView = ({events, onPick,", NL + "};");
+
+  // /!\ The reservation and the render must agree about whether THIS pin has a
+  // mark. Passing a constant, or forgetting the argument, puts a neighbour's
+  // date chip over a click target -- invisibly, and only on marked pins.
+  ok(/r: scPinR\(g\.items\.length, !!groupIcon\(g\)\)/.test(view),
+     "label placement reserves the pin's real width, mark included");
+  // The class expression wraps, so this has to span lines -- and it pins that the
+  // class comes from the SAME `ic` the reservation above was computed from.
+  ok(/class=\$\{"sc-map-pin"[\s\S]{0,200}?\(ic \? " sc-map-pin--ico" : ""\)/.test(view),
+     "and the pin renders the matching class, from that same mark");
+
+  // /!\ A merged pin only wears a mark when every event under it AGREES. Taking
+  // the first one's mark states in a picture that the pin is a Challenge when
+  // half of it is a league night.
+  const gi = view.slice(view.indexOf("const groupIcon = useCallback"));
+  ok(/out\.icon !== ic\.icon \|\| out\.img !== ic\.img \|\| out\.hue !== ic\.hue\) return null/.test(gi),
+     "a mixed pin gets no mark");
+  ok(/if\(!ic \|\| !ic\.icon\) return null/.test(gi),
+     "and one unresolved event drops the whole pin's mark");
+
+  // /!\ The list is derived from the SAME in-frame test as the pins. Two ways of
+  // answering "is this one showing" is how the list names what the map does not.
+  ok(/const inFrame = inFramePins\.length/.test(view),
+     "the count and the list come from one array");
+  ok(/sort\(\(a, b\) => a\.i - b\.i\)/.test(view),
+     "and it is ordered by the caller's own order, not by latitude");
+
+  // /!\ No inner scroll. The finder's map lives inside a scrolling overlay, and
+  // a scroll box inside a scrolling parent is the peephole the print-proxy
+  // dialog had to have taken out of it.
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  const listCss = css.slice(css.indexOf(".sc-map-list{"), css.indexOf(".sc-map-list-go"));
+  ok(listCss.length > 0, "the list has styles at all");
+  ok(!/overflow-y\s*:\s*auto/.test(listCss), "the on-screen list adds no inner scroll");
+
+  // /!\ ONE icon resolver across both surfaces. A finder result and the calendar
+  // row for the same shop night are the same event seen from two pages.
+  ok(/const scSeriesIcon = \(row\) => calendarEventIcon\(/.test(src),
+     "the finder's marks go through the calendar's own resolver");
+  ok(/iconOf=\$\{scSeriesIcon\}/.test(src), "and the finder map is wired to it");
+  ok(/iconOf=\$\{mapIconOf\}/.test(src), "and the calendar map to its own memoised one");
+
+  // /!\ mapIconOf must sit BELOW the `art` index it closes over: a useCallback
+  // evaluates its dependency array at its declaration point, so higher up this
+  // is a TDZ ReferenceError into the error boundary.
+  const artAt = src.indexOf("const art = useMemo(() => calendarArtIndex(sealedPrices,",
+                            src.indexOf("function CalendarView("));
+  const iconAt = src.indexOf("const mapIconOf = useCallback(");
+  ok(artAt > 0 && iconAt > artAt, "mapIconOf is declared after the art index it reads");
+
+  // /!\ And the calendar's own chip delegates to the same stack the pin uses, so
+  // the map and the calendar cannot draw one event two ways.
+  ok(/const KindIcon = \(\{icon, hue, img, size, cls\}\) => \{/.test(src),
+     "KindIcon is the one glyph-under-mark stack");
+  ok(/<\$\{KindIcon\} icon=\$\{ic\.icon\}/.test(view), "the pin uses it");
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed");
