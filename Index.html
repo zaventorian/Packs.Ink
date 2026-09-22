@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=470">
+<link rel="stylesheet" href="styles.css?v=471">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -41221,22 +41221,35 @@ const calendarTimeline = (events, opts) => {
 // uses. hideBrokenImg hides a failed photo by style, so a product TCGplayer has
 // no picture for (or a curated URL a CSP change later blocks) degrades to the
 // glyph instead of leaving a hole, with no error handling at the call site.
-const CalendarKindDot = ({kind, ev, art}) => {
-  const {icon, hue, img} = calendarEventIcon(ev || {kind}, art);
-  // ⚠ A product photo here is TCGplayer's, shot on a WHITE sweep — so a 13px
-  // calendar chip was a little white square in the middle of a dark grid, and
-  // the ground under it made that worse rather than better (an object-fit:
-  // contain photo letterboxes, so the tile read white edge to edge). The hook
-  // cuts the sweep and leaves the grid showing through; Ravensburger's own
-  // marks are same-origin and already transparent, so it returns them as-is.
+// The glyph-under-mark stack, given an already-resolved {icon, hue, img}. Split
+// out of CalendarKindDot 2026-09-22 so the event MAP can wear the same marks as
+// the calendar that feeds it — a Challenge shield on the calendar and an
+// anonymous yellow dot on the map for the same event is the two surfaces
+// disagreeing about what the thing IS.
+//
+// ⚠ A product photo here is TCGplayer's, shot on a WHITE sweep — so a 13px
+// calendar chip was a little white square in the middle of a dark grid, and the
+// ground under it made that worse rather than better (an object-fit: contain
+// photo letterboxes, so the tile read white edge to edge). The hook cuts the
+// sweep and leaves the grid showing through; Ravensburger's own marks are
+// same-origin and already transparent, so it returns them as-is.
+//
+// ⚠ It owns a HOOK, so it has to stay a component — it can never become a
+// helper a render loop calls inline.
+const KindIcon = ({icon, hue, img, size, cls}) => {
   const photo = useProductCutUrl(img);
-  return html`<span class="cal-ico" aria-hidden="true" style=${{color: hue}}>
-    <span class="cal-ico-glyph">${uiIcon(icon, 13)}</span>
+  return html`<span class=${"cal-ico" + (cls ? " " + cls : "")} aria-hidden="true"
+    style=${{color: hue}}>
+    <span class="cal-ico-glyph">${uiIcon(icon, size || 13)}</span>
     ${img && html`<img class=${"cal-ico-img" + (photo.cors && !photo.cut ? " on-white" : "")}
       ref=${photo.ref} src=${photo.src} alt=""
       crossOrigin=${photo.cors ? "anonymous" : null}
       onLoad=${photo.onLoad} onError=${hideBrokenImg}/>`}
   </span>`;
+};
+const CalendarKindDot = ({kind, ev, art}) => {
+  const {icon, hue, img} = calendarEventIcon(ev || {kind}, art);
+  return html`<${KindIcon} icon=${icon} hue=${hue} img=${img}/>`;
 };
 
 // The badge every surface that can draw one puts beside an estimated date. Tiny
@@ -41665,9 +41678,33 @@ const scLabelW = (text) => {
 // each side, so the width is those plus the digits; the HEIGHT is fixed, which
 // is why only the horizontal half changes.
 const SC_PIN_MIN_W = 22, SC_PIN_CHROME = 14, SC_PIN_DIGIT = 6.4;
-const scPinR = (count) => {
+// ⚠ A pin wearing its kind's mark is WIDER again — the glyph is 18px and a
+// merged one carries the count beside it with a 3px gap. This number is not
+// decoration: scPlacePinLabels reserves the pin's real box so no date chip is
+// ever drawn over another event's dot, and CLAUDE.md already records a 2.5px
+// under-reservation putting a chip corner over a click target.
+//
+// ⚠ 18, not 14, and the 4px it moved was a REAL under-reservation found by
+// measuring the live pin rather than by reading the CSS. `.cal-ico` (the shared
+// glyph stack this borrows) declares its own 18px box and is declared LATER in
+// styles.css, so at equal specificity it won and the 14px asked for here never
+// applied. It passed only because SC_LBL_BLEED's 1px of slack happened to cover
+// most of the gap — and that pixel exists to absorb a rounding, not a
+// systematic error. `.sc-map-pin .sc-map-pin-ico` now wins outright and says
+// this number out loud; the two must move together.
+const SC_PIN_ICON = 18, SC_PIN_ICON_GAP = 3;
+// How many rows the on-screen list draws before it offers the rest behind a
+// click. ⚠ Measured, not guessed: the calendar map at a metro with every kind
+// on is 65 PINS but 232 EVENTS -- a merged pin is several league nights -- and
+// 232 rows is about ten screens of page hanging under a 480px map. The count in
+// the header is always the true one, so the cap hides nothing it does not name.
+const SC_MAP_LIST_CAP = 40;
+const scPinR = (count, hasIcon) => {
   const d = count > 1 ? String(count).length : 0;
-  return (d ? Math.max(SC_PIN_MIN_W, SC_PIN_CHROME + SC_PIN_DIGIT * d) : SC_PIN_MIN_W) / 2;
+  const digits = d ? SC_PIN_DIGIT * d : 0;
+  const ico = hasIcon ? SC_PIN_ICON + (d ? SC_PIN_ICON_GAP : 0) : 0;
+  const w = (ico || digits) ? SC_PIN_CHROME + ico + digits : SC_PIN_MIN_W;
+  return Math.max(SC_PIN_MIN_W, w) / 2;
 };
 // ── Dragging the map ─────────────────────────────────────────────────
 // Dragging the tiles right by dx means the CENTRE moved left by dx, so the sign
@@ -41731,7 +41768,7 @@ const scPlacePinLabels = (pins, w, h) => {
   }
   return out;
 };
-const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf, height, fit, focus, focusEmpty, onPan}) => {
+const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf, height, fit, focus, focusEmpty, onPan, iconOf, listTitle}) => {
   const wrapRef = useRef(null);
   const [w, setW] = useState(0);
   // ⚠ The open callout is keyed on the GROUP's position, never its index, and
@@ -41742,6 +41779,10 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf,
   // it. A key self-heals instead: if the pins move, nothing matches and the
   // callout simply closes.
   const [selKey, setSelKey] = useState(null);
+  // ⚠ Deliberately NOT reset when the events or the frame change. Somebody who
+  // asked for the whole list and then nudged the map has not changed their mind,
+  // and re-collapsing under a pan is the control fighting the hand.
+  const [listAll, setListAll] = useState(false);
   // The box is a different width embedded in the calendar tile, expanded over
   // the page, and on a phone, so it is measured rather than assumed.
   useLayoutEffect(() => {
@@ -41754,13 +41795,39 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf,
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+  // ⚠ THE HEIGHT IS MEASURED, exactly as the width is, and for the same reason
+  // — it is not the same on every surface, and CSS gets the last word. The
+  // calendar passes CAL_MAP_VIEW_H (480) while
+  // `.cal-map-view .sc-map-box{height:340px !important}` renders it 340 on a
+  // phone, so every number derived from the prop was computed for a box 41%
+  // taller than the one being drawn in: the FIT framed the pins into 480px of
+  // vertical space and the bottom ~140px was then clipped, `scPlacePinLabels`
+  // placed date chips against a floor that did not exist, and pins landed
+  // genuinely outside the box (measured: one at top:471px inside a 340px box).
+  //
+  // ⚠ The style still writes the PROP, never the measurement. The box's height
+  // comes from `H`, so feeding a measurement back into it is a loop; reading it
+  // only for the maths converges in one pass whether or not CSS overrides it.
+  const [mh, setMh] = useState(0);
+  const _mapBoxRo = useRef(null);
+  const boxRef = useCallback((el) => {
+    if(_mapBoxRo.current){ _mapBoxRo.current.disconnect(); _mapBoxRo.current = null; }
+    if(!el) return;
+    const sync = () => setMh(Math.round(el.getBoundingClientRect().height));
+    sync();
+    if(typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    _mapBoxRo.current = ro;
+  }, []);
+  useEffect(() => () => { if(_mapBoxRo.current) _mapBoxRo.current.disconnect(); }, []);
   const rows = events || [];
   // ⚠ The FIT is per surface, not a constant. The finder draws a 50-mile radius
   // and wants to be zoomed into it; the calendar draws a season that spans
   // continents and must be allowed all the way out. A single range serves
   // neither — capped at 13 the world map cannot fit Tokyo and Chicago on one
   // screen at all, and floored at 2 the finder opens on a view of Europe.
-  const H = height || SC_MAP_H;
+  const H = mh || height || SC_MAP_H;
   const fitOpts = fit || {maxZoom: 13, fallbackZoom: 11};
   // ⚠ The deps are the focus's own NUMBERS, never the object — a caller building
   // `{lat, lng, zoom}` inline hands back a new identity every render, and a memo
@@ -41773,8 +41840,47 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf,
     : null, [rows, w, H, fitOpts.minZoom, fitOpts.maxZoom, fitOpts.fallbackZoom, fLat, fLng, fZ]);
   // A pin's `i` is its index in `rows` — osmFitLayout preserves it precisely so
   // an event we could not place never renumbers the ones after it.
-  const groups = useMemo(() => layout ? scMergePins(layout.pins) : [], [layout]);
+  const allGroups = useMemo(() => layout ? scMergePins(layout.pins) : [], [layout]);
   const gKey = (g) => g.left + ":" + g.top;
+  // The mark a pin wears — the SAME {icon, hue, img} the calendar draws beside
+  // that event in every other view, so the map stops being a field of anonymous
+  // yellow dots and a Challenge reads as a Challenge at a glance.
+  //
+  // ⚠ A merged pin only gets one when every event under it AGREES. Two different
+  // things at one address is exactly what the count and the callout are for, and
+  // picking the first one's mark would state, in a picture, that the pin is a
+  // Challenge when half of it is a league night.
+  const groupIcon = useCallback((g) => {
+    if(!iconOf) return null;
+    let out = null;
+    for(const p of g.items){
+      const ic = iconOf(rows[p.i]);
+      if(!ic || !ic.icon) return null;
+      if(!out) out = ic;
+      else if(out.icon !== ic.icon || out.img !== ic.img || out.hue !== ic.hue) return null;
+    }
+    return out;
+  }, [iconOf, rows]);
+  // ⚠ ONLY WHAT CAN BE SEEN IS RENDERED, and this is a real bug fix rather than
+  // a tidy-up. `.sc-map-box` is `overflow:hidden`, so a pin outside the frame was
+  // invisible — and still a `<button>` in the DOM. Measured on the calendar map at
+  // a metro focus on a 375px phone: **65 pins drawn, 46 of them entirely outside
+  // the frame**, the worst 65,685px away, every one of them keyboard-focusable and
+  // carrying a full aria-label. Tabbing through the map walked 46 controls nobody
+  // could see, and a screen reader read all 65. Clipping hides a thing from your
+  // eyes, never from the tab order. Present on desktop too (29 of 65).
+  //
+  // ⚠ The test is INTERSECTION, not centre-in-frame: a pin whose centre sits just
+  // outside still shows half its dot at the edge, and dropping it would delete
+  // something visible. It uses the group's REAL radius (`scPinR`), the same width
+  // the label placer reserves, so "drawn" and "reserved" cannot disagree.
+  const groups = useMemo(() => {
+    if(!layout) return [];
+    return allGroups.filter(g => {
+      const r = scPinR(g.items.length, !!groupIcon(g));
+      return g.left + r >= 0 && g.left - r <= w && g.top + r >= 0 && g.top - r <= H;
+    });
+  }, [layout, allGroups, groupIcon, w, H]);
   // ⚠ The tiles MOVE under the finger and the layout is only recomputed on
   // release. Refetching a tile set per pointermove is a request storm and a
   // visibly stuttering map; a transform is one compositor property and costs
@@ -41813,11 +41919,20 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf,
   // One label per MARKER, not per event: a merged pin is one place, and the
   // date it shows is the first one under it — the count on the dot is what says
   // there are more, and the callout is what names them.
+  // ⚠ Computed from `groups` (the VISIBLE ones), the same array the render loop
+  // walks — `labelSides[gi]` is indexed by position, so placing over `allGroups`
+  // while rendering a filtered list silently hands every pin its neighbour's chip.
+  // An off-frame dot also no longer reserves space, which is correct: nothing is
+  // drawn there, so a chip over it covers nothing.
   const labelSides = useMemo(() => scPlacePinLabels(groups.map(g => {
     const first = g.items.reduce((a, b) => (b.i < a.i ? b : a), g.items[0]);
-    return {left: g.left, top: g.top, rank: first.i, r: scPinR(g.items.length),
+    // ⚠ The SAME hasIcon the pin will actually render with. Reserve the plain
+    // width for a pin that ends up wearing a mark and a neighbour's date chip is
+    // placed over its edge — over a click target, invisibly.
+    return {left: g.left, top: g.top, rank: first.i,
+            r: scPinR(g.items.length, !!groupIcon(g)),
             text: dateOf ? (dateOf(rows[first.i]) || "") : ""};
-  }), w, H), [groups, rows, dateOf, w, H]);
+  }), w, H), [groups, rows, dateOf, w, H, groupIcon]);
 
   // ⚠ "Not on the map" is TWO different facts and they must not be added up.
   // A set or product release is worldwide — it is in no place by definition, the
@@ -41831,8 +41946,21 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf,
   // explanation reads as broken software, so count what actually landed in the
   // frame and say so. Pins outside it are clipped by `overflow:hidden`, which is
   // right, but silent.
-  const inFrame = layout ? layout.pins.filter(q => q.left >= 0 && q.left <= w
-                                              && q.top >= 0 && q.top <= H).length : 0;
+  // ⚠ The pins themselves, not just a count: the list under the map is exactly
+  // "what is on screen", so it has to be derived from the same test that decides
+  // whether a pin is visible. Two ways of answering "is this one showing" is how
+  // a list ends up naming an event the map is not drawing.
+  //
+  // ⚠ Sorted by the pin's `i`, the caller's own order (date-sorted on both
+  // surfaces) — NOT by pin position, which orders a list of dates by latitude.
+  // ⚠ Derived from the VISIBLE GROUPS, so it is literally "the events under the
+  // pins that are drawn" rather than a second, nearly-identical test. That is the
+  // invariant stated exactly: the list can no longer name an event the map is not
+  // showing, or miss one it is, because there is only one answer to "is this on
+  // screen" and both halves read it.
+  const inFramePins = useMemo(() => groups.flatMap(g => g.items)
+    .slice().sort((a, b) => a.i - b.i), [groups]);
+  const inFrame = inFramePins.length;
   const placedIdx = useMemo(() => {
     const set = new Set();
     for(const pin of (layout ? layout.pins : [])) set.add(pin.i);
@@ -41860,7 +41988,8 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf,
     </div>`}
     ${layout && html`<${React.Fragment}>
       <div class=${"sc-map-box" + (onPan ? " sc-map-box--drag" : "") + (pan ? " sc-map-box--dragging" : "")}
-        style=${{height: H + "px"}}
+        ref=${boxRef}
+        style=${{height: (height || SC_MAP_H) + "px"}}
         onPointerDown=${onPan ? onDragStart : undefined}
         onPointerMove=${onPan ? onDragMove : undefined}
         onPointerUp=${onPan ? onDragEnd : undefined}
@@ -41876,18 +42005,35 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf,
              calendar's mini-map and the deck quick-add thumbnails both had. */
           layout.tiles.map(t => html`<img key=${t.key} src=${osmTileUrl(t)} alt=""
             width=${layout.size} height=${layout.size} draggable="false" loading="eager"
+            onError=${hideBrokenImg}
             style=${{left: t.left + "px", top: t.top + "px"}}/>`)}
         ${groups.map((g, gi) => {
           const side = labelSides[gi];
           const first = g.items.reduce((a, b) => (b.i < a.i ? b : a), g.items[0]);
           const day = dateOf ? (dateOf(rows[first.i]) || "") : "";
+          const ic = groupIcon(g);
           return html`<button key=${gKey(g)} type="button"
-            class=${"sc-map-pin" + (selKey === gKey(g) ? " on" : "") + (g.items.length > 1 ? " many" : "")}
+            class=${"sc-map-pin" + (selKey === gKey(g) ? " on" : "")
+              + (g.items.length > 1 ? " many" : "") + (ic ? " sc-map-pin--ico" : "")}
             style=${{left: g.left + "px", top: g.top + "px"}}
             onClick=${() => setSelKey(k => k === gKey(g) ? null : gKey(g))}
+            ${/* ⚠ A merged pin is a DISCLOSURE, so it says how many and names the
+                 first — never all of them. Listing every event inline made one
+                 button announce 1,755 characters on a 25-event pin, which a
+                 screen reader reads start to finish with nothing to skim. The
+                 names are not lost: the callout this opens is a list of real
+                 buttons, one per event, which is the reachable way to expose
+                 them. aria-expanded is what says the list is there at all. */""}
+            aria-expanded=${g.items.length > 1 ? (selKey === gKey(g) ? "true" : "false") : undefined}
             aria-label=${g.items.length > 1
-              ? `${g.items.length} events here: ${g.items.map(fullOf).join("; ")}`
+              ? `${g.items.length} events here, including ${nameOf(g.items[0])} — list them`
               : fullOf(g.items[0])}>
+            ${/* ⚠ An icon pin inverts: a light disc with the kind's own colour on
+                 it, not the kind's colour as the disc. The DLC and CCQ marks are
+                 IMAGES with their own palette — on a saturated ground they are
+                 mud — and a white-on-pale glyph is unreadable at 14px. */""}
+            ${ic && html`<${KindIcon} icon=${ic.icon} hue=${ic.hue} img=${ic.img}
+              size=${14} cls="sc-map-pin-ico"/>`}
             ${g.items.length > 1 ? g.items.length : ""}
             ${/* ⚠ The chip is a CHILD of the pin button, so it shares the hit
                  area and can never become a click target that does nothing, and
@@ -41922,6 +42068,41 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf,
             ].filter(Boolean).join(" · ")}</span>`}
         <span class="cal-map-credit">© OpenStreetMap contributors</span>
       </div>
+      ${/* The map answers "where", and this answers "what" — the same events, in
+           date order, readable without hunting for a pin and hovering it. It is
+           scoped to what is ON SCREEN rather than to everything the map holds,
+           so panning and zooming narrow it: that is what makes it a reading of
+           the map rather than a second copy of the list beside it.
+           ⚠ It is a plain block with no inner scroll. A scroll box inside a
+           scrolling page (and the finder's map lives inside a scrolling overlay)
+           is the peephole the print-proxy dialog already had to have taken out
+           of it. */""}
+      ${inFrame > 0 && html`<div class="sc-map-list">
+        <div class="sc-map-list-head">
+          ${listTitle || "On the map"}
+          <span class="sc-map-list-n">${inFrame}</span>
+        </div>
+        ${(listAll ? inFramePins : inFramePins.slice(0, SC_MAP_LIST_CAP)).map(p => {
+          const ic = iconOf ? iconOf(rows[p.i]) : null;
+          const day = dateOf ? (dateOf(rows[p.i]) || "") : "";
+          return html`<button key=${p.i} type="button" class="sc-map-list-row"
+            onClick=${() => onPick && onPick(rows[p.i], p.i)}>
+            ${ic && html`<${KindIcon} icon=${ic.icon} hue=${ic.hue} img=${ic.img} size=${13}/>`}
+            ${day && html`<span class="sc-map-list-day">${day}</span>`}
+            <span class="sc-map-list-txt">
+              <span class="sc-map-list-name">${nameOf(p)}</span>
+              ${subOf(p) && html`<span class="sc-map-list-sub">${subOf(p)}</span>`}
+            </span>
+            <span class="sc-map-list-go" aria-hidden="true">→</span>
+          </button>`;
+        })}
+        ${/* ⚠ The button names the REMAINDER, not the total. "Show all 232" next
+             to 40 visible rows reads as though 232 more are hidden. */""}
+        ${!listAll && inFrame > SC_MAP_LIST_CAP && html`<button type="button"
+          class="sc-map-list-more" onClick=${() => setListAll(true)}>
+          Show ${inFrame - SC_MAP_LIST_CAP} more
+        </button>`}
+      </div>`}
     </>`}
   </div>`;
 };
@@ -43451,6 +43632,18 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   const art = useMemo(() => calendarArtIndex(sealedPrices,
     all.filter(e => e.kind === "set" || e.kind === "product").map(e => e.set_name || e.title)),
     [sealedPrices, all]);
+  // The mark each pin wears — the SAME resolver every other calendar surface
+  // draws from, so a Challenge is a Challenge on the map too.
+  //
+  // ⚠ It has to sit BELOW `art`: a useCallback evaluates its dependency array at
+  // its own declaration point, and `art` is a const declared later in this same
+  // scope, so higher up this is a TDZ ReferenceError into the error boundary —
+  // the trap `screenerPayload` already documents.
+  //
+  // ⚠ useCallback, not an inline arrow at the call site. EventMapView feeds this
+  // into the memo that places every date chip, so a fresh identity each render
+  // re-runs the whole label-collision pass on every unrelated keystroke.
+  const mapIconOf = useCallback((ev) => calendarEventIcon(ev, art), [art]);
   const counts = useMemo(() => {
     const c = {};
     for(const k of CALENDAR_KIND_KEYS) c[k] = 0;
@@ -43888,6 +44081,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
             labelOf=${(e) => calEventTitle(e)}
             subLabelOf=${(e) => [calDayLabel(e && e.starts_on), e && e.location].filter(Boolean).join(" · ")}
             worldwideOf=${(e) => e && (e.kind === "set" || e.kind === "product")}
+            iconOf=${mapIconOf} listTitle="On the map"
             focusEmpty=${!mapFocus ? null
               : mapScope === "mine"
                 ? `Nothing you follow is near ${mapFocus.label}. Switch to All events, or zoom out.`
@@ -44371,6 +44565,13 @@ const scParseKinds = (raw) => {
 const scKindOf = (row) => SC_KIND_KEYS.includes(row && row.kind) ? row.kind : "other";
 const scKindsLabel = (ks) => ks.length === SC_KIND_KEYS.length ? "Lorcana Events"
   : ks.map(k => SC_KIND_PLURAL[k]).join(" & ");
+// The mark a finder result wears on the map. ⚠ It goes through
+// `calendarEventIcon` with a synthetic store row rather than keeping its own
+// icon table: a finder result and the calendar row for the same shop night are
+// the same event seen from two pages, and two tables is how a Set Championship
+// ends up a trophy on one and something else on the other. `scKindOf` already
+// folds an unknown kind into the catch-all, exactly as the feed does.
+const scSeriesIcon = (row) => calendarEventIcon({kind: "store", rph_kind: scKindOf(row)});
 
 // ── Which DATES ─────────────────────────────────────────────────────────────
 // One date became a list: "which of these three Saturdays" is the question a
@@ -44999,6 +45200,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
             ? fmtSCDate(e._next.start_datetime, e.timezone)
               + " · " + fmtSCTime(e._next.start_datetime, e.timezone)
             : null}
+          iconOf=${scSeriesIcon} listTitle="On the map"
           onPick=${(e) => setSel({series: e, occ: e._next})}/>`}
         <div class="sc-list">
           ${visibleSorted.map(e => {

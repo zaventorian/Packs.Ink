@@ -2201,13 +2201,22 @@ ok("the graded tile isolates its version badge",
     /\.cal-ico-img\{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;\}/.test(css5));
   ok("and the ground is a class the component has to ask for",
     /\.cal-ico-img\.on-white\{background:var\(--bg-surface\);\}/.test(css5));
+  // The photo logic lives in KindIcon now, because the event MAP wears the same
+  // marks as the calendar that feeds it.
+  const kicon = grab("const KindIcon = ({icon, hue, img, size, cls}) => {", NL + "};");
   const dot = grab("const CalendarKindDot = ({kind, ev, art}) => {", NL + "};");
   // ⚠ cors is true only for a photo proxyImg rewrites, i.e. a CDN catalog shot
   // where the white studio sweep is the rule. A brand mark is same-origin, so
   // it never asks for a ground and never goes near the canvas.
   ok("only an uncut CDN photo asks for one",
-    /photo\.cors && !photo\.cut \? " on-white" : ""/.test(dot));
-  ok("the chip icon goes through the shared cut", /useProductCutUrl\(img\)/.test(dot));
+    /photo\.cors && !photo\.cut \? " on-white" : ""/.test(kicon));
+  ok("the chip icon goes through the shared cut", /useProductCutUrl\(img\)/.test(kicon));
+  // ⚠ And the calendar's own dot must DELEGATE rather than keep a second copy.
+  // Two stacks that both draw a kind is how the map and the calendar end up
+  // disagreeing about what an event looks like, which is the whole reason this
+  // was split out.
+  ok("CalendarKindDot delegates to it", /<\$\{KindIcon\}/.test(dot));
+  ok("and keeps no photo hook of its own", !/useProductCutUrl/.test(dot));
 
   const hook = grab("const useProductCutUrl = (src) => {", NL + "};");
   ok("the hook cuts ONLY what proxyImg rewrites",
