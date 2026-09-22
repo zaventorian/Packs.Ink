@@ -3173,7 +3173,26 @@ const osmFitLayout = (points, w, h, opts) => {
   if(!isFinite(z)) z = o.fallbackZoom == null ? 11 : o.fallbackZoom;
   z = Math.max(o.minZoom == null ? 1 : o.minZoom, Math.min(o.maxZoom == null ? 15 : o.maxZoom, z));
 
-  const base = osmTileLayout(osmFracLat(centerFy), centerFx * 360 - 180, z, w, h);
+  // ⚠ A FOCUS overrides the fit, and shares every line BELOW it deliberately.
+  // The wrap-to-nearest-copy and the pin subtraction are the two places a pin can
+  // drift off its tile, and a second copy of either is exactly how that happens —
+  // so "centre here at this zoom" changes the centre and the zoom, and nothing else.
+  // ⚠ `coord`, never a bare Number() — Null Island again. A focus half-built
+  // from a lookup that returned nothing ({lat: null}) would otherwise be a
+  // perfectly finite 0N 0E, and "zoom to my town" would centre the Atlantic.
+  const fLat = o.focus ? coord(o.focus.lat) : NaN, fLng = o.focus ? coord(o.focus.lng) : NaN;
+  let cFx = centerFx, cFy = centerFy;
+  if(isFinite(fLat) && isFinite(fLng) && Math.abs(fLat) <= 90 && Math.abs(fLng) <= 180){
+    const ff = osmWorldFrac(fLat, fLng);
+    cFx = ((ff.fx % 1) + 1) % 1;
+    cFy = ff.fy;
+    // The clamps above are the FIT's business; a focus is a deliberate choice and
+    // is bounded only by what tiles exist.
+    const fz = Math.round(Number(o.focus.zoom));
+    z = isFinite(fz) ? Math.max(0, Math.min(19, fz)) : z;
+  }
+
+  const base = osmTileLayout(osmFracLat(cFy), cFx * 360 - 180, z, w, h);
   if(!base) return null;
   const world = Math.pow(2, base.zoom) * OSM_TILE_PX;
   // Each point is drawn at whichever wrapped copy of itself is nearest the
@@ -3181,13 +3200,13 @@ const osmFitLayout = (points, w, h, opts) => {
   // near copy is the real one, and the raw fraction is a world away.
   const pins = pts.map(v => {
     let fx = v.fx;
-    if(Math.abs(fx + 1 - centerFx) < Math.abs(fx - centerFx)) fx += 1;
-    else if(Math.abs(fx - 1 - centerFx) < Math.abs(fx - centerFx)) fx -= 1;
+    if(Math.abs(fx + 1 - cFx) < Math.abs(fx - cFx)) fx += 1;
+    else if(Math.abs(fx - 1 - cFx) < Math.abs(fx - cFx)) fx -= 1;
     return {i: v.i, lat: v.lat, lng: v.lng,
             left: Math.round(fx * world - base.originX),
             top: Math.round(v.fy * world - base.originY)};
   });
-  return Object.assign({}, base, {pins, center: {lat: osmFracLat(centerFy), lng: centerFx * 360 - 180}});
+  return Object.assign({}, base, {pins, center: {lat: osmFracLat(cFy), lng: cFx * 360 - 180}});
 };
 
 // SET_RELEASE_DATES (a const, far below) expanded into calendar rows. Passed in
@@ -9541,6 +9560,15 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
         onClick=${()=>setPrivateSaleOpen(true)}>＋ Private sale</button>`}
     </div>`}
 
+    ${/* ⚠ Directly under the price box and ABOVE Price Changes, not below it.
+         A population is the context you read a price against, so it belongs
+         beside the price; below the delta table it lands ~700px down and is
+         off-screen on a laptop, which is exactly how it got missed. It sits
+         after the Graded/Raw toggle rather than before it so the toggle stays
+         adjacent to the prices it switches. Renders nothing when PSA has never
+         graded the card. */""}
+    <${GradedPopPanel} group=${group}/>
+
     ${!isGradedMode && statRows.length > 0 && html`<div class="card-detail-screener">
       <div class="cd-affiliate-note">Buy links open TCGplayer through their affiliate program — we may earn a commission at no extra cost to you.</div>
       <div class="card-detail-screener-head">
@@ -9563,11 +9591,6 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
         Individual sales are the amber dots on the price history below.
       </div>`}
     </div>`}
-
-    ${/* Under the price block on purpose: a population only means something
-         next to a price. Renders nothing at all when PSA has never graded this
-         card, or before migration 165 is applied. */""}
-    <${GradedPopPanel} group=${group}/>
 
     <div class="card-detail-history-section">
       ${!gradedPremium && html`<div class="card-detail-tabs">
@@ -41390,7 +41413,7 @@ const scPlacePinLabels = (pins, w, h) => {
   }
   return out;
 };
-const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf, height, fit}) => {
+const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf, height, fit, focus, focusEmpty}) => {
   const wrapRef = useRef(null);
   const [w, setW] = useState(0);
   // ⚠ The open callout is keyed on the GROUP's position, never its index, and
@@ -41421,9 +41444,15 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf,
   // screen at all, and floored at 2 the finder opens on a view of Europe.
   const H = height || SC_MAP_H;
   const fitOpts = fit || {maxZoom: 13, fallbackZoom: 11};
+  // ⚠ The deps are the focus's own NUMBERS, never the object — a caller building
+  // `{lat, lng, zoom}` inline hands back a new identity every render, and a memo
+  // keyed on that recomputes the whole tile layout on every keystroke elsewhere
+  // on the page.
+  const fLat = focus ? focus.lat : null, fLng = focus ? focus.lng : null, fZ = focus ? focus.zoom : null;
   const layout = useMemo(() => w > 40
-    ? osmFitLayout(rows.map(e => ({lat: e.latitude, lng: e.longitude})), w, H, fitOpts)
-    : null, [rows, w, H, fitOpts.minZoom, fitOpts.maxZoom, fitOpts.fallbackZoom]);
+    ? osmFitLayout(rows.map(e => ({lat: e.latitude, lng: e.longitude})), w, H,
+                   focus ? Object.assign({}, fitOpts, {focus: {lat: fLat, lng: fLng, zoom: fZ}}) : fitOpts)
+    : null, [rows, w, H, fitOpts.minZoom, fitOpts.maxZoom, fitOpts.fallbackZoom, fLat, fLng, fZ]);
   // A pin's `i` is its index in `rows` — osmFitLayout preserves it precisely so
   // an event we could not place never renumbers the ones after it.
   const groups = useMemo(() => layout ? scMergePins(layout.pins) : [], [layout]);
@@ -41443,6 +41472,14 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf,
   // event with no coordinates is a GAP in the data. Counted together, a calendar
   // showing the circuit would permanently report "11 events have no location on
   // file", which reads as broken software rather than as the truth.
+  // ⚠ Zooming somewhere with nothing in it is the COMMON outcome on a calendar
+  // holding a global circuit and whatever shops you follow — follow none and a
+  // zoom to your own town is correctly, completely empty. An empty map with no
+  // explanation reads as broken software, so count what actually landed in the
+  // frame and say so. Pins outside it are clipped by `overflow:hidden`, which is
+  // right, but silent.
+  const inFrame = layout ? layout.pins.filter(q => q.left >= 0 && q.left <= w
+                                              && q.top >= 0 && q.top <= H).length : 0;
   const placedIdx = useMemo(() => {
     const set = new Set();
     for(const pin of (layout ? layout.pins : [])) set.add(pin.i);
@@ -41497,6 +41534,7 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf,
           </button>`;
         })}
       </div>
+      ${focus && focusEmpty && inFrame === 0 && html`<div class="sc-map-note">${focusEmpty}</div>`}
       ${/* The callout is what makes a merged pin honest: every event under it is
            named and separately clickable, so nothing is reachable only by
            zooming in to a level the tiles may not even have. */
@@ -42627,6 +42665,9 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
     pool.filter(e => e.kind === "set" || e.kind === "product").map(e => e.set_name || e.title)),
     [sealedPrices, pool]);
   const nFilters = (kinds.length < CALENDAR_KIND_KEYS.length ? 1 : 0) + (region !== "all" ? 1 : 0);
+  // The same destination the title uses. `calendar` is in HOME_ALWAYS_SECTION, so
+  // this resolves at every width rather than only on a wide home page.
+  const calNav = panelNav ? panelNav("calendar", "Lorcana Calendar") : null;
 
   return html`<aside class="home-feed home-feed--calendar">
     <div class="cal-panel-head">
@@ -42650,6 +42691,24 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
           aria-label=${mode === "month" ? "Switch to list view" : "Switch to month view"}
           onClick=${() => setMode(m => m === "month" ? "list" : "month")}>
           ${uiIcon(mode === "month" ? "list" : "calendar", 12)}</button>
+        ${/* ⚠ The map is a LINK, not a third local mode — the panel is 240-360px
+              wide and a map in it is a smudge, so the button goes where the map
+              is readable. An <a href> means modifier-click opens a tab and
+              right-click offers Copy link address, per the SPA-nav convention.
+              It is also the only always-visible map entry point on the home
+              page: the finder's own Map toggle cannot render until a search has
+              results, so someone who has never typed a postal code sees none. */""}
+        ${calNav && html`<a class="cal-panel-tool" href=${calNav.href + "?cv=map"}
+          title="Map — the season, and your shops, on a map" aria-label="Map view"
+          onClick=${navHandler(() => {
+            // ⚠ The mode goes through the STORED preference, not the URL. The
+            // page reads `?cv=` out of location.search in a mount-time useMemo,
+            // and App writes the pathname after the view changes — so a param
+            // set here is not on the URL yet when CalendarView reads it. Same
+            // shape as the `?a=sealed` → Screener handoff.
+            try { localStorage.setItem(CAL_VIEW_LS, "map"); } catch {}
+            calNav.go();
+          })}>${uiIcon("map", 12)}</a>`}
         ${onFindEvents && html`<button type="button" class="cal-panel-tool"
           title="Find events near you" aria-label="Find events near you"
           onClick=${() => onFindEvents()}>${uiIcon("store", 12)}</button>`}
@@ -42778,6 +42837,45 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   }, []);
   const [kinds, setKinds] = useState(() => calReadKindPref(seed.ck));
   const [region, setRegion] = useState(() => calReadRegionPref(seed.cr));
+  // Where the MAP is pointed. Null is the whole season, which is the map's job
+  // and therefore its default: auto-zooming to somebody's metro on arrival would
+  // hide the circuit, which is the one thing this page is about.
+  //
+  // ⚠ The place box shares `packsink:scZip` / `scCountry` with the event finder
+  // rather than keeping a second one. "Where are you" is one question, and two
+  // boxes that can disagree is how a person ends up looking at the wrong Dublin
+  // on one surface and the right one on the other.
+  const [mapQ, setMapQ] = useState(() => { try { return localStorage.getItem("packsink:scZip") || ""; } catch { return ""; } });
+  const [mapFocus, setMapFocus] = useState(null);
+  const [mapBusy, setMapBusy] = useState(false);
+  const [mapErr, setMapErr] = useState(null);
+  const mapSeq = useRef(0);
+  const focusHere = useCallback(async (q) => {
+    const text = String(q || "").trim();
+    if(!text){ setMapErr("Enter a postal code or town."); return; }
+    // ⚠ Sequenced like the finder's own search: two lookups can overlap (Enter
+    // twice, or Go after a correction) and a stale FAILURE landing last would
+    // otherwise wipe a good answer — the bug that box already had once.
+    const my = ++mapSeq.current;
+    setMapBusy(true); setMapErr(null);
+    try {
+      let country = "";
+      try { country = (localStorage.getItem("packsink:scCountry") || "").toUpperCase(); } catch {}
+      const o = await scResolveOrigin(text, country);
+      if(my !== mapSeq.current) return;
+      setMapFocus({lat: o.lat, lng: o.lng, zoom: CAL_MAP_FOCUS_Z,
+                   label: [o.city, o.state].filter(Boolean).join(", ") || text});
+      try {
+        localStorage.setItem("packsink:scZip", text);
+        if(o.country) localStorage.setItem("packsink:scCountry", String(o.country).toUpperCase());
+      } catch {}
+    } catch(e){
+      if(my !== mapSeq.current) return;
+      setMapErr((e && e.message) || "Couldn't find that place.");
+    } finally {
+      if(my === mapSeq.current) setMapBusy(false);
+    }
+  }, []);
   const [query, setQuery] = useState(() => seed.cq || "");
   const [span, setSpan] = useState(() => calReadSpanPref(seed.cspan));
   const [group, setGroup] = useState(() => calReadGroupPref(seed.cg));
@@ -43195,15 +43293,54 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
 
     ${mode === "map"
       ? html`<div class="cal-map-view">
+          ${/* The place box. The map opens on the whole season, and this is how
+               you get from "where is the circuit" to "what is near me" without
+               leaving the page. */""}
+          <form class="cal-map-bar" onSubmit=${(e) => { e.preventDefault(); focusHere(mapQ); }}>
+            <label class="cal-map-place">
+              ${uiIcon("store", 12)}
+              <input type="text" value=${mapQ} maxLength=${40} title=${SC_ZIP_TITLE}
+                placeholder="Postal code or town" aria-label="Zoom the map to a postal code or town"
+                onInput=${(e) => setMapQ(e.target.value.slice(0, 40))}/>
+            </label>
+            <button type="submit" class="cal-map-go" disabled=${mapBusy}>
+              ${mapBusy ? "…" : "Zoom in"}</button>
+            ${mapFocus && html`<${React.Fragment}>
+              ${/* ⚠ A stepper, not a slider or a pinch: the map is a static set of
+                   <img> tiles with no pan, so the honest control is the one that
+                   re-renders it at a new zoom. Bounded where the tiles stay useful. */""}
+              <span class="cal-map-zoom" role="group" aria-label="Zoom">
+                <button type="button" aria-label="Zoom out" title="Zoom out"
+                  disabled=${mapFocus.zoom <= CAL_MAP_FOCUS_MIN}
+                  onClick=${() => setMapFocus(f => f && {...f, zoom: Math.max(CAL_MAP_FOCUS_MIN, f.zoom - 1)})}>−</button>
+                <button type="button" aria-label="Zoom in" title="Zoom in"
+                  disabled=${mapFocus.zoom >= CAL_MAP_FOCUS_MAX}
+                  onClick=${() => setMapFocus(f => f && {...f, zoom: Math.min(CAL_MAP_FOCUS_MAX, f.zoom + 1)})}>+</button>
+              </span>
+              <span class="cal-map-at">${mapFocus.label}</span>
+              <button type="button" class="cal-linkish cal-map-reset"
+                onClick=${() => { setMapFocus(null); setMapErr(null); }}>Whole season</button>
+              ${/* ⚠ The calendar map holds the CIRCUIT plus the shops you follow —
+                   not every local event, which is the finder's job. Zoomed into a
+                   town, saying so and offering the other map is the honest move;
+                   pretending this one answers it is not. */""}
+              ${onFindEvents && html`<button type="button" class="cal-linkish cal-map-all"
+                title="Every Lorcana event near you, not just the ones you follow"
+                onClick=${() => { try { localStorage.setItem("packsink:scMap", "1"); } catch {} onFindEvents(); }}>
+                Every event near me →</button>`}
+            </>`}
+          </form>
+          ${mapErr && html`<div class="cal-warn cal-warn--near">${uiIcon("warn", 14)} ${mapErr}</div>`}
           ${/* ⚠ `listed`, the same array the list renders — so "Show past" and
                every filter above mean the same thing here as they do there, and
                a map can never quietly hold a different set of events from the
                view you switched away from. */""}
-          <${EventMapView} events=${listed} height=${CAL_MAP_VIEW_H} fit=${CAL_MAP_FIT}
+          <${EventMapView} events=${listed} height=${CAL_MAP_VIEW_H} fit=${CAL_MAP_FIT} focus=${mapFocus}
             dateOf=${(e) => calShortDay(e && e.starts_on)}
             labelOf=${(e) => calEventTitle(e)}
             subLabelOf=${(e) => [calDayLabel(e && e.starts_on), e && e.location].filter(Boolean).join(" · ")}
             worldwideOf=${(e) => e && (e.kind === "set" || e.kind === "product")}
+            focusEmpty=${mapFocus ? `Nothing on your calendar is near ${mapFocus.label}. Zoom out, turn on "SCs near me" above, or open every event near you.` : null}
             onPick=${setSel}/>
         </div>`
       : mode === "timeline"
@@ -47151,6 +47288,26 @@ const JAPAN_CORE_FULL_SETS = new Set([
   "Wilds Unknown", "Attack of the Vine!",
 ]);
 const JAPAN_CORE_PARTIAL_SETS = new Set(["Whispers in the Well", "Winterspell"]);
+// A card in an otherwise fully-released set that is NOT Japan-legal, keyed
+// "<set>|<collector number>". duels.ink excludes exactly one (2026-09-22), and it
+// is the entry to be sceptical of: Rise of the Floodborn released whole in Japan,
+// so one lone common missing the flag looks far more like a gap in their data than
+// a real omission. Kept because their list is what we're matching; delete the entry
+// to undo.
+// The Illumineer's Quest reward cards are numbered into their origin set's own
+// run (Deep Trouble -> 223-225, Palace Heist -> 223-224), and duels.ink files
+// them as ordinary base cards of those sets, every one Japan-legal. We park them
+// in EXTRAS_SET_NAME instead, which is not a Japan-full set, so without this all
+// 9 read illegal -- and invisibly, because each one's booster twin IS legal, so
+// the CARD still shows up and only this printing's tile goes missing.
+//   Scoped to the two QUEST buckets deliberately. duels.ink tracks no entry of
+// its own for the other two: a Starter Deck Exclusive Foil is a foil reprint
+// sharing its base card's collector number, and the Gift Set Oversized cards are
+// display pieces no format allows. Nothing to match, so both stay out.
+const JAPAN_CORE_EXTRAS_BUCKETS = new Set(["Deep Trouble", "Palace Heist"]);
+const JAPAN_CORE_FULL_SET_EXCLUSIONS = new Set([
+  "Rise of the Floodborn|149", // Hiram Flaversham - Toymaker
+]);
 // Match by Product Name ("Name - Version"), punctuation/case-insensitive.
 const _jpNorm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 // Collector numbers released so far through the Curator's Library slot, per
@@ -47163,18 +47320,25 @@ const _jpNorm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 // It Go" is a Winterspell card AND a Challenge promo. The `f` suffix on a few
 // Winterspell rows (113f = the foil printing of 113) is stripped before the
 // lookup: the foil of a released card is the same released card.
+//   RECONCILED 2026-09-22 against duels.ink's own Core-JA list (its bundled
+// cards-data chunk tags every card with a `core_ja` legality flag; 2887 cards,
+// matching its own on-screen filter count). Its base-set lists are now what these
+// two Sets hold verbatim — 67 and 126 — so every card it calls Japan-legal, this
+// file does too, and NAMES below is now fully redundant with them. It stays as a
+// belt-and-braces net, which means one trap: dropping a number here no longer
+// makes a card illegal if its name is still listed below. Check both.
 const JAPAN_CORE_PARTIAL_NUMBERS = {
   "Whispers in the Well": new Set([
-    5,21,24,26,27,29,32,34,45,57,62,66,68,70,75,78,83,87,89,97,98,102,105,106,111,
-    115,118,133,137,141,146,150,154,155,156,157,160,162,165,166,169,172,176,178,179,
-    181,185,187,196,199,200,202,205,207,214,217,220,223,239,
+    5,21,24,26,27,29,32,34,45,57,62,66,68,70,75,78,83,87,89,97,98,102,105,106,111,115,118,
+    133,137,141,146,150,154,155,156,157,160,162,165,166,169,172,176,178,179,181,185,187,196,
+    199,200,202,205,207,208,214,217,220,223,225,228,231,235,236,237,239,240,
   ]),
   "Winterspell": new Set([
-    1,2,3,4,6,7,8,9,10,11,12,13,16,17,18,19,20,22,25,26,27,28,29,31,32,33,38,39,40,
-    43,45,46,47,50,51,52,55,59,60,61,64,65,66,68,71,72,79,80,84,85,86,87,89,90,92,97,
-    102,106,107,111,113,114,115,116,118,119,121,123,124,125,127,131,136,139,141,145,
-    147,149,150,153,158,166,168,169,172,174,176,177,179,181,184,185,188,189,190,192,
-    193,194,195,196,197,199,202,204,206,216,223,227,228,230,233,236,239,241,
+    1,2,3,4,6,7,8,9,10,11,13,16,17,18,19,20,21,22,25,26,27,28,29,31,32,33,38,39,40,43,45,46,
+    47,50,51,52,55,58,59,60,61,64,65,66,68,71,72,79,80,84,85,86,87,89,90,92,94,97,102,106,
+    107,111,113,114,115,116,118,119,121,123,124,125,127,131,136,139,143,145,147,149,150,153,
+    158,163,164,166,168,169,172,174,176,177,179,181,184,185,188,189,190,192,193,194,195,196,
+    197,199,202,204,206,207,209,215,216,221,223,224,225,226,227,228,230,232,233,236,239,241,
   ]),
 };
 const JAPAN_CORE_PARTIAL_NAMES = new Set([
@@ -47220,12 +47384,14 @@ const JAPAN_CORE_PARTIAL_NAMES = new Set([
 const isJapanCoreLegal = (row) => {
   if(!row) return false;
   const set = row.Set;
-  if(JAPAN_CORE_FULL_SETS.has(set)) return true;
-  if(!JAPAN_CORE_PARTIAL_SETS.has(set)) return false;
-  // Numbers are the primary key; the older name list stays as a union so the
-  // six cards the retailer happened to be out of stock on don't silently
-  // become illegal. Either source saying "released" is enough.
+  // Extras rows carry their EXTRAS_MAP variantLabel in Rarity (see buildRow).
+  if(set === EXTRAS_SET_NAME) return JAPAN_CORE_EXTRAS_BUCKETS.has(row.Rarity);
+  const full = JAPAN_CORE_FULL_SETS.has(set);
+  if(!full && !JAPAN_CORE_PARTIAL_SETS.has(set)) return false;
+  // Parsed once: the full-set branch needs it for the exclusion check too.
   const n = parseInt(String(row.Number ?? "").replace(/\D/g, ""), 10);
+  if(full) return !(Number.isFinite(n) && JAPAN_CORE_FULL_SET_EXCLUSIONS.has(set + "|" + n));
+  // Numbers are the primary key; the name list stays as a union (see above).
   const nums = JAPAN_CORE_PARTIAL_NUMBERS[set];
   if(nums && Number.isFinite(n) && nums.has(n)) return true;
   return JAPAN_CORE_PARTIAL_NAMES.has(_jpNorm(row["Product Name"]));
