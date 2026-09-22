@@ -519,6 +519,23 @@ input[type="checkbox"]:disabled{opacity:0.4;cursor:not-allowed;}
    [hidden]{display:none} — so without this a card whose art 404s leaves a
    blank clickable slot in the reel rather than disappearing. */
 .reveal-card[hidden]{display:none;}
+/* Hover-enlarge float. Fixed, so it escapes .reveal-window's overflow:hidden —
+   a CSS scale on the card itself would just be clipped by the strip.
+   ⚠ z-index sits BELOW .enlarged-card-overlay (200): clicking a card opens
+   that full-screen view while the pointer is still over the card, and a
+   thumbnail floating on top of it would look like a rendering fault. The click
+   handler also clears the float, so this is the second of two defences.
+   ⚠ pointer-events:none, or the float lands under the cursor and swallows the
+   click that is meant to open the card. */
+.reveal-hover{position:fixed;z-index:150;pointer-events:none;
+  border-radius:10px;overflow:hidden;border:1px solid var(--border);
+  background:var(--bg-modal);box-shadow:0 10px 30px rgba(0,0,0,0.45);
+  animation:fadeIn 0.12s ease;}
+.reveal-hover img{width:100%;display:block;}
+@media (hover:none){
+  /* Belt and braces beside mouseHoverOnly: a touch device must never paint it. */
+  .reveal-hover{display:none;}
+}
 @media (prefers-reduced-motion:reduce){
   /* A marquee that never stops is the exact thing this setting is for. Drop to
      a plain horizontal scroller — and hide the duplicate copy, which only

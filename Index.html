@@ -48251,6 +48251,18 @@ const revealSetLabel = (cards) => {
   for(const [s, k] of n){ if(k > topN){ top = s; topN = k; } }
   return (top && topN * 2 > (cards || []).length) ? top : null;
 };
+// Width of the hover-enlarge float. ~2.5x the nav card, which is enough to read
+// the art and the name off the card face without becoming a modal in all but
+// name — clicking is still what gets you the full-screen view.
+const REVEAL_PREVIEW_W = 232;
+// ⚠ Card art is NOT reliably 5:7 here, which is the whole reason this constant
+// exists. Prestaged spoiler art is a REVEAL-SLIDE SCREENSHOT, not an official
+// render — the Hyperia City set measures 295x490 (1.66) against a real card's
+// 1.4 — and mixed aspects are also why the reel's cards vary in width. The
+// float is positioned before its image has loaded, so the fit test has to
+// assume the TALLEST plausible card; over-reserving only lifts a preview a
+// little higher than it needed, where under-reserving runs it off-screen.
+const REVEAL_PREVIEW_MAX_RATIO = 1.75;
 // Seconds of travel per card. The reel's job is "something landed, go look" —
 // fast enough to read as alive, slow enough that a card you want to click is
 // still there when your hand gets to it.
@@ -48262,6 +48274,73 @@ const REVEAL_SECS_PER_CARD = 2.4;
 // the full detail modal, for the same reason (nothing on that modal is
 // meaningful for a card with no pids and no prices yet).
 const RevealStrip = ({cards, variant, setLabel, onOpen, onOpenSet}) => {
+  // Hover-to-enlarge. ⚠ It CANNOT be a CSS scale on the card: the reel lives
+  // inside .reveal-window's overflow:hidden, so a growing card is clipped by
+  // the strip's own edges. A fixed-position float escapes that — the same
+  // reason the deck editor's row preview is portaled rather than scaled.
+  const [hover, setHover] = useState(null);
+  const floatRef = useRef(null);
+  // ⚠ The float is placed from a LIVE measurement of the card element and the
+  // float's OWN rendered height — never from coordinates captured at hover
+  // time, and never from an assumed aspect ratio. Two reasons, both real:
+  //   1. Card art is not a fixed shape here. Prestaged spoiler art is a
+  //      reveal-slide screenshot (Hyperia City is 295x490, ratio 1.66) while a
+  //      real card render is 1.4, so any reserved height is wrong for half the
+  //      reel and the "does it fit below?" test decides with it.
+  //   2. A captured rect goes stale the moment anything scrolls or reflows
+  //      between the pointer event and the paint.
+  // Measuring on commit removes both by construction.
+  const placeFloat = useCallback(() => {
+    const f = floatRef.current;
+    if(!f || !hover || !hover.el) return;
+    const b = hover.el.getBoundingClientRect();
+    const w = f.offsetWidth || REVEAL_PREVIEW_W;
+    // Before the image loads the box has no real height — fall back to the
+    // tallest plausible card so the first placement is still on-screen, then
+    // the img's onLoad re-runs this with the true height.
+    const h = f.offsetHeight || Math.round(REVEAL_PREVIEW_W * REVEAL_PREVIEW_MAX_RATIO);
+    f.style.left = Math.max(8,
+      Math.min(window.innerWidth - w - 8, b.left + b.width / 2 - w / 2)) + "px";
+    f.style.top = Math.max(8, Math.min(window.innerHeight - h - 8,
+      b.bottom + h + 12 <= window.innerHeight ? b.bottom + 10 : b.top - h - 10)) + "px";
+  }, [hover]);
+  useLayoutEffect(placeFloat, [placeFloat]);
+  // ⚠ Re-place while the float is open. A placement is a snapshot, and the
+  // page moves under it for two ordinary reasons: reel art is still streaming
+  // in during the first seconds (a reflow above the panel shifted the card 59px
+  // after placement, which is exactly how this was found), and the reader can
+  // scroll with the pointer parked on a card. The scroll listener is CAPTURING
+  // so it hears scrolling inside any container, not just the document.
+  useEffect(() => {
+    if(!hover) return;
+    const onMove = () => placeFloat();
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
+    return () => {
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onMove);
+    };
+  }, [hover, placeFloat]);
+  // ⚠ MOUSE ONLY, via the shared gate. Touch fires a synthetic pointerenter
+  // and NEVER a matching leave, so on a phone one tap would park a card-sized
+  // image over the page with nothing on screen able to dismiss it. The LEAVE
+  // handlers below are deliberately ungated, so anything that does open can
+  // always close itself.
+  // ⚠ A factory per card, not one shared handler: mouseHoverOnly forwards ONLY
+  // the event to its inner function, so a second `card` argument would arrive
+  // undefined. The card is closed over instead.
+  // ⚠ NAV VARIANT ONLY. Hover-enlarge answers "let me see that one" on a
+  // desktop pointer, and the nav card is 88px — small enough to need it. The
+  // home-panel copy only renders under 1100px, where the pointer is a finger
+  // far more often than not (mouseHoverOnly then makes it dead code anyway),
+  // its cards are already bigger, and it can sit at the very bottom of the
+  // page where a float has nowhere clean to go. Tapping there opens the
+  // full-screen view, which is the better answer on a phone regardless.
+  const canHover = variant === "nav";
+  const enterFor = (c) => canHover ? mouseHoverOnly((e) => {
+    // Store the ELEMENT, not its rect — see placeFloat.
+    setHover({el: e.currentTarget, src: (c.row && c.row.img_large) || c.art, name: c.name});
+  }) : undefined;
   if(!cards || !cards.length) return null;
   const title = setLabel ? setLabel + " just revealed cards!" : "New cards revealed!";
   // ⚠ Rendered TWICE, and -50% of the track is therefore exactly one copy —
@@ -48271,7 +48350,14 @@ const RevealStrip = ({cards, variant, setLabel, onOpen, onOpenSet}) => {
   const seq = (pass) => cards.map(c => html`<button type="button"
       key=${pass + ":" + c.card_id}
       class=${"reveal-card" + (pass === "b" ? " reveal-card--dup" : "")}
-      onClick=${() => onOpen && onOpen(c.row)}
+      onPointerEnter=${enterFor(c)}
+      ${/* Ungated on purpose — whatever manages to open must always be able to
+            close, even if it opened from a pointer type we did not expect. */""}
+      onPointerLeave=${() => setHover(null)}
+      ${/* The click opens the full-screen enlarged overlay (z-index 200). Drop
+            the little preview in the same tick — it sits above the page but
+            must never be left floating over that overlay. */""}
+      onClick=${() => { setHover(null); onOpen && onOpen(c.row); }}
       title=${c.name} aria-label=${"Enlarge " + c.name}
       ${/* The second pass is a visual duplicate: a screen reader must not read
             36 cards twice, and Tab must not walk through a copy of the reel. */""}
@@ -48285,7 +48371,8 @@ const RevealStrip = ({cards, variant, setLabel, onOpen, onOpenSet}) => {
       <img src=${c.art} alt="" loading="eager" draggable=${false}
         onError=${e => { const b = e.currentTarget.closest("button"); if(b) b.hidden = true; }}/>
     </button>`);
-  return html`<div class=${"reveal-strip reveal-strip--" + variant}>
+  return html`<div class=${"reveal-strip reveal-strip--" + variant}
+    onPointerLeave=${() => setHover(null)}>
     <a class="reveal-head" href=${setLabel ? "/cards?set=" + encodeURIComponent(setLabel) : "/cards"}
       onClick=${navHandler(() => onOpenSet && onOpenSet(setLabel))}
       title=${title + " — open the Cards tab"}>
@@ -48304,6 +48391,12 @@ const RevealStrip = ({cards, variant, setLabel, onOpen, onOpenSet}) => {
         ${seq("a")}${seq("b")}
       </div>
     </div>
+    ${hover && html`<div class="reveal-hover" ref=${floatRef} aria-hidden="true"
+      style=${{width: REVEAL_PREVIEW_W + "px"}}>
+      ${/* onLoad re-places: until the art has loaded the box has no true
+            height, so the first pass positions against the fallback. */""}
+      <img src=${hover.src} alt="" draggable=${false} onLoad=${placeFloat}/>
+    </div>`}
   </div>`;
 };
 // Ravensburger rebalances a leader by re-rendering it IN PLACE — the art keeps
