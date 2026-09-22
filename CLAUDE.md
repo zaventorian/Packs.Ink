@@ -1140,6 +1140,67 @@ Every card-search surface in the app **must** route through `matchesCardFilter` 
 
 **Anti-pattern:** Don't re-implement the soft-match or stat-op logic inline. If a new view needs a small filter shim (e.g. chip-only filtering with no parsed query), pass `{inks: chipInks, rarities: chipRarities}` as `f` and `null` as `parsed`.
 
+## Card search finds SEALED PRODUCT too, in its own section (2026-09-21)
+
+"What is a booster box going for" had no answer in any search box — sealed was
+reachable only from the Sealed collection tab, the Sealed movers row and the
+Screener in sealed mode, three places you have to already be in. Typing
+"illumineer's trove" returned nothing. Both card-search surfaces now carry a
+**Sealed products** section: the home quick-search dropdown (under "Variants &
+other versions") and the Cards grid. `searchSealedProducts` is the one matcher
+behind both. Guarded by `node scripts/test_sealed_search.mjs`.
+
+**A row opens `SealedDetailModal`, which already WAS the sealed card-tile** —
+photo, set · type, Low + NM Market, the `priceStanding` chip, the 6-window Δ%
+grid and the full price-history chart. Nothing about it was rebuilt; it only
+lacked a way in.
+
+- **⚠ PRICED ROWS ONLY, and that single rule is what makes sealed safe next to
+  card search.** Pins, lore counters and puzzles are **named after cards** — 27
+  of the 70 pins/counters are literal `Character - Version` names ("Mickey Mouse
+  - Brave Little Tailor", "Belle - Mechanic Extraordinaire") and most of the
+  rest are bare character names, which is why `deriveSealedDisplayType` already
+  short-circuits on them. Admitting them drops ~70 card-named rows into card
+  searches, **every one of them also `isUnpricedSealed`** — a dead end on the
+  surface whose entire job is showing a price. That is the same call
+  `HomeQuickSearch` already makes when it skips Coconut leaders, and it is what
+  the user meant by "I don't want to make card search worse". Verified live:
+  elsa / mickey mouse / ariel / winnie the pooh / moana / belle each return
+  their cards and **zero** sealed rows, while `stitch` correctly surfaces the
+  Stitch Collector's Gift Set beside 27 cards. Five predicates enforce it
+  (`printing !== "Normal"`, `product_type === "Promo Single"`,
+  `isUnpricedSealed`, `isHiddenSealedListing`, and both prices null); the test
+  pins all five at source, because dropping any one is silent.
+- **⚠ Its own section BELOW the cards, computed independently of them.** The
+  card lists are untouched, so no query can cost a card its slot however it is
+  written — that is the whole reason this needs no opt-in token, and it is a
+  source-level property the test asserts (the home `suggestions` memo must stay
+  a function of `[q, raw]` alone, and the sealed divider must sort after the
+  cards').
+- **⚠ The Cards-tab grid is sized for BOXES** (square cell, `object-fit:contain`),
+  which is the point of a section rather than interleaved tiles: a booster box
+  in a 5:7 card grid either breaks its row or shrinks every card around it —
+  the same trap documented above for Location cards. A sealed tile in the card
+  grid was considered and rejected for exactly that.
+- **⚠ Deliberately NOT `matchesCardFilter`**, and this is a real exception
+  rather than a bypass: sealed has no ink, rarity, cost, classification or body
+  text, so every dimension that matcher exists to enforce is absent. The Price
+  Graphing sealed picker is already on the "intentionally do NOT use it" list
+  for the same reason. The haystack is the cleaned name + display type + **set
+  name**, tokens AND-ed, so `azurite booster box` and `vine trove` both land
+  even where TCGplayer's own name omits one half.
+- **⚠ On the Cards tab it is gated on TYPED TEXT, never the chips.** Every chip
+  is a card dimension sealed does not have, so an "amber commons" filter would
+  otherwise list every booster box on the site as if it had matched something.
+  Typing a product name is the ask; a chip is not. Never offered in the deck
+  editor (`deckMode`) — sealed is not deck contents.
+- A zero-card search that DID match sealed says so ("No cards match your search
+  — but it matches sealed product, below") instead of dead-ending. The section
+  renders after the empty state, so "below" is true.
+- **`ProductPhoto`'s wrapper is `position:absolute`, so the slot carries its own
+  size** — the standing rule from the sealed movers / collection tiles. The
+  white studio sweep is cut client-side as it is everywhere else.
+
 ## Cards browse filter dimensions
 
 Drawer + toolbar quick-filter chips (icon-only on toolbar):
