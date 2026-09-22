@@ -60,6 +60,7 @@ const PATH_TO_VIEW = {
   "/": "home", "/screener": "screener", "/price-graphing": "history",
   "/analytics": "market", "/cards": "cards", "/collection": "collection",
   "/decks": "decks", "/how-it-works": "faq", "/elo": "elo",
+  "/calendar": "calendar",
 };
 
 const moduleSrc = [
@@ -122,6 +123,18 @@ check("decks default section has no suffix", at("/decks"), "Decks");
 check("collection section", at("/collection", "?c=graded"), "your Collection · Graded");
 check("screener mode", at("/screener", "?m=sealed"), "the Screener · Sealed");
 check("analytics sub-tool", at("/analytics", "?a=swiss"), "Analytics · Swiss Odds");
+// The calendar is four different pages at one URL, and the map is the one
+// people send — so the toast has to say WHICH, or "Link to this page copied"
+// is the only feedback you get for the one link worth sharing.
+check("calendar map", at("/calendar", "?cv=map&cmap=41.88,-87.63,9,Chicago,+IL"),
+  "the Lorcana Calendar · Map");
+check("calendar month", at("/calendar", "?cv=month&cm=2026-10"),
+  "the Lorcana Calendar · Month");
+// The list is the default view, so the page's own name already describes it.
+check("calendar list has no suffix", at("/calendar", "?cv=list"), "the Lorcana Calendar");
+check("bare calendar", at("/calendar"), "the Lorcana Calendar");
+check("a bogus cv falls back to the page", at("/calendar", "?cv=nonsense"),
+  "the Lorcana Calendar");
 
 // A leaf page owns the label even though the section param behind it is still
 // in the URL — you opened a deck, so the link is to the deck, not to the tab.
