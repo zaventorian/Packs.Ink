@@ -5194,7 +5194,7 @@ effects DO: for anyone with no saved search, the first time the gate turns true 
 
 `EventMapView` (beside `scMergePins` in Index.html) draws many events on one OSM map.
 Same tiles-as-plain-`<img>` deal as `CalendarMiniMap` — no library, no script, no cookie —
-over `osmFitLayout`. Guarded by `node scripts/test_event_map.mjs` (240 checks).
+over `osmFitLayout`. Guarded by `node scripts/test_event_map.mjs` (258 checks).
 
 **It needed no migration, no RPC change, no new query and no `_headers` change.**
 `get_nearby_lorcana_events` already aggregates lat/lng per series, calendar rows carry
@@ -5220,6 +5220,81 @@ anyone scopes a "map feature" as large.
 - **⚠ `CAL_MAP_H` was already taken** by the calendar's own mini-map height (150). The
   view's is `CAL_MAP_VIEW_H`. A duplicate `const` at module scope is a SyntaxError that
   takes the whole app to a blank page, and it is not caught by any test — only by loading it.
+
+### ⚠ Only what can be SEEN is rendered, and the box MEASURES itself (2026-09-22)
+
+Two bugs found by sweeping the finished feature rather than from a report. Both
+were invisible by construction, and both had been there since the map shipped.
+
+**A clipped pin was still a BUTTON.** `.sc-map-box` is `overflow:hidden`, so a pin
+outside the frame was hidden from your eyes and from nobody else. Measured on the
+calendar map at a metro focus on a 375px phone: **65 pins drawn, 46 entirely
+outside the frame**, the worst **65,685px** away, every one keyboard-focusable and
+carrying a full `aria-label` — so Tab walked 46 controls nobody could see and a
+screen reader read all 65. Present on desktop too (29 of 65). Clipping hides a
+thing from your eyes, never from the tab order.
+
+- `allGroups` is the merge; **`groups` — what the render loop walks — is the
+  filtered set**, and it is what every downstream number reads.
+- **⚠ INTERSECTION, not centre-in-frame.** A pin whose centre sits just outside
+  still shows half its dot at the edge; dropping it deletes something visible. It
+  tests against the group's real `scPinR`, the same width the label placer
+  reserves, so "drawn" and "reserved" cannot disagree.
+- **⚠ `labelSides` is indexed BY POSITION** (`labelSides[gi]`), so it must be
+  computed from the same filtered array the render walks. Placing over the
+  unfiltered set while rendering a filtered one hands every pin its neighbour's
+  date chip — silently, and only on maps that have anything off-frame.
+- An off-frame dot no longer reserves label space, which is correct: nothing is
+  drawn there, so a chip over it covers nothing.
+- **The on-screen list is now literally the events under the pins that are
+  drawn** (`groups.flatMap(g => g.items)`), so "the list names exactly what the
+  map shows" is true by construction rather than by two nearly-identical tests
+  agreeing.
+
+**⚠ THE HEIGHT IS MEASURED, exactly as the width is — CSS gets the last word.**
+The calendar passes `CAL_MAP_VIEW_H` (480) while
+`.cal-map-view .sc-map-box{height:340px !important}` renders it **340** on a
+phone, so every number derived from the prop was computed for a box **41% taller
+than the one being drawn in**: the fit framed pins into 480px of vertical space
+and the bottom ~140px was then clipped, `scPlacePinLabels` placed chips against a
+floor that did not exist, and pins landed genuinely outside the box (measured: one
+at `top:471px` inside a 340px box). ~29% of the map was laid out where it could
+never be seen.
+
+- **⚠ The style still writes the PROP, never the measurement.** The box's height
+  comes from `H`, so feeding a measurement back in is a loop; reading it only for
+  the maths converges in one pass whether or not CSS overrides it.
+- The width was already measured for exactly this reason, and its own comment
+  says so — "the box is a different width embedded in the calendar tile, expanded
+  over the page, and on a phone, so it is measured rather than assumed". The
+  height is no different, and a breakpoint duplicated in JS and CSS is the
+  one-number-in-two-files trap this file warns about elsewhere.
+
+**⚠ A merged pin DISCLOSES, it does not RECITE.** A pin standing for 25 events
+carried all 25 in its `aria-label` — **1,755 characters** as one button's
+accessible name, which a screen reader reads start to finish with nothing to skim,
+on the pin most worth landing on. The names were never at risk: the callout it
+opens is already a list of real buttons, one per event, which is the reachable way
+to expose them. It now says what it is and what activating it does, and carries
+`aria-expanded` (absent on a single pin, which discloses nothing). Measured:
+**1755 → 85 characters**.
+
+A tile that fails to load now hides itself (`onError={hideBrokenImg}`) instead of
+drawing a broken-image glyph over the map.
+
+Measured after, at 375x667 and 1280x900: pins **65 → 19** and **65 → 36**, **0 out
+of frame at either width**, 0 chips outside the box, 0 chip-over-pin overlaps, 0
+horizontal overflow — and the finder's fitted map still shows all 7 of 7 results,
+so nothing that should be drawn was dropped. The on-screen count falls with the
+pins; that is the list becoming honest, not losing anything.
+
+**Deliberately NOT changed by that sweep**: the finder's map takes neither `focus`
+nor `onPan`, so it cannot be dragged or zoomed while the calendar's can. That is
+left as-is rather than "fixed" — the finder's map is a fitted overview of a radius
+you already chose, its merged pins are answered by the callout and the list
+beneath it, and it offers no grab cursor or zoom control to suggest otherwise.
+Giving it pan without zoom would be half a control on a map whose whole job is to
+frame one search.
 
 ### The date on the pin, and why placement is a FIT
 
