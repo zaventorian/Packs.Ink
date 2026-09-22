@@ -42,10 +42,20 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const POP_NONFOIL_VARIETY = "),
   grab("const gradedPopBucket = (variety) => {", NL + "};"),
   grab("const gradedPopStats = (row) => {", NL + "};"),
-  "export {popNameKey, popSetName, popCardKey, gradedPopBucket, gradedPopStats, POP_SET_ALIASES};",
+  grab("const POP_SORT_FIELD = {", NL + "};"),
+  // gradedPopPick maps an owned/rollup printing through gradedSlotBucket, so
+  // the real one comes along — a stub would let the two vocabularies drift.
+  grabLine("const GRADED_FOIL_PRINTINGS = "),
+  grabLine("const GRADED_NONFOIL_PRINTINGS = "),
+  grab("const gradedSlotBucket = (p) => {", NL + "};"),
+  grab("const gradedPopPick = (rows, printing) => {", NL + "};"),
+  "export {popNameKey, popSetName, popCardKey, gradedPopBucket, gradedPopStats,"
+  + " POP_SET_ALIASES, POP_SORT_FIELD, gradedPopPick};",
 ].join(NL)));
 
-const { popNameKey, popSetName, popCardKey, gradedPopBucket, gradedPopStats } = mod;
+const { popNameKey, popSetName, popCardKey, gradedPopBucket, gradedPopStats,
+        POP_SORT_FIELD, gradedPopPick } = mod;
+const SRC = src;
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) pass++; else { fail++; console.log("  FAIL: " + m); } };
@@ -254,6 +264,58 @@ section("6. real pulled data (skipped when pop_output is empty)");
     ok(unmapped.length === 0, `every pulled set label maps (unmapped: ${unmapped.slice(0, 3)})`);
     ok(dupSpec === 0, `spec_id is unique across sets (${dupSpec} duplicates)`);
     ok(specs.size === rows, "one spec_id per card row");
+  }
+}
+
+// 7. gradedPopPick — which printing's population you are shown
+section("7. gradedPopPick");
+{
+  const nf = { variety: "", total: 93, pop_10: 73 };
+  const fo = { variety: "Foil", total: 150, pop_10: 110 };
+  eq(gradedPopPick([], "Foil").row, null, "no rows is no pick");
+  eq(gradedPopPick(null, null).row, null, "null is no pick");
+
+  // One printing needs no label — there was no choice to report.
+  const one = gradedPopPick([nf], null);
+  eq(one.row, nf, "a single row is the pick");
+  eq(one.label, null, "and carries no label");
+
+  // ⚠ It must never SUM. Non-Foil and Foil are different markets — the C1
+  // split is $1,707 against $280 — so one number across both describes neither.
+  const pickFoil = gradedPopPick([nf, fo], "Foil");
+  eq(pickFoil.row, fo, "the foil printing is picked for a foil slab");
+  eq(pickFoil.label, "Foil", "and named, because there was a choice");
+  eq(gradedPopPick([nf, fo], "Cold Foil").row, fo, "cold foil is foil");
+  eq(gradedPopPick([nf, fo], "Holofoil").row, fo, "holofoil is foil");
+  eq(gradedPopPick([nf, fo], "Normal").row, nf, "normal is non-foil");
+  eq(gradedPopPick([nf, fo], "Non-Foil").row, nf, "non-foil is non-foil");
+  eq(gradedPopPick([nf, fo], null).row, fo, "no printing falls back to the biggest");
+  eq(gradedPopPick([nf, fo], "Two Swords").row, fo,
+     "an unmappable printing falls back to the biggest rather than guessing");
+  ok(gradedPopPick([nf, fo], "Foil").row.total !== nf.total + fo.total,
+     "the two printings are never summed");
+}
+
+// 8. Every Screener pop column can actually be sorted
+section("8. POP_SORT_FIELD covers the shipped columns");
+{
+  // The comparator falls through to r[k]. A column key missing from this map
+  // makes every row tie, which on screen reads as "this column does not sort"
+  // — no error, no clue. So the map is checked against what actually ships.
+  const cols = [...SRC.matchAll(/popCol\("([a-z0-9]+)",\s*"[^"]*",\s*"([a-z0-9_]+)"/g)]
+    .map((m) => ({ key: m[1], field: m[2] }));
+  ok(cols.length >= 7, `the pop columns were found in Index.html (got ${cols.length})`);
+  for (const c of cols) {
+    eq(POP_SORT_FIELD[c.key], c.field,
+       `column ${c.key} sorts on the field it renders`);
+  }
+  // The hand-written gem column is not a popCol (it renders a percentage).
+  eq(POP_SORT_FIELD.popgem, "pop_gem", "the gem-rate column sorts too");
+  ok(SRC.includes('onSort("popgem"'), "...and its header is wired to onSort");
+  // Nothing in the map should be dead weight either.
+  const keys = new Set(cols.map((c) => c.key).concat("popgem"));
+  for (const k of Object.keys(POP_SORT_FIELD)) {
+    ok(keys.has(k), `POP_SORT_FIELD.${k} corresponds to a real column`);
   }
 }
 

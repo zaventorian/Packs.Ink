@@ -772,6 +772,32 @@ const gradedPopBucket = (variety) => {
   return null;
 };
 
+// Screener pop columns: COLUMN KEY -> the field the synth pass attached to the
+// row. The two deliberately differ (a column is "pop10", the field "pop_ten"),
+// so the sort comparator needs this map -- without it r[k] is undefined, every
+// row ties, and the column looks like it simply does not sort. Kept beside the
+// pop helpers so a guard test can check it against the columns that ship.
+const POP_SORT_FIELD = {
+  poptot: "pop_total", pop10: "pop_ten", popgem: "pop_gem",
+  popgrade: "pop_grade", pop95: "pop_g9_5", pop9: "pop_g9",
+  pop8: "pop_g8", pop7: "pop_g7", popq: "pop_qual",
+};
+
+// Which of a card's population rows describes the printing in front of you.
+// ⚠ It NEVER sums them. Non-Foil and Foil are different markets -- the C1
+// split is $1,707 against $280 -- so one number across both describes neither.
+// Returns {row, label}: label is non-null only when there was a choice to make,
+// so a caller can say WHICH printing it ended up showing.
+const gradedPopPick = (rows, printing) => {
+  const list = rows || [];
+  if(!list.length) return {row: null, label: null};
+  if(list.length === 1) return {row: list[0], label: null};
+  const want = printing ? gradedSlotBucket(printing) : null;
+  const hit = want && list.find(r => gradedPopBucket(r.variety) === want);
+  const row = hit || list.slice().sort((a, b) => (b.total || 0) - (a.total || 0))[0];
+  return {row, label: gradedPopBucket(row.variety) || row.variety || null};
+};
+
 // One PSA row's numbers, plus the reads that make them mean something.
 //  * gemRate is the share of graded copies that came back a 10 — the closest
 //    thing to "how hard is this card to grade". Low rate + high price is a
@@ -32722,6 +32748,17 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       .catch(e => { if(!cancelled){ console.warn("graded rollup fetch:", e?.message || e); setGradedRollup([]); } });
     return () => { cancelled = true; };
   }, [showGraded, gradedPremium, gradedRollup]);
+  // PSA population, for the pop columns. Same lazy, once-per-session cache the
+  // card modal and the poster use, so opening the Screener after a card page
+  // costs nothing. Resolves empty (never throws) before migration 165 lands, in
+  // which case every pop column simply reads "—".
+  const [gradedPop, setGradedPop] = useState(null);
+  useEffect(() => {
+    if(!showGraded || !gradedPremium || gradedPop != null) return;
+    let cancelled = false;
+    fetchGradedPop().then(p => { if(!cancelled) setGradedPop(p); });
+    return () => { cancelled = true; };
+  }, [showGraded, gradedPremium, gradedPop]);
   // Third mode: Sealed. Mutually exclusive with Graded — flipping one on
   // turns the other off. Persisted so a user who lives in one mode lands
   // there on next visit.
@@ -33672,6 +33709,42 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           abs_pct_1d:null,
         });
       }
+      // PSA population, attached ONCE per row rather than looked up per cell:
+      // nine pop columns over 200 rows would otherwise be ~1,800 lookups a
+      // paint. Flat numeric fields are what makes the columns SORTABLE -- the
+      // comparator falls through to r[k], so a value that exists only inside a
+      // td renderer can be displayed but never ordered.
+      if(gradedPop){
+        const popCache = new Map();
+        for(const row of synth){
+          const ck = row.card_id + "|" + (row._variant || "");
+          let st = popCache.get(ck);
+          if(st === undefined){
+            const cat = catalogByCardId.get(row.card_id);
+            const prows = cat ? (gradedPop.byCard.get(
+              popCardKey(cat.Set, cat["Product Name"], cat.Number)) || []) : [];
+            const picked = gradedPopPick(prows, row._variant);
+            st = picked.row ? gradedPopStats(picked.row) : null;
+            popCache.set(ck, st);
+          }
+          row._pop = st;
+          row.pop_total = st ? st.total : null;
+          row.pop_ten   = st ? st.ten : null;
+          row.pop_gem   = (st && st.total > 0) ? st.ten / st.total : null;
+          row.pop_qual  = st ? st.qualified : null;
+          // ⚠ PSA only. On a CGC/BGS/SGC/TAG row we hold no population for
+          // that grader's grade, so this stays null rather than borrowing PSA's
+          // count for a different grader's slab.
+          if(st && (row.grader || "").toLowerCase() === "psa"){
+            const hit = st.breakdown.find(b => b.label === String(row.grade));
+            row.pop_grade = hit ? hit.n : 0;
+          } else row.pop_grade = null;
+          for(const gk of ["10","9.5","9","8","7"]){
+            const hit = st && st.breakdown.find(b => b.key === gk);
+            row["pop_g" + gk.replace(".", "_")] = st ? (hit ? hit.n : 0) : null;
+          }
+        }
+      }
       rows = synth;
     }
     // Smart-search: route the search box and chip filters (Rarity / Ink /
@@ -33869,6 +33942,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         const v = r[colName];
         return v == null ? null : Math.abs(v);
       }
+      // Pop columns. The keys are the COLUMN keys, which deliberately differ
+      // from the field names, so they need mapping -- r[k] would be undefined
+      // and every row would tie, which reads as "sorting is broken".
+      if(POP_SORT_FIELD[k] !== undefined) return r[POP_SORT_FIELD[k]];
       // Legacy "price" key (active-mode-driven) still supported for old prefs.
       if(k === "price")  return priceMode === "market" ? r.market_today : r.low_today;
       return r[k];
@@ -33891,7 +33968,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return 0;
     });
     return out;
-  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes,
+  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes, gradedPop,
     watchOnly, watchedKeys]);
 
   // Plain click sets the primary sort; shift-click sets the tiebreaker applied
@@ -33944,6 +34021,12 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     const fixed = {name:"Name", sale_count:"Sales", last_sold_date:"Sold",
       set_rank:"Set", raw_low:"Raw Low", raw_market:"Raw Mkt", price:"Price"};
     if(fixed[k]) return fixed[k];
+    // Anything else registered as a column answers for itself, so a new column
+    // never has to be named twice. ⚠ try/catch, not a typeof guard: colDefs
+    // is a const declared further down this scope, and `typeof` on a binding
+    // still in its temporal dead zone THROWS rather than returning "undefined".
+    // Without this the Sort chip printed the raw key ("Sort poptot").
+    try { const c = colDefs.find(x => x.key === k); if(c && c.label) return c.label; } catch(e) {}
     const m = /^(?:abs_pct_|mkt_pct_|pct_)(.+)$/.exec(k);
     if(m){
       const wins = {"1d":"1D","7d":"1W","30d":"1M","90d":"3M","180d":"6M","365d":"1Y","1095d":"3Y","rel":"Rel"};
@@ -34360,6 +34443,17 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // the ⚙ Columns popover, persisted per Screener mode. checkbox / image / Name
   // are fixed. "deltas" is one entry that expands to the active Δ% windows.
   const colModeKey = premiumGraded ? "pgraded" : showGraded ? "graded" : showSealed ? "sealed" : "raw";
+  // Population is attached to each row up in the synth pass (see `row._pop`),
+  // so these render plain fields. That is also what makes them SORTABLE: the
+  // comparator falls through to r[k], and a value computed inside a td can be
+  // displayed but never ordered.
+  const popNum = (v) => v == null ? "—" : Number(v).toLocaleString(undefined, {maximumFractionDigits: 0});
+  const popCol = (key, label, field, tip, hidden) => ({
+    key, label, defaultHidden: !!hidden,
+    th:()=>html`<th key=${key} class="sortable th-num" title=${tip}
+      onClick=${(e)=>onSort(key, e)}>${label}${arrow(key)}</th>`,
+    td:(r)=>html`<td key=${key} class="td-num">${popNum(r[field])}</td>`});
+
   const colDefs = (() => {
     const setCol = {key:"set", label:"Set",
       th:()=>html`<th key="set" class="sortable th-set" title="Sort by set release order (newest first) — shift-click to use as a tiebreaker" onClick=${(e)=>onSort("set_rank", e)}>Set${arrow("set_rank")}</th>`,
@@ -34431,6 +34525,28 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       salesCol,
       money("raw_low","Raw Low","raw_low","raw_low","Raw (ungraded) TCGplayer Low",true),
       money("raw_market","Raw Mkt","raw_market","raw_market","Raw (ungraded) TCGplayer NM Market",true),
+      // ⚠ PSA population, and PSA ONLY -- graded_pop carries no CGC, BGS, SGC
+      // or TAG counts. Every header says PSA for that reason: on a CGC 10 row
+      // these describe the PSA market for the same card, NOT that row's own
+      // population, and a bare "Pop" header would quietly claim otherwise.
+      popCol("poptot", "PSA Pop", "pop_total",
+        "Total copies PSA has graded of this card and printing, at every grade. PSA only — no CGC, BGS, SGC or TAG."),
+      popCol("pop10", "PSA 10s", "pop_ten",
+        "Copies PSA has graded a straight 10. Half grades and qualified grades are not counted."),
+      {key:"popgem", label:"Gem %",
+        th:()=>html`<th key="popgem" class="sortable th-num" title="Share of graded copies that came back a straight 10 — how hard the card is to grade. A low rate beside a high price is a genuinely scarce 10." onClick=${(e)=>onSort("popgem", e)}>Gem %${arrow("popgem")}</th>`,
+        td:(r)=>html`<td key="popgem" class="td-num">${r.pop_gem == null ? "—" : (Math.round(1000 * r.pop_gem) / 10) + "%"}</td>`},
+      // ⚠ THIS row's own grade, and only on PSA rows. On a BGS 9.5 row the
+      // PSA ladder says nothing about how many BGS 9.5s exist, so it dashes
+      // rather than borrowing PSA's number for another grader's grade.
+      popCol("popgrade", "Pop @ Grade", "pop_grade",
+        "How many copies PSA has graded at THIS row's grade. Blank on non-PSA rows — we hold no CGC, BGS, SGC or TAG population.", true),
+      popCol("pop95", "PSA 9.5", "pop_g9_5", "Copies PSA has graded 9.5", true),
+      popCol("pop9",  "PSA 9s",  "pop_g9",   "Copies PSA has graded a straight 9", true),
+      popCol("pop8",  "PSA 8s",  "pop_g8",   "Copies PSA has graded a straight 8", true),
+      popCol("pop7",  "PSA 7s",  "pop_g7",   "Copies PSA has graded a straight 7", true),
+      popCol("popq",  "Qualified", "pop_qual",
+        "Copies carrying a qualifier (OC, ST, MK, PD) — a named flaw that trades at a discount to a clean copy of the same grade.", true),
       ...winCols, ...(benchmarkReady && !showSealed ? [vsMktCol] : []), signalsCol];
     // Sticky-Low flag (migration 124's low_last_changed): TCGCSV's Low is a
     // published price aggregate rather than a sale, so it often goes days
@@ -37066,17 +37182,8 @@ async function buildGradedPosterBlob(opts){
   try {
     const pop = await fetchGradedPop();
     const prows = (popKey && pop.byCard.get(popKey)) || [];
-    if(prows.length === 1){ popRow = prows[0]; }
-    else if(prows.length > 1){
-      // ⚠ Never SUM the printings. Non-Foil and Foil are different markets
-      // -- the C1 split is $1,707 against $280 -- so one table across both
-      // describes neither. Take the printing this poster is about; failing
-      // that the biggest, and NAME it so the reader knows which one they have.
-      const want = popPrinting ? gradedSlotBucket(popPrinting) : null;
-      popRow = (want && prows.find(r => gradedPopBucket(r.variety) === want))
-            || prows.slice().sort((a, b) => (b.total || 0) - (a.total || 0))[0];
-      popLabel = gradedPopBucket(popRow.variety) || popRow.variety || null;
-    }
+    const picked = gradedPopPick(prows, popPrinting);
+    popRow = picked.row; popLabel = picked.label;
     popSetGem = popSet ? (pop.setGem.get(popSet) == null ? null : pop.setGem.get(popSet)) : null;
   } catch(e) {
     // ⚠ LOUD, not silent. A missing graded_pop table is handled inside
