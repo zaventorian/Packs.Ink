@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=465">
+<link rel="stylesheet" href="styles.css?v=466">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2540,6 +2540,14 @@ const uiIcon = (key, size) => {
   const f = UI_ICON_PATHS[key];
   return f ? f(size) : null;
 };
+
+// ⚠ A HOVER PREVIEW MUST BE MOUSE-ONLY. Touch fires a synthetic mouseenter
+// and never a matching mouseleave, so a preview opened by a tap floats over the
+// page until something else is tapped — scrolling does not clear it. Reported
+// 2026-09-21 from the Collection set-detail list, where nudging a +/- counter
+// left a full card image parked over the rows. Wrap the ENTER and MOVE halves;
+// leave the LEAVE half unwrapped so anything that did open can still close.
+const mouseHoverOnly = (fn) => (e) => { if(e.pointerType === "mouse") fn(e); };
 
 // ── Lorcana Calendar ────────────────────────────────────────────────────────
 // What is coming for the GAME (set releases, product drops, championship
@@ -6976,7 +6984,17 @@ const matchesCardFilter = (row, f, parsed) => {
       for(const phrase of parsed.contains){
         const pn = searchNorm(phrase);
         if(hay.includes(pn)) continue;                 // contiguous phrase
-        const toks = pn.split(/\s+/).filter(Boolean);  // else require every token (spans the " - " in "Stitch - Rock Star")
+        // Else require every token (spans the " - " in "Stitch - Rock Star").
+        //
+        // ⚠ DISTINCT tokens, because this fallback is a bare substring test and
+        // a repeated word collapses it to a single-token search. "go go" — the
+        // very example the phrase-chip above was introduced to fix — asked only
+        // "does the haystack contain 'go'", which is a SUBSTRING, so it matched
+        // Gopher, Gothel, Gonna, Good and Gosalyn: 278 cards for a two-word
+        // phrase. Deduping makes a phrase whose words are all the same fall back
+        // to nothing, i.e. contiguous-only, which is what it always meant.
+        // Any phrase with two genuinely different words is untouched.
+        const toks = [...new Set(pn.split(/\s+/).filter(Boolean))];
         if(toks.length > 1 && toks.every(t => hay.includes(t))) continue;
         return false;
       }
@@ -8096,9 +8114,9 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
           ${tableSales.slice(0, 200).map(s => { const priv = s.source_query==="private_sale"; return html`<tr key=${s.item_id}
             class=${"gs-table-row"+(sel?.item_id===s.item_id?" sel":"")+(priv?" gs-private":"")}
             onClick=${()=>setSel({...s})}
-            onMouseEnter=${e=> safeHttpUrl(s.image_url) && setHoverImg({src:safeHttpUrl(s.image_url), x:e.clientX, y:e.clientY})}
-            onMouseMove=${e=> setHoverImg(p=> p ? {...p, x:e.clientX, y:e.clientY} : p)}
-            onMouseLeave=${()=> setHoverImg(null)}>
+            onPointerEnter=${mouseHoverOnly(e=> safeHttpUrl(s.image_url) && setHoverImg({src:safeHttpUrl(s.image_url), x:e.clientX, y:e.clientY}))}
+            onPointerMove=${mouseHoverOnly(e=> setHoverImg(p=> p ? {...p, x:e.clientX, y:e.clientY} : p))}
+            onPointerLeave=${()=> setHoverImg(null)}>
             <td>${dstr(s.sold_date)}</td>
             <td class="gs-table-title" title=${s.title||""}>${s.title||""}</td>
             <td style=${{color: GRADER_COLOR[(s.grader||'').toLowerCase()]||"inherit"}}>${(s.grader||"").toUpperCase()}</td>
@@ -12357,6 +12375,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
                       onBulkAddCollection, onBulkAddToDeck, onBulkNewDeck, fetchUserDecks,
                       pendingSearch, onConsumedPendingSearch,
                       coconutCard, onPickCoconut, inkBudget,
+                      sealedPrices, onOpenSealed,
                       defaultInks, urlSync=false}) => {
   // When opened inside the deck editor, prefill the ink chips with the
   // deck's current inks (1-2 colors) so the user keeps seeing in-ink cards
@@ -12404,7 +12423,24 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     // Handoffs WITH "x:" syntax (e.g. the Artist Alley "artist: <name>" link)
     // stay as parsed search text. addSmartChip is referenced in-body only (it's
     // defined later in the component) so it stays OUT of the deps array.
-    if(q && !q.includes(":")){
+    // ⚠ A handoff must reach the SAME answer as typing the words into the
+    // Cards box, and for a while it did not. "elsa promo" typed here parses to
+    // name "elsa" + rarity Promo and works; handed over from the home bar it
+    // was committed whole as `contains: "elsa promo"`, which looks for that
+    // literal phrase in the haystack and so matches NOTHING — the single most
+    // natural way to use the home search box was the one that broke. Run the
+    // same splitter the Cards box's own Enter key uses, and apply it the same
+    // way (see applySuggestion's "split" branch).
+    const split = q && !q.includes(":") ? smartSplitSuggestion(q) : null;
+    if(split){
+      for(const c of split.chips) addSmartChip(c);
+      if(split.name) addSmartChip({kind:"contains", value:split.name});
+      setFilter(f => ({...f, search: ""}));
+    } else if(q && !q.includes(":")){
+      // No dimension in it, so it is a pure NAME — commit it as a PHRASE
+      // `contains` chip so it matches "Go Go Tomago" rather than every card
+      // whose text holds the lone token "go" (free-text is token-ANY in
+      // CardsView, which returned 250+ false hits — the "feels bad" report).
       addSmartChip({kind:"contains", value:q});
       setFilter(f => ({...f, search: ""}));
     } else {
@@ -12671,6 +12707,38 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   // ± counter UX already covers that case.
   const deckMode = typeof onDeckQtyChange === "function";
   const allowSelect = !!selectable && !deckMode;
+  // Sealed product matching the typed text, as its own section under the card
+  // grid. See searchSealedProducts for why only PRICED rows are eligible.
+  //
+  // ⚠ Gated on TYPED TEXT, never on the chips. Every chip is a card dimension
+  // — ink, rarity, cost, keyword — and sealed has none of them, so an "amber
+  // commons" filter would list every booster box on the site as if it had
+  // matched something. Typing a product name is the ask; a chip is not.
+  //
+  // ⚠ It renders BELOW the grid and is computed independently of it, so the
+  // cards keep every slot they have today whatever this returns. Never offered
+  // in the deck editor — sealed is not deck contents.
+  const sealedSetNameById = useMemo(() => {
+    const m = {};
+    for(const r of (raw || [])) if(r.Set && r.set_id && !m[r.set_id]) m[r.set_id] = r.Set;
+    return m;
+  }, [raw]);
+  //
+  // ⚠ It reads the typed text AND any `contains` CHIPS, because a contains
+  // chip IS typed text — just committed. Arriving from the home search bar
+  // moves the words into a chip and blanks the input, so reading `filter.search`
+  // alone meant a handoff of "trove" landed on zero cards AND zero sealed: a
+  // total dead end, reached by the exact flow this feature exists for. Every
+  // OTHER chip stays excluded, per the dimension rule above.
+  const sealedQuery = useMemo(() => {
+    const parts = [(filter.search || "").trim()];
+    for(const c of smartChips) if(c.kind === "contains") parts.push(String(c.value));
+    return parts.filter(Boolean).join(" ");
+  }, [filter.search, smartChips]);
+  const sealedMatches = useMemo(() => {
+    if(deckMode || !onOpenSealed) return [];
+    return searchSealedProducts(sealedPrices, sealedQuery, sealedSetNameById, 12);
+  }, [deckMode, onOpenSealed, sealedPrices, sealedQuery, sealedSetNameById]);
   const [selected, setSelected] = useState(() => new Set());
   const toggleSelected = useCallback((cardId) => {
     setSelected(prev => {
@@ -13071,9 +13139,45 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
                adding copies of it. ${COCONUT_CARDS.length} to choose from.</p>
             <button class="chip active" onClick=${onPickCoconut}>${uiIcon("coconut")} Pick a Coconut leader</button>
           </div>`
-        : html`<div style=${{fontSize:15,marginBottom:12}}>No cards match your search.</div>
+        : html`<div style=${{fontSize:15,marginBottom:12}}>${sealedMatches.length
+            ? "No cards match your search — but it matches sealed product, below."
+            : "No cards match your search."}</div>
       ${(activeCount > 0 || (filter.search||"").trim()) && html`<button class="clear-filters-btn"
         onClick=${()=>setFilter(emptyFilter())} title="Clear all active filters and search">✕ Clear filters & search</button>`}`}
+    </div>`}
+    ${sealedMatches.length > 0 && html`<div class="cards-sealed">
+      <div class="cards-sealed-head">
+        <span class="cards-sealed-title">Sealed products</span>
+        <span class="cards-sealed-count muted">${sealedMatches.length}${sealedMatches.length === 12 ? "+" : ""} matching “${sealedQuery}”</span>
+      </div>
+      ${/* Its own grid, sized for BOXES. That is the point of giving sealed a
+            section instead of tiles in the card grid: a booster box is roughly
+            square and the card grid is 5:7, so an interleaved sealed tile
+            either breaks its row or shrinks every card around it — the same
+            trap CLAUDE.md documents for Location cards. */""}
+      <div class="cards-sealed-grid">
+        ${sealedMatches.map(p => {
+          const px = p.market_price ?? p.low_price;
+          const isMkt = p.market_price != null;
+          return html`<button key=${"cs:"+p.tcgplayer_product_id} class="cards-sealed-tile"
+            onClick=${()=>onOpenSealed(p)}
+            title=${cleanSealedName(p.name||"") + " — price & history"}>
+            <span class="cards-sealed-art">
+              ${p.image_url
+                ? html`<${ProductPhoto} src=${p.image_url} glyph="box" size=${34}/>`
+                : uiIcon("box", 34)}
+            </span>
+            <span class="cards-sealed-name">${cleanSealedName(p.name||"")}</span>
+            <span class="cards-sealed-meta">${
+              [sealedSetNameById[p.set_id] || "", deriveSealedDisplayType(p)].filter(Boolean).join(" · ")
+            }</span>
+            ${px != null && html`<span class="cards-sealed-px">
+              <span class="cards-sealed-px-val">${fmt(Number(px))}</span>
+              <span class="cards-sealed-px-lbl">${isMkt ? "NM Market" : "Low"}</span>
+            </span>`}
+          </button>`;
+        })}
+      </div>
     </div>`}
     ${drawerOpen && html`<${FilterDrawer} filter=${filter} setFilter=${setFilter}
       setsByGroup=${setsByGroup} allIllustrators=${allIllustrators}
@@ -13089,8 +13193,19 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
 };
 
 const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, openDeckById,
+                    sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta,
                     incomingSearch, incomingOpenCardId, onConsumedIncomingCardsSearch}) => {
   const [selectedGroup,setSelectedGroup] = useState(null);
+  // Sealed product opened from the "Sealed products" section under the grid.
+  // Reuses SealedDetailModal wholesale — it already carries the photo, Low +
+  // NM Market, the price-standing chip, the 6-window Δ% grid and the full
+  // price-history chart, which is the whole of what a sealed "card tile" owes.
+  const [selectedSealed, setSelectedSealed] = useState(null);
+  const cardsSealedSetNames = useMemo(() => {
+    const m = {};
+    for(const r of (raw || [])) if(r.Set && r.set_id && !m[r.set_id]) m[r.set_id] = r.Set;
+    return m;
+  }, [raw]);
   // Home-page quick-search handoff: pre-seed the smart-search and (when set)
   // open the chosen card's detail modal once `raw` is loaded.
   const [pendingSearch, setPendingSearch] = useState(null);
@@ -13351,11 +13466,22 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       fetchUserDecks=${fetchUserDecks}
       pendingSearch=${pendingSearch}
       onConsumedPendingSearch=${() => setPendingSearch(null)}
+      sealedPrices=${sealedPrices}
+      onOpenSealed=${setSelectedSealed}
       urlSync=${true}/>
     ${selectedGroup && html`<${CardDetailModal} key=${cardNavKey(selectedGroup)} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}
       onNavigate=${(g)=>setSelectedGroup(g)}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
+    ${selectedSealed && html`<${SealedDetailModal}
+      product=${selectedSealed}
+      sealedCollection=${sealedCollection || {}}
+      sealedMeta=${sealedMeta || {}}
+      updateSealedQty=${updateSealedQty || (()=>{})}
+      updateSealedMeta=${updateSealedMeta || (()=>{})}
+      readOnly=${!user || !updateSealedQty}
+      setName=${selectedSealed.set_id ? (cardsSealedSetNames[selectedSealed.set_id] || null) : null}
+      onClose=${()=>setSelectedSealed(null)}/>`}
     ${proxyDeck && proxyCardById && html`<${ProxyPrintModal}
       deck=${proxyDeck} cardById=${proxyCardById}
       onClose=${()=>setProxySelection(null)}/>`}
@@ -14523,6 +14649,59 @@ const SEALED_COLLECTIBLES = [
 // Strip the "Disney Lorcana: " prefix that TCGCSV prepends to every product —
 // the set pill already says where this is from; the prefix is just noise.
 const cleanSealedName = (name) => (name || "").replace(/^Disney Lorcana:\s*/i, "");
+// Name search over PRICED sealed product — the one matcher every card-search
+// surface uses to offer sealed alongside cards (home quick-search, the Cards
+// tab). Deliberately NOT matchesCardFilter: sealed has no ink, rarity, cost or
+// body text, so every dimension that matcher exists to enforce is absent, and
+// the Price Graphing sealed picker is already on the documented "intentionally
+// do NOT use it" list for exactly this reason.
+//
+// ⚠ PRICED ROWS ONLY, and that rule is what makes sealed safe to put anywhere
+// near card search. Pins, lore counters and puzzles are NAMED AFTER CARDS —
+// 27 of the 70 pins/counters are literal "Character - Version" card names
+// ("Mickey Mouse - Brave Little Tailor", "Belle - Mechanic Extraordinaire")
+// and most of the rest are bare character names, which deriveSealedDisplayType
+// already short-circuits on for the same reason. Letting them in would drop
+// ~70 card-named rows into card searches, every one of them ALSO unpriced
+// (isUnpricedSealed) — a dead end on the surface whose whole job is showing a
+// price. Same call HomeQuickSearch already makes when it skips Coconut
+// leaders. They stay reachable on the Pins & Counters tab, where a checklist
+// belongs.
+//
+// The haystack is the cleaned name + its display type + its set name, so
+// "azurite booster box" and "vine trove" both land even where TCGplayer's own
+// name omits one half. Tokens are AND-ed, matching smart search's default.
+const SEALED_SEARCH_MIN = 2;
+const searchSealedProducts = (sealedPrices, query, setNameById, limit = 6) => {
+  const s = (query || "").trim();
+  if(s.length < SEALED_SEARCH_MIN || !sealedPrices || !sealedPrices.length) return [];
+  const toks = searchNorm(s.toLowerCase()).split(/\s+/).filter(Boolean);
+  if(!toks.length) return [];
+  const scored = [];
+  for(const p of sealedPrices){
+    if(p.printing !== "Normal" || p.product_type === "Promo Single") continue;
+    if(isUnpricedSealed(p) || isHiddenSealedListing(p)) continue;
+    // Nothing to show on a price surface, so nothing to offer.
+    if(p.low_price == null && p.market_price == null) continue;
+    const name = cleanSealedName(p.name || "");
+    const nName = searchNorm(name.toLowerCase());
+    const setName = (setNameById && p.set_id != null) ? (setNameById[p.set_id] || "") : "";
+    const hay = nName + " " + searchNorm(deriveSealedDisplayType(p).toLowerCase())
+      + " " + searchNorm(setName.toLowerCase());
+    if(!toks.every(t => hay.includes(t))) continue;
+    // Rank: a hit in the name itself beats one that only matched on the type
+    // or set name appended to the haystack, and a prefix beats a mid-name hit.
+    const nQ = toks.join(" ");
+    const rank = nName.startsWith(nQ) ? 0
+      : nName.includes(nQ) ? 1
+      : toks.every(t => nName.includes(t)) ? 2 : 3;
+    scored.push({p, rank, name});
+  }
+  scored.sort((a, b) => a.rank - b.rank
+    || sealedDisplayTypeRank(deriveSealedDisplayType(a.p)) - sealedDisplayTypeRank(deriveSealedDisplayType(b.p))
+    || a.name.localeCompare(b.name));
+  return scored.slice(0, limit).map(x => x.p);
+};
 
 // ── Amazon ASIN catalog for sealed product ──────────────────────────────
 // Hand-curated, because there is no feed to build it from: Amazon's product
@@ -18699,7 +18878,8 @@ const SetDetailListRow = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, 
     : inkTint(inkList[0] || group.ink, theme);
   return html`<div class=${rowClass} style=${{background: rowBg}}
       onClick=${onOpen}
-      onMouseEnter=${onEnter} onMouseMove=${onMove} onMouseLeave=${onLeave}>
+      onPointerEnter=${mouseHoverOnly(onEnter)} onPointerMove=${mouseHoverOnly(onMove)}
+      onPointerLeave=${onLeave}>
     ${onlyFoil
       ? html`<${InlineCounter} qty=${foilQty}   onChange=${onFoil}/>`
       : onlyNormal
@@ -34574,9 +34754,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
               <td class="td-img">${img
                 ? html`<img src=${img} loading="lazy" alt="" style=${{cursor:"pointer"}}
                     onClick=${openThisRow}
-                    onMouseEnter=${(e) => setHoverPreview({src: r.image_normal || img, x: e.clientX, y: e.clientY})}
-                    onMouseMove=${(e) => setHoverPreview(p => p ? {...p, x: e.clientX, y: e.clientY} : p)}
-                    onMouseLeave=${() => setHoverPreview(null)}/>`
+                    onPointerEnter=${mouseHoverOnly((e) => setHoverPreview({src: r.image_normal || img, x: e.clientX, y: e.clientY}))}
+                    onPointerMove=${mouseHoverOnly((e) => setHoverPreview(p => p ? {...p, x: e.clientX, y: e.clientY} : p))}
+                    onPointerLeave=${() => setHoverPreview(null)}/>`
                 : null}</td>
               <td class="td-name">
                 <div class="td-name-main">
@@ -39279,7 +39459,7 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
 // matches by Product Name substring. Enter (or clicking "Search") opens the
 // Cards tab with the typed query pre-applied. Clicking a suggestion does the
 // same but also opens that card's detail modal on landing.
-const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
+const HomeQuickSearch = ({raw, sealedPrices, openCardsWithSearch, onOpenSealed}) => {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   // -1 = nothing pre-selected. Enter on a fresh query opens the Cards tab with
@@ -39363,6 +39543,22 @@ const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
     }
     return [...byId.values()].slice(0, 8);
   }, [suggestions, raw]);
+  // Sealed product matching the same text — booster boxes, troves, gift sets.
+  // "What is a box of this going for" is a price question this box is the fast
+  // path for, and until now it had no answer here at all.
+  //
+  // ⚠ Its own section BELOW the cards, never merged into them. The card list
+  // above keeps all 20 of its slots and is computed without reference to this,
+  // so adding sealed cannot cost a card a place however the query is written —
+  // which is the whole reason it needs no opt-in token.
+  const setNameById = useMemo(() => {
+    const m = {};
+    for(const r of (raw || [])) if(r.Set && r.set_id && !m[r.set_id]) m[r.set_id] = r.Set;
+    return m;
+  }, [raw]);
+  const sealedSuggestions = useMemo(
+    () => onOpenSealed ? searchSealedProducts(sealedPrices, q, setNameById, 6) : [],
+    [sealedPrices, q, setNameById, onOpenSealed]);
   const handleSubmit = () => {
     const txt = q.trim();
     if(!txt) return;
@@ -39399,7 +39595,7 @@ const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
       }}/>
     <button class="home-quick-search-go" onClick=${handleSubmit}
       title="Open the Cards tab with this search">Search</button>
-    ${open && suggestions.length > 0 && html`<div class="home-quick-search-list" role="listbox">
+    ${open && (suggestions.length > 0 || sealedSuggestions.length > 0) && html`<div class="home-quick-search-list" role="listbox">
       ${suggestions.map((r, i) => html`<button key=${r.card_id}
         class=${"home-quick-search-item" + (i === idx ? " active" : "")}
         role="option" aria-selected=${i === idx}
@@ -39424,6 +39620,29 @@ const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
             <div class="home-quick-search-item-meta">${r.Set || ""} · ${r.Rarity || ""}</div>
           </div>
         </button>`)}`}
+      ${sealedSuggestions.length > 0 && html`
+        <div class="home-quick-search-divider">Sealed products</div>
+        ${sealedSuggestions.map(p => {
+          const px = p.market_price ?? p.low_price;
+          return html`<button key=${"sealed:"+p.tcgplayer_product_id}
+            class="home-quick-search-item home-quick-search-item--sealed"
+            role="option"
+            onMouseDown=${e=>e.preventDefault()}
+            onClick=${()=>onOpenSealed(p)}>
+            <span class="hqs-sealed-img">
+              ${p.image_url
+                ? html`<${ProductPhoto} src=${p.image_url} glyph="box" size=${20}/>`
+                : uiIcon("box", 20)}
+            </span>
+            <div class="home-quick-search-item-text">
+              <div class="home-quick-search-item-name">${cleanSealedName(p.name || "")}</div>
+              <div class="home-quick-search-item-meta">${
+                [setNameById[p.set_id] || "", deriveSealedDisplayType(p)].filter(Boolean).join(" · ")
+              }</div>
+            </div>
+            ${px != null && html`<span class="hqs-sealed-px">${fmt(Number(px))}</span>`}
+          </button>`;
+        })}`}
     </div>`}
   </div>`;
 };
@@ -45510,7 +45729,9 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       label=${HOME_PANEL_LABELS[openPanel] || "Section"} node=${openPanelNode}
       cta=${panelCta[openPanel] || null} onClose=${closePanel} onNavAway=${closePanelForNav}/>`}
     <div class="home-page-title">
-      <${HomeQuickSearch} raw=${raw} openCardsWithSearch=${openCardsWithSearch}/>
+      <${HomeQuickSearch} raw=${raw} sealedPrices=${sealedPrices}
+        openCardsWithSearch=${openCardsWithSearch}
+        onOpenSealed=${setSelectedSealed}/>
     </div>
     ${/* Only the EDITING controls sit up here, and only while editing: sticky,
           so Done and Cancel stay reachable while you rearrange. The launcher
@@ -50703,9 +50924,9 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard, defaultInk
                 role="button" tabIndex=${-1}
                 title=${full ? (g["Product Name"] || "card") + " — already at the limit of " + max
                              : "Add " + (g["Product Name"] || "card") + " to the deck"}
-                onMouseEnter=${(e) => { setCursor(i); hover(e); }}
-                onMouseMove=${hover}
-                onMouseLeave=${() => onHoverCard && onHoverCard(null)}
+                onPointerEnter=${mouseHoverOnly((e) => { setCursor(i); hover(e); })}
+                onPointerMove=${mouseHoverOnly(hover)}
+                onPointerLeave=${() => onHoverCard && onHoverCard(null)}
                 onClick=${() => bump(g, 1)}>
                 ${/* NOT loading="lazy": at most 30 rows, all one scroll apart, and a
                       deferred lazy image renders this row as a blank slot where the
@@ -51943,7 +52164,8 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         const qtyText = (coconutCard && item.quantity === 1) ? "" : item.quantity + "×";
         return html`<div key=${k} class=${"deck-row"+dimClass+(overLimit?" coconut-over":"")}
           style=${rowBg ? {background: rowBg} : undefined}
-          onMouseEnter=${onRowEnter} onMouseMove=${onRowMove} onMouseLeave=${onRowLeave}>
+          onPointerEnter=${mouseHoverOnly(onRowEnter)} onPointerMove=${mouseHoverOnly(onRowMove)}
+          onPointerLeave=${onRowLeave}>
           <span class=${"deck-row-qty"+(overLimit?" over":"")}
             title=${overLimit ? `${item.quantity} copies — ${COCONUT_SET_NAME} allows ${cocoLimit === Infinity ? "any number" : cocoLimit}` : null}>
             ${overLimit ? html`<span class="coconut-over-flag" aria-label="Over the Coconut copy limit">${uiIcon("warn", 11)}</span>` : ""}${qtyText}
@@ -55571,6 +55793,11 @@ function App(){
     ${viewsReady&&view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
       openDeckById=${openDeckById}
+      sealedPrices=${sealedPrices}
+      sealedCollection=${sealedCollection}
+      sealedMeta=${sealedMeta}
+      updateSealedQty=${updateSealedQty}
+      updateSealedMeta=${updateSealedMeta}
       incomingSearch=${incomingCardsSearch}
       incomingOpenCardId=${incomingCardsOpenId}
       onConsumedIncomingCardsSearch=${() => { setIncomingCardsSearch(null); setIncomingCardsOpenId(null); }}/>`}
