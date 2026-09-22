@@ -77,6 +77,16 @@ same email. `--done <id>` rolls it forward.
 
 That is the difference between a reminder and a note somebody wrote down once.
 
+Data that only a person can refresh
+-----------------------------------
+`pop_stale` is the third shape: PSA population is real data in a real table, but
+its collector needs Zaven's own signed-in Chrome on a residential IP (PSA is
+Cloudflare-fronted and every page below /Pop wants a collectors.com login), so
+no cron can ever fetch it. The watch therefore checks the DATA's age rather than
+a calendar — `max(graded_pop.pulled_at)` against POP_MAX_AGE_DAYS — which means
+running the pull silences it by itself, with no `--done` to remember. A review
+entry would need that; a staleness check does not.
+
 Usage
 -----
     python scripts/reconcile_catalog.py --watch            # CI: red on anything new
@@ -330,6 +340,70 @@ def save_ack(path: str, data: dict) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write("\n")
+
+
+# PSA publishes population once a week-ish and a card's pop moves slowly, so a
+# weekly pull is the cadence — 8 days is that plus a day of grace, which keeps a
+# run that happens on Tuesday one week and Wednesday the next from alerting.
+POP_MAX_AGE_DAYS = 8
+
+
+POP_HINT = """This one cannot run in CI — PSA is Cloudflare-fronted and every page below
+/Pop needs a collectors.com login, so it needs YOUR signed-in Chrome.
+  powershell -File scripts/pop_run.ps1
+It opens the burner Chrome, waits for you to be signed in, pulls every
+English set (~4 min), then dry-run loads. Finish with:
+  python scripts/psa_pop_load.py --commit
+⚠ Never automate the sign-in, and never retry past a wall — psa_pop_pull.mjs
+stops dead on one on purpose. This is Zaven's real collectors.com account."""
+
+
+def pop_stale_finding(last_pulled: str | None, today: str,
+                      max_age_days: int = POP_MAX_AGE_DAYS) -> dict | None:
+    """The PSA population table has gone stale (or was never loaded).
+
+    ⚠ The KEY carries the last pull's DATE, deliberately. Acks are keyed
+    `kind:key`, so a key of plain "psa" could be acked once and would then
+    silence this alert forever — the one thing a staleness check must not allow.
+    Keyed on the date, an ack can only ever snooze the particular staleness in
+    front of you: the next pull moves the key and the alert can come back.
+    """
+    if last_pulled is None:
+        return None                      # table missing / unreadable — see pop_findings
+    if not last_pulled:
+        return {
+            "kind": "pop_stale", "key": "psa:never",
+            "name": "PSA population has never been loaded",
+            "detail": "graded_pop is empty",
+            "hint": POP_HINT,
+        }
+    age = (date.fromisoformat(today) - date.fromisoformat(last_pulled[:10])).days
+    if age < max_age_days:
+        return None
+    return {
+        "kind": "pop_stale", "key": f"psa:{last_pulled[:10]}",
+        "name": f"PSA population is {age} days old",
+        "detail": f"last pulled {last_pulled[:10]} · want it under {max_age_days} days",
+        "hint": POP_HINT,
+    }
+
+
+def pop_findings(sb: Supabase, today: str) -> list[dict]:
+    """Age of the PSA population data, or nothing at all.
+
+    Every failure here is silence. A database without migration 165 has no
+    `graded_pop`, and a watch that goes red for a table a PR cannot create is
+    the "red job everyone learns to ignore" this whole file exists to avoid.
+    """
+    try:
+        rows = sb.select("graded_pop", columns="pulled_at",
+                         order="pulled_at.desc", limit=1)
+    except Exception as e:
+        print(f"  (PSA population check skipped, non-fatal: {e})")
+        return []
+    last = (rows[0].get("pulled_at") or "") if rows else ""
+    f = pop_stale_finding(last, today)
+    return [f] if f else []
 
 
 def due_reviews(ack: dict, today: str) -> list[dict]:
@@ -600,6 +674,8 @@ def collect_findings(sb: Supabase, ack: dict | None = None, today: str | None = 
     except Exception as e:  # Lorcast down must not fail the whole watch
         print(f"  (Lorcast set check skipped, non-fatal: {e})")
 
+    out.extend(pop_findings(sb, today or date.today().isoformat()))
+
     if ack is not None:
         out.extend(due_reviews(ack, today or date.today().isoformat()))
 
@@ -615,6 +691,7 @@ KIND_LABEL = {
     "card_no_pid":    "Card with no TCGplayer id (can never price)",
     "missing_set":    "Lorcast set we don't have",
     "review_due":     "Scheduled review (no feed watches this — a person has to look)",
+    "pop_stale":      "PSA population data is stale (needs a signed-in Chrome — see the steps)",
 }
 
 
@@ -639,8 +716,8 @@ def run_watch(sb: Supabase, fail: bool, json_path: str | None) -> int:
             by_kind.setdefault(f["kind"], []).append(f)
         for kind, items in by_kind.items():
             print(f"\n▶ {KIND_LABEL.get(kind, kind)}  ({len(items)})")
-            if kind == "review_due":
-                # A review's whole value is that the steps travel with the
+            if kind in ("review_due", "pop_stale"):
+                # The whole value of these is that the steps travel with the
                 # alert — nobody is going to go dig up how to do it.
                 for f in items:
                     print(f"\n    {f['key']}   [{f['detail']}]")
@@ -649,8 +726,9 @@ def run_watch(sb: Supabase, fail: bool, json_path: str | None) -> int:
                         print(f"      why:  {f['why']}")
                     for i, line in enumerate(str(f["hint"]).split("\n")):
                         print(("      how:  " if i == 0 else "            ") + line)
-                    print(f"      done: python scripts/reconcile_catalog.py --done {f['key']} "
-                          f"--next YYYY-MM-DD")
+                    if kind == "review_due":
+                        print(f"      done: python scripts/reconcile_catalog.py --done {f['key']} "
+                              f"--next YYYY-MM-DD")
                 continue
             for f in items:
                 print(f"    {f['kind']}:{f['key']}")
