@@ -6984,7 +6984,17 @@ const matchesCardFilter = (row, f, parsed) => {
       for(const phrase of parsed.contains){
         const pn = searchNorm(phrase);
         if(hay.includes(pn)) continue;                 // contiguous phrase
-        const toks = pn.split(/\s+/).filter(Boolean);  // else require every token (spans the " - " in "Stitch - Rock Star")
+        // Else require every token (spans the " - " in "Stitch - Rock Star").
+        //
+        // ⚠ DISTINCT tokens, because this fallback is a bare substring test and
+        // a repeated word collapses it to a single-token search. "go go" — the
+        // very example the phrase-chip above was introduced to fix — asked only
+        // "does the haystack contain 'go'", which is a SUBSTRING, so it matched
+        // Gopher, Gothel, Gonna, Good and Gosalyn: 278 cards for a two-word
+        // phrase. Deduping makes a phrase whose words are all the same fall back
+        // to nothing, i.e. contiguous-only, which is what it always meant.
+        // Any phrase with two genuinely different words is untouched.
+        const toks = [...new Set(pn.split(/\s+/).filter(Boolean))];
         if(toks.length > 1 && toks.every(t => hay.includes(t))) continue;
         return false;
       }
@@ -12413,7 +12423,24 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     // Handoffs WITH "x:" syntax (e.g. the Artist Alley "artist: <name>" link)
     // stay as parsed search text. addSmartChip is referenced in-body only (it's
     // defined later in the component) so it stays OUT of the deps array.
-    if(q && !q.includes(":")){
+    // ⚠ A handoff must reach the SAME answer as typing the words into the
+    // Cards box, and for a while it did not. "elsa promo" typed here parses to
+    // name "elsa" + rarity Promo and works; handed over from the home bar it
+    // was committed whole as `contains: "elsa promo"`, which looks for that
+    // literal phrase in the haystack and so matches NOTHING — the single most
+    // natural way to use the home search box was the one that broke. Run the
+    // same splitter the Cards box's own Enter key uses, and apply it the same
+    // way (see applySuggestion's "split" branch).
+    const split = q && !q.includes(":") ? smartSplitSuggestion(q) : null;
+    if(split){
+      for(const c of split.chips) addSmartChip(c);
+      if(split.name) addSmartChip({kind:"contains", value:split.name});
+      setFilter(f => ({...f, search: ""}));
+    } else if(q && !q.includes(":")){
+      // No dimension in it, so it is a pure NAME — commit it as a PHRASE
+      // `contains` chip so it matches "Go Go Tomago" rather than every card
+      // whose text holds the lone token "go" (free-text is token-ANY in
+      // CardsView, which returned 250+ false hits — the "feels bad" report).
       addSmartChip({kind:"contains", value:q});
       setFilter(f => ({...f, search: ""}));
     } else {
@@ -12696,10 +12723,22 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     for(const r of (raw || [])) if(r.Set && r.set_id && !m[r.set_id]) m[r.set_id] = r.Set;
     return m;
   }, [raw]);
+  //
+  // ⚠ It reads the typed text AND any `contains` CHIPS, because a contains
+  // chip IS typed text — just committed. Arriving from the home search bar
+  // moves the words into a chip and blanks the input, so reading `filter.search`
+  // alone meant a handoff of "trove" landed on zero cards AND zero sealed: a
+  // total dead end, reached by the exact flow this feature exists for. Every
+  // OTHER chip stays excluded, per the dimension rule above.
+  const sealedQuery = useMemo(() => {
+    const parts = [(filter.search || "").trim()];
+    for(const c of smartChips) if(c.kind === "contains") parts.push(String(c.value));
+    return parts.filter(Boolean).join(" ");
+  }, [filter.search, smartChips]);
   const sealedMatches = useMemo(() => {
     if(deckMode || !onOpenSealed) return [];
-    return searchSealedProducts(sealedPrices, filter.search || "", sealedSetNameById, 12);
-  }, [deckMode, onOpenSealed, sealedPrices, filter.search, sealedSetNameById]);
+    return searchSealedProducts(sealedPrices, sealedQuery, sealedSetNameById, 12);
+  }, [deckMode, onOpenSealed, sealedPrices, sealedQuery, sealedSetNameById]);
   const [selected, setSelected] = useState(() => new Set());
   const toggleSelected = useCallback((cardId) => {
     setSelected(prev => {
@@ -13109,7 +13148,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     ${sealedMatches.length > 0 && html`<div class="cards-sealed">
       <div class="cards-sealed-head">
         <span class="cards-sealed-title">Sealed products</span>
-        <span class="cards-sealed-count muted">${sealedMatches.length}${sealedMatches.length === 12 ? "+" : ""} matching “${(filter.search||"").trim()}”</span>
+        <span class="cards-sealed-count muted">${sealedMatches.length}${sealedMatches.length === 12 ? "+" : ""} matching “${sealedQuery}”</span>
       </div>
       ${/* Its own grid, sized for BOXES. That is the point of giving sealed a
             section instead of tiles in the card grid: a booster box is roughly

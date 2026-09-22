@@ -1189,17 +1189,67 @@ lacked a way in.
   for the same reason. The haystack is the cleaned name + display type + **set
   name**, tokens AND-ed, so `azurite booster box` and `vine trove` both land
   even where TCGplayer's own name omits one half.
-- **⚠ On the Cards tab it is gated on TYPED TEXT, never the chips.** Every chip
-  is a card dimension sealed does not have, so an "amber commons" filter would
-  otherwise list every booster box on the site as if it had matched something.
-  Typing a product name is the ask; a chip is not. Never offered in the deck
-  editor (`deckMode`) — sealed is not deck contents.
+- **⚠ On the Cards tab it is gated on TYPED TEXT plus any `contains` CHIPS, and
+  on no other chip.** Every other chip is a card dimension sealed does not have,
+  so an "amber commons" filter would otherwise list every booster box on the
+  site as if it had matched something. A `contains` chip is different — it IS
+  typed text, just committed — and it has to count, because **the home search
+  bar hands a query over by committing it as a chip and blanking the input**.
+  Reading `filter.search` alone meant a handoff of "trove" landed on zero cards
+  AND zero sealed: a total dead end, reached by the exact flow the feature
+  exists for. Never offered in the deck editor (`deckMode`) — sealed is not
+  deck contents.
 - A zero-card search that DID match sealed says so ("No cards match your search
   — but it matches sealed product, below") instead of dead-ending. The section
   renders after the empty state, so "below" is true.
 - **`ProductPhoto`'s wrapper is `position:absolute`, so the slot carries its own
   size** — the standing rule from the sealed movers / collection tiles. The
   white studio sweep is cut client-side as it is everywhere else.
+
+### ⚠ The home search bar must PARSE like the Cards box — fixed 2026-09-21
+
+Typing `elsa promo` into the Cards smart-search parses to name `elsa` + rarity
+`Promo` and returns 13 cards. Handing the **same words** over from the home
+search bar — Enter, or the Search button — committed them whole as
+`contains: "elsa promo"`, a literal phrase no card's haystack holds, so it
+matched **nothing**. The most natural way to use the home box was the one that
+broke, and it broke silently: an empty grid, no error. Reported by Zaven, who
+had noticed the two surfaces disagreeing.
+
+- **The handoff effect now runs `smartSplitSuggestion(q)`** — the same splitter
+  the Cards box's own Enter key uses — and applies it the same way
+  `applySuggestion`'s `"split"` branch does: dimension chips, plus the residual
+  name as a `contains` chip. `elsa promo` → `rarity: promo` + `contains: elsa`,
+  13 cards, identical to typing it. Verified for `mickey amber` (17) and
+  `rapunzel enchanted` (2) too.
+- **⚠ A query with NO dimension in it must still commit as ONE phrase chip.**
+  That is the older "feels bad" fix and it is still load-bearing: free text is
+  token-ANY in CardsView, so `go go` as free text returns 278 cards. The split
+  is tried FIRST and the whole-phrase commit is the fallback — get that order
+  backwards and every name search blows up.
+- A query containing explicit `x:` syntax (the Artist Alley `artist: <name>`
+  link) still goes through as parsed search TEXT, untouched.
+
+### ⚠ A `contains` phrase of REPEATED words collapsed to one token (2026-09-21)
+
+`matchesCardFilter`'s `contains` branch falls back, when the contiguous phrase
+misses, to "require every token" — and that test is a bare **substring**
+(`hay.includes(t)`), not a word match. So a phrase whose words are all the same
+asked only *"does the haystack contain `go`"*, which matched **Gopher, Gothel,
+Gonna, Good and Gosalyn**: **278 cards for a two-word phrase**. `go go` is the
+literal example the phrase-chip commit path was written to fix, so the code
+carried a comment claiming a fix that was never there — found while verifying
+the handoff above, not reported.
+
+- **The tokens are DEDUPED** (`[...new Set(...)]`), so a phrase whose words are
+  all identical has one distinct token, fails the `length > 1` test, and is
+  contiguous-only — which is what it always meant. **278 → 3**, all Go Go Tomago.
+- **⚠ Any phrase with two genuinely different words is untouched**, and the
+  fallback's real purpose survives: it exists to span the `" - "` in a full card
+  name, so `mother gothel evil ever` must keep matching. Both directions pinned.
+- The bare-substring test is still loose for OTHER short tokens; only the
+  degenerate all-same-word case is fixed here. Widening it to word boundaries
+  would change every `contains` search on the site and is a separate call.
 
 ## Cards browse filter dimensions
 

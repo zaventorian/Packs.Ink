@@ -52,6 +52,24 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
 ].join(NL)));
 const { searchSealedProducts } = mod;
 
+// The whole smart-search span — aliases, parseSearchQuery, smartSplitSuggestion
+// and matchesCardFilter — pulled the same way test_scanner_edit_search.mjs does.
+const smart = await import("data:text/javascript," + encodeURIComponent([
+  "const localStorage = { getItem(){ return null; }, setItem(){}, removeItem(){} };",
+  grabLine("const COCONUT_CARD_TYPE = "),
+  grabLine("const EXTRAS_SET_NAME = "),
+  grab("const MAINLINE_SETS = [", NL + "];"),
+  grab("const SET_ORDER = [", NL + "];"),
+  grab("const SET_PARENT = {", NL + "};"),
+  grabLine("let _promoBaseSet"),
+  grab("const cardParentSetForFilter = (row) => {", NL + "};"),
+  grab("const normalizeRarity = r => {", NL + "};"),
+  grab("const INK_COLORS = {",
+       'return items.filter(g => matchesCardFilter(g, f, {...parsed, nameMatchMode: "any"}));' + NL + "};"),
+  "export {smartSplitSuggestion, matchesCardFilter};",
+].join(NL)));
+const { smartSplitSuggestion, matchesCardFilter } = smart;
+
 let pass = 0, fail = 0;
 const ok = (cond, what) => { if (cond) { pass++; } else { fail++; console.error("  FAIL: " + what); } };
 
@@ -192,8 +210,8 @@ console.log("6. source-level: sealed can never displace a card");
                        src.indexOf("const CardsView ="));
   ok(/if\(deckMode \|\| !onOpenSealed\) return \[\];/.test(cb),
     "CardBrowser offers no sealed inside the deck editor");
-  ok(/searchSealedProducts\(sealedPrices, filter\.search/.test(cb),
-    "CardBrowser keys sealed on the TYPED text, never the chips");
+  ok(/const parts = \[\(filter\.search \|\| ""\)\.trim\(\)\];/.test(cb),
+    "CardBrowser keys sealed on the TYPED text");
   ok(cb.indexOf('class="cards-sealed"') > cb.indexOf('class="cards-grid'),
     "the sealed section renders after the card grid");
 
@@ -206,6 +224,101 @@ console.log("6. source-level: sealed can never displace a card");
                        "p.low_price == null && p.market_price == null"]) {
     ok(fn.includes(guard), "the " + guard + " guard is still there");
   }
+
+  // ⚠ Sealed reads the typed text AND any `contains` CHIPS, because a contains
+  // chip IS typed text, just committed. The home bar hands a query over by
+  // committing it as a chip and blanking the input, so reading filter.search
+  // alone made a handoff of "trove" land on zero cards AND zero sealed — a
+  // dead end reached by the exact flow the feature exists for.
+  ok(/for\(const c of smartChips\) if\(c\.kind === "contains"\)/.test(cb),
+    "the sealed query folds in contains chips");
+  ok(/searchSealedProducts\(sealedPrices, sealedQuery/.test(cb),
+    "…and the matcher is given that combined query");
+  // Every OTHER chip is a card dimension sealed does not have, so it must not
+  // reach the query — "amber commons" listing every booster box is the failure.
+  ok(!/c\.kind === "(ink|rarity|set|cost|card_type)"/.test(
+        cb.slice(cb.indexOf("const sealedQuery"), cb.indexOf("const sealedMatches"))),
+    "no dimension chip leaks into the sealed query");
+}
+
+console.log("7. the home handoff parses like the Cards box, not as one phrase");
+{
+  // The bug: typing "elsa promo" into the Cards box parses to name "elsa" +
+  // rarity Promo and works, but handing the same words over from the home
+  // search bar committed `contains: "elsa promo"` — a literal phrase no card's
+  // haystack holds, so it matched NOTHING. The most natural way to use the
+  // home box was the one that broke, and it broke silently: an empty grid.
+  const split = smartSplitSuggestion;
+
+  const chipsOf = (q) => {
+    const s = split(q);
+    return s ? { name: s.name, chips: s.chips.map((c) => c.kind + ":" + c.value) } : null;
+  };
+
+  // The reported case, and its siblings.
+  const elsa = chipsOf("elsa promo");
+  ok(elsa && elsa.name === "elsa" && elsa.chips.includes("rarity:Promo"),
+    '"elsa promo" splits into name elsa + rarity Promo');
+  const rap = chipsOf("rapunzel enchanted");
+  ok(rap && rap.name === "rapunzel" && rap.chips.includes("rarity:Enchanted"),
+    '"rapunzel enchanted" splits');
+  const amb = chipsOf("mickey amber");
+  ok(amb && amb.name === "mickey" && amb.chips.includes("ink:Amber"),
+    '"mickey amber" splits on ink');
+
+  // ⚠ The other half: a PURE NAME must NOT split, so the handoff keeps
+  // committing it as one phrase chip. Without that, "go go" goes back to
+  // token-ANY free text and returns 250+ false hits (the "feels bad" report).
+  ok(split("go go") === null, '"go go" does not split — it stays a phrase');
+  ok(split("winnie the pooh") === null, '"winnie the pooh" stays a phrase');
+  ok(split("trove") === null, "a single word can never split");
+
+  // And the handoff has to actually USE it. This is a render-site property,
+  // so it is checked at source; the effect is not a pure function.
+  const eff = src.slice(src.indexOf("    if(pendingSearch == null) return;"),
+                        src.indexOf("}, [pendingSearch, onConsumedPendingSearch]);"));
+  ok(/const split = q && !q\.includes\(":"\) \? smartSplitSuggestion\(q\) : null;/.test(eff),
+    "the handoff runs the splitter");
+  ok(/for\(const c of split\.chips\) addSmartChip\(c\);/.test(eff),
+    "…commits its dimension chips");
+  ok(/if\(split\.name\) addSmartChip\(\{kind:"contains", value:split\.name\}\);/.test(eff),
+    "…and the residual name as a contains chip");
+  ok(/addSmartChip\(\{kind:"contains", value:q\}\);/.test(eff),
+    "a non-splitting query still commits as ONE phrase chip");
+  ok(eff.indexOf("smartSplitSuggestion") < eff.indexOf('value:q'),
+    "the split is tried BEFORE the whole-phrase fallback");
+}
+
+console.log("8. a `contains` phrase of repeated words does not collapse");
+{
+  // The contains fallback ("require every token") is a bare SUBSTRING test, so
+  // a phrase whose words are all the same asked only "does the haystack contain
+  // 'go'" — which matched Gopher, Gothel, Gonna, Good and Gosalyn. "go go"
+  // returned 278 cards live, and it is the very example the phrase-chip commit
+  // path was written to fix, so the code claimed a fix that was not there.
+  // Deduping the tokens makes such a phrase contiguous-only. Measured 278 -> 3.
+  const card = (name) => ({
+    "Product Name": name, card_type: "Character", text: "",
+    classifications: [], Rarity: "Common", Set: "The First Chapter",
+  });
+  const rows = [
+    card("Go Go Tomago - Cutting Edge"),
+    card("Gopher - Hunny Cook"),
+    card("Mother Gothel - Evil as Ever"),
+    card("Dug - Good Boy"),
+    card("It's Gonna Be Great!"),
+    card("Gosalyn Mallard - The Quiverwing Quack"),
+  ];
+  const hit = (phrase) => rows.filter((r) =>
+    matchesCardFilter(r, {}, { filters: {}, contains: [phrase] })).map((r) => r["Product Name"]);
+
+  const go = hit("go go");
+  ok(go.length === 1 && go[0].startsWith("Go Go Tomago"),
+    '"go go" matches only Go Go Tomago, not every card with "go" inside a word');
+  ok(hit("gopher hunny").length === 1, "a two-DIFFERENT-word phrase keeps the token fallback");
+  // The fallback exists to span the " - " in a full card name; that must survive.
+  ok(hit("mother gothel evil ever").length === 1,
+    "the token fallback still spans a card name's separator");
 }
 
 console.log((fail ? "\nFAILED " : "\nOK ") + pass + " passed, " + fail + " failed");
