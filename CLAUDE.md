@@ -5194,7 +5194,7 @@ effects DO: for anyone with no saved search, the first time the gate turns true 
 
 `EventMapView` (beside `scMergePins` in Index.html) draws many events on one OSM map.
 Same tiles-as-plain-`<img>` deal as `CalendarMiniMap` — no library, no script, no cookie —
-over `osmFitLayout`. Guarded by `node scripts/test_event_map.mjs` (90 checks).
+over `osmFitLayout`. Guarded by `node scripts/test_event_map.mjs` (184 checks).
 
 **It needed no migration, no RPC change, no new query and no `_headers` change.**
 `get_nearby_lorcana_events` already aggregates lat/lng per series, calendar rows carry
@@ -5384,6 +5384,74 @@ off its tile, and a second copy of either is exactly how that happens.
   local event**. Pins outside the frame are clipped by `overflow:hidden`, which
   is right, but silent.
 
+### A map you can SEND — `?scview` and `?cmap` (2026-09-22)
+
+Zaven: *"can we make maps shareable via link? like if i want to share a map at a
+zipcode for set champs so someone else can see."* Both maps could be OPENED by
+link and neither could be SENT. The finder's Copy link already carried the ZIP,
+the distance, the kinds and the date — everything except which VIEW, so a map
+link landed the recipient on a list. The calendar's `?cv=map` carried the mode
+and nothing else, and that map opens on the whole season: the one thing the
+sender was showing was the one thing the URL could not say.
+
+- **The finder: `?scview=map|list`**, written by the Copy link button and read
+  by the map toggle. One param, because the rest of that view was already
+  shareable. The button reads **"Copy map link"** when the map is what is on
+  screen — the link carries the view now, so a button still saying "Copy link"
+  beside a map leaves the one person who wants to send it guessing.
+  - **⚠ This REVERSES a deliberate call in that file** (*"which way you prefer to
+    read results is yours, where the results ARE is what a link is for"*). A map
+    is not a rendering preference laid over a list — at a glance it answers which
+    of these is worth the drive, which is the whole reason to send one.
+- **The calendar: `?cmap=<lat>,<lng>,<zoom>[,<label>]`** plus `cmr` (radius),
+  `cms` (scope) and `cmk` (SC / prerelease / locals). So the address bar IS the
+  shareable map and the existing "Copy link to this page" needs no second
+  control beside it.
+  - **⚠ The LABEL is LAST and only the first three fields are split off.** Every
+    American city name contains a comma, so anything that splits the whole string
+    and takes field 3 truncates "Chicago, IL" to "Chicago".
+  - **⚠ Coordinates are the identity; the label is cosmetic and is NEVER
+    re-resolved on arrival.** A second geocode could answer differently and move
+    the recipient's map off the spot the sender chose, which is the entire
+    promise of the link. It is length-capped (48) because it is text off a URL
+    rendering into the toolbar and the empty-state line.
+  - **⚠ Null Island, a THIRD time.** `Number("")` and `Number(null)` are both 0,
+    so a half-written `?cmap` is a perfectly finite point in the Atlantic that
+    renders as an ordinary, empty map. Every field must be a number somebody
+    actually wrote down — a blank field is a MISSING field.
+  - **⚠ All four are written in map mode ONLY and deleted otherwise.** A `cmap`
+    left on the URL after switching to List is a stale anchor that does nothing
+    where you are and silently repoints the map on the way back — the trap `cm`
+    is already guarded against one line above.
+
+**⚠ A POINTED map link is COMPLETE — defaults included.** This shipped broken in
+the first cut and only showed up on opening the link AS SOMEBODY ELSE: the
+sender was on "All events" (the default, so omitted) and the reader's saved
+scope was "Just mine", so a set-champs map at a ZIP reproduced as a map of the
+shops THAT READER follows — for most people none. An empty map, at the right
+place, with no error and nothing on screen to say a filter had been swapped
+underneath it. **"Omit the default" is only safe when the reader's fallback IS
+the default**, and here the fallback is the reader's own stored preference.
+`cmap` is what separates the two kinds of link and is why this does not make
+every map URL long: a map somebody AIMED is the thing that gets sent, so it
+carries everything; a bare `?cv=map` (the home tile's own Map button) is "open
+MY map", where inheriting your own preferences is right, so it stays short.
+
+**⚠ A LINK MAY CHOOSE FOR YOU, NEVER OVER YOU.** `usePrefWrite` (beside
+`useEscToClose`) is the shared hook: a value that arrived from a URL skips its
+FIRST localStorage write, so having a look at somebody's shared map cannot
+silently repoint the reader's own view / scope / kind defaults from one click on
+someone else's link. Their own toggle persists exactly as before. Same rule
+`?cv=` already follows against the month-view stamp. The seeded radius was
+already safe — only the `<select>`'s own onChange writes `packsink:scRadius`,
+which the finder shares.
+
+All four calendar params are registered in **BOTH `dirtyParams` and
+`VIEW_OWNED`**, the standing rule whose failure is silent: unregistered, the link
+works for the SENDER, who is already there, and resets for everyone they send it
+to. Pinned in `test_event_map.mjs` along with the codec's round trip, every Null
+Island shape, the comma in a place name, the zoom clamp and the label cap.
+
 ### How the finder itself works
 
 `UpcomingSCsBox` (Index.html). ZIP/postal + radius + optional date, three modes: **All / Set Champs / Prereleases**. Reworked 2026-07-30 so **All means literally every Lorcana event RPH lists** — locals, league nights, draft nights — not just the two classified subsets.
@@ -5393,7 +5461,7 @@ off its tile, and a second copy of either is exactly how that happens.
 - **Series key = store + kind + format + local weekday + local start time.** Explicitly NOT the title: stores stamp the date into it ("7/30/26 Lake Forest Lorcana Core Constructed Thursday"), which would split every weekly into one-offs. A genuine one-off is just a series of length 1. Cadence itself is re-derived client-side from the real dates (`scCadence`) so a biweekly isn't mislabelled weekly; irregular spacing falls back to "N dates".
 - **Pins and the modal are per-series / per-occurrence.** `packsink:scPinned` now holds `series_key` strings (was event ids — old numeric pins simply stop matching, which is the intended lapse). The modal takes `{series, occ}`: venue/format/geo from the series, date + entry + capacity + the registration link from the one date clicked.
 - **No date ceiling.** The RPC returns everything upcoming; series collapsing is what makes that readable. `p_max_series` caps at 400 listings, `p_max_occurrences` caps each series' expanded date list at 24 (`occurrence_count` stays the true total).
-- **Deep links**: `?sczip/scc/scdist/scdate/scmode`. `SC_DEEP_LINKED` gates force-rendering the box when the home panel is hidden — `scmode` was missing from that list until 2026-07-30.
+- **Deep links**: `?sczip/scc/scdist/scdate/scmode/scview`. `SC_DEEP_LINKED` gates force-rendering the box when the home panel is hidden — `scmode` was missing from that list until 2026-07-30, and `scview` (list vs map) until 2026-09-22. See "A map you can SEND" above for why the view rides the link at all.
 - **`safe_local_ts(ts, tz)`** wraps `at time zone` so one malformed RPH timezone can't fail the whole query.
 
 **Discovery: `scripts/elo/discover_events.py`** (daily, `.github/workflows/discover_scs.yml`). ONE scan of the ~17k-row upcoming index → classifies every event → writes both `lorcana_events` (all kinds) and `set_championships` (SC subset, unchanged, because the Elo pipeline binds to that table). Replaced two full scans of the same index.
