@@ -1817,8 +1817,11 @@ ok("the dense mark is a height-driven square, not 72% of each axis",
 // out-specifies everything above on the one grid that needed it most.
 ok("the desktop cell opts out of dense",
   /\.cal-month:not\(\.cal-month--dense\) \.cal-cell\{position:relative;min-height:128px/.test(cgCSS));
+// ⚠ Comment-stripped, or this passes/fails on PROSE: the note explaining what
+// the superseded `:not(--compact)` rules used to do contains the selector.
+const cgRules = cgCSS.replace(/\/\*[\s\S]*?\*\//g, "");
 ok("and nothing styles a cell by :not(--compact) any more",
-  !/\.cal-month:not\(\.cal-month--compact\)/.test(cgCSS));
+  !/\.cal-month:not\(\.cal-month--compact\)/.test(cgRules));
 // ⚠ The JS breakpoint and the CSS one are the SAME 700. A gap between them is a
 // width where the chip label is hidden and the cell is not dense -- a 47px cell
 // drawing four chips of nothing, which is the bug this replaces.
