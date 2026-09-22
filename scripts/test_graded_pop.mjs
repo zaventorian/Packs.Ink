@@ -189,8 +189,33 @@ section("5. gradedPopStats");
   // ⚠ A qualifier key must not be read as a grade — "9Q" is not grade 9.
   eq(q.popHigher(9), 45, "only straight and half grades above 9 count as higher");
 
+  // The per-grade table the panel renders.
+  const bd = gradedPopStats({
+    total: 754, pop_10: 659, pop_9: 82,
+    grades: { auth: 1, "6": 1, "7": 2, "8": 9, "9": 82, "10": 659, "3": 0, gradeTotal: 754 },
+  }).breakdown;
+  eq(bd.map((b) => b.label).join(","), "10,9,8,7,6,Auth", "highest grade first, Auth last");
+  eq(bd.reduce((n, b) => n + b.n, 0), 754, "the rows account for every graded copy");
+  // ⚠ Zero-population grades are dropped: eleven empty rows bury the four that
+  // carry the card, and "no copies at grade 3" is not why anyone opened this.
+  ok(!bd.some((b) => b.n === 0), "grades nobody owns are not rows");
+  ok(!bd.some((b) => b.key === "gradeTotal"), "the totals are not mistaken for a grade");
+
+  // ⚠ A qualifier sorts directly UNDER its straight grade, never merged into it
+  // and never floated to the end — it is a different product at the same number.
+  const qb = gradedPopStats({
+    total: 60, pop_10: 30, pop_9: 20,
+    grades: { "10": 30, "9.5": 5, "9": 20, "9Q": 4, "10Q": 1 },
+  }).breakdown;
+  eq(qb.map((b) => b.label).join(","), "10,10 Q,9.5,9,9 Q", "qualifiers follow their own grade");
+  ok(qb.find((b) => b.label === "9 Q").qual === true, "a qualifier row is flagged");
+  ok(qb.find((b) => b.label === "9").qual === false, "a straight grade is not");
+  eq(qb.find((b) => b.label === "9.5").grade, 9.5, "half grades keep their value");
+
   // Degenerate input must degrade, never throw.
   ok(gradedPopStats(null) === null, "no row is null");
+  eq(gradedPopStats({ total: 5, pop_10: 5, grades: {} }).breakdown.length, 0,
+     "no grade detail is an empty table, not a crash");
   const zero = gradedPopStats({ total: 0, pop_10: 0, pop_9: 0, grades: {} });
   eq(zero.gemRate, null, "a card with nothing graded has no gem rate, not 0/0");
   eq(zero.popHigher(9), 0, "and nothing above any grade");
