@@ -169,7 +169,13 @@ def main() -> int:
             return 2
 
         ctx = browser.contexts[0] if browser.contexts else browser.new_context()
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        # ⚠ A NEW tab, never ctx.pages[0]. The graded scraper reuses the front
+        # tab because that IS its tab; this browser also carries a live Terapeak
+        # research session, and navigating it away to read a pop report would
+        # throw away a login that is expensive to get back. The probe cleans up
+        # its own tab and leaves every other one exactly as it found it.
+        page = ctx.new_page()
+        opened_page = True
 
         for i, url in enumerate(args.url):
             if i:
@@ -226,6 +232,12 @@ def main() -> int:
                 f = OUT_DIR / f"pop_{stamp}_{i}.html"
                 f.write_text(page.content(), encoding="utf-8")
                 print(f"  html saved: {f}")
+
+        if opened_page:
+            try:
+                page.close()
+            except Exception:
+                pass
 
     out = OUT_DIR / f"pop_probe_{stamp}.json"
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
