@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=472">
+<link rel="stylesheet" href="styles.css?v=473">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -24988,7 +24988,13 @@ function buildGradedExportText(buckets){
     if(b.label) lines.push(b.label);
     for(const r of b.rows){
       const bits = [];
-      if(r.number) bits.push(r.number);
+      // ⚠ A collector number ALONE does not identify a card, and on a graded
+      // list it usually cannot: promos restart at 1 in every promo set, so an
+      // ungrouped list read "#2 · Promo" three times for three different
+      // cards. When the bucket carries no heading the row has to say its own
+      // set; when it does, repeating it on every row is noise.
+      const where = [b.label ? "" : r.set, r.number ? "#" + r.number : ""].filter(Boolean).join(" ");
+      if(where) bits.push(where);
       if(r.rarity) bits.push(r.rarity);
       if(r.foil)   bits.push("Foil");
       const tier = [r.grader, r.grade].filter(Boolean).join(" ");
@@ -24996,8 +25002,7 @@ function buildGradedExportText(buckets){
       lines.push(`- ${r.name}${bits.length ? " · " + bits.join(" · ") : ""}${r.qty > 1 ? ` ×${r.qty}` : ""}`);
     }
   }
-  return lines.join("
-");
+  return lines.join("\n");
 }
 
 // The machine-readable list: a spreadsheet, an insurance schedule, a grading
@@ -25010,15 +25015,13 @@ function buildGradedExportCsv(buckets){
   if(!rows.length) return null;
   const esc = (v) => {
     const t = String(v == null ? "" : v);
-    return /[",
-]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+    return /[",\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
   };
   const lines = ["Qty,Name,Set,Card Number,Rarity,Printing,Grader,Grade"];
   for(const r of rows){
     lines.push([r.qty, esc(r.name), esc(r.set), esc(r.number), esc(r.rarity), esc(r.printing), esc(r.grader), esc(r.grade)].join(","));
   }
-  return lines.join("
-");
+  return lines.join("\n");
 }
 
 const GradedOwnedGrid = ({items, cardById, priceByKey, splitTiers, raw, theme, onOpen, basis}) => {
@@ -25135,7 +25138,7 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, splitTiers, raw, theme, o
   // "Foil" tag only on mainline (x/204) booster cards, which have a real
   // non-foil/cold-foil duality. Extras/quest/promo cards are single-printing —
   // no foil qualifier (user rule: foil label is only for x/204 cards).
-  const showFoilBadge = (e)=> !GRADED_CHASE_RARITIES.has(e.rarity) && e.printing !== "Normal" && MAINLINE_SETS.includes(e.set);
+  const showFoilBadge = gradedOwnedIsFoil;
   const printCell = (e)=> (GRADED_CHASE_RARITIES.has(e.rarity) || !MAINLINE_SETS.includes(e.set)) ? "" : (e.printing === "Normal" ? "Non-foil" : "Foil");
   const gradeBadge = (e)=> html`<span class="gco-grade" style=${{background: GRADER_COLOR[(e.grader||"").toLowerCase()] || "#888"}}>${(e.grader||"").toUpperCase()} ${e.grade}</span>`;
   const valStr = (e)=> e.value != null ? (e.rawPlaceholder ? "~" : "") + fmt(e.value) : "—";
@@ -25149,6 +25152,41 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, splitTiers, raw, theme, o
         <span class="gco-vp-item"><span class="gco-vp-num">${e.avg5!=null?fmt(e.avg5):"—"}</span><span class="gco-vp-lbl">avg last 5</span></span>
       </div>`
     : html`<div class="gco-val">${valStr(e)}</div>`;
+
+
+  // Export the list you are LOOKING AT — same filters, same sort, same
+  // per-set grouping — so "export" means "this, as a file" and there is no
+  // second layout to reason about. Prices never enter: see gradedExportRow.
+  const exportBuckets = useCallback(() => buckets.map(b => ({
+    label: b.label, rows: b.items.map(gradedExportRow),
+  })), [buckets]);
+
+  const copyGradedList = useCallback(() => {
+    const text = buildGradedExportText(exportBuckets());
+    if(!text){ flashToast("No graded cards to export"); return; }
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text)
+        .then(() => flashToast(`Copied ${visible.length} graded card${visible.length===1?"":"s"} — no prices included`))
+        .catch(() => flashToast("Couldn't copy the list — try the CSV instead"));
+    } else {
+      flashToast("Clipboard not supported here — try the CSV instead");
+    }
+  }, [exportBuckets, visible.length]);
+
+  const downloadGradedCsv = useCallback(() => {
+    const csv = buildGradedExportCsv(exportBuckets());
+    if(!csv){ flashToast("No graded cards to export"); return; }
+    try {
+      const blob = new Blob([csv], {type:"text/csv"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "packs-ink-graded-" + new Date().toISOString().slice(0,10) + ".csv";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 1000);
+      flashToast(`Exported ${visible.length} graded card${visible.length===1?"":"s"} — no prices included`);
+    } catch(e){ flashToast("Couldn't build the CSV: " + (e.message || e)); }
+  }, [exportBuckets, visible.length]);
 
   if(!entries.length) return html`<div class="gc-empty">
     <div class="gc-empty-title">No graded cards owned yet</div>
@@ -25183,6 +25221,14 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, splitTiers, raw, theme, o
         <button class=${viewMode==="list"?"active":""} onClick=${()=>setViewMode("list")} title="Compact list">☰</button>
         <button class=${viewMode==="grid"?"active":""} onClick=${()=>setViewMode("grid")} title="Card grid">▦</button>
       </div>
+      <button class="import-csv-btn gco-export-btn" onClick=${copyGradedList}
+        title="Copy these cards as a plain-text list you can paste into a message. No prices — names, sets, numbers and grades only.">
+        Copy list
+      </button>
+      <button class="import-csv-btn gco-export-btn" onClick=${downloadGradedCsv}
+        title="Download these cards as a CSV. No prices — names, sets, numbers, printings and grades only.">
+        CSV
+      </button>
     </div>
     <div class="gco-summary">${visible.length} card${visible.length===1?"":"s"} · <span class="green">${fmt(totalValue)}</span></div>
     ${buckets.map(b => html`<div class="gco-bucket" key=${b.key}>
