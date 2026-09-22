@@ -102,9 +102,24 @@ ok("the bake produced something at all", baked.length > 20, String(baked.length)
 const strays = Object.keys(LORCANA_SET_ART).filter((s) => !MAINLINE_SETS.includes(s)
   && !Object.prototype.hasOwnProperty.call(SET_RELEASE_DATES, s));
 ok("every set-logo key is a real set name", strays.length === 0, strays.join(", "));
+// ⚠ RELEASED is the operative word, and it has to be enforced rather than
+// assumed. A set is listed in MAINLINE_SETS from the moment it is announced —
+// that is what makes it sort as the newest and stops its cards being stamped
+// Promo — but Ravensburger ships the brand bundle around release, so the newest
+// set legitimately has no logo for weeks. lorcanaSetArt returning null is the
+// documented steady state there, and every call site renders without one, so
+// demanding a logo for an unreleased set fails on a correct catalog.
+const releasedMainline = MAINLINE_SETS.filter((s) => {
+  const lgs = (SET_RELEASE_DATES[s] || {}).lgs;
+  return !lgs || Date.now() >= new Date(lgs + "T00:00:00").getTime();
+});
 ok("every released mainline set has a logo",
-  MAINLINE_SETS.every((s) => !!lorcanaSetArt(s)),
-  MAINLINE_SETS.filter((s) => !lorcanaSetArt(s)).join(", "));
+  releasedMainline.every((s) => !!lorcanaSetArt(s)),
+  releasedMainline.filter((s) => !lorcanaSetArt(s)).join(", "));
+// ...and the filter must not silently swallow the whole list.
+ok("the released-set filter still covers the shipped sets",
+  releasedMainline.length >= MAINLINE_SETS.length - 1 && releasedMainline.length > 10,
+  `${releasedMainline.length} of ${MAINLINE_SETS.length}`);
 ok("a set with no logo returns null rather than a broken path",
   lorcanaSetArt("Promo Set 1") === null && lorcanaSetArt(undefined) === null);
 

@@ -3385,7 +3385,20 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .sc-msg-err{color:var(--red);}
 .sc-results{margin-top:8px;}
 .sc-results-head{font-size:10px;text-transform:uppercase;letter-spacing:0.4px;
-  color:var(--text-muted);font-weight:700;margin-bottom:5px;}
+  color:var(--text-muted);font-weight:700;margin-bottom:5px;
+  display:flex;align-items:center;gap:8px;}
+/* The count is the part that gives: a long "near Downtown Toronto (CN Tower…)"
+   must not push the toggle off the edge of the embedded tile. */
+.sc-results-count{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sc-viewtoggle{display:flex;flex:0 0 auto;gap:0;border:1px solid var(--border);
+  border-radius:999px;overflow:hidden;margin-left:auto;}
+.sc-viewtoggle-btn{background:none;border:0;border-radius:0;cursor:pointer;
+  padding:3px 9px;font:inherit;font-size:9.5px;font-weight:700;letter-spacing:0.4px;
+  text-transform:uppercase;color:var(--text-muted);}
+.sc-viewtoggle-btn.on{background:var(--accent);color:#fff;}
+.sc-viewtoggle-btn:not(.on):hover{color:var(--text);}
+/* Hidden, not unmounted — see the note at the render site. */
+.sc-results--map .sc-list{display:none;}
 .sc-list{display:flex;flex-direction:column;gap:4px;max-height:340px;overflow-y:auto;}
 /* A tile is one SERIES (a store's recurring slot), so it stacks: the summary row
    on top, then the optional expanded date list beneath it. */
@@ -11041,6 +11054,146 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
   transform:translate(-50%,-50%);background:var(--accent);
   border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.5);pointer-events:none;}
 .cal-map-credit{font-size:9px;color:var(--text-muted);margin-top:3px;text-align:right;}
+
+/* PSA Pop Report, inside the card modal's details column under the price box.
+   A table, because "how many at each grade" is tabular and a prose sentence
+   makes you do the arithmetic yourself. */
+.cd-pop{margin-top:12px;border:1px solid var(--border);border-radius:8px;
+  background:var(--bg-surface);padding:11px 13px;}
+.cd-pop-title{font-size:10px;text-transform:uppercase;letter-spacing:0.6px;
+  font-weight:700;color:var(--text-muted);margin-bottom:9px;}
+.cd-pop-block+.cd-pop-block{margin-top:12px;padding-top:11px;border-top:1px solid var(--border);}
+.cd-pop-variety{font-size:12px;font-weight:700;margin-bottom:7px;}
+/* The two headline numbers. The gem rate is deliberately the larger of the two
+   and in the accent: it is the one figure that reframes the price above it. */
+.cd-pop-summary{display:flex;gap:22px;align-items:flex-end;margin-bottom:9px;}
+.cd-pop-stat{display:flex;flex-direction:column;gap:1px;}
+.cd-pop-stat-n{font-size:19px;font-weight:800;line-height:1;
+  font-variant-numeric:tabular-nums;}
+.cd-pop-stat--gem .cd-pop-stat-n{font-size:27px;color:var(--accent);}
+.cd-pop-stat-l{font-size:9.5px;text-transform:uppercase;letter-spacing:0.5px;
+  color:var(--text-muted);font-weight:700;}
+.cd-pop-table{width:100%;border-collapse:collapse;font-size:11.5px;
+  font-variant-numeric:tabular-nums;}
+.cd-pop-table th,.cd-pop-table td{padding:3px 6px;text-align:right;}
+.cd-pop-table th[scope=row]{text-align:left;font-weight:700;}
+.cd-pop-table thead th{font-size:9px;text-transform:uppercase;letter-spacing:0.5px;
+  color:var(--text-muted);border-bottom:1px solid var(--border);padding-bottom:4px;}
+.cd-pop-table thead th:first-child{text-align:left;}
+.cd-pop-table tbody tr+tr th,.cd-pop-table tbody tr+tr td{border-top:1px solid var(--border);}
+/* PSA 10 is the row people came for. */
+.cd-pop-table tr.is-ten th,.cd-pop-table tr.is-ten td{color:var(--accent);font-weight:800;}
+/* A qualified grade is a different product from a clean one at the same number,
+   so it reads as secondary rather than as another row of the same thing. */
+.cd-pop-table tr.is-qual th,.cd-pop-table tr.is-qual td{color:var(--text-muted);font-style:italic;}
+.cd-pop-foot{margin-top:9px;padding-top:8px;border-top:1px solid var(--border);
+  font-size:10.5px;color:var(--text-muted);display:flex;flex-direction:column;gap:3px;}
+
+/* The event finder's map view. Shares CalendarMiniMap's tile treatment — the
+   dark-theme filter especially, or the map is a bright rectangle in a dark
+   page — but its pins are BUTTONS, not decoration, so they take a hit area. */
+.sc-map{margin-top:10px;}
+.sc-map-box{position:relative;overflow:hidden;border-radius:8px;
+  border:1px solid var(--border);background:var(--bg-surface);width:100%;}
+.sc-map-box img{position:absolute;display:block;border:0;max-width:none;image-rendering:auto;}
+html[data-mode="dark"] .sc-map-box img{filter:brightness(0.82) saturate(0.85);}
+.sc-map-pin{position:absolute;transform:translate(-50%,-50%);
+  /* 22px, not the 13px the calendar's decorative pin uses: this one is tapped,
+     and the site's documented mobile floor is 36px of hit area — which the
+     padding-free box cannot give, so the ::after below extends it. */
+  min-width:22px;height:22px;padding:0 5px;border-radius:999px;
+  background:var(--accent);color:#fff;border:2px solid #fff;
+  box-shadow:0 1px 4px rgba(0,0,0,0.5);cursor:pointer;z-index:1;
+  font-size:11px;font-weight:700;line-height:1;display:flex;align-items:center;
+  justify-content:center;font-variant-numeric:tabular-nums;}
+.sc-map-pin::after{content:"";position:absolute;left:50%;top:50%;
+  width:36px;height:36px;transform:translate(-50%,-50%);}
+/* The date chip. A CHILD of the pin button, so it shares the hit area and can
+   never be a click target that does nothing — and placed by scPlacePinLabels,
+   which guarantees it covers no other event's dot. */
+.sc-map-pin-d{position:absolute;top:50%;transform:translateY(-50%);
+  height:18px;box-sizing:border-box;padding:0 6px;border-radius:5px;
+  display:flex;align-items:center;white-space:nowrap;
+  font-size:11px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;
+  background:var(--bg-modal);color:var(--text);border:1px solid var(--border);
+  box-shadow:0 1px 3px rgba(0,0,0,0.35);}
+.sc-map-pin-d--r{left:calc(100% + 4px);}
+.sc-map-pin-d--l{right:calc(100% + 4px);}
+.sc-map-pin.on .sc-map-pin-d{border-color:var(--accent);color:var(--accent);}
+.sc-map-pin.many{background:var(--accent);}
+.sc-map-pin.on{z-index:3;transform:translate(-50%,-50%) scale(1.25);
+  box-shadow:0 0 0 3px var(--bg-modal),0 2px 8px rgba(0,0,0,0.6);}
+.sc-map-pin:hover,.sc-map-pin:focus-visible{z-index:2;}
+.sc-map-callout{margin-top:6px;border:1px solid var(--border);border-radius:8px;
+  background:var(--bg-modal);overflow:hidden;max-height:168px;overflow-y:auto;}
+.sc-map-callout-row{display:flex;width:100%;align-items:center;gap:8px;
+  padding:8px 10px;background:none;border:0;border-radius:0;cursor:pointer;
+  text-align:left;color:var(--text);font:inherit;font-size:12px;}
+.sc-map-callout-row+.sc-map-callout-row{border-top:1px solid var(--border);}
+.sc-map-callout-row:hover{background:var(--bg-surface);}
+.sc-map-callout-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
+.sc-map-callout-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* The line that makes two rows from one shop distinguishable — see the note at
+   subOf. Muted, but never dropped on narrow widths for that reason. */
+.sc-map-callout-sub{font-size:10px;color:var(--text-muted);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;}
+.sc-map-callout-go{color:var(--accent);flex:0 0 auto;}
+.sc-map-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.sc-map-foot .cal-map-credit{margin-left:auto;}
+.sc-map-missing{font-size:10px;color:var(--text-muted);}
+.sc-map-empty{padding:18px 10px;text-align:center;font-size:12px;color:var(--text-muted);}
+/* The calendar page's map mode. The finder's map is a section under a result
+   list and carries its own top margin; here it IS the view. */
+.cal-map-view{margin-top:12px;}
+.cal-map-view .sc-map{margin-top:0;}
+/* The place box: how you get from "where is the circuit" to "what is near me"
+   without leaving the page. Wraps, because it grows a zoom stepper and two
+   links once a place is picked. */
+/* Said OVER the tiles, not under them: the empty map is the thing being
+   explained, so the explanation has to be where the eye already is. */
+.sc-map-note{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  z-index:4;max-width:min(88%,420px);padding:10px 14px;border-radius:10px;
+  border:1px solid var(--border);background:var(--bg-modal);color:var(--text);
+  box-shadow:0 6px 24px rgba(0,0,0,0.45);font-size:12px;line-height:1.45;
+  text-align:center;pointer-events:none;}
+.cal-map-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:10px;}
+.cal-map-place{display:flex;align-items:center;gap:6px;flex:1 1 180px;min-width:0;
+  padding:5px 10px;border:1px solid var(--border);border-radius:999px;
+  background:var(--bg-modal);color:var(--text-muted);}
+.cal-map-place input{flex:1 1 auto;min-width:0;background:none;border:0;outline:none;
+  color:var(--text);font:inherit;font-size:12.5px;padding:0;}
+.cal-map-go{flex:0 0 auto;padding:6px 13px;border-radius:999px;cursor:pointer;
+  border:1px solid var(--accent);background:var(--accent);color:#fff;
+  font:inherit;font-size:11.5px;font-weight:700;letter-spacing:0.02em;}
+.cal-map-go:disabled{opacity:0.55;cursor:default;}
+.cal-map-zoom{display:inline-flex;flex:0 0 auto;border:1px solid var(--border);
+  border-radius:999px;overflow:hidden;background:var(--bg-modal);}
+.cal-map-zoom button{width:30px;height:28px;border:0;border-radius:0;background:none;
+  color:var(--text);cursor:pointer;font:inherit;font-size:14px;line-height:1;padding:0;}
+.cal-map-zoom button+button{border-left:1px solid var(--border);}
+.cal-map-zoom button:hover:not(:disabled){color:var(--accent);background:var(--accent-glow);}
+.cal-map-zoom button:disabled{opacity:0.35;cursor:default;}
+.cal-map-at{font-size:11.5px;font-weight:700;color:var(--accent);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40%;}
+.cal-map-reset{font-size:11.5px;flex:0 0 auto;}
+.cal-map-scope{flex:0 0 auto;font-size:11px;}
+.cal-map-scope button{padding:6px 11px;font-size:11px;font-weight:700;}
+.cal-map-radius{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;
+  font-size:11.5px;color:var(--text-muted);}
+.cal-map-radius select{font:inherit;font-size:11.5px;padding:4px 6px;border-radius:6px;
+  border:1px solid var(--border);background:var(--bg-modal);color:var(--text);}
+.cal-map-note{font-size:11px;flex:0 0 auto;}
+.cal-map-note--err{color:var(--danger,#e0685f);}
+@media (max-width:640px){
+  /* The input takes its own line, so the stepper and the two links keep their
+     hit areas instead of being crushed into a strip beside it. */
+  .cal-map-place{flex:1 1 100%;}
+  .cal-map-at{max-width:100%;}
+  /* The stepper is the one control here you tap repeatedly, so it takes the
+     site's mobile floor rather than the 28px a desktop pointer is happy with. */
+  .cal-map-zoom button{width:44px;height:36px;font-size:16px;}
+  .cal-map-go{padding:8px 15px;}
+}
 
 /* ── what comes out that day ──────────────────────────────────────────────── */
 .cal-products{margin-top:14px;padding:9px 11px;border:1px solid var(--border);
