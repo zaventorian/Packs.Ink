@@ -794,6 +794,34 @@ section("17. marks + on-screen list wiring");
   ok(listCss.length > 0, "the list has styles at all");
   ok(!/overflow-y\s*:\s*auto/.test(listCss), "the on-screen list adds no inner scroll");
 
+  // /!\ THE GLYPH'S CSS SIZE MUST EQUAL SC_PIN_ICON. This is the bug that got
+  // through: `.sc-map-pin-ico` asked for 14px, `.cal-ico` declares its own 18px
+  // box and is declared LATER at equal specificity, so the mark rendered 4px
+  // wider than scPlacePinLabels reserved for it. It passed anyway, because
+  // SC_LBL_BLEED's 1px of slack happened to cover most of the gap -- which is a
+  // pixel meant to absorb a rounding, not a systematic error. Measured on the
+  // live pin, not read off the stylesheet.
+  const icoRule = /\.sc-map-pin\s+\.sc-map-pin-ico\{([^}]*)\}/.exec(css);
+  ok(!!icoRule, "the pin's glyph rule is scoped to beat .cal-ico");
+  if (icoRule) {
+    const w = /width:\s*(\d+)px/.exec(icoRule[1]);
+    ok(!!w && Number(w[1]) === SC_PIN_ICON,
+       "the glyph's CSS width equals SC_PIN_ICON (" + (w && w[1]) + " vs " + SC_PIN_ICON + ")");
+    const h = /height:\s*(\d+)px/.exec(icoRule[1]);
+    ok(!!h && Number(h[1]) === SC_PIN_ICON, "and its height, so the box is square");
+    const fb = /flex:\s*0 0 (\d+)px/.exec(icoRule[1]);
+    ok(!!fb && Number(fb[1]) === SC_PIN_ICON,
+       "and its flex-basis, so a tight pin cannot shrink it below what was reserved");
+  }
+  // /!\ And it must actually OUT-SPECIFY .cal-ico, or the number above is a
+  // statement of intent that the cascade ignores -- which is exactly what
+  // happened. Two classes beats one.
+  const calIco = /(^|\})\.cal-ico\{([^}]*)\}/m.exec(css);
+  if (calIco && /width:\s*\d+px/.test(calIco[2])) {
+    ok(/\.sc-map-pin\s+\.sc-map-pin-ico\{/.test(css),
+       ".cal-ico sizes itself, so the pin's rule must carry two classes to win");
+  }
+
   // /!\ ONE icon resolver across both surfaces. A finder result and the calendar
   // row for the same shop night are the same event seen from two pages.
   ok(/const scSeriesIcon = \(row\) => calendarEventIcon\(/.test(src),
