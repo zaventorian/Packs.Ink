@@ -460,6 +460,119 @@ input[type="checkbox"]:disabled{opacity:0.4;cursor:not-allowed;}
 .theme-toggle--help svg{display:block;}
 .theme-toggle--help.active{background:var(--accent-glow);color:var(--accent);
   border-color:var(--accent);}
+/* ── New-card reveal reel ─────────────────────────────────────────────────
+   A marquee of card ART for everything added to the catalog in the last 96h
+   (see revealRotation). Two mounts, CSS-gated so exactly one is ever live:
+   `--nav` rides the empty middle of the top nav on desktop, `--panel` is the
+   home-rail copy for narrow widths, where the nav is a two-row scroller with
+   no slack and a documented width budget it must not blow.
+   ⚠ NO mask-image anywhere in here. A mask on a container forces offscreen
+   compositing and visibly softens child <img>s — and this component is
+   nothing BUT images, at a size where that shows. The edge fades are
+   absolutely-positioned gradient pseudo-elements instead, which is the
+   documented alternative. They paint --bg-solid, never --bg: four themes hold
+   a gradient in --bg, which is not a valid colour stop. */
+.reveal-strip{display:none;}
+.reveal-head{flex:0 0 auto;display:flex;flex-direction:column;gap:1px;
+  text-decoration:none;color:inherit;min-width:0;}
+.reveal-kicker{display:inline-flex;align-items:center;gap:3px;
+  font-family:'Cinzel',serif;font-size:9px;font-weight:700;letter-spacing:0.6px;
+  text-transform:uppercase;color:var(--accent);white-space:nowrap;}
+.reveal-title{font-family:'Cinzel',serif;font-size:12px;font-weight:700;
+  line-height:1.15;color:var(--text);}
+.reveal-count{font-size:9.5px;color:var(--text-muted);white-space:nowrap;}
+.reveal-head:hover .reveal-title{color:var(--accent);}
+/* ⚠ No `flex` here on purpose. The two variants lay out on DIFFERENT axes —
+   the nav strip is a flex ROW (so flex sizes the window's width) and the panel
+   is a flex COLUMN (where the same declaration sizes its HEIGHT). A shared
+   `flex:1 1 0` collapsed the panel copy to a 62px box with 96px cards
+   overflowing it, clipped by the overflow:hidden below. Each variant declares
+   its own sizing. */
+.reveal-window{position:relative;min-width:0;overflow:hidden;}
+.reveal-window::before,.reveal-window::after{content:"";position:absolute;
+  top:0;bottom:0;width:20px;pointer-events:none;z-index:1;}
+.reveal-window::before{left:0;background:linear-gradient(90deg,var(--bg-solid),transparent);}
+.reveal-window::after{right:0;background:linear-gradient(270deg,var(--bg-solid),transparent);}
+/* ⚠ The gap between cards is a MARGIN, never the track's `gap`. The track
+   holds exactly two copies and the animation travels -50%, so half the track
+   has to equal one copy EXACTLY. With `gap` it doesn't: the track carries
+   (2n-1) gaps, so -50% lands half a gap out and the reel visibly jumps every
+   loop. With a trailing margin per card each copy is n*(card+gap) and the two
+   halves are identical. Do not "tidy" this into a gap. */
+.reveal-track{display:flex;width:max-content;will-change:transform;
+  animation:reveal-scroll linear infinite;}
+@keyframes reveal-scroll{from{transform:translateX(0);}to{transform:translateX(-50%);}}
+/* Pause while a pointer is over the reel or a card holds keyboard focus —
+   otherwise the card you are reaching for walks out from under the cursor. */
+.reveal-strip:hover .reveal-track,
+.reveal-strip:focus-within .reveal-track{animation-play-state:paused;}
+/* The global `button` rule paints border/background/radius/padding, so a
+   control meant to read as bare art has to unset all four. */
+.reveal-card{flex:0 0 auto;display:block;height:var(--reveal-card-h);
+  margin:0 var(--reveal-gap) 0 0;padding:0;border:none;background:transparent;
+  border-radius:5px;overflow:hidden;cursor:pointer;line-height:0;
+  transition:transform 0.12s,box-shadow 0.12s;}
+.reveal-card img{height:100%;width:auto;display:block;}
+.reveal-card:hover,.reveal-card:focus-visible{transform:translateY(-2px);
+  box-shadow:0 3px 10px rgba(0,0,0,0.35);}
+/* ⚠ `.reveal-card` sets display:block, which OUT-SPECIFIES the UA's
+   [hidden]{display:none} — so without this a card whose art 404s leaves a
+   blank clickable slot in the reel rather than disappearing. */
+.reveal-card[hidden]{display:none;}
+@media (prefers-reduced-motion:reduce){
+  /* A marquee that never stops is the exact thing this setting is for. Drop to
+     a plain horizontal scroller — and hide the duplicate copy, which only
+     exists to make motion loop and reads as the reel stuttering when still. */
+  .reveal-track{animation:none;}
+  .reveal-window{overflow-x:auto;}
+  .reveal-card--dup{display:none;}
+}
+/* Desktop: in the nav. Sized so the reel NEVER makes the nav taller. The tab
+   grid is what sets that height (measured: 99.2px at the shipped chip sizing),
+   so anything under it is free — an 88px card leaves 11px of headroom and the
+   bar stays byte-identical in height with the reel present or absent. ⚠ Raising
+   this past the tab grid's own height starts pushing the whole header down,
+   which moves every sticky offset and safe-area calc pinned to it. */
+@media (min-width:1101px){
+  .reveal-strip--nav{display:flex;align-items:center;gap:12px;
+    flex:1 1 0;min-width:0;--reveal-card-h:88px;--reveal-gap:7px;}
+  /* The head gives way before the reel does. A signed-in user with a long
+     display name widens the right cluster (which never shrinks), and the only
+     slack left is this strip — so let the head compress and ellipse rather
+     than let the strip overflow and put a scrollbar on the whole page. */
+  .reveal-strip--nav .reveal-head{max-width:190px;flex:0 1 auto;min-width:0;}
+  .reveal-strip--nav .reveal-title,
+  .reveal-strip--nav .reveal-kicker{overflow:hidden;text-overflow:ellipsis;}
+  /* Row direction: this sizes the window's WIDTH — it takes whatever the head
+     leaves, which is the whole point of putting the reel in the nav's slack. */
+  .reveal-strip--nav .reveal-window{flex:1 1 0;}
+  /* `.tabs` is flex:1 1 auto, so normally IT absorbs the slack and pushes the
+     right cluster to the edge. Hand that job to the reel only while the reel
+     is actually mounted — :has() scopes it, so a quiet week (no reveals in 96h)
+     leaves the nav's geometry byte-identical to what it was before this.
+     ⚠ 0 0, not 0 1: the tab rows are flex-wrap:nowrap, so letting `.tabs`
+     shrink would compress the chips rather than reflow them. Navigation must
+     never pay for a flourish — the reel absorbs every squeeze instead. */
+  .top-nav:has(.reveal-strip--nav) .tabs{flex:0 0 auto;}
+}
+/* Narrow: the home-rail copy. Smaller cards, title above the reel rather than
+   beside it — a 240–360px rail has no room for a side-by-side head. */
+@media (max-width:1100px){
+  .reveal-strip--panel{display:flex;flex-direction:column;gap:7px;
+    --reveal-card-h:96px;--reveal-gap:6px;
+    background:var(--bg-surface);border:1px solid var(--border);
+    border-radius:10px;padding:10px 0 10px 10px;}
+  .reveal-strip--panel .reveal-head{flex-direction:row;align-items:baseline;
+    gap:6px;flex-wrap:wrap;padding-right:10px;}
+  .reveal-strip--panel .reveal-title{font-size:13px;}
+  /* Column direction: the window must take its height from the cards, not from
+     a flex basis — see the note on .reveal-window. */
+  .reveal-strip--panel .reveal-window{flex:0 0 auto;width:100%;
+    height:var(--reveal-card-h);}
+  /* The reel starts flush with the panel's own left padding, so there is no
+     card under a left fade — only the right edge needs one. */
+  .reveal-strip--panel .reveal-window::before{display:none;}
+}
 .top-nav-right{flex-shrink:0;display:flex;flex-direction:column;
   align-items:flex-end;gap:4px;}
 /* Bubbles row needs an explicit horizontal flex on desktop too — without

@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=471">
+<link rel="stylesheet" href="styles.css?v=472">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -576,7 +576,7 @@ const deckVersionsUnavailable = (err) => {
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v57";  // v57: promo-set rework — SUPPRESSED_CARD_IDS, one placeholder row per unpriced P4/PD1 card, the P3 #63 "Japanese Exclusive" label, and the cards-count freshness probe (a v56 record has no cardCount). (v56: Coconut Beta 2 — The Vine - Towering Stalk is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v55: Elsa - Exploring the Unknown 59/P3 (JA) moved to JAPAN_ONLY_NONFOIL, so its img_* now point at the JP scan — the English frame is baked into cached rows and a replay would keep showing it for 24h. v54: Coconut Beta 1.1 — Stitch/Mufasa/Donald Duck/Robin Hood ability text + their re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording searchable for 24h. v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. v52: Coconut leader merge/suppress.)
+const CACHE_KEY = "packsink:catalog:v58";  // v58: rows carry `added_at` (cards.inserted_at) for the new-card reveal reel — a replayed v57 record has no such field, so every card reads as "not new" and the reel stays dark for 24h on exactly the sessions a reveal wave is meant to reach. (v57: promo-set rework — SUPPRESSED_CARD_IDS, one placeholder row per unpriced P4/PD1 card, the P3 #63 "Japanese Exclusive" label, and the cards-count freshness probe (a v56 record has no cardCount). (v56: Coconut Beta 2 — The Vine - Towering Stalk is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v55: Elsa - Exploring the Unknown 59/P3 (JA) moved to JAPAN_ONLY_NONFOIL, so its img_* now point at the JP scan — the English frame is baked into cached rows and a replay would keep showing it for 24h. v54: Coconut Beta 1.1 — Stitch/Mufasa/Donald Duck/Robin Hood ability text + their re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording searchable for 24h. v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. v52: Coconut leader merge/suppress.)
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -3946,6 +3946,12 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
     // cards have this as null; the few that need it are listed in
     // VARIANT_LABELS_BY_CARD_ID at the top of the file.
     "variant_label": VARIANT_LABELS_BY_CARD_ID[c.id] || null,
+    // When WE first saw this card (cards.inserted_at) — the reveal reel's only
+    // input. Null on every SYNTHETIC row (Coconut leaders, CUSTOM_VARIANTS, the
+    // prestaged promos), which is correct: those are minted in this file rather
+    // than inserted, so they have no "added to the database" moment and must
+    // not announce themselves as one. revealRotation drops a null outright.
+    "added_at": c.inserted_at || null,
   });
 
   // Drop the `tcgplayer_product_id is not null` filter at fetch time too so
@@ -24931,6 +24937,90 @@ const GRADED_OWNED_SORTS = {
 // foil badge is never shown for them — it's reserved for the foil copy of a
 // normal card that exists in both Normal and Cold Foil.
 const GRADED_CHASE_RARITIES = new Set(["Epic","Enchanted","Iconic","Promo"]);
+
+// Does an owned graded row wear a "Foil" tag? Only the foil copy of a mainline
+// booster card, which is the one place a Normal / Cold Foil duality exists —
+// a chase rarity or a promo is single-printing, so the word would distinguish
+// nothing. One accessor, because the grid and the export must agree about
+// what a card is called; a copied list that says Foil where the screen does
+// not is a list nobody can check against the screen they copied it from.
+const gradedOwnedIsFoil = (e) => !GRADED_CHASE_RARITIES.has(e.rarity)
+  && e.printing !== "Normal" && MAINLINE_SETS.includes(e.set);
+
+// ⚠ THE WHOLE POINT OF THIS EXPORT IS THAT IT CARRIES NO PRICE. It exists
+// because a collector sending someone "here is what I have in hand" does not
+// want to imply an asking price for any of it — so a dollar figure leaking in
+// does not make the file untidy, it makes it the wrong file. The defence is
+// structural rather than a rule somebody has to remember: `gradedExportRow`
+// projects an owned entry onto a NAMED, closed set of fields, and
+// `buildGradedExportText` / `buildGradedExportCsv` are pure functions of those
+// rows. Neither serializer is ever handed `value`, `lastSold` or `avg5`, so a
+// column added later cannot reach a price without someone widening this
+// projection on purpose. Guarded by `node scripts/test_graded_export.mjs`.
+const gradedExportRow = (e) => ({
+  name:    e.sub ? `${e.name} - ${e.sub}` : e.name,
+  set:     e.set || "",
+  // The printed collector number ("115/204"), not the sort key — this is a
+  // list someone reads against the cards in their hands.
+  number:  (e.meta && e.meta.Number) || "",
+  rarity:  e.rarity || "",
+  grader:  (e.grader || "").toUpperCase(),
+  grade:   e.grade == null ? "" : String(e.grade),
+  qty:     Number(e.qty) || 1,
+  // The raw printing string, for the CSV only — see below.
+  printing: e.printing || "",
+  foil:    gradedOwnedIsFoil(e),
+});
+
+// The human list: what you paste into a DM. It mirrors the SCREEN — same
+// order, same per-set grouping, same Foil wording — because the one check
+// available to whoever pastes it is holding it up against the grid they
+// copied it from.
+function buildGradedExportText(buckets){
+  const lines = [];
+  let cards = 0, copies = 0;
+  for(const b of buckets){ for(const r of b.rows){ cards++; copies += r.qty; } }
+  if(!cards) return null;
+  lines.push(`Graded Lorcana — ${cards} card${cards===1?"":"s"}` + (copies !== cards ? ` (${copies} copies)` : ""));
+  for(const b of buckets){
+    if(!b.rows.length) continue;
+    lines.push("");
+    if(b.label) lines.push(b.label);
+    for(const r of b.rows){
+      const bits = [];
+      if(r.number) bits.push(r.number);
+      if(r.rarity) bits.push(r.rarity);
+      if(r.foil)   bits.push("Foil");
+      const tier = [r.grader, r.grade].filter(Boolean).join(" ");
+      if(tier) bits.push(tier);
+      lines.push(`- ${r.name}${bits.length ? " · " + bits.join(" · ") : ""}${r.qty > 1 ? ` ×${r.qty}` : ""}`);
+    }
+  }
+  return lines.join("
+");
+}
+
+// The machine-readable list: a spreadsheet, an insurance schedule, a grading
+// submission. It carries the raw `printing` rather than the screen's Foil tag
+// — a column can afford to be complete where a sentence has to be readable —
+// and, like the text, no price of any kind.
+function buildGradedExportCsv(buckets){
+  const rows = [];
+  for(const b of buckets) for(const r of b.rows) rows.push(r);
+  if(!rows.length) return null;
+  const esc = (v) => {
+    const t = String(v == null ? "" : v);
+    return /[",
+]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+  };
+  const lines = ["Qty,Name,Set,Card Number,Rarity,Printing,Grader,Grade"];
+  for(const r of rows){
+    lines.push([r.qty, esc(r.name), esc(r.set), esc(r.number), esc(r.rarity), esc(r.printing), esc(r.grader), esc(r.grade)].join(","));
+  }
+  return lines.join("
+");
+}
+
 const GradedOwnedGrid = ({items, cardById, priceByKey, splitTiers, raw, theme, onOpen, basis}) => {
   const gradedPremium = useContext(GradedPremiumContext);
   // All sort + filter selections persist to localStorage so the view is the
@@ -38413,6 +38503,16 @@ const HOME_PANELS = [
   // stored column that is still a valid column name and the new default would
   // otherwise never reach anyone who has loaded the site.
   {key:"calendar",    label:"Lorcana Calendar",     col:"right"},
+  // The reveal reel's NARROW mount, and it sits here — between the calendar and
+  // the collection chart — because that is where Zaven asked for it: on a phone
+  // every column stacks into one list, and this is the point in that list where
+  // "what is coming" has just been read and "what do I own" has not yet started.
+  // It renders ONLY under 1100px (styles.css switches the copies over); above
+  // that the reel is in the nav, and showing both would be the same marquee
+  // twice on one screen. It is a real panel rather than a fixed one so it can be
+  // moved and hidden like any other — an always-on marquee somebody cannot turn
+  // off is the thing that makes a page feel like an advert.
+  {key:"reveals",     label:"New card reveals",     col:"right"},
   // There was a "Gear" panel here, an accessories list in the right rail.
   // Removed 2026-09-12 (Zaven): once the "Lorcana on Amazon" row shipped it was
   // a second Amazon prompt on the same page, and the row already reaches the
@@ -38469,7 +38569,7 @@ const HOME_PANEL_LABELS = Object.fromEntries(HOME_PANELS.map(p => [p.key, p.labe
 // every width instead of only above 1100px.
 // ⚠ Keep this on ONE line — scripts/test_share_links.mjs extracts it with a
 // single-line grab, and splitting it truncated the const to a syntax error.
-const HOME_POPOUT_KEYS = new Set(HOME_PANEL_KEYS.filter(k => k !== "calendar" && !HOME_FIXED_KEYS.has(k)));
+const HOME_POPOUT_KEYS = new Set(HOME_PANEL_KEYS.filter(k => k !== "calendar" && k !== "reveals" && !HOME_FIXED_KEYS.has(k)));
 // Panels whose title goes to their own section at EVERY width, because the
 // pop-out would show the same thing the panel already shows.
 const HOME_ALWAYS_SECTION = new Set(["calendar"]);
@@ -38523,6 +38623,13 @@ const HOME_LAYOUT_CALENDAR_KEY = "packsink:homeLayoutCalendarRail";
 // alone. Stamped rather than coerced, so a re-pick afterwards sticks.
 const HOME_LAYOUT_RAIL_SWAP_KEY = "packsink:homeLayoutRailSwap";
 const HOME_RAIL_SWAP_TO_LEFT = ["tools", "setEv"];
+// One-shot stamp for the reveal reel's home panel. Same reason as every stamp
+// above it: normalizeHomeLayout APPENDS a key it has never seen, so a new panel
+// lands at the FOOT of its column for every browser that has ever loaded the
+// site — and the foot of the right rail is below the collection chart, which is
+// the one place it was specifically asked not to be. Seat it directly after the
+// calendar. Stamped rather than coerced, so moving it afterwards sticks.
+const HOME_LAYOUT_REVEALS_KEY = "packsink:homeLayoutReveals";
 // Movers-banner ordering (edit mode ▲▼). null = the built-in order, where
 // the newest-set banner floats top during release week and bottom after; a
 // stored order is explicit and retires that heuristic.
@@ -47009,6 +47116,9 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // note in the coconut build) hides the tile instead of linking to an empty
   // filtered page. Ravensburger adds beta cards weekly, so the count is derived,
   // never hardcoded.
+  // The narrow-width reveal reel — see the `reveals` case in panelNode.
+  const revealHomeCards = useMemo(() => revealRotation(raw, Date.now()), [raw]);
+  const revealHomeSet = useMemo(() => revealSetLabel(revealHomeCards), [revealHomeCards]);
   const coconutIds = useMemo(() => {
     const ids = new Set();
     for(const r of (raw || [])){ if(r.isCoconut && r.card_id) ids.add(r.card_id); }
@@ -47268,6 +47378,15 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       case "calendar":   return html`<${CalendarPanel} key="calendar" user=${user}
         panelNav=${panelTitleNav} onFindEvents=${openEventFinder} finderOpen=${finderOpen}
         sealedPrices=${sealedPrices}/>`;
+      // Narrow-width copy of the nav reel. Computed from `raw` right here
+      // rather than drilled down from App: both call the same pure
+      // revealRotation over the same catalog, so the two mounts cannot
+      // disagree about what "new" means, and HomeView's props list is long
+      // enough already.
+      case "reveals":    return revealHomeCards.length === 0 ? null
+        : html`<${RevealStrip} key="reveals" variant="panel" cards=${revealHomeCards}
+            setLabel=${revealHomeSet} onOpen=${openEnlargedCard}
+            onOpenSet=${(s) => openCardsFilteredBySet && openCardsFilteredBySet(s || undefined)}/>`;
       case "setEv":      return html`<${HomeEvStrip} key="setEv" sets=${sets} avgs=${avgs}
         sealedPrices=${sealedPrices} setsMeta=${setsMeta} panelNav=${panelTitleNav}/>`;
       case "collection": return html`<${CollectionPanel} key="collection" raw=${raw} user=${user}
@@ -48008,6 +48127,138 @@ const coconutFreshCards = (nowMs) => {
       return Number.isFinite(t) && t <= nowMs && t >= cutoff;
     })
     .sort((a, b) => (a.revealed === b.revealed ? a.cn - b.cn : (a.revealed < b.revealed ? 1 : -1)));
+};
+
+// ── New-card reveal reel ─────────────────────────────────────────────────────
+// Spoiler season: Lorcast indexes a set in WAVES over several weeks, and
+// `cards.inserted_at` is the day WE first saw each card. It is a true "first
+// added" and not a last-touched stamp, which is the whole reason this works
+// with no curation: the daily Lorcast load upserts every card every day, but
+// PostgREST only writes the columns it SENDS and `inserted_at` is never in the
+// payload, while the `cards_updated_at` trigger touches `updated_at` alone.
+//
+// So a card is news for REVEAL_WINDOW_HOURS after it lands and then rotates out
+// by itself. No end-date to remember, no list to maintain: the reel goes quiet
+// between sets and lights up again on the next wave with no edit. That is the
+// opposite of COCONUT_CARDS above, whose `revealed` dates are hand-authored —
+// right for 25 beta cards nobody else publishes, wrong for a 204-card set.
+//
+// ⚠ Deliberately NOT scoped to one set, and that is what makes it match the
+// ask ("Hyperia City and its relevant promos and stuff too"). Measured against
+// the live catalog 2026-09-22, the 96h window held 61 cards: 38 Hyperia City
+// plus 23 promos across Promo Set 3/4, PD1 and Magical Places. A `Set ===
+// newsSet` filter would have thrown all 23 away, and they are the same reveal.
+// The WINDOW is what keeps it honest — a bulk backfill is rare and self-clears
+// in four days, where a bad set filter is wrong every day until someone edits it.
+const REVEAL_WINDOW_HOURS = 96;
+// The reel renders every card TWICE — that duplication is what makes the
+// marquee loop seamless — so this is half the DOM cost, and each entry is a
+// network image. A whole set landing at once is 204 cards; past this the strip
+// stops being a glance and becomes a page of images loading inside the nav bar.
+const REVEAL_MAX_CARDS = 36;
+// Extras & Oddities is a curation bucket we backfill BY HAND (see EXTRAS_MAP) —
+// a row landing there is us catching up on an old printing, never a reveal.
+const REVEAL_EXCLUDED_SETS = new Set([EXTRAS_SET_NAME]);
+
+// One entry per card_id — a card's Normal and Foil rows are ONE reveal, not
+// two — newest first, then by collector number so a single wave reads in
+// printed order rather than in whatever order the fetch returned.
+// ⚠ Rows with no art are dropped outright: this reel is nothing BUT art, so a
+// card that cannot render one has nothing to contribute and an empty slot in a
+// marquee reads as a broken image rather than as a card we are missing.
+const revealRotation = (rows, nowMs) => {
+  const cutoff = nowMs - REVEAL_WINDOW_HOURS * 36e5;
+  const best = new Map();
+  for(const r of (rows || [])){
+    if(!r || !r.card_id || !r.added_at) continue;
+    if(REVEAL_EXCLUDED_SETS.has(r.Set)) continue;
+    const t = Date.parse(r.added_at);
+    // ⚠ A stamp in the FUTURE is clock skew or a bad backfill, never a reveal.
+    // Trusting it would pin that card to the head of the reel permanently,
+    // because it can never fall out of a window whose end keeps moving toward
+    // it. Same rule coconutFreshCards applies to a typo'd `revealed` year.
+    if(!Number.isFinite(t) || t > nowMs || t < cutoff) continue;
+    const art = r.img_normal || r.img_large || r.img_small || null;
+    const prev = best.get(r.card_id);
+    // Keep the first printing that has art; only upgrade a no-art entry.
+    if(prev && (prev.art || !art)) continue;
+    const num = parseInt(r.Number, 10);
+    best.set(r.card_id, {card_id: r.card_id, t, art, row: r,
+      name: r["Product Name"] || "", set: r.Set || "",
+      num: Number.isFinite(num) ? num : Number.MAX_SAFE_INTEGER});
+  }
+  return [...best.values()]
+    .filter(c => c.art)
+    .sort((a, b) => (b.t - a.t) || (a.num - b.num)
+      || String(a.name).localeCompare(String(b.name)))
+    .slice(0, REVEAL_MAX_CARDS);
+};
+
+// The headline names the set that DOMINATES the reel — in spoiler season that
+// is the set being spoiled, and the promos riding along are not what a reader
+// is being told about. A genuine split (nothing over half) says nothing
+// specific rather than picking a winner out of a near-tie and being wrong.
+const revealSetLabel = (cards) => {
+  const n = new Map();
+  for(const c of (cards || [])) if(c.set) n.set(c.set, (n.get(c.set) || 0) + 1);
+  let top = null, topN = 0;
+  for(const [s, k] of n){ if(k > topN){ top = s; topN = k; } }
+  return (top && topN * 2 > (cards || []).length) ? top : null;
+};
+// Seconds of travel per card. The reel's job is "something landed, go look" —
+// fast enough to read as alive, slow enough that a card you want to click is
+// still there when your hand gets to it.
+const REVEAL_SECS_PER_CARD = 2.4;
+
+// The reel itself. Art ONLY — no name, no price, no rarity: this answers "what
+// just got revealed", and the card face already says everything a spoiler
+// reader wants. Clicking one opens the shared enlarged-card overlay rather than
+// the full detail modal, for the same reason (nothing on that modal is
+// meaningful for a card with no pids and no prices yet).
+const RevealStrip = ({cards, variant, setLabel, onOpen, onOpenSet}) => {
+  if(!cards || !cards.length) return null;
+  const title = setLabel ? setLabel + " just revealed cards!" : "New cards revealed!";
+  // ⚠ Rendered TWICE, and -50% of the track is therefore exactly one copy —
+  // that equality is what makes the loop seamless, and it needs no measuring,
+  // no ResizeObserver and no rAF (unlike MoversBanner, which needs all three
+  // because its tiles are variable width). Do not add a third copy.
+  const seq = (pass) => cards.map(c => html`<button type="button"
+      key=${pass + ":" + c.card_id}
+      class=${"reveal-card" + (pass === "b" ? " reveal-card--dup" : "")}
+      onClick=${() => onOpen && onOpen(c.row)}
+      title=${c.name} aria-label=${"Enlarge " + c.name}
+      ${/* The second pass is a visual duplicate: a screen reader must not read
+            36 cards twice, and Tab must not walk through a copy of the reel. */""}
+      aria-hidden=${pass === "b" ? "true" : null}
+      tabIndex=${pass === "b" ? -1 : null}>
+      ${/* ⚠ NEVER loading="lazy". A lazy image inside a horizontal scroller can
+            sit at 0px and never trigger its own fetch — the documented failure
+            that rendered the movers picker's set-logo chip as an empty pill —
+            and Chrome defers every lazy image while the tab is hidden. At most
+            REVEAL_MAX_CARDS of them, all in one strip: eager is correct here. */""}
+      <img src=${c.art} alt="" loading="eager" draggable=${false}
+        onError=${e => { const b = e.currentTarget.closest("button"); if(b) b.hidden = true; }}/>
+    </button>`);
+  return html`<div class=${"reveal-strip reveal-strip--" + variant}>
+    <a class="reveal-head" href=${setLabel ? "/cards?set=" + encodeURIComponent(setLabel) : "/cards"}
+      onClick=${navHandler(() => onOpenSet && onOpenSet(setLabel))}
+      title=${title + " — open the Cards tab"}>
+      <span class="reveal-kicker">${uiIcon("sparkle", 12)} Just revealed</span>
+      <span class="reveal-title">${title}</span>
+      ${/* ⚠ Deliberately NOT a count. The reel is capped at REVEAL_MAX_CARDS, so
+            the honest number here is the number SHOWN — and on the day this
+            shipped that was "36" sitting a few inches from the news tile's
+            "38 cards revealed!", two different figures for what a reader takes
+            to be one thing. The tile owns the count (it counts the SET, which
+            is the number anyone means); the reel owns the pictures. */""}
+      <span class="reveal-count">See them →</span>
+    </a>
+    <div class="reveal-window">
+      <div class="reveal-track" style=${{animationDuration: (cards.length * REVEAL_SECS_PER_CARD) + "s"}}>
+        ${seq("a")}${seq("b")}
+      </div>
+    </div>
+  </div>`;
 };
 // Ravensburger rebalances a leader by re-rendering it IN PLACE — the art keeps
 // its collector number and the footer stamp goes "[Format Coconut] • Beta" ->
@@ -54551,6 +54802,16 @@ function App(){
     setView("decks");
     setTabClickNonce(n => n + 1);
   }, []);
+  // Cards added to the catalog in the last REVEAL_WINDOW_HOURS — the reveal
+  // reel's contents, shared by the nav strip (desktop) and the home panel
+  // (narrow), so the two can never disagree about what "new" means.
+  // ⚠ `Date.now()` is read at memo time rather than tracked on a timer: the
+  // window is four days and a card silently rotating out mid-session is not
+  // worth an interval re-rendering the whole nav. `raw` changes on every
+  // refresh, including the visibilitychange re-probe when a backgrounded tab
+  // comes back, which is the moment a long session picks up a new wave anyway.
+  const revealCards = useMemo(() => revealRotation(raw, Date.now()), [raw]);
+  const revealSet = useMemo(() => revealSetLabel(revealCards), [revealCards]);
   // Home section header → respective view shortcuts. Each just nudges the
   // top-level view (and a sub-section where the destination has tabs);
   // the URL sync effect handles pushState.
@@ -55401,7 +55662,8 @@ function App(){
   // any more, so move news to the rail once. Stamped rather than coerced, so a
   // deliberate re-pick of Top afterwards survives the next load.
   const [homeLayout, setHomeLayout] = useState(() => {
-    let fixNews = false, hoistTools = false, onShortcuts = false, hoistCal = false, swapRails = false;
+    let fixNews = false, hoistTools = false, onShortcuts = false, hoistCal = false, swapRails = false,
+        seatReveals = false;
     try {
       fixNews = !localStorage.getItem(HOME_LAYOUT_NEWS_FIX_KEY);
       if(fixNews) localStorage.setItem(HOME_LAYOUT_NEWS_FIX_KEY, "1");
@@ -55413,6 +55675,8 @@ function App(){
       if(hoistCal) localStorage.setItem(HOME_LAYOUT_CALENDAR_KEY, "1");
       swapRails = !localStorage.getItem(HOME_LAYOUT_RAIL_SWAP_KEY);
       if(swapRails) localStorage.setItem(HOME_LAYOUT_RAIL_SWAP_KEY, "1");
+      seatReveals = !localStorage.getItem(HOME_LAYOUT_REVEALS_KEY);
+      if(seatReveals) localStorage.setItem(HOME_LAYOUT_REVEALS_KEY, "1");
     } catch {}
     try {
       const stored = localStorage.getItem(HOME_LAYOUT_KEY);
@@ -55472,6 +55736,21 @@ function App(){
             let last = -1;
             list.forEach((p, idx) => { if(p.col === "left") last = idx; });
             if(last >= 0) list.splice(last + 1, 0, moved); else list.push(moved);
+          }
+        }
+        // The reveal reel was appended at the foot of its column; it belongs
+        // directly after the calendar. ⚠ Runs LAST, after the rail swap above
+        // has settled where the calendar actually is — seating against a
+        // position that is about to move would put the reel in the old rail.
+        // Guarded on the reel still being where the append left it, so a
+        // deliberate re-placement is never overwritten.
+        if(seatReveals){
+          const rev = list.find(p => p.key === "reveals");
+          const cal = list.findIndex(p => p.key === "calendar");
+          if(rev && cal >= 0){
+            list = list.filter(p => p.key !== "reveals");
+            const at = list.findIndex(p => p.key === "calendar");
+            list.splice(at + 1, 0, {...rev, col: list[at].col});
           }
         }
         return list;
@@ -56989,9 +57268,14 @@ function App(){
       } catch(e) {
         console.warn("column probes failed (network); assuming columns exist", e);
       }
+      // `inserted_at` needs no probe like the three above: it is an ORIGINAL
+      // schema.sql column (not added by a later migration), so it is present
+      // wherever `id` and `name` are, and probing for it would buy a wasted
+      // round trip on every cold load. It feeds the reveal reel — see
+      // revealRotation for why it is a trustworthy "first added" stamp.
       const baseCols = hasInksColumn
-        ? "id,set_id,name,version,rarity,ink,inks,collector_number,cost,inkable,card_type,classifications,text,image_small,image_normal,image_large,tcgplayer_product_id"
-        : "id,set_id,name,version,rarity,ink,collector_number,cost,inkable,card_type,classifications,text,image_small,image_normal,image_large,tcgplayer_product_id";
+        ? "id,set_id,name,version,rarity,ink,inks,collector_number,cost,inkable,card_type,classifications,text,image_small,image_normal,image_large,tcgplayer_product_id,inserted_at"
+        : "id,set_id,name,version,rarity,ink,collector_number,cost,inkable,card_type,classifications,text,image_small,image_normal,image_large,tcgplayer_product_id,inserted_at";
       let CARDS_COLS = hasIllustratorsColumn ? baseCols + ",illustrators" : baseCols;
       if(hasTier2Stats) CARDS_COLS += ",strength,willpower,lore,move_cost";
       const SEALED_COLS = "tcgplayer_product_id,set_id,product_type,name,clean_name,low_price,market_price,image_url,tcgplayer_url,printing,price_date";
@@ -57167,6 +57451,18 @@ function App(){
         <div class="tabs-row">${TABS_BOTTOM.map(renderTab)}</div>
         ${err && !bootFailed && html`<span style=${{fontSize:11,color:"var(--red)",marginLeft:8,alignSelf:"center"}}>${err} <button onClick=${()=>loadFromSupabase({force:true})} style=${{fontSize:11,padding:"2px 8px",marginLeft:6}}>retry</button></span>`}
       </div>
+      ${/* The reveal reel rides the empty middle of the nav — the slack between
+            the tab grid and the right cluster, which on a wide desktop is ~900px
+            of nothing. It is DESKTOP ONLY (hidden under 1100px in styles.css):
+            the two-row mobile nav is a horizontal scroller with no slack at all
+            and a documented "do NOT regress" width budget, so below that width
+            the same reel renders as a home panel instead — see the `reveals`
+            entry in HOME_PANELS. `.tabs` gives up its flex-grow to this strip
+            only when the strip is actually present (`.top-nav:has(.reveal-strip)`),
+            so a quiet week leaves the nav byte-identical to before. */""}
+      ${revealCards.length > 0 && html`<${RevealStrip} variant="nav" cards=${revealCards}
+        setLabel=${revealSet} onOpen=${openEnlargedCard}
+        onOpenSet=${(s) => s ? openCardsFilteredBySet(s) : onTabClick("cards")}/>`}
       <div class="top-nav-right">
         <div class="top-nav-right-row top-nav-right-row--primary"
           ref=${settingsRef} style=${{position:"relative",display:"inline-flex",gap:4,alignItems:"center"}}>
