@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=469">
+<link rel="stylesheet" href="styles.css?v=470">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1341,6 +1341,26 @@ const useEscToClose = (onClose) => {
       if(prevFocus && typeof prevFocus.focus === "function"){ try { prevFocus.focus(); } catch(_){} }
     };
   }, []);
+};
+
+// Persist a preference to localStorage, EXCEPT when this visit got its value
+// from a shared link.
+//
+// ⚠ A link's choice of view is not a preference change. Somebody opening a
+// shared map — "here is the set-champs map at my ZIP" — is having a look, not
+// telling us how they like to read the calendar from now on; writing the seeded
+// value through would silently repoint their own default from one click on
+// someone else's URL. Same rule `?cv=` already follows against the month-view
+// stamp: a link may choose FOR you, never OVER you.
+//
+// The seeded value skips only its FIRST write. The moment the reader touches the
+// control themselves it persists exactly as it always did.
+const usePrefWrite = (key, value, seeded) => {
+  const armed = useRef(!seeded);
+  useEffect(() => {
+    if(!armed.current){ armed.current = true; return; }
+    try { localStorage.setItem(key, value); } catch {}
+  }, [key, value]);
 };
 
 // Tooltip visibility — flipped by the user-settings gear in the top bar.
@@ -42819,6 +42839,47 @@ const CAL_MAP_VIEW_H = 480;
 const CAL_MAP_FOCUS_Z = 9, CAL_MAP_FOCUS_MIN = 3, CAL_MAP_FOCUS_MAX = 13;
 const CAL_MAP_SCOPE_LS = "packsink:cal:mapScope";
 const CAL_MAP_KINDS_LS = "packsink:cal:mapKinds";
+// The label a focus wears when no town is behind it — a drag, or a shared link
+// that carried only coordinates. One const because the drag handler and the
+// `?cmap` codec both have to spell it the same way or a dragged map and a link
+// to the same spot read as two different places.
+const CAL_MAP_ANY_LABEL = "this area";
+const CAL_MAP_LABEL_MAX = 48;
+
+// `?cmap=<lat>,<lng>,<zoom>[,<label>]` — where the map is pointed, so a map can
+// be SENT. Without it `?cv=map` only says "open the map", and it opens on the
+// whole season: the one thing the sender was actually showing you is the one
+// thing the link could not carry.
+//
+// ⚠ The LABEL is last on purpose, and the split keeps only the first three
+// fields: a place name contains a comma ("Chicago, IL"), so anything that splits
+// the whole string and takes field 3 truncates every American city to its state.
+//
+// ⚠ Coordinates are the identity and the label is cosmetic. It is never
+// re-resolved on arrival — a second geocode could answer differently and move the
+// recipient's map off the spot the sender chose, which is the entire promise of
+// the link. It is length-capped because it is text off a URL rendering into the
+// toolbar and the empty-state line.
+const calParseMapFocus = (raw) => {
+  const parts = String(raw || "").split(",");
+  if(parts.length < 3) return null;
+  // ⚠ Number("") and Number(null) are both 0, not NaN — Null Island, which this
+  // map has already shipped twice. A blank field is a MISSING field, never 0N 0E.
+  if(!parts[0].trim() || !parts[1].trim() || !parts[2].trim()) return null;
+  const lat = Number(parts[0]), lng = Number(parts[1]), z = Math.round(Number(parts[2]));
+  if(!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(z)) return null;
+  if(lat < -OSM_LAT_MAX || lat > OSM_LAT_MAX || lng < -180 || lng > 180) return null;
+  const label = parts.slice(3).join(",").trim().slice(0, CAL_MAP_LABEL_MAX);
+  return {lat, lng, zoom: Math.min(CAL_MAP_FOCUS_MAX, Math.max(CAL_MAP_FOCUS_MIN, z)),
+          label: label || CAL_MAP_ANY_LABEL};
+};
+// 4dp is ~11m — finer than a map at zoom 13 can show, and it keeps the link short.
+const calMapFocusParam = (f) => {
+  if(!f) return "";
+  const head = [f.lat.toFixed(4), f.lng.toFixed(4), String(f.zoom)];
+  const label = String(f.label || "").trim().slice(0, CAL_MAP_LABEL_MAX);
+  return (label && label !== CAL_MAP_ANY_LABEL ? head.concat([label]) : head).join(",");
+};
 // ⚠ Default flipped list → MONTH 2026-09-21 (Zaven), the same call the home
 // panel took the day before. The mode is persisted on every mount, so a plain
 // default change reaches NOBODY who has ever opened this page — the same trap
@@ -43168,7 +43229,8 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   const seed = useMemo(() => {
     try { const q = new URLSearchParams(location.search);
       return {ck: q.get("ck"), cv: q.get("cv"), cm: q.get("cm"), cr: q.get("cr"),
-              cq: q.get("cq"), cspan: q.get("cspan"), cn: q.get("cn"), cg: q.get("cg")}; }
+              cq: q.get("cq"), cspan: q.get("cspan"), cn: q.get("cn"), cg: q.get("cg"),
+              cmap: q.get("cmap"), cmr: q.get("cmr"), cms: q.get("cms"), cmk: q.get("cmk")}; }
     catch { return {}; }
   }, []);
   const [kinds, setKinds] = useState(() => calReadKindPref(seed.ck));
@@ -43188,28 +43250,44 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   // person who has not followed anything yet — which is everyone, once.
   // Narrowing to your own is the FILTER, which is the way round Zaven asked for.
   const [mapScope, setMapScope] = useState(() => {
+    if(seed.cms) return seed.cms === "mine" ? "mine" : "all";
     try { return localStorage.getItem(CAL_MAP_SCOPE_LS) === "mine" ? "mine" : "all"; } catch { return "all"; }
   });
-  useEffect(() => { try { localStorage.setItem(CAL_MAP_SCOPE_LS, mapScope); } catch {} }, [mapScope]);
-  const [mapFocus, setMapFocus] = useState(null);
+  usePrefWrite(CAL_MAP_SCOPE_LS, mapScope, seed.cms != null);
+  // ⚠ A `?cmap` seed wins over the null default, and that is the ONLY way a
+  // map arrives pointed anywhere: the default is deliberately the whole season,
+  // so a link with no focus is not "no opinion", it is the season view.
+  const [mapFocus, setMapFocus] = useState(() => calParseMapFocus(seed.cmap));
   // ⚠ The finder's OWN saved radius, not a second one. Two radius settings for
   // "near me" is the same trap as two postal-code boxes: they drift, and the
   // person gets different answers on two surfaces for one question.
-  const [mapNearRadius, setMapNearRadius] = useState(() => calNearOrigin().radius);
+  // ⚠ A seeded radius is NOT written to `packsink:scRadius` — it never was
+  // (only the <select>'s own onChange writes), and that is exactly right here:
+  // the sender's 200-mile sweep must not become the reader's saved radius on
+  // every other surface that shares this key.
+  const [mapNearRadius, setMapNearRadius] = useState(() => {
+    const fromUrl = parseInt(seed.cmr, 10);
+    if(Number.isFinite(fromUrl) && fromUrl > 0) return Math.min(500, fromUrl);
+    return calNearOrigin().radius;
+  });
   // ⚠ The RPH kind (Set Champs / Prereleases / Locals) is a DIFFERENT axis from
   // the chips above, which are the calendar's own kinds (sets, products, DLCs,
   // CCQs, my stores). A store event is one row under "My stores" whether it is a
   // Set Championship or a Thursday league night, so narrowing between those
   // three needs its own control — the same three the finder has.
   const [mapStoreKinds, setMapStoreKinds] = useState(() => {
+    // ⚠ scParseKinds, not a second parser — it is the same three keys the finder
+    // filters on, it takes the same aliases a hand-typed link might carry, and an
+    // unparseable value means EVERYTHING rather than nothing. A filter nobody
+    // asked for, silently hiding most of the map, is the worse failure.
+    if(seed.cmk) return scParseKinds(seed.cmk);
     try {
       const raw = (localStorage.getItem(CAL_MAP_KINDS_LS) || "").split(",").filter(Boolean)
         .filter(k => CAL_STORE_KIND_KEYS.includes(k));
       return raw.length ? raw : CAL_STORE_KIND_KEYS.slice();
     } catch { return CAL_STORE_KIND_KEYS.slice(); }
   });
-  useEffect(() => { try { localStorage.setItem(CAL_MAP_KINDS_LS, mapStoreKinds.join(",")); } catch {} },
-    [mapStoreKinds]);
+  usePrefWrite(CAL_MAP_KINDS_LS, mapStoreKinds.join(","), seed.cmk != null);
   const [mapBusy, setMapBusy] = useState(false);
   const [mapErr, setMapErr] = useState(null);
   const mapSeq = useRef(0);
@@ -43309,9 +43387,30 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
       (mode === "list" || mode === "map" || month === calMonthOf(today)) ? url.searchParams.delete("cm") : url.searchParams.set("cm", month);
       near ? url.searchParams.set("cn", "1") : url.searchParams.delete("cn");
       (mode !== "timeline" || group === "packed") ? url.searchParams.delete("cg") : url.searchParams.set("cg", group);
+      // Where the map is pointed, and what it is filtered to — so the address bar
+      // IS the shareable map, and the existing "Copy link to this page" needs no
+      // second control beside it.
+      //
+      // ⚠ Every one of these is written ONLY in map mode and deleted otherwise.
+      // A `cmap` left on the URL after switching to List is a stale anchor that
+      // does nothing where you are and silently repoints the map when you go
+      // back — the same trap `cm` is already guarded against one line above.
+      //
+      // ⚠ Defaults are omitted, so an ordinary "here is the season" map link
+      // stays `/calendar?cv=map` and the filters only show up when somebody set
+      // them. Radius rides only when it can matter: a "Just mine" map does not
+      // run the nearby query at all.
+      const onMap = mode === "map";
+      (onMap && mapFocus) ? url.searchParams.set("cmap", calMapFocusParam(mapFocus)) : url.searchParams.delete("cmap");
+      (onMap && mapScope === "mine") ? url.searchParams.set("cms", "mine") : url.searchParams.delete("cms");
+      (onMap && mapStoreKinds.length && mapStoreKinds.length < CAL_STORE_KIND_KEYS.length)
+        ? url.searchParams.set("cmk", mapStoreKinds.join(",")) : url.searchParams.delete("cmk");
+      (onMap && mapFocus && mapScope === "all")
+        ? url.searchParams.set("cmr", String(mapNearRadius)) : url.searchParams.delete("cmr");
       if(url.toString() !== location.href) history.replaceState(history.state, "", url.toString());
     } catch {}
-  }, [kinds, mode, month, region, today, query, span, near, group]);
+  }, [kinds, mode, month, region, today, query, span, near, group,
+      mapFocus, mapScope, mapStoreKinds, mapNearRadius]);
 
   const hidden = useMemo(() => calendarHiddenSet(subs.subs), [subs.subs]);
   const savedIds = useMemo(() => new Set(subs.subs.filter(x => x.kind === "event").map(x => String(x.ref))),
@@ -43762,7 +43861,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           <${EventMapView} events=${mapRows} height=${CAL_MAP_VIEW_H} fit=${CAL_MAP_FIT} focus=${mapFocus}
             onPan=${(c) => setMapFocus(f => ({lat: c.lat, lng: c.lng,
               zoom: (f && f.zoom) || c.zoom || CAL_MAP_FOCUS_Z,
-              label: (f && f.label) || "this area"}))}
+              label: (f && f.label) || CAL_MAP_ANY_LABEL}))}
             dateOf=${(e) => calShortDay(e && e.starts_on)}
             labelOf=${(e) => calEventTitle(e)}
             subLabelOf=${(e) => [calDayLabel(e && e.starts_on), e && e.location].filter(Boolean).join(" · ")}
@@ -44269,13 +44368,13 @@ const scDateChipLabel = (ymd) => {
 // Captured at module load (before any App URL-cleanup effect): did this visit
 // arrive on an event deep link? Forces the box to render even when the user has
 // hidden the home panel — otherwise shared links dead-end.
-const SC_DEEP_PARAMS = ["sczip","scc","scdist","scdate","scmode"];
+const SC_DEEP_PARAMS = ["sczip","scc","scdist","scdate","scmode","scview"];
 let SC_DEEP_SEED = (() => {
   try {
     const p = new URLSearchParams(window.location.search);
     if(!SC_DEEP_PARAMS.some(k => p.has(k))) return null;
     return {zip: p.get("sczip"), ctry: p.get("scc"), dist: p.get("scdist"),
-            date: p.get("scdate"), mode: p.get("scmode")};
+            date: p.get("scdate"), mode: p.get("scmode"), view: p.get("scview")};
   } catch { return null; }
 })();
 const SC_DEEP_LINKED = !!SC_DEEP_SEED;
@@ -44413,6 +44512,10 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   // Pins are intentionally NOT in the URL — they're a personal per-device pref.
   const [scSeed] = useState(() => SC_DEEP_SEED || {});
   const pZip = scSeed.zip, pCtry = scSeed.ctry, pDist = scSeed.dist, pDate = scSeed.date, pMode = scSeed.mode;
+  // ⚠ Only "map" and "list" mean anything; anything else is ignored rather
+  // than guessed at, so a mangled link lands on the reader's own preference
+  // instead of a view nobody picked.
+  const pView = scSeed.view === "map" || scSeed.view === "list" ? scSeed.view : null;
   // Which event kinds the box shows — any subset of Set Championships,
   // prereleases and locals (league nights, drafts, everything else RPH lists).
   // All three come from the SAME table (lorcana_events), so the selection is a
@@ -44439,15 +44542,22 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [sel, setSel] = useState(null);            // {series, occ} — one date of one series
-  // List or map. Persisted per browser like the other finder preferences, and
-  // NOT in the shareable ?sc… params: which way you prefer to read results is
-  // yours, where the results ARE is what a link is for.
+  // List or map. Persisted per browser, AND carried by ?scview, so a shared link
+  // arrives as the thing the sender was looking at.
+  //
+  // ⚠ This REVERSES an earlier call here ("which way you prefer to read results
+  // is yours") and the reason is Zaven's: "if i want to share a map at a zipcode
+  // for set champs so someone else can see". A map is not a rendering preference
+  // laid over a list — at a glance it answers "which of these is worth the
+  // drive", which is the whole reason to send one, and a link that lands the
+  // recipient on a list has not shared the map at all.
+  //
+  // ⚠ A SEEDED value does not persist — see usePrefWrite.
   const [mapOn, setMapOn] = useState(() => {
+    if(pView) return pView === "map";
     try { return localStorage.getItem("packsink:scMap") === "1"; } catch { return false; }
   });
-  useEffect(() => {
-    try { localStorage.setItem("packsink:scMap", mapOn ? "1" : "0"); } catch {}
-  }, [mapOn]);
+  usePrefWrite("packsink:scMap", mapOn ? "1" : "0", !!pView);
   // Scouting from the finder: same panel as the Elo tab and the calendar.
   const canScoutBox = useContext(ScoutContext);
   const [scoutEv, setScoutEv] = useState(null);
@@ -44678,13 +44788,19 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
     // "everything, no date filter", so an ordinary link stays short.
     if(!isAll) u.searchParams.set("scmode", kinds.join(","));
     if(dateActive) u.searchParams.set("scdate", dates.join(","));
+    // ⚠ Which VIEW, because a map is the thing being shared — not a preference
+    // laid over it. Omitted for the list, which is the default either way, so an
+    // ordinary link stays as short as it has always been.
+    if(mapOn) u.searchParams.set("scview", "map");
     return u.toString();
   };
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(buildShareUrl());
       setCopied(true); setTimeout(() => setCopied(false), 1600);
-      flashToast("Link copied — opens this view (ZIP, distance, date).");
+      flashToast(mapOn
+        ? "Map link copied — opens this map (ZIP, distance, kinds, date)."
+        : "Link copied — opens this view (ZIP, distance, date).");
     } catch { flashToast("Couldn't copy the link."); }
   };
 
@@ -44708,10 +44824,17 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
         <span class="sc-title-expand-hint" aria-hidden="true">${expanded?"✕":"⤢"}</span>
       </button>
       <div class="sc-box-head-actions">
+        ${/* ⚠ It names the MAP when the map is what is on screen. The link
+             carries the view now, so a button still saying "Copy link" beside a
+             map leaves the one person who wants to send it guessing whether it
+             will arrive as one. */""}
         ${!inTile && html`<button class="sc-copy-link" type="button" onClick=${copyLink}
           disabled=${!scZipReady(zip)}
-          title="Copy a link that reopens this view (place, distance, date)">
-          ${copied ? html`${uiIcon("check")} Copied` : html`${uiIcon("link")} Copy link`}
+          title=${mapHere
+            ? "Copy a link that reopens this MAP (place, distance, kinds, date)"
+            : "Copy a link that reopens this view (place, distance, date)"}>
+          ${copied ? html`${uiIcon("check")} Copied`
+            : html`${uiIcon("link")} Copy ${mapHere ? "map " : ""}link`}
         </button>`}
         ${expanded
           ? html`<button class="sc-collapse-btn" type="button" onClick=${closeExpanded}
@@ -45239,8 +45362,36 @@ const useHomePoll = (user) => {
 const HomePollBox = ({state, user, onSignIn}) => {
   const {poll, pick, setPick, busy, vote} = state;
   if(!poll) return null;
+  // A CLOSED poll (migration 167: winner is set) stops asking and starts
+  // answering. Results go public at that point — while it is live they are
+  // shown only to voters, so the standings can't steer later votes, but once a
+  // winner is announced hiding the split from everyone else says less than
+  // nothing. `winner == null` on a pre-167 database, so it renders exactly as
+  // it did before and the client is safe to ship first.
+  const closed = poll.winner != null && poll.options[poll.winner] != null;
   const voted = poll.my_choice != null && Array.isArray(poll.pct);
-  const whole = voted ? pollWholePct(poll.pct) : null;
+  const showPct = Array.isArray(poll.pct) && (voted || closed);
+  const whole = showPct ? pollWholePct(poll.pct) : null;
+  if(closed) return html`<div class="home-poll home-poll--closed" role="group" aria-label="Poll result">
+    <div class="home-poll-kicker">Poll · result</div>
+    <div class="home-poll-q">${poll.question}</div>
+    <div class="home-poll-winner">
+      ${poll.winner_image && html`<img class="home-poll-winner-art" src=${poll.winner_image}
+        alt="" loading="eager" onError=${hideBrokenImg}/>`}
+      <div class="home-poll-winner-text">
+        <div class="home-poll-winner-lbl">Winner</div>
+        <div class="home-poll-winner-name">${poll.options[poll.winner]}</div>
+      </div>
+    </div>
+    ${whole && html`<ul class="home-poll-results">
+      ${poll.options.map((o, i) => html`<li key=${i}
+          class=${"home-poll-res" + (i === poll.winner ? " won" : "") + (i === poll.my_choice ? " mine" : "")}>
+        <span class="home-poll-bar" style=${{width: whole[i] + "%"}}></span>
+        <span class="home-poll-res-name">${i === poll.my_choice ? "✓ " : ""}${o}</span>
+        <span class="home-poll-res-pct">${whole[i]}%</span>
+      </li>`)}
+    </ul>`}
+  </div>`;
   const choose = (i) => {
     if(!user){ flashToast("Sign in to vote"); onSignIn && onSignIn(); return; }
     setPick(i);
@@ -45284,7 +45435,13 @@ const HomePollBox = ({state, user, onSignIn}) => {
 // That shape is what makes it safe to forget about: a box you collapsed in
 // March cannot swallow a set announcement in June. A plain boolean would.
 const NEWS_COLLAPSE_LS = "packsink:home:newsCollapsedSig";
-const NewsFeed = ({variant, tiles, panelNav, poll, sig}) => {
+// `lead` is a single tile that renders ABOVE the poll, where everything else in
+// `tiles` renders below it. It exists because the poll sits at the top of this
+// feed by design (it is the tallest thing here and must stay inside the
+// collapse), so "put this story above the poll" has nowhere else to go. Only
+// the one lead slot: a second thing above the poll would push the poll out of
+// sight on a phone, which is the layout this feed already works hard to avoid.
+const NewsFeed = ({variant, tiles, panelNav, poll, lead, sig}) => {
   // "" = expanded. Anything else is the signature that was live when it was
   // minimised, which doubles as the collapsed flag.
   const [seenSig, setSeenSig] = useState(() => {
@@ -45325,6 +45482,7 @@ const NewsFeed = ({variant, tiles, panelNav, poll, sig}) => {
     ${/* ⚠ The poll sits INSIDE the collapse. It is the tallest thing in this
           box (~200px of the 578 it measured on a phone), so a collapse that
           left it standing would not be a collapse. */""}
+    ${!collapsed && (lead || null)}
     ${!collapsed && (poll || null)}
     <div class="home-feed-head">
       ${titleEl}
@@ -46590,14 +46748,30 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // "News" tile: the newest set while it's still pre-release (reveal season).
   // Counts distinct cards we have live for that set, updating as more arrive,
   // and deep-links to the Cards tab filtered to the set.
-  const newsSet = NEWEST_SET;
+  // ⚠ NOT NEWEST_SET, and that was a silent bug: NEWEST_SET is the newest set
+  // WITH PRICES, which is right for the movers banners (a set with no prices
+  // has no movers) and exactly wrong here. A set in reveal season has no
+  // TCGplayer pids yet, so it has no prices BY DEFINITION — NEWEST_SET
+  // therefore skipped past it to the last released set, which then failed the
+  // PRERELEASE_SETS test. The result was a tile that could never appear during
+  // the one window it exists for: Hyperia City had 29 cards live and the home
+  // page said nothing. Ask the question the tile actually asks — which set is
+  // still pre-release — and the price data stops mattering.
+  const newsSet = useMemo(() => {
+    for(let i = MAINLINE_SETS.length - 1; i >= 0; i--){
+      if(PRERELEASE_SETS.has(MAINLINE_SETS[i])) return MAINLINE_SETS[i];
+    }
+    return null;
+  }, []);
   const newsCount = useMemo(() => {
     if(!newsSet) return 0;
     const ids = new Set();
     for(const r of raw){ if(r.Set === newsSet && r.card_id) ids.add(r.card_id); }
     return ids.size;
   }, [raw, newsSet]);
-  const showNews = newsCount > 0 && PRERELEASE_SETS.has(newsSet);
+  // PRERELEASE_SETS is date-gated, so newsSet is null once the set ships and
+  // this tile retires itself with no edit — the same self-expiry it had before.
+  const showNews = newsCount > 0 && !!newsSet;
 
   // "New Format" tile for the Format Coconut open beta → Cards filtered to the
   // Coconut set. Counted off `raw` rather than COCONUT_CARDS.length so a client
@@ -46629,14 +46803,21 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // beside the Rare–Legendary movers banner — NOT as full-width announce
   // tiles, which ate half a phone screen when two conventions ran at once.
   const newsTiles = [];
-  if(showNews) newsTiles.push(html`<a key="news" class="home-news-tile home-news-clickable"
+  // ⚠ The reveal counter is the LEAD tile — it renders above the poll, not in
+  // `newsTiles` with the rest. Reveal season is the most time-sensitive thing
+  // this feed carries and the count moves every few days, where the poll sits
+  // still for weeks; below a ~200px poll it was the one story you had to scroll
+  // to reach. Everything else stays below the poll.
+  const newsLead = showNews
+    ? html`<a key="news" class="home-news-tile home-news-clickable"
           href=${"/cards?set=" + encodeURIComponent(newsSet)}
           onClick=${navHandler(() => openCardsFilteredBySet && openCardsFilteredBySet(newsSet))}
           style=${{display:"block", textDecoration:"none", color:"inherit", cursor:"pointer"}}>
           <div class="home-news-kicker">${uiIcon("news", 13)} News</div>
-          <div class="home-news-title">${newsSet} — ${newsCount} card${newsCount===1?"":"s"} revealed!</div>
-          <div class="home-news-sub">Browse the set →</div>
-        </a>`);
+          <div class="home-news-title">${newsSet}! ${newsCount} card${newsCount===1?"":"s"} revealed!</div>
+          <div class="home-news-sub">Click here to see them →</div>
+        </a>`
+    : null;
   for(const ev of activeEvents) newsTiles.push(html`<div key=${"ev-"+ev.id} class="home-news-tile">
           <div class="home-news-title">${ev.title}</div>
           ${(ev.dateLabel || ev.eventUrl) && html`<a class="home-news-event-link"
@@ -46741,11 +46922,17 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     // so a brand-new poll could not reopen a collapsed box. Deliberately NOT
     // my_choice or pct: those change when YOU vote, which would pop the box
     // open at the one moment you have just finished with it.
-    return keys + "::" + (homePoll.poll ? homePoll.poll.poll_id : "-");
-  }, [newsTiles, homePoll.poll]);
-  const newsFeedAside = (variant) => (panelCol["news"] != null && (newsTiles.length > 0 || homePoll.poll))
+    // The lead tile's COUNT rides along deliberately: "3 cards revealed" going
+    // to "17 cards revealed" is exactly the "something new is posted" the
+    // collapse is supposed to reopen for, and unlike a countdown it only moves
+    // when reveals actually land.
+    return keys + "::" + (homePoll.poll ? homePoll.poll.poll_id : "-")
+         + "::" + (showNews ? newsSet + ":" + newsCount : "-");
+  }, [newsTiles, homePoll.poll, showNews, newsSet, newsCount]);
+  const newsFeedAside = (variant) => (panelCol["news"] != null && (newsTiles.length > 0 || homePoll.poll || newsLead))
     ? html`<${NewsFeed} key=${"news-"+variant} variant=${variant} tiles=${newsTiles} sig=${newsSig}
         panelNav=${variant === "rail" ? panelTitleNav : null}
+        lead=${newsLead}
         poll=${html`<${HomePollBox} state=${homePoll} user=${user} onSignIn=${onSignIn}/>`}/>`
     : null;
   // The legacy CSS-gated ride on the Rare–Legendary banner stays the default
@@ -54412,6 +54599,7 @@ function App(){
                            "g","hm","hr","hs",
                            "q","ink","rarity","cost","type","inkable","legal","owned",
                            "ck","cv","cm","cr","cq","cspan","cn","cg",
+                           "cmap","cmr","cms","cmk",
                            ...ELO_URL_PARAMS, ...SC_DEEP_PARAMS];
       // Each view "owns" the deep-link params it actually consumes — those
       // survive a same-view strip so /decks?tourney=<id> deep-links + ctrl-
@@ -54438,7 +54626,8 @@ function App(){
         // ?cr= which regions (a csv), ?cq= the search box, ?cspan= how many
         // months the timeline draws, ?cn= pull in the Set Championships inside
         // the event finder's saved radius.
-        calendar:   new Set(["ck","cv","cm","cr","cq","cspan","cn","cg"]),
+        calendar:   new Set(["ck","cv","cm","cr","cq","cspan","cn","cg",
+                             "cmap","cmr","cms","cmk"]),
       };
       const owned = VIEW_OWNED[view] || new Set();
       const stripList = dirtyParams.filter(p => !owned.has(p));

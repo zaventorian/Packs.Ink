@@ -49,14 +49,23 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const scPanCenter = (center, zoom, dx, dy) => {", NL + "};"),
   grabLine("const _scBoxHit = "),
   grab("const scPlacePinLabels = (pins, w, h) => {", NL + "};"),
+  grabLine("const CAL_MAP_FOCUS_Z = "),
+  grabLine("const CAL_MAP_ANY_LABEL = "),
+  grabLine("const CAL_MAP_LABEL_MAX = "),
+  grab("const calParseMapFocus = (raw) => {", NL + "};"),
+  grab("const calMapFocusParam = (f) => {", NL + "};"),
   "export {osmWorldFrac, osmFracLat, osmTileLayout, osmFitLayout, OSM_FIT_PAD,"
   + " scMergePins, SC_PIN_MERGE_PX, scLabelW, scPlacePinLabels,"
-  + " SC_PIN_R, SC_LBL_GAP, SC_LBL_H, scPinR, scPanCenter};",
+  + " SC_PIN_R, SC_LBL_GAP, SC_LBL_H, scPinR, scPanCenter,"
+  + " calParseMapFocus, calMapFocusParam, CAL_MAP_ANY_LABEL,"
+  + " CAL_MAP_FOCUS_MIN, CAL_MAP_FOCUS_MAX, CAL_MAP_LABEL_MAX};",
 ].join(NL)));
 
 const { osmWorldFrac, osmFracLat, osmTileLayout, osmFitLayout, OSM_FIT_PAD,
         scMergePins, SC_PIN_MERGE_PX, scLabelW, scPlacePinLabels,
-        SC_PIN_R, SC_LBL_GAP, SC_LBL_H, scPinR, scPanCenter } = mod;
+        SC_PIN_R, SC_LBL_GAP, SC_LBL_H, scPinR, scPanCenter,
+        calParseMapFocus, calMapFocusParam, CAL_MAP_ANY_LABEL,
+        CAL_MAP_FOCUS_MIN, CAL_MAP_FOCUS_MAX, CAL_MAP_LABEL_MAX } = mod;
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; } else { fail++; console.log("  FAIL: " + msg); } };
@@ -526,6 +535,125 @@ section("13. scPanCenter");
   const l = osmFitLayout([P(CHI.lat, CHI.lng)], W, H,
                          { focus: { lat: c.lat, lng: c.lng, zoom: 4 } });
   ok(!!l && l.pins.length === 1, "a panned centre is a focus osmFitLayout accepts");
+}
+
+// 14. A map you can SEND -- the ?cmap codec
+//
+// Zaven: "can we make maps shareable via link? like if i want to share a map at
+// a zipcode for set champs so someone else can see". `?cv=map` alone only says
+// "open the map", and the map opens on the whole season -- so the one thing the
+// sender was showing is the one thing the link could not carry.
+//
+// Every failure here is silent and looks like a working map of the wrong place.
+section("14. ?cmap share codec");
+{
+  const CHI = { lat: 41.8781, lng: -87.6298 };
+
+  // /!\ Null Island, which this map has already shipped TWICE. Number("") and
+  // Number(null) are both 0, not NaN, so a half-written param is a perfectly
+  // finite point in the Atlantic that renders as an ordinary, empty map.
+  for (const bad of ["", ",,", "41.88,,9", ",-87.63,9", "41.88,-87.63,",
+                     "abc,def,9", "41.88,-87.63", null, undefined]) {
+    ok(calParseMapFocus(bad) === null,
+       "a blank or partial ?cmap is rejected, not read as 0N 0E: " + JSON.stringify(bad));
+  }
+  ok(calParseMapFocus("0,0,9") !== null, "but a DELIBERATE 0,0 is still a real point");
+
+  ok(calParseMapFocus("91,0,9") === null, "a latitude past the Mercator limit is rejected");
+  ok(calParseMapFocus("0,181,9") === null, "and so is a longitude off the planet");
+
+  // /!\ The LABEL is last, and only the first three fields are split off,
+  // because every American city name contains a comma. Splitting the whole
+  // string and taking field 3 truncates "Chicago, IL" to "Chicago".
+  const withState = calParseMapFocus("41.8781,-87.6298,9,Chicago, IL");
+  ok(withState && withState.label === "Chicago, IL", "a place name keeps its comma");
+  near(withState.lat, CHI.lat, 1e-9, "and the latitude still parses");
+  near(withState.lng, CHI.lng, 1e-9, "and the longitude");
+
+  // A coordinates-only link (what a DRAG produces) gets the shared any-label,
+  // never an empty string: "No Lorcana events near " is a broken sentence.
+  const bare = calParseMapFocus("41.8781,-87.6298,9");
+  ok(bare && bare.label === CAL_MAP_ANY_LABEL, "a label-less focus says " + CAL_MAP_ANY_LABEL);
+  ok(calParseMapFocus("41.8781,-87.6298,9,   ").label === CAL_MAP_ANY_LABEL,
+     "and so does a whitespace-only label");
+
+  // Zoom CLAMPS rather than rejecting -- a hand-edited z=40 should still show
+  // you the place, at the closest zoom tiles exist for.
+  ok(calParseMapFocus("41.88,-87.63,40").zoom === CAL_MAP_FOCUS_MAX, "a huge zoom clamps in");
+  ok(calParseMapFocus("41.88,-87.63,-5").zoom === CAL_MAP_FOCUS_MIN, "a negative zoom clamps out");
+  ok(calParseMapFocus("41.88,-87.63,9.6").zoom === 10, "a fractional zoom rounds to a real tile level");
+
+  // /!\ Text off a URL renders into the toolbar and the empty-state line, so it
+  // is length-capped -- an unbounded label is a layout break by hyperlink.
+  const longLbl = calParseMapFocus("41.88,-87.63,9," + "x".repeat(400));
+  ok(longLbl.label.length === CAL_MAP_LABEL_MAX, "a runaway label is capped");
+
+  // -- ROUND TRIP: what the writer emits is what the reader gets back --------
+  for (const f of [{ lat: 41.8781, lng: -87.6298, zoom: 9, label: "Chicago, IL" },
+                   { lat: -33.8688, lng: 151.2093, zoom: 11, label: "Sydney" },
+                   { lat: 35.6762, lng: 139.6503, zoom: 13, label: CAL_MAP_ANY_LABEL },
+                   { lat: 0, lng: 0, zoom: 3, label: "" }]) {
+    const back = calParseMapFocus(calMapFocusParam(f));
+    ok(!!back, "a written focus reads back: " + (f.label || "(none)"));
+    near(back.lat, f.lat, 1e-4, "  latitude survives the round trip");
+    near(back.lng, f.lng, 1e-4, "  longitude survives the round trip");
+    ok(back.zoom === f.zoom, "  zoom survives the round trip");
+    ok(back.label === (f.label || CAL_MAP_ANY_LABEL), "  and the label");
+  }
+
+  // /!\ The any-label is OMITTED rather than written: a dragged map is the
+  // common case and its link should not carry two words the parser supplies.
+  ok(calMapFocusParam({ lat: 1, lng: 2, zoom: 9, label: CAL_MAP_ANY_LABEL }).split(",").length === 3,
+     "a label-less focus writes three fields, not four");
+  ok(calMapFocusParam(null) === "", "and no focus writes nothing at all");
+
+  // The whole chain, not just the string: what the writer emits is a focus
+  // osmFitLayout will actually draw.
+  const l = osmFitLayout([P(CHI.lat, CHI.lng)], 800, 420,
+                         { focus: calParseMapFocus(calMapFocusParam(
+                             { lat: CHI.lat, lng: CHI.lng, zoom: 9, label: "Chicago, IL" })) });
+  ok(!!l && l.pins.length === 1, "a link's focus is one the map can draw");
+}
+
+// 15. The registration rule, which fails silently
+//
+// /!\ CLAUDE.md's standing rule: a new deep-link param must be in BOTH
+// `dirtyParams` and `VIEW_OWNED`. Unregistered, the link appears to work and
+// then the view-sync effect strips it on the next render -- so it "works" for
+// the sender, who is already there, and resets for everyone they send it to.
+section("15. deep-link param registration");
+{
+  const dirty = grab("const dirtyParams = [", "];");
+  const owned = grab("calendar:   new Set([", "]),");
+  for (const k of ["cmap", "cmr", "cms", "cmk"]) {
+    ok(dirty.includes('"' + k + '"'), k + " is registered in dirtyParams");
+    ok(owned.includes('"' + k + '"'), k + " is owned by the calendar view");
+  }
+
+  // The finder's half. `scview` has to be in SC_DEEP_PARAMS or a bare
+  // ?scview=map never opens the box at all, and buildShareUrl has to write it
+  // or the Copy link button quietly shares a list.
+  ok(grabLine("const SC_DEEP_PARAMS = ").includes('"scview"'),
+     "scview is an event-finder deep-link param");
+  ok(src.includes('u.searchParams.set("scview", "map")'),
+     "and the finder's share link writes it");
+  ok(src.includes('if(pView) return pView === "map";'),
+     "and the map toggle reads it, so a shared map arrives as a map");
+
+  // /!\ A seeded value must not be written back to localStorage: a link may
+  // choose FOR the reader, never OVER them.
+  ok(src.includes('usePrefWrite("packsink:scMap", mapOn ? "1" : "0", !!pView)'),
+     "a link's view does not repoint the reader's saved preference");
+  ok(src.includes("usePrefWrite(CAL_MAP_SCOPE_LS, mapScope, seed.cms != null)"),
+     "nor its scope");
+  ok(src.includes('usePrefWrite(CAL_MAP_KINDS_LS, mapStoreKinds.join(","), seed.cmk != null)'),
+     "nor its kinds");
+
+  // /!\ Written in map mode ONLY. A `cmap` left behind after switching to List
+  // is a stale anchor that silently repoints the map on the way back.
+  ok(src.includes('(onMap && mapFocus) ? url.searchParams.set("cmap"'),
+     "cmap is written only in map mode");
+  ok(src.includes('url.searchParams.delete("cmap")'), "and deleted otherwise");
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed");
