@@ -28,6 +28,11 @@ const parts = [
   `const SUPABASE_URL = "https://stub.invalid";`,
   slice(/^const SET_PARENT = \{/m, /^\};/m, "SET_PARENT"),
   slice(/^const MAINLINE_SETS = \[/m, /^\];/m, "MAINLINE_SETS"),
+  // The "formats+coconut" span below runs as far as getFormat, and the reveal
+  // reel's logic sits inside it (next to coconutFreshCards, which is the other
+  // "what is new" rule). REVEAL_EXCLUDED_SETS reads this, so the slice needs it
+  // — the eval is the whole span, not just the declarations this test asserts on.
+  slice(/^const EXTRAS_SET_NAME = /m, /^const EXTRAS_SET_NAME = .*$/m, "EXTRAS_SET_NAME"),
   slice(/^const SPECIAL_DECK_LIMITS = \{/m, /^const getFormat = .*$/m, "formats+coconut"),
   slice(/^function checkDeckLegality\(/m, /^\}/m, "checkDeckLegality"),
 ];

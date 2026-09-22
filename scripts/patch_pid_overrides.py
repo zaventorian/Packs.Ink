@@ -303,6 +303,7 @@ def main() -> None:
     # printing's picture, which is the wrong art on a promo tile.
     P3_SET  = "set_1e6669367c7a4a208ce51fd8bd7d2c41"  # Promo Set 3
     CC1_SET = "set_curators_cc1"       # Curator's Collection: Heroines
+    CC2_SET = "set_curators_cc2"       # Curator's Collection: Beauty and the Beast
     # PD1 is Lorcast's own rolling promo set (#1-#8 today). A promo that ships
     # inside a product hangs off PD1 by its PRINTED number - the product is the
     # packaging, not a set. That is why Illumineer's Quest Q3 gets no set row of
@@ -362,6 +363,31 @@ def main() -> None:
          "Logos/cards/sulley-protective-monster-pd1-18.jpg"),
         (704672, PD1_SET, "19", "crd_pd1_19_violet_parr_super_resilient", None,
          "Logos/cards/violet-parr-super-resilient-pd1-19.jpg"),
+        # Curator's Collection: Beauty and the Beast (CC2) — announced at D23
+        # 2026, six premium foil reprints sold ~$99.99 at a handful of Disney
+        # locations starting 2026-10-01. Not on TCGplayer yet (no secondary
+        # market before release), so promo_pid is None for all six and each
+        # carries a repo-local art crop pulled from the D23 reveal video —
+        # same "read off the announcement photo" call as PD1 #18/#19 above.
+        # Fill in the pid and delete the art path once TCGplayer lists it;
+        # the row updates in place (same card_id), so nobody's collection
+        # mark moves. Bases confirmed against Lorcast (cost/ink/stats/text
+        # match exactly): Be Our Guest = Fabled #31, Mrs. Potts = Ursula's
+        # Return #52, Belle - Hidden Archer / Gaston - Intellectual
+        # Powerhouse / Beast - Tragic Hero = Rise of the Floodborn
+        # #72/#147/#173, Lumiere - Fiery Friend = Fabled #121.
+        (649978, CC2_SET, "1", "crd_cc2_1_be_our_guest",                    None,
+         "Logos/cards/be-our-guest-cc2-1.jpg"),
+        (549620, CC2_SET, "2", "crd_cc2_2_mrs_potts_enchanted_teapot",      None,
+         "Logos/cards/mrs-potts-enchanted-teapot-cc2-2.jpg"),
+        (516417, CC2_SET, "3", "crd_cc2_3_belle_hidden_archer",             None,
+         "Logos/cards/belle-hidden-archer-cc2-3.jpg"),
+        (650056, CC2_SET, "4", "crd_cc2_4_lumiere_fiery_friend",            None,
+         "Logos/cards/lumiere-fiery-friend-cc2-4.jpg"),
+        (516406, CC2_SET, "5", "crd_cc2_5_gaston_intellectual_powerhouse",  None,
+         "Logos/cards/gaston-intellectual-powerhouse-cc2-5.jpg"),
+        (527629, CC2_SET, "6", "crd_cc2_6_beast_tragic_hero",               None,
+         "Logos/cards/beast-tragic-hero-cc2-6.jpg"),
         # === AUTO-RESOLVED — lines below this point are written by
         # scripts/apply_catalog_resolutions.py from a "resolution" block in
         # catalog_watch.json, keyed by the trailing `# auto:<promo_pid>` comment.
