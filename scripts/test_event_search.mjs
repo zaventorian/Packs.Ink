@@ -273,8 +273,15 @@ eq(/const\s+geocodeZip/.test(SRC), false, "the old US-shaped geocoder is gone");
 eq(/await\s+geocodeZip\s*\(/.test(SRC), false, "and nothing still calls it");
 eq((SRC.match(/class="sc-zip-input"/g) || []).length, 2,
    "both search boxes still exist");
-eq((SRC.match(/placeholder="Postal code or town"/g) || []).length, 2,
-   "and both take a postal code or a town");
+// THREE boxes now: the finder's, the Elo tab's distance box, and the calendar
+// map's "zoom in" (2026-09-22). All three route through scResolveOrigin, so all
+// three must promise the same thing — a box that says ZIP and then accepts a
+// town is the confusion the universal resolver was built to end. Bump this with
+// a fourth only after checking the new one uses the resolver too.
+eq((SRC.match(/placeholder="Postal code or town"/g) || []).length, 3,
+   "every place box takes a postal code or a town");
+eq((SRC.match(/scResolveOrigin\s*\(/g) || []).length >= 3, true,
+   "and every one of them resolves through scResolveOrigin");
 // ⚠ The Elo box used to strip everything but digits, which silently ate the
 // letters out of every non-US postal code as they were typed.
 eq(/onInput=\$\{e=>setZip\(e\.target\.value\.replace\(\/\[\^0-9\]/.test(SRC), false,

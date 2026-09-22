@@ -407,5 +407,66 @@ section("11. scPlacePinLabels");
   ok(sides.some(Boolean), "a real layout still labels something");
 }
 
+// 12. osmFitLayout's FOCUS override — "zoom to this postal code"
+//
+// The calendar's map opens on a whole season across four continents; a focus is
+// how you get from that to your own town. It shares every line of the pin maths
+// with the fit deliberately, so what is tested here is that it overrides the two
+// things it should and nothing else.
+section("12. osmFitLayout focus");
+{
+  const CHI = { lat: 41.88, lng: -87.63 };
+  const TOK = { lat: 35.68, lng: 139.77 };
+  const pts = [P(CHI.lat, CHI.lng), P(TOK.lat, TOK.lng), P(-33.87, 151.21)];
+
+  const fitted = osmFitLayout(pts, W, H);
+  const focused = osmFitLayout(pts, W, H, { focus: { lat: CHI.lat, lng: CHI.lng, zoom: 9 } });
+  ok(focused.zoom === 9, "the focus's zoom wins over the fitted one");
+  ok(focused.zoom !== fitted.zoom, "and it really is a different zoom to the fit");
+  near(focused.center.lat, CHI.lat, 1e-6, "the centre is the focus, not the cluster");
+  near(focused.center.lng, CHI.lng, 1e-6, "same for longitude");
+
+  // The focused point lands in the middle of the box — which is the whole
+  // promise of "zoom here", and the one thing a second copy of the pin
+  // subtraction would silently break.
+  const chiPin = focused.pins.find((q) => q.i === 0);
+  near(chiPin.left, W / 2, 1.5, "the focused point sits at the box's centre, x");
+  near(chiPin.top, H / 2, 1.5, "the focused point sits at the box's centre, y");
+
+  // ⚠ The fit's clamps are the FIT's business. A person who pressed + chose
+  // that zoom, so minZoom/maxZoom must not quietly overrule them.
+  const past = osmFitLayout(pts, W, H, { minZoom: 2, maxZoom: 4, focus: { lat: CHI.lat, lng: CHI.lng, zoom: 12 } });
+  ok(past.zoom === 12, "a focus zoom past maxZoom is honoured, not clamped to the fit's cap");
+
+  // ...but tiles only exist for 0..19.
+  const silly = osmFitLayout(pts, W, H, { focus: { lat: CHI.lat, lng: CHI.lng, zoom: 99 } });
+  ok(silly.zoom >= 0 && silly.zoom <= 19, "an absurd zoom is bounded to what tiles exist");
+
+  // A half-built focus must fall back to the fit rather than to Null Island —
+  // the same trap the coordinate reader itself carries.
+  for (const bad of [{ lat: null, lng: -87.63, zoom: 9 }, { lat: 41.88, lng: null, zoom: 9 },
+                     { lat: "", lng: "", zoom: 9 }, { lat: 999, lng: -87.63, zoom: 9 }]) {
+    const f = osmFitLayout(pts, W, H, { focus: bad });
+    ok(f.zoom === fitted.zoom && Math.abs(f.center.lng - fitted.center.lng) < 1e-9,
+       "an unusable focus falls back to the fit (" + JSON.stringify(bad) + ")");
+  }
+  const noZoom = osmFitLayout(pts, W, H, { focus: { lat: CHI.lat, lng: CHI.lng } });
+  ok(noZoom.zoom === fitted.zoom, "a focus with no zoom keeps the fitted zoom");
+  near(noZoom.center.lat, CHI.lat, 1e-6, "but still moves the centre");
+
+  // ⚠ The antimeridian wrap has to follow the FOCUS, not the cluster's centre:
+  // focused on Tokyo, Sydney is a neighbour and must not be drawn a world away.
+  const jp = osmFitLayout([P(TOK.lat, TOK.lng), P(-33.87, 151.21), P(CHI.lat, CHI.lng)],
+                          W, H, { focus: { lat: TOK.lat, lng: TOK.lng, zoom: 4 } });
+  const syd = jp.pins.find((q) => q.i === 1);
+  const world = Math.pow(2, jp.zoom) * 256;
+  ok(Math.abs(syd.left - W / 2) < world / 2,
+     "a neighbour of the focus is drawn near it, not at the far copy of the world");
+
+  // Every event still comes back, in frame or not — the box clips, the layout
+  // does not drop.
+  ok(focused.pins.length === fitted.pins.length, "a focus hides nothing from the layout");
+}
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
