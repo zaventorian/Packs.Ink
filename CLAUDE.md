@@ -5228,6 +5228,31 @@ window over the one already on screen.
   runs at its own declaration point, so above it that is a TDZ ReferenceError
   into the error boundary (the `screenerPayload` trap).
 
+### Dragging it, and the kind chips (2026-09-22)
+
+- **A pointer drag pans it.** ⚠ The tiles move under the finger on ONE transform
+  layer holding the tiles AND the pins, and the layout is recomputed only on
+  release — refetching a tile set per `pointermove` is a request storm and a
+  juddering map, and moving the shared parent is what keeps a pin on its street.
+- **⚠ `scPanCenter` works in WORLD PIXELS, not degrees** (a pixel is worth more
+  latitude near the poles) and **inverts the sign** (dragging the tiles right
+  shows what was west). **Longitude WRAPS, latitude CLAMPS**: a drag west past
+  the antimeridian must come out at +179, not -181, which `osmFitLayout` rejects
+  as out of range — so the map would go blank rather than error.
+- **⚠ 5px before a drag starts**, the movers banner's threshold, so a click on a
+  pin is still a click.
+- **⚠ `touch-action:none`, which is what a map is.** The cost is accepted: on a
+  phone you scroll the page from above or below the map, not across it — which
+  is why the map is shorter at ≤640px.
+- **A drag lands you in FOCUS mode** even from the fitted view: once you have
+  moved the map by hand, "fit everything" is not what you asked for, and
+  snapping back on the next render would undo the drag in front of you.
+- **Set Champs / Prereleases / Locals chips.** ⚠ A DIFFERENT axis from the chips
+  above, which are the calendar's own kinds — a store event is one row under "My
+  stores" whether it is a Set Championship or a Thursday league night. Only rows
+  carrying an `rph_kind` are filtered, so a DLC, a CCQ or a set release never
+  vanishes because Locals is off. Last active chip can't be switched off.
+
 ### `/calendar?cv=map`, the fourth mode
 
 Beside List / Month / Timeline, rendering **`listed`** — the same array the list renders, so
