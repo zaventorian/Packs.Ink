@@ -844,5 +844,93 @@ section("17. marks + on-screen list wiring");
   ok(/<\$\{KindIcon\} icon=\$\{ic\.icon\}/.test(view), "the pin uses it");
 }
 
+// 18. Only what can be SEEN is rendered, and the box measures itself
+//
+// Two bugs found by sweeping the finished feature, both invisible by
+// construction and both fixed here. Source-level, because the real proof is a
+// live measurement -- these pin the shape so it cannot quietly come back.
+section("18. clipped pins + the measured height");
+{
+  const view = grab("const EventMapView = ({events, onPick,", NL + "};");
+
+  // -- Clipped pins were still BUTTONS ----------------------------------------
+  // /!\ `.sc-map-box` is overflow:hidden, so a pin outside the frame was hidden
+  // from your eyes and from nobody else. Measured on the calendar map at a metro
+  // focus: 65 pins drawn, 46 entirely outside the frame (worst 65,685px away),
+  // every one keyboard-focusable with a full aria-label -- so Tab walked 46
+  // controls nobody could see and a screen reader read all 65. Present on
+  // desktop too (29 of 65), not just on phones.
+  ok(/const allGroups = useMemo\(\(\) => layout \? scMergePins/.test(view),
+     "the unfiltered groups are kept under their own name");
+  ok(/const groups = useMemo\(\(\) => \{[\s\S]{0,400}?allGroups\.filter/.test(view),
+     "and `groups` -- what the render loop walks -- is the FILTERED set");
+
+  // /!\ INTERSECTION, not centre-in-frame: a pin whose centre sits just outside
+  // still shows half a dot at the edge, and dropping it deletes something
+  // visible. And it must use the group's REAL radius, the same scPinR the label
+  // placer reserves, or "drawn" and "reserved" disagree.
+  ok(/scPinR\(g\.items\.length, !!groupIcon\(g\)\)[\s\S]{0,200}?g\.left \+ r >= 0 && g\.left - r <= w && g\.top \+ r >= 0 && g\.top - r <= H/.test(view)
+     || /const r = scPinR\(g\.items\.length, !!groupIcon\(g\)\);[\s\S]{0,160}?g\.left \+ r >= 0/.test(view),
+     "visibility is an intersection test against the pin's real radius");
+
+  // /!\ labelSides is indexed BY POSITION (`labelSides[gi]`), so it has to be
+  // computed from the same array the render walks. Placing over `allGroups`
+  // while rendering a filtered list hands every pin its neighbour's date chip --
+  // silently, and only for maps that have anything off-frame.
+  const lsIdx = view.indexOf("const labelSides = useMemo(() => scPlacePinLabels(groups.map");
+  ok(lsIdx > 0, "labelSides is placed over `groups`, the array that is rendered");
+  ok(!/scPlacePinLabels\(allGroups/.test(view), "and never over the unfiltered set");
+
+  // /!\ And the LIST is derived from those same visible groups, so "the list
+  // names exactly what the map draws" is true by construction rather than by two
+  // nearly-identical tests agreeing.
+  ok(/const inFramePins = useMemo\(\(\) => groups\.flatMap\(g => g\.items\)/.test(view),
+     "the on-screen list is the events under the pins that are drawn");
+  ok(/sort\(\(a, b\) => a\.i - b\.i\)/.test(view), "still in the caller's own order");
+
+  // -- The height is MEASURED -------------------------------------------------
+  // /!\ The calendar passes CAL_MAP_VIEW_H (480) and
+  // `.cal-map-view .sc-map-box{height:340px !important}` renders 340 on a phone,
+  // so the fit framed pins into 480px of vertical space that was then clipped to
+  // 340 -- ~29% of the map laid out where it could never be seen, chips placed
+  // against a floor that did not exist, and a pin measured at top:471px inside a
+  // 340px box. The width was already measured for exactly this reason.
+  ok(/const H = mh \|\| height \|\| SC_MAP_H;/.test(view),
+     "H prefers the measured box height over the prop");
+  ok(/const \[mh, setMh\] = useState\(0\)/.test(view), "and that measurement is state");
+  ok(/ref=\$\{boxRef\}/.test(view), "the box carries the ref that measures it");
+  // /!\ The STYLE must keep writing the prop. The box's height comes from it, so
+  // feeding the measurement back in is a feedback loop; reading it only for the
+  // maths converges in one pass whether or not CSS overrides it.
+  ok(/style=\$\{\{height: \(height \|\| SC_MAP_H\) \+ "px"\}\}/.test(view),
+     "but the style still writes the PROP, so there is no measure/set loop");
+  ok(!/style=\$\{\{height: H \+ "px"\}\}/.test(view), "never the measured value");
+
+  // The CSS override this exists to survive should still be there; if it is ever
+  // removed the measurement simply agrees with the prop, which is also correct.
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  ok(/\.cal-map-view \.sc-map-box\{height:\d+px ?!important;\}/.test(css)
+     || !/\.cal-map-view \.sc-map-box\{height/.test(css),
+     "the calendar's mobile height override is either present or gone, not half-edited");
+
+  // -- A merged pin is a DISCLOSURE, not a recital ---------------------------
+  // /!\ It used to name every event inline, so a 25-event pin announced 1,755
+  // characters as ONE button's accessible name -- read start to finish, with
+  // nothing to skim and no way out. The names are not lost: the callout it opens
+  // is a list of real buttons, one per event, which is the reachable way to
+  // expose them. Measured after: 1755 -> 85 characters.
+  ok(/\$\{g\.items\.length\} events here, including \$\{nameOf\(g\.items\[0\]\)\}/.test(view),
+     "a merged pin names its count and the first event, never all of them");
+  ok(!/\$\{g\.items\.map\(fullOf\)\.join\("; "\)\}/.test(view),
+     "and never recites every event into one label");
+  ok(/aria-expanded=\$\{g\.items\.length > 1 \?/.test(view),
+     "it carries aria-expanded, because it discloses the callout");
+  ok(/aria-expanded=\$\{g\.items\.length > 1 \? \(selKey === gKey\(g\) \? "true" : "false"\) : undefined\}/.test(view),
+     "which tracks the open state, and is absent on a single pin that discloses nothing");
+
+  // -- A tile that fails leaves a gap, not a broken-image glyph ---------------
+  ok(/onError=\$\{hideBrokenImg\}/.test(view), "a tile that fails to load hides itself");
+}
+
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
