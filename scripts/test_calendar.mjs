@@ -2258,9 +2258,16 @@ ok("the graded tile isolates its version badge",
   ok("and names the current one so the icon is never ambiguous",
     /Showing the month — switch to the list/.test(panel)
     && /Showing the list — switch to the month/.test(panel));
-  // The /calendar PAGE keeps its segmented control: three modes is not A-or-B.
-  ok("the page's three-mode control is untouched",
-    (src.match(/CAL_VIEW_MODES = \["list", "month", "timeline"\]/g) || []).length === 1);
+  // The /calendar PAGE keeps its segmented control — the panel's one-button
+  // toggle is right for A-or-B and wrong the moment there are more than two.
+  // Map made it FOUR (2026-09-22); what this pins is that the page never
+  // collapses to the panel's shape, not the exact membership.
+  const pageModes = /CAL_VIEW_MODES = \[([^\]]*)\]/.exec(src);
+  ok("the page still has a multi-mode control, not the panel's toggle",
+    !!pageModes && pageModes[1].split(",").length >= 3);
+  ok("and map is one of its modes", !!pageModes && /"map"/.test(pageModes[1]));
+  ok("the panel's toggle is still only list/month",
+    /setMode\(m => m === "month" \? "list" : "month"\)/.test(panel));
 }
 
 // ── the banner's cameras stay on the title's line ───────────────────────────
