@@ -5200,6 +5200,34 @@ whose DOTS clear each other comfortably have labels that overlap completely — 
   Every character it does not need is a pin that keeps its label instead of falling back to
   a dot. Verified live: 40 pins → 17 chips, 0 chip-chip, 0 chip-dot and 0 out-of-frame.
 
+### ⚠ The map defaults to ALL events, and yours is the FILTER (2026-09-22)
+
+Zaven: *"I want map to default to all events, then you can filter down to just
+yours"* — and *"if i click every event near me, it opens a new smaller window."*
+One mistake, two symptoms. The map held the circuit plus the shops you follow, so
+zooming to your own town answered a narrower question than the one asked, and the
+route to the real answer was a link opening the finder's map in a second, smaller
+window over the one already on screen.
+
+- **A focused map fetches every event around that point** — `useMapNearbyEvents`,
+  the same `get_nearby_lorcana_events` the finder uses, with **`p_kind: null`** so
+  league nights count. Measured near Chicago: **26 pins before, 65 after**, 34 of
+  them in frame.
+- **⚠ ALL is the default and the left-hand option.** The shops you follow are the
+  NARROWING; as the starting point they show an empty map to exactly the person
+  who has followed nothing yet, which is everyone once.
+- **⚠ The map draws `listed` PLUS the feed, never the feed alone.** The circuit
+  and your own shops ARE the calendar. `calendarMergeStore` keys on `event_id`,
+  so a shop you follow is never drawn twice.
+- **⚠ It only ever runs FOCUSED.** ~17k upcoming events; a whole-world map of
+  them is not a map, and that RPC is the most expensive read on the screen. No
+  focus, no fetch, plus a module-scope cache per (point, radius).
+- **⚠ The radius is the finder's own `packsink:scRadius`**, not a second setting —
+  the two-postal-code-boxes trap again.
+- **⚠ `mapNear` / `mapRows` sit BELOW `listed`**, which they read: a `useMemo`
+  runs at its own declaration point, so above it that is a TDZ ReferenceError
+  into the error boundary (the `screenerPayload` trap).
+
 ### `/calendar?cv=map`, the fourth mode
 
 Beside List / Month / Timeline, rendering **`listed`** — the same array the list renders, so
