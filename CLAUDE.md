@@ -2239,6 +2239,7 @@ so #7 there is five different cards.
 | `card_no_pid` | `cards.tcgplayer_product_id` null → `card_prices_latest` is an INNER JOIN, so that card can never show a price |
 | `missing_set` | Lorcast published a set id we've never seen — **not the same as a set we don't have**, see below |
 | `review_due` | a **scheduled review** came due — see below |
+| `pop_stale` | **PSA population data is over a week old** — see below |
 
 ### ⚠ `missing_set` is an ID test, and a set id is not a set (2026-09-13)
 
@@ -2273,6 +2274,60 @@ Acknowledge from the CLI, don't hand-edit: `python scripts/reconcile_catalog.py 
 **Why any of this exists:** the old `reconcile` job ran green every single day with **18 genuinely missing singles in its output**, because it exited 0, `RECONCILE_ALERT_WEBHOOK` was never set, and its report went to a Step Summary nobody opens. An alert with no delivery is not an alert. The other half was coverage — it only looked at pids with a recent PRICE, so a product listed before release (a new Quest set, next set's boxes) was invisible to it.
 
 Two things it does NOT re-report, structurally rather than by ack: `load_sealed_products.SKIP_NAME_PATTERNS` is **imported** (so a deliberate loader exclusion can't come back as a finding — add a pattern there and it's silent here in the same commit), and `sealed_no_set` skips `product_type='Promo Single'` / `card_no_pid` skips Format Coconut, where a null is the correct steady state.
+
+### The PSA population refresh — weekly, and half of it cannot be automated
+
+`pop_stale` is a third shape of finding, next to a machine-read check and a
+`review_due`: the data is real and lives in a real table, but **its collector can
+never run in CI.** PSA is Cloudflare-fronted (a datacenter IP gets the
+interstitial) and every page below `/Pop` redirects to a collectors.com login, so
+the pull needs a real browser, on a residential IP, signed in as Zaven. A runner
+has none of the three.
+
+So the two halves are split:
+
+- **Doing it: `powershell -File scripts\pop_run.ps1`** — opens the burner Chrome
+  (the same profile `graded_run.ps1` uses, so the collectors.com session usually
+  persists between weeks), waits for a psacard.com tab, runs
+  `psa_pop_pull.mjs` (~70 sequential jittered requests, ~4 min), then **dry-run
+  loads**. `-Commit` writes; `-SkipLoad` pulls only; `-DryRun` prints the plan.
+- **Remembering it: `reconcile_catalog.py --watch`**, already daily, already
+  emailing. It reads `max(graded_pop.pulled_at)` and reports once it is over
+  `POP_MAX_AGE_DAYS` (8) old.
+
+**⚠ It checks the DATA's age, not a calendar, and that is the whole reason it is
+not a `reviews` entry.** A review needs `--done` to roll forward, which is one
+more thing to forget on a chore nobody is watching; a staleness check is cleared
+by the act of doing it. 8 days is a weekly cadence plus a day of grace, so a pull
+on Tuesday one week and Wednesday the next never alerts.
+
+- **⚠ The ack key carries the last pull's DATE (`psa:2026-09-22`), never a bare
+  `psa`.** Acks are keyed `kind:key`, so a constant key could be acked once and
+  would then mute this permanently — for a staleness alert that is not a snooze,
+  it is a mute with a reason attached. Keyed on the date, an ack can only ever
+  cover the particular staleness in front of you.
+- **⚠ Every failure of the check is SILENCE.** A database without migration 165
+  has no `graded_pop`, and going red for a table a PR cannot create is the "red
+  job everyone learns to ignore" the watch exists to avoid. An EMPTY table does
+  speak up (`psa:never`) — that one is a real gap.
+- **The steps travel with the alert**, the same rule `review_due` follows, because
+  whoever reads the failure email needs a command they do not have memorised.
+- **⚠ Never automate the collectors.com sign-in, and never retry past a wall.**
+  `psa_pop_pull.mjs` treats a non-200, a sign-in redirect or a challenge-shaped
+  body as fatal on purpose, and `pop_run.ps1` says to wait a day rather than loop.
+  It is Zaven's real account. A set already pulled today is skipped, so re-running
+  after a wall resumes rather than re-fetching.
+- **`pop_run.ps1` reads the newest year heading out of `psa_pop_pull.mjs`'s own
+  `YEARS` table** rather than carrying a copy. A stale hand-written heading opens
+  a page that still exists and still renders — nothing errors, you just sign in on
+  the wrong year.
+- Unlike `graded_run.ps1` it does **not** kill a running Chrome: that script needs
+  a fresh one because Terapeak freezes its date window, and PSA has no such window.
+
+Guarded by `python scripts/test_catalog_watch.py`, which pins both directions —
+a check that never fires freezes pop at whatever week it was last pulled while
+every card page keeps confidently printing it, and one that fires on a missing
+table trains everyone to ignore the run.
 
 **Scheduled reviews — the parts no feed can watch.** Japan Core legality comes from a Japanese retailer's HTML; the pin and lore-counter lists come from a fan site; next set's spoilers come from press releases. Nothing can watch those, so `catalog_watch.json`'s `reviews` list carries them: each becomes a `review_due` finding on its date and rides the same red run and the same email. The `how` steps are printed **inside** the alert, because nobody is going to go dig them up. Four are seeded:
 

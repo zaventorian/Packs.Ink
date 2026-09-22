@@ -34,9 +34,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from reconcile_catalog import (  # noqa: E402
-    ACK_PATH, KIND_LABEL, ack_reason, classify_promo_printing, due_reviews,
-    load_ack, norm_name, promo_base_candidates, promo_printing_hint,
-    promo_suffix_of,
+    ACK_PATH, KIND_LABEL, POP_MAX_AGE_DAYS, ack_reason, classify_promo_printing,
+    due_reviews, load_ack, norm_name, pop_findings, pop_stale_finding,
+    promo_base_candidates, promo_printing_hint, promo_suffix_of,
 )
 
 failed = 0
@@ -174,6 +174,86 @@ check("every_days is an int when present", bad_every, [])
 overdue = [r.get("id") for r in reviews if str(r.get("due", "")) < TODAY]
 check("no review ships already overdue", overdue, [])
 
+# ── PSA population staleness ─────────────────────────────────────────────────
+# The PSA pull cannot run in CI (Cloudflare + a collectors.com login + a
+# residential IP), so the only automated half is noticing that the data has gone
+# stale. Every failure mode here is silent in production:
+#
+#   - a check that never fires, and pop quietly freezes at whatever week it was
+#     last pulled while every card page keeps confidently printing it;
+#   - a check that goes red on a database with no `graded_pop` at all, which is
+#     the "red job everyone learns to ignore" the whole watch exists to avoid;
+#   - an ack that silences it FOREVER rather than snoozing one staleness.
+
+check("fresh data is quiet", pop_stale_finding("2026-09-20T10:00:00Z", "2026-09-22"), None)
+check("the day before the limit is still quiet",
+      pop_stale_finding("2026-09-15", "2026-09-22"), None)
+check("exactly at the limit fires",
+      (pop_stale_finding("2026-09-14", "2026-09-22") or {}).get("kind"), "pop_stale")
+check("the age is reported",
+      (pop_stale_finding("2026-09-10", "2026-09-22") or {}).get("name"),
+      "PSA population is 12 days old")
+check("an empty table fires",
+      (pop_stale_finding("", "2026-09-22") or {}).get("key"), "psa:never")
+check("an unreadable table is SILENT, not red",
+      pop_stale_finding(None, "2026-09-22"), None)
+check("the limit leaves a day of grace on a weekly cadence", POP_MAX_AGE_DAYS >= 8, True)
+
+# ⚠ The key carries the pull DATE so an ack can only ever snooze ONE staleness.
+# A constant key would be ackable once and silent thereafter — for a staleness
+# alert that is not a snooze, it is a permanent mute with a reason attached.
+k1 = (pop_stale_finding("2026-09-10", "2026-09-22") or {}).get("key")
+k2 = (pop_stale_finding("2026-09-12", "2026-09-24") or {}).get("key")
+check("two different pulls are two different ack keys", k1 != k2, True)
+check("the same pull is the same ack key",
+      (pop_stale_finding("2026-09-10", "2026-09-23") or {}).get("key"), k1)
+
+# The steps have to travel with the alert — this one is reached by whoever is
+# reading a failure email, and its answer is a command they will not have.
+hint = (pop_stale_finding("2026-09-10", "2026-09-22") or {}).get("hint") or ""
+check("the hint names the driver", "pop_run.ps1" in hint, True)
+check("the hint names the commit step", "--commit" in hint, True)
+check("the hint says why CI cannot do it", "Chrome" in hint, True)
+check("pop_stale has a label", "pop_stale" in KIND_LABEL, True)
+
+# ⚠ A pop_stale key CONTAINS a colon ("psa:2026-09-10"), which the ack layer
+# splits kind-from-id on. It only works because that split is bounded — an
+# unbounded one would file the ack under kind "pop_stale", id "psa" and snooze
+# every future staleness along with this one.
+_stale_key = (pop_stale_finding("2026-09-10", "2026-09-22") or {})["key"]
+_ack = {"acks": {f"pop_stale:{_stale_key}": {"why": "pulling it tomorrow"}}, "rules": []}
+check("an ack on one staleness is honoured",
+      ack_reason(_ack, "pop_stale", _stale_key, "", "2026-09-22"), "pulling it tomorrow")
+check("...and does not cover the next one",
+      ack_reason(_ack, "pop_stale", "psa:2026-09-17", "", "2026-09-29"), None)
+
+
+class _PopSb:
+    """Enough of Supabase for pop_findings: one call, or a raise."""
+
+    def __init__(self, rows=None, boom=None):
+        self.rows, self.boom, self.calls = rows, boom, []
+
+    def select(self, table, **kw):
+        self.calls.append((table, kw))
+        if self.boom:
+            raise self.boom
+        return self.rows
+
+
+sb = _PopSb(rows=[{"pulled_at": "2026-09-01T00:00:00Z"}])
+check("a stale table produces one finding", len(pop_findings(sb, "2026-09-22")), 1)
+check("it reads graded_pop newest-first", sb.calls[0][0], "graded_pop")
+check("it asks for one row only", sb.calls[0][1].get("limit"), 1)
+check("it orders by pulled_at desc", sb.calls[0][1].get("order"), "pulled_at.desc")
+check("a missing table is silent",
+      pop_findings(_PopSb(boom=RuntimeError("42P01 relation does not exist")), "2026-09-22"), [])
+check("an empty table still speaks up",
+      [f["key"] for f in pop_findings(_PopSb(rows=[]), "2026-09-22")], ["psa:never"])
+check("fresh data adds nothing",
+      pop_findings(_PopSb(rows=[{"pulled_at": "2026-09-21"}]), "2026-09-22"), [])
+
+
 # ── The promo-printing classifier ────────────────────────────────────────────
 # The watch found the Rapunzel Store Championship pair the day TCGplayer listed
 # it and still cost a session of archaeology to file, because the finding said
@@ -304,7 +384,10 @@ with tempfile.TemporaryDirectory() as d:
 
 class _StubSb:
     def select(self, table, **kw):
-        return {"sets": _SETS, "sealed_products": [], "cards": []}[table]
+        # graded_pop is here only so the PSA staleness check inside
+        # collect_findings stays quiet — this section is about missing_set.
+        return {"sets": _SETS, "sealed_products": [], "cards": [],
+                "graded_pop": [{"pulled_at": date.today().isoformat()}]}[table]
 
 
 _SETS = [
