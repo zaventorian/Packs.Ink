@@ -795,12 +795,25 @@ const gradedPopStats = (row) => {
   const popHigher = (grade) => ladder.reduce((s, x) => s + (x.grade > grade ? x.n : 0), 0);
   const qualified = Object.keys(g).reduce((s, k) => s + (/Q$/.test(k) ? num(k) : 0), 0);
   const half = Object.keys(g).reduce((s, k) => s + (/^\d+\.5$/.test(k) ? num(k) : 0), 0);
+  // One row per grade PSA has actually recorded, highest first. Zero-population
+  // grades are DROPPED: a table with eleven empty rows buries the four that
+  // carry the card, and "no copies exist at grade 3" is not information anybody
+  // opened a pop report for.
+  // ⚠ A qualifier key ("9Q") is not grade 9 -- it is a 9 with a named flaw
+  // (OC, ST, MK, PD) that trades at a discount, so it gets its own row directly
+  // under its straight grade rather than being folded into it.
+  const breakdown = Object.keys(g).map(k => {
+    if(k === "auth") return {key: k, label: "Auth", grade: -1, qual: false, n: num(k)};
+    const m = /^(\d+(?:\.\d+)?)(Q)?$/.exec(k);
+    if(!m) return null;                       // gradeTotal / halfTotal / qualifiedTotal
+    return {key: k, label: m[1] + (m[2] ? " Q" : ""), grade: parseFloat(m[1]),
+            qual: !!m[2], n: num(k)};
+  }).filter(x => x && x.n > 0)
+    .sort((a, b) => b.grade - a.grade || (a.qual ? 1 : 0) - (b.qual ? 1 : 0));
   return {
-    total, ten, nine, ladder, popHigher, qualified, half,
+    total, ten, nine, ladder, breakdown, popHigher, qualified, half,
     gemRate: total > 0 ? ten / total : null,
     nineUp: total > 0 ? (ten + nine) / total : null,
-    // The number people actually want when they are holding a 10.
-    tenIsOneOf: ten,
   };
 };
 
@@ -1552,7 +1565,7 @@ const MAINLINE_SETS = [
   "The First Chapter","Rise of the Floodborn","Into the Inklands",
   "Ursula's Return","Shimmering Skies","Azurite Sea","Archazia's Island",
   "Reign of Jafar","Fabled","Whispers in the Well","Winterspell",
-  "Wilds Unknown","Attack of the Vine!"
+  "Wilds Unknown","Attack of the Vine!","Hyperia City"
 ];
 // Full set ordering for catalog / Cards view / Collection grid. Includes
 // promo sets and the Extras & Oddities bucket so they're browsable and
@@ -6243,6 +6256,7 @@ const SET_NICKNAMES = {
   "winterspell":"Winterspell", "winter spell":"Winterspell",
   "wilds":"Wilds Unknown", "wilds unknown":"Wilds Unknown", "wu":"Wilds Unknown",
   "vine":"Attack of the Vine!", "vines":"Attack of the Vine!", "attack of the vine":"Attack of the Vine!", "attack of the vines":"Attack of the Vine!", "aotv":"Attack of the Vine!", "aov":"Attack of the Vine!",
+  "hyperia":"Hyperia City", "hyperia city":"Hyperia City", "hc":"Hyperia City",
   // Promo & special sets
   "promo set 1":"Promo Set 1", "promo 1":"Promo Set 1", "ps1":"Promo Set 1",
   "promo set 2":"Promo Set 2", "promo 2":"Promo Set 2", "ps2":"Promo Set 2",
@@ -8668,57 +8682,52 @@ const GradedPopPanel = ({group}) => {
   const pct = (n, d) => d > 0 ? Math.round(1000 * n / d) / 10 : null;
 
   return html`<div class="cd-pop">
-    <div class="cd-pop-head">
-      <span>PSA Population</span>
-      <span class="cd-pop-grand">${fmtInt(grand)} graded${grandTen > 0
-        ? html` · ${fmtInt(grandTen)} at PSA 10` : ""}</span>
-    </div>
+    <div class="cd-pop-title">PSA Pop Report</div>
     ${rows.map(r => {
       const st = gradedPopStats(r);
       if(!st || !st.total) return null;
       // A variety we can map is shown in OUR vocabulary; one we cannot is shown
       // in PSA's own words rather than forced into a printing it may not be.
-      // See gradedPopBucket -- Variety carries finish, rarity and provenance.
+      // See gradedPopBucket -- Variety carries finish, rarity AND provenance.
       const label = gradedPopBucket(r.variety) || r.variety || "Base";
-      const rest = Math.max(0, st.total - st.ten - st.nine - (Number((r.grades||{})["8"]) || 0));
-      const seg = (n) => ({width: (100 * n / st.total).toFixed(2) + "%"});
-      const eight = Number((r.grades || {})["8"]) || 0;
-      return html`<div key=${r.spec_id} class="cd-pop-row">
-        <div class="cd-pop-row-top">
-          <span class="cd-pop-label">${label}</span>
-          <span class="cd-pop-nums">
-            <b>${fmtInt(st.total)}</b> graded
-            ${st.ten > 0 && html`<span class="cd-pop-ten">${fmtInt(st.ten)} at 10</span>`}
-            ${st.gemRate != null && html`<span class="cd-pop-gem"
-              title=${`${fmtInt(st.ten)} of ${fmtInt(st.total)} graded copies came back a straight 10`}>
-              ${pct(st.ten, st.total)}% gem</span>`}
-          </span>
+      const share = (n) => Math.round(1000 * n / st.total) / 10;
+      return html`<div key=${r.spec_id} class="cd-pop-block">
+        ${/* The printing only needs naming when there is more than one to tell
+             apart -- on a single-printing Iconic it is a label with no job. */""}
+        ${rows.length > 1 && html`<div class="cd-pop-variety">${label}</div>`}
+        <div class="cd-pop-summary">
+          <div class="cd-pop-stat cd-pop-stat--gem">
+            <span class="cd-pop-stat-n">${st.gemRate == null ? "—" : share(st.ten) + "%"}</span>
+            <span class="cd-pop-stat-l">graded PSA 10</span>
+          </div>
+          <div class="cd-pop-stat">
+            <span class="cd-pop-stat-n">${fmtInt(st.total)}</span>
+            <span class="cd-pop-stat-l">copies graded</span>
+          </div>
         </div>
-        <div class="cd-pop-bar" role="img"
-          aria-label=${`${fmtInt(st.ten)} at PSA 10, ${fmtInt(st.nine)} at 9, ${fmtInt(eight)} at 8, ${fmtInt(rest)} lower`}>
-          ${st.ten > 0 && html`<i class="ten" style=${seg(st.ten)} title=${`PSA 10 · ${fmtInt(st.ten)}`}/>`}
-          ${st.nine > 0 && html`<i class="nine" style=${seg(st.nine)}
-            title=${`PSA 9 · ${fmtInt(st.nine)} (${fmtInt(st.popHigher(9))} higher)`}/>`}
-          ${eight > 0 && html`<i class="eight" style=${seg(eight)}
-            title=${`PSA 8 · ${fmtInt(eight)} (${fmtInt(st.popHigher(8))} higher)`}/>`}
-          ${rest > 0 && html`<i class="rest" style=${seg(rest)} title=${`7 and below · ${fmtInt(rest)}`}/>`}
-        </div>
-        ${(st.qualified > 0 || st.half > 0) && html`<div class="cd-pop-extra">
-          ${st.half > 0 && html`<span>${fmtInt(st.half)} half-grade${st.half === 1 ? "" : "s"}</span>`}
-          ${st.qualified > 0 && html`<span title="A qualifier (OC, ST, MK, PD) marks a specific flaw and trades at a discount to a clean copy of the same grade">
-            ${fmtInt(st.qualified)} qualified</span>`}
-        </div>`}
+        <table class="cd-pop-table">
+          <thead><tr><th scope="col">Grade</th><th scope="col">Copies</th><th scope="col">Share</th></tr></thead>
+          <tbody>
+            ${st.breakdown.map(b => html`<tr key=${b.key}
+              class=${(b.grade === 10 && !b.qual ? "is-ten" : "") + (b.qual ? " is-qual" : "")}>
+              <th scope="row" title=${b.qual
+                ? "A qualifier (OC, ST, MK, PD) names a specific flaw; it trades at a discount to a clean copy of the same grade"
+                : (b.grade === -1 ? "Authentic — genuine, but not assigned a numeric grade" : "")}>${b.label}</th>
+              <td>${fmtInt(b.n)}</td>
+              <td>${share(b.n)}%</td>
+            </tr>`)}
+          </tbody>
+        </table>
       </div>`;
     })}
     <div class="cd-pop-foot">
       ${/* ⚠ One line, not two: htm collapses the newline between two adjacent
-           expressions, so a break here renders "against75.3%". Same trap the
-           calendar hit with its started-ago chip. */""}
-      ${pop.setGem != null && grand > 0 && html`<span>
-        ${`${pct(grandTen, grand)}% of this card grades 10, against ${Math.round(1000 * pop.setGem) / 10}% across ${setName}.`}
+           expressions, so a break here renders "against75.3%". */""}
+      ${pop.setGem != null && grand > 0 && rows.length > 0 && html`<span>
+        ${`${Math.round(1000 * grandTen / grand) / 10}% of this card grades 10, against ${Math.round(1000 * pop.setGem) / 10}% across ${setName}.`}
       </span>`}
-      <span class="muted">PSA, English printings only. Population counts every copy PSA has
-      ever graded, so it only grows.</span>
+      <span class="muted">PSA, English printings only. Population counts every copy
+      PSA has ever graded, so it only grows.</span>
     </div>
   </div>`;
 };
@@ -9547,6 +9556,15 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
             qty=${collection[group.card_id+":"+group.foil.tcg_printing]||0}
             onQtyChange=${user && updateQty ? (q)=>updateQty(group.card_id, group.foil.tcg_printing, q) : null}/>`}
         </div>`}
+
+        ${/* ⚠ INSIDE the details column, directly under the price box — not a
+             sibling of it. As a sibling it rendered below the whole top section
+             and landed ~700px down, off-screen on a laptop, which is how it got
+             missed entirely on first look. It also fills the dead space beside
+             a tall card image on a single-printing card.
+             It sits OUTSIDE the prices conditional on purpose: a card can have
+             population without this modal showing it a price block. */""}
+        <${GradedPopPanel} group=${group}/>
       </div>
     </div>
 
@@ -9559,15 +9577,6 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
         title="Admin: log a manual/private graded sale for this card"
         onClick=${()=>setPrivateSaleOpen(true)}>＋ Private sale</button>`}
     </div>`}
-
-    ${/* ⚠ Directly under the price box and ABOVE Price Changes, not below it.
-         A population is the context you read a price against, so it belongs
-         beside the price; below the delta table it lands ~700px down and is
-         off-screen on a laptop, which is exactly how it got missed. It sits
-         after the Graded/Raw toggle rather than before it so the toggle stays
-         adjacent to the prices it switches. Renders nothing when PSA has never
-         graded the card. */""}
-    <${GradedPopPanel} group=${group}/>
 
     ${!isGradedMode && statRows.length > 0 && html`<div class="card-detail-screener">
       <div class="cd-affiliate-note">Buy links open TCGplayer through their affiliate program — we may earn a commission at no extra cost to you.</div>
@@ -9667,6 +9676,12 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
               name: group["Product Name"],
               sub: `${group.Set||""}${group.Number?" · #"+String(group.Number).split("/")[0]:""}${group.Rarity?" · "+group.Rarity:""}${isSplitCard && splitBadge(gradedPrintingFilter) ? " · "+splitBadge(gradedPrintingFilter) : ""}`,
               dateStr: posterDate,
+              // The poster resolves population itself (it is already async).
+              // Passing the KEY rather than the rows keeps the modal from
+              // fetching something only the export uses.
+              popKey: popCardKey(group.Set, group["Product Name"], group.Number),
+              popPrinting: gradedPrintingFilter || null,
+              popSet: group.Set || "",
             }}
             onReport=${user ? (s)=>setReportSale(s) : null}
             canEditGraded=${isGradedAdmin} onEditGraded=${(s)=>setEditSale(s)}/>`
@@ -37029,7 +37044,8 @@ const drawPosterScatter = (ctx, series, lines, showTrend, x, y, w, h, P) => {
 };
 
 async function buildGradedPosterBlob(opts){
-  const { artSrc, name, sub, combos, featured, series, rawLines, showTrend, dateStr, rawLatest } = opts;
+  const { artSrc, name, sub, combos, featured, series, rawLines, showTrend, dateStr, rawLatest,
+          popKey, popPrinting, popSet } = opts;
   const P = posterPalette();
   try { if(document.fonts && document.fonts.ready) await document.fonts.ready; } catch {}
   const [artImg, logoImg] = await Promise.all([
@@ -37043,6 +37059,34 @@ async function buildGradedPosterBlob(opts){
   const money0 = (v)=> v==null?"—":"$"+Number(v).toLocaleString(undefined,{maximumFractionDigits:0});
   const WINS = [["1w","1W"],["1m","1M"],["3m","3M"],["6m","6M"],["1y","1Y"]];
   const win = (featured && featured.sales) ? computeGradedSaleWindows(featured.sales) : null;
+
+  // PSA population for this card. The poster is already async and
+  // fetchGradedPop caches per session, so after the first card this is free.
+  let popRow = null, popSetGem = null, popLabel = null;
+  try {
+    const pop = await fetchGradedPop();
+    const prows = (popKey && pop.byCard.get(popKey)) || [];
+    if(prows.length === 1){ popRow = prows[0]; }
+    else if(prows.length > 1){
+      // ⚠ Never SUM the printings. Non-Foil and Foil are different markets
+      // -- the C1 split is $1,707 against $280 -- so one table across both
+      // describes neither. Take the printing this poster is about; failing
+      // that the biggest, and NAME it so the reader knows which one they have.
+      const want = popPrinting ? gradedSlotBucket(popPrinting) : null;
+      popRow = (want && prows.find(r => gradedPopBucket(r.variety) === want))
+            || prows.slice().sort((a, b) => (b.total || 0) - (a.total || 0))[0];
+      popLabel = gradedPopBucket(popRow.variety) || popRow.variety || null;
+    }
+    popSetGem = popSet ? (pop.setGem.get(popSet) == null ? null : pop.setGem.get(popSet)) : null;
+  } catch(e) {
+    // ⚠ LOUD, not silent. A missing graded_pop table is handled inside
+    // fetchGradedPop (it resolves empty), so anything reaching here is a real
+    // bug in this block -- and the poster degrades to the old grade list, which
+    // looks exactly like "this card has no population". A bare `catch {}` hid
+    // precisely that once: a concurrent edit dropped popKey from the
+    // destructure, every export silently fell back, and nothing said why.
+    console.error("[graded-poster] population lookup failed:", e);
+  }
 
   const measure=document.createElement("canvas").getContext("2d");
   measure.font="700 22px 'Cinzel', Georgia, serif";
@@ -37115,8 +37159,71 @@ async function buildGradedPosterBlob(opts){
     y += 12;
   }
 
-  // grade price list (all grades — last + avg)
-  if((combos||[]).length){
+  // PSA population. This REPLACES the all-grades price list, which said what
+  // people paid at each grade; population says how many exist there, and the
+  // two answer different questions. ⚠ It falls back to the price list when
+  // PSA has never graded the card, so the poster never ships with a hole.
+  const popStats = popRow ? gradedPopStats(popRow) : null;
+  if(popStats && popStats.total > 0){
+    ctx.textAlign="left";
+    ctx.fillStyle=P.accent; ctx.font="700 13px 'Cinzel', Georgia, serif"; y+=12;
+    ctx.fillText("PSA Pop Report", statsX, y);
+    if(popLabel){
+      // Measured while the title's own font is still set, then switched -- a
+      // measureText under a different font puts the label in the wrong place.
+      const tw=ctx.measureText("PSA Pop Report").width;
+      ctx.fillStyle=P.muted; ctx.font="700 9px 'Nunito Sans', sans-serif";
+      ctx.fillText(popLabel.toUpperCase(), statsX+tw+8, y);
+    }
+    // The gem rate is the largest thing here and the only accent number: it is
+    // the one figure that reframes the prices above it.
+    y+=6;
+    const gemTxt = popStats.gemRate==null ? "—" : (Math.round(1000*popStats.gemRate)/10)+"%";
+    ctx.fillStyle=P.accent; ctx.font="800 26px 'Nunito Sans', sans-serif";
+    ctx.fillText(gemTxt, statsX, y+24);
+    const gemW=ctx.measureText(gemTxt).width;
+    ctx.fillStyle=P.muted; ctx.font="700 8px 'Nunito Sans', sans-serif";
+    ctx.fillText("GRADED PSA 10", statsX, y+36);
+    const totX=statsX+Math.max(gemW+26, 104);
+    ctx.fillStyle=P.text; ctx.font="800 18px 'Nunito Sans', sans-serif";
+    ctx.fillText(fmtInt(popStats.total), totX, y+24);
+    ctx.fillStyle=P.muted; ctx.font="700 8px 'Nunito Sans', sans-serif";
+    ctx.fillText("COPIES GRADED", totX, y+36);
+    y+=46;
+
+    const xShare=statsX+statsW, xCopies=statsX+statsW-86;
+    ctx.font="700 8px 'Nunito Sans', sans-serif"; ctx.fillStyle=P.muted;
+    ctx.textAlign="left";  ctx.fillText("GRADE", statsX, y+10);
+    ctx.textAlign="right"; ctx.fillText("COPIES", xCopies, y+10); ctx.fillText("SHARE", xShare, y+10);
+    ctx.textAlign="left";
+    let ry=y+10+16;
+    const ROW=18, bottom=PAD+artH;
+    const maxRows=Math.max(0, Math.floor((bottom-(ry-12))/ROW));
+    const all=popStats.breakdown;
+    const show=(all.length>maxRows) ? all.slice(0, Math.max(0,maxRows-1)) : all;
+    for(const b of show){
+      const isTen = b.grade===10 && !b.qual;
+      ctx.textAlign="left";
+      ctx.fillStyle = isTen ? P.accent : (b.qual ? P.muted : P.text);
+      ctx.font=(isTen?"800":"700")+" 12px 'Nunito Sans', sans-serif";
+      ctx.fillText(b.label, statsX, ry);
+      ctx.textAlign="right";
+      ctx.fillText(fmtInt(b.n), xCopies, ry);
+      ctx.fillStyle = isTen ? P.accent : P.dim;
+      ctx.fillText((Math.round(1000*b.n/popStats.total)/10)+"%", xShare, ry);
+      ctx.textAlign="left";
+      ry+=ROW;
+    }
+    if(show.length<all.length){
+      ctx.fillStyle=P.muted; ctx.font="600 10px 'Nunito Sans', sans-serif";
+      ctx.fillText("+ "+(all.length-show.length)+" more grades", statsX, ry+2);
+      ry+=14;
+    }
+    if(popSetGem!=null && popStats.gemRate!=null && ry+10 <= PAD+artH){
+      ctx.fillStyle=P.muted; ctx.font="600 9px 'Nunito Sans', sans-serif";
+      ctx.fillText("Set average "+(Math.round(1000*popSetGem)/10)+"% at PSA 10", statsX, ry+2);
+    }
+  } else if((combos||[]).length){
     ctx.fillStyle=P.accent; ctx.font="700 13px 'Cinzel', Georgia, serif"; ctx.textAlign="left"; y+=12; ctx.fillText("All grades", statsX, y);
     const xAvg=statsX+statsW, xLast=statsX+statsW-86, nameX=statsX+16;
     y+=4;
@@ -46935,16 +47042,20 @@ const MAINLINE_RELEASE_ORDER = [
   "Whispers in the Well",    // 10
   "Winterspell",             // 11
   "Wilds Unknown",           // 12
-  "Attack of the Vine!",     // 13 — listed pre-release so it sorts as the newest
+  "Attack of the Vine!",     // 13
+  "Hyperia City",            // 14 — listed pre-release so it sorts as the newest
 ];
 // Sets that appear in release-order for DISPLAY (newest-first sorting + Infinity
 // legality) but have NOT physically released yet, so they're excluded from Core
 // rotation math — the format must not rotate weeks before the set drops. Entries
-// are date-gated [set name, retail release date]: a set drops out of pre-release
+// are date-gated [set name, LGS release date]: a set drops out of pre-release
 // automatically at local midnight on release day, so Core rotates on schedule
-// without a code change.
+// without a code change. ⚠ The date is the LGS date from SET_RELEASE_DATES, not
+// the retail one a week later — the set is playable, and Core rotates, the day
+// shops may sell it. Attack of the Vine! carries its LGS 07-17, not retail 07-24.
 const PRERELEASE_SETS = new Set([
   ["Attack of the Vine!", "2026-07-17"],
+  ["Hyperia City", "2026-10-16"],
 ].filter(([, rel]) => Date.now() < new Date(rel + "T00:00:00").getTime()).map(([name]) => name));
 
 // Compute the Core-Constructed legal window from the latest released set
