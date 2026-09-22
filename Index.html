@@ -40574,6 +40574,58 @@ function useNearbyScEvents(on){
   return {rows: rows || [], err, ready, ...origin};
 }
 
+// Every Lorcana event around a POINT, for the map. Same RPC as the box above,
+// with two differences that are the whole feature:
+//
+//  * `p_kind: null` — every kind, not just Set Championships. "What is on near
+//    me" means the league nights too.
+//  * it is driven by the map's own FOCUS, not the saved ZIP, so zooming
+//    somewhere else asks about there.
+//
+// ⚠ It only ever runs FOCUSED. There are ~17k upcoming events; a whole-world
+// map of them is not a map, and the RPC that walks them is the most expensive
+// read on this screen. No focus, no fetch.
+const _calMapNearCache = new Map();
+function useMapNearbyEvents(focus, radius, on){
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const lat = focus ? focus.lat : null, lng = focus ? focus.lng : null;
+  const key = `${lat}|${lng}|${radius}`;
+  useEffect(() => {
+    if(!on || lat == null || lng == null){ setRows(null); setErr(null); setBusy(false); return; }
+    if(_calMapNearCache.has(key)){ setRows(_calMapNearCache.get(key)); setErr(null); return; }
+    let cancelled = false;
+    setErr(null); setBusy(true);
+    (async () => {
+      try {
+        const {data, error} = await sbClient.rpc("get_nearby_lorcana_events", {
+          p_lat: lat, p_lng: lng, p_radius_mi: radius, p_kind: null,
+        });
+        if(error) throw error;
+        // The RPC returns SERIES, and a weekly league night is one series with
+        // many dates — so it is the OCCURRENCES that go on the map, exactly as
+        // the near-me SC hook does it.
+        const out = [];
+        for(const sr of data || []){
+          for(const oc of (sr.occurrences || [])){
+            const entry = calendarStoreEntry({...sr, ...oc, event_id: oc.event_id,
+              name: oc.name || sr.name, start_datetime: oc.start_datetime,
+              end_datetime: oc.end_datetime}, {near: true, distance_mi: sr.distance_mi});
+            if(entry) out.push(entry);
+          }
+        }
+        _calMapNearCache.set(key, out);
+        if(!cancelled){ setRows(out); setBusy(false); }
+      } catch(e){
+        if(!cancelled){ setRows(null); setErr(String(e && e.message || e)); setBusy(false); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [on, lat, lng, radius, key]);
+  return {rows: rows || [], err, busy};
+}
+
 // A plain <a download>. An installed PWA on iOS can still refuse it, so every
 // surface offering the download offers the Google Calendar link beside it — one
 // of the two always works, and neither needs a server.
@@ -42590,6 +42642,7 @@ const CAL_MAP_VIEW_H = 480;
 // A metro, not a street and not a continent: at 9 a whole conurbation and its
 // suburbs fit, which is the scale "what is near me" is asked at.
 const CAL_MAP_FOCUS_Z = 9, CAL_MAP_FOCUS_MIN = 3, CAL_MAP_FOCUS_MAX = 13;
+const CAL_MAP_SCOPE_LS = "packsink:cal:mapScope";
 // ⚠ Default flipped list → MONTH 2026-09-21 (Zaven), the same call the home
 // panel took the day before. The mode is persisted on every mount, so a plain
 // default change reaches NOBODY who has ever opened this page — the same trap
@@ -42953,7 +43006,20 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   // boxes that can disagree is how a person ends up looking at the wrong Dublin
   // on one surface and the right one on the other.
   const [mapQ, setMapQ] = useState(() => { try { return localStorage.getItem("packsink:scZip") || ""; } catch { return ""; } });
+  // ⚠ ALL events is the default, not yours. "What is on near me" is the
+  // question somebody zooming to their own town is asking, and answering it
+  // with only the shops they already follow shows an empty map to exactly the
+  // person who has not followed anything yet — which is everyone, once.
+  // Narrowing to your own is the FILTER, which is the way round Zaven asked for.
+  const [mapScope, setMapScope] = useState(() => {
+    try { return localStorage.getItem(CAL_MAP_SCOPE_LS) === "mine" ? "mine" : "all"; } catch { return "all"; }
+  });
+  useEffect(() => { try { localStorage.setItem(CAL_MAP_SCOPE_LS, mapScope); } catch {} }, [mapScope]);
   const [mapFocus, setMapFocus] = useState(null);
+  // ⚠ The finder's OWN saved radius, not a second one. Two radius settings for
+  // "near me" is the same trap as two postal-code boxes: they drift, and the
+  // person gets different answers on two surfaces for one question.
+  const [mapNearRadius, setMapNearRadius] = useState(() => calNearOrigin().radius);
   const [mapBusy, setMapBusy] = useState(false);
   const [mapErr, setMapErr] = useState(null);
   const mapSeq = useRef(0);
@@ -43108,6 +43174,16 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   // you know where you are in the season.
   const [showPast, setShowPast] = useState(false);
   const listed = showPast ? shown : upcoming;
+  // Every event around the map's focus — fetched only in map mode, only when
+  // focused, and only while the scope is All.
+  const mapNear = useMapNearbyEvents(mapFocus, mapNearRadius, mode === "map" && mapScope === "all");
+  // ⚠ The map draws `listed` PLUS the nearby feed, never the feed alone: the
+  // circuit and your own shops are the calendar, and dropping them the moment
+  // you zoom would answer a narrower question than the one you asked. The merge
+  // keys on event_id, so a shop you follow is not drawn twice.
+  const mapRows = useMemo(() => (mapScope === "all" && mapFocus)
+    ? calendarMergeStore(listed, mapNear.rows.filter(e => !hidden.has(e.id)))
+    : listed, [mapScope, mapFocus, listed, mapNear.rows, hidden]);
   const byMonth = useMemo(() => {
     const m = new Map();
     for(const ev of listed){
@@ -43425,16 +43501,35 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
                   onClick=${() => setMapFocus(f => f && {...f, zoom: Math.min(CAL_MAP_FOCUS_MAX, f.zoom + 1)})}>+</button>
               </span>
               <span class="cal-map-at">${mapFocus.label}</span>
+              ${/* ⚠ ALL is the default and the left-hand option. Zoomed into a
+                   town, "what is on near me" is the question, and the shops you
+                   already follow are the narrowing — not the starting point.
+                   This used to be a link to the finder's own map, which opened a
+                   second, smaller window over this one to answer half of what
+                   you were already looking at. */""}
+              <span class="seg-toggle cal-map-scope" role="group" aria-label="Which events">
+                <button type="button" class=${mapScope === "all" ? "active" : ""}
+                  aria-pressed=${mapScope === "all"}
+                  title="Every Lorcana event near here, whether you follow the shop or not"
+                  onClick=${() => setMapScope("all")}>All events</button>
+                <button type="button" class=${mapScope === "mine" ? "active" : ""}
+                  aria-pressed=${mapScope === "mine"}
+                  title="Only the circuit and the shops you follow"
+                  onClick=${() => setMapScope("mine")}>Just mine</button>
+              </span>
+              ${mapScope === "all" && html`<label class="cal-map-radius">
+                within
+                <select value=${String(mapNearRadius)} aria-label="Search radius"
+                  onChange=${(e) => { const v = Number(e.target.value); setMapNearRadius(v);
+                    try { localStorage.setItem(CAL_NEAR_LS_RADIUS, String(v)); } catch {} }}>
+                  ${[10, 25, 50, 100, 200].map(r => html`<option key=${r} value=${String(r)}>${r} mi</option>`)}
+                </select>
+              </label>`}
+              ${mapNear.busy && html`<span class="cal-map-note muted">Finding events…</span>`}
+              ${mapNear.err && html`<span class="cal-map-note cal-map-note--err"
+                title=${mapNear.err}>Couldn't load nearby events</span>`}
               <button type="button" class="cal-linkish cal-map-reset"
                 onClick=${() => { setMapFocus(null); setMapErr(null); }}>Whole season</button>
-              ${/* ⚠ The calendar map holds the CIRCUIT plus the shops you follow —
-                   not every local event, which is the finder's job. Zoomed into a
-                   town, saying so and offering the other map is the honest move;
-                   pretending this one answers it is not. */""}
-              ${onFindEvents && html`<button type="button" class="cal-linkish cal-map-all"
-                title="Every Lorcana event near you, not just the ones you follow"
-                onClick=${() => { try { localStorage.setItem("packsink:scMap", "1"); } catch {} onFindEvents(); }}>
-                Every event near me →</button>`}
             </>`}
           </form>
           ${mapErr && html`<div class="cal-warn cal-warn--near">${uiIcon("warn", 14)} ${mapErr}</div>`}
@@ -43442,12 +43537,16 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
                every filter above mean the same thing here as they do there, and
                a map can never quietly hold a different set of events from the
                view you switched away from. */""}
-          <${EventMapView} events=${listed} height=${CAL_MAP_VIEW_H} fit=${CAL_MAP_FIT} focus=${mapFocus}
+          <${EventMapView} events=${mapRows} height=${CAL_MAP_VIEW_H} fit=${CAL_MAP_FIT} focus=${mapFocus}
             dateOf=${(e) => calShortDay(e && e.starts_on)}
             labelOf=${(e) => calEventTitle(e)}
             subLabelOf=${(e) => [calDayLabel(e && e.starts_on), e && e.location].filter(Boolean).join(" · ")}
             worldwideOf=${(e) => e && (e.kind === "set" || e.kind === "product")}
-            focusEmpty=${mapFocus ? `Nothing on your calendar is near ${mapFocus.label}. Zoom out, turn on "SCs near me" above, or open every event near you.` : null}
+            focusEmpty=${!mapFocus ? null
+              : mapScope === "mine"
+                ? `Nothing you follow is near ${mapFocus.label}. Switch to All events, or zoom out.`
+                : mapNear.busy ? `Finding events near ${mapFocus.label}…`
+                : `No Lorcana events near ${mapFocus.label} within ${mapNearRadius} mi. Try a wider radius, or zoom out.`}
             onPick=${setSel}/>
         </div>`
       : mode === "timeline"
