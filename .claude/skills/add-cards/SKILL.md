@@ -26,13 +26,24 @@ cd scripts && python -c "from dotenv import load_dotenv;load_dotenv('.env');from
 ```
 
 Credentials come from `scripts/.env` locally. In a cloud session they come from the cloud
-environment: `SUPABASE_URL` as an environment variable, and the service key as an **API
-credential** on the Supabase host (headers `Authorization: Bearer <key>` and `apikey: <key>`),
-with `SUPABASE_SERVICE_KEY=proxy-injected` as a placeholder env var. `supabase_client` sends no
-auth of its own when it sees that placeholder, and the agent proxy adds the real key — the
-session never sees it. If this check fails in the cloud, tell Zaven which piece is missing and
-stop. (`cards.disneylorcana.com` must be in the environment's allowed domains for the gallery
-guard; without it the import still runs but says it could not read the gallery.)
+environment: `SUPABASE_URL` + the placeholder `SUPABASE_SERVICE_KEY=proxy-injected` as env vars,
+and the real service key as an **API credential** on the Supabase host
+(`Authorization: Bearer <key>`), which the agent proxy adds on the way out — the session never
+sees it. With the placeholder, `supabase_client` sends the PUBLIC publishable key as `apikey`
+(Supabase requires that header, and runs the request as the Bearer JWT's role).
+
+Reading a failure:
+- `401 "No API key found"` — the client sent no `apikey`; you are on an old `supabase_client`.
+- `permission denied for table ...` / 401 as anon — the proxy did NOT add the credential. Tell
+  Zaven to delete and re-add it in the environment settings (Authorization / Bearer / the key,
+  host `umwqowkiatjjltologrd.supabase.co`), then start a NEW session.
+
+⚠ **Never work around missing credentials by changing permissions** — no temporary storage or
+RLS policies, no GRANTs, no uploading via the SQL connector. That is a permission change on
+production and is not yours to make. If Stage 0 fails, stop, say which piece is missing, and
+leave the prepared manifest + crops in the scratchpad so a rerun is instant.
+(`cards.disneylorcana.com` must be in the allowed domains for the gallery guard; without it the
+import still runs but says it could not read the gallery.)
 
 ## Stage 1 — Find the image files
 
