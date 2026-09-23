@@ -149,7 +149,7 @@ def main():
             jpg = optimize(data)
             path = f"{tag}/{cn}.jpg"
             up = requests.post(f"{sb.url}/storage/v1/object/{BUCKET}/{path}",
-                               headers={"apikey": sb.key, "Authorization": f"Bearer {sb.key}",
+                               headers={**sb.auth_headers(),
                                         "Content-Type": "image/jpeg", "x-upsert": "true"}, data=jpg, timeout=60)
             if not up.ok:
                 print(f"  {label} UPLOAD FAIL {up.status_code}"); continue

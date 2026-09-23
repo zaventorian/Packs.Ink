@@ -25,12 +25,14 @@ pip install -q requests python-dotenv pillow 2>/dev/null
 cd scripts && python -c "from dotenv import load_dotenv;load_dotenv('.env');from supabase_client import Supabase;print(len(Supabase().select('sets',columns='id',filters={'name':'ilike.*'})),'sets')"
 ```
 
-Credentials come from `scripts/.env` locally, or the environment variables `SUPABASE_URL` +
-`SUPABASE_SERVICE_KEY` in a cloud session. If this fails in the cloud, tell Zaven which of
-these is missing and stop:
-- the two env vars aren't set on the cloud environment, or
-- the environment's network access doesn't allow `*.supabase.co` (also add
-  `cards.disneylorcana.com` for the gallery guard; PyPI is in the default trusted list).
+Credentials come from `scripts/.env` locally. In a cloud session they come from the cloud
+environment: `SUPABASE_URL` as an environment variable, and the service key as an **API
+credential** on the Supabase host (headers `Authorization: Bearer <key>` and `apikey: <key>`),
+with `SUPABASE_SERVICE_KEY=proxy-injected` as a placeholder env var. `supabase_client` sends no
+auth of its own when it sees that placeholder, and the agent proxy adds the real key — the
+session never sees it. If this check fails in the cloud, tell Zaven which piece is missing and
+stop. (`cards.disneylorcana.com` must be in the environment's allowed domains for the gallery
+guard; without it the import still runs but says it could not read the gallery.)
 
 ## Stage 1 — Find the image files
 

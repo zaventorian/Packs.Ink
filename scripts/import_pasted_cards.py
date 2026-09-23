@@ -276,7 +276,7 @@ def main():
         p = "%s/%s.jpg" % (args.tag, cn)
         up = requests.post(
             "%s/storage/v1/object/%s/%s" % (sb.url, BUCKET, p),
-            headers={"apikey": sb.key, "Authorization": "Bearer %s" % sb.key,
+            headers={**sb.auth_headers(),
                      "Content-Type": "image/jpeg", "x-upsert": "true"},
             data=jpg, timeout=60)
         if not up.ok:
