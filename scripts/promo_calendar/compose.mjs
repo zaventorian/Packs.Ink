@@ -66,6 +66,20 @@ async function run(browser, fmt) {
   await page.evaluate(() => window.__seek(0));
   await page.waitForTimeout(800);
   const file = path.join(OUT, `lorcana-calendar-${fmt}.mp4`);
+  /* --audit: step the whole cut at 15fps and list every callout that is
+   * clipped by the window or hidden under the caption. Nothing is encoded. */
+  if (argv.includes("--audit")) {
+    const seen = new Map();
+    for (let t = 0; t < plan.total; t += 1 / 15) {
+      await page.evaluate((x) => window.__seek(x), t);
+      const bad = await page.evaluate(() => window.__audit());
+      const sh = plan.shots.findIndex((s) => t < s.at + s.dur);
+      for (const b of bad) { const k = sh + " " + b; if (!seen.has(k)) seen.set(k, [t, t]); seen.get(k)[1] = t; }
+    }
+    for (const [k, [a, b]] of seen) log(`  ${a.toFixed(2)}-${b.toFixed(2)}s  shot ${k}`);
+    log(seen.size ? `${seen.size} problem(s)` : "audit clean: every callout is on screen and clear of the caption");
+    return ctx.close();
+  }
   if (STILLS.length) {
     for (const t of STILLS) {
       await page.evaluate((x) => window.__seek(x), t);

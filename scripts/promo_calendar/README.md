@@ -10,6 +10,7 @@ python scripts/dev_server.py 8850                          # in another shell
 node scripts/promo_calendar/capture.mjs                    # raw clips + marks -> promo/calendar/clips/
 node scripts/promo_calendar/compose.mjs                    # -> promo/calendar/lorcana-calendar-desktop.mp4
 node scripts/promo_calendar/compose.mjs --stills 6,23,51   # PNG frames, no encode
+node scripts/promo_calendar/compose.mjs --audit            # every callout on screen + clear of the caption?
 node scripts/promo_calendar/compose.mjs --audio track.mp3  # mux music (none by default)
 node scripts/promo_calendar/marksheet.mjs c_local out.png  # one labelled frame per mark
 ```
@@ -27,6 +28,13 @@ node scripts/promo_calendar/marksheet.mjs c_local out.png  # one labelled frame 
   `[clipFrom, clipTo, speed]` segments (a speed ramp — waits fast, payoffs near
   1x), a camera keyed to mark boxes, spotlight callouts on mark boxes, and a
   caption. `PACE` scales the whole cut.
+- **The camera fits the callouts.** Each callout pulls the camera (zoom out,
+  then shift) until its box and label sit inside the window with headroom and
+  clear of the caption; the most-visible callout is applied last so it always
+  wins. `--audit` steps the whole cut and lists anything clipped — run it after
+  every plan edit. It checks geometry only: a mark taken BEFORE a click can be
+  stale once the page re-flows, which is why clicks also record `<name>After`.
+  Look at a still at each callout's midpoint too.
 - **`scene.html`** is the stage: window, camera, callouts, lower-third
   captions, chapter rail, hook/CTA cards. `__seek(t)` is a pure function of time.
 - **`compose.mjs`** steps the scene frame by frame and pipes JPEGs to ffmpeg.

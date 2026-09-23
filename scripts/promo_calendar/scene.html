@@ -110,6 +110,49 @@ function camAt(sh, lt){
   }
   return k[k.length-1].slice(1);
 }
+/* The camera FITS the callouts. Each active callout (with a lead-in before it
+ * appears and a tail after) pulls the camera — zooming out if its box plus its
+ * label would not fit, then shifting — until the box and label sit inside the
+ * window and clear of the caption. Weighted by a smooth envelope, so it eases
+ * rather than jumps, and still a pure function of time. */
+const LEAD = 0.5, TAIL = 0.35;
+const labW = (l) => (l ? 32 + l.length * 12.5 : 0);
+function envelope(lt, c){
+  return ease(clamp((lt - (c.from - LEAD)) / LEAD, 0, 1)) * ease(clamp(((c.to + TAIL) - lt) / TAIL, 0, 1));
+}
+function capBoxVp(){
+  if (!cap.dataset.on) return null;
+  return { l: cap.offsetLeft - 40, r: cap.offsetLeft - 40 + cap.offsetWidth, t: cap.offsetTop - 68 };
+}
+function fitCam(sh, lt, c, vw, vh){
+  let [cx, cy, W] = c;
+  const cb = capBoxVp();
+  // Weakest first: whichever callout is most on screen is applied LAST, so its
+  // box is guaranteed to fit even while a neighbour is easing in or out.
+  const active = (sh.calls || []).map((call, i) => ({ call, i, e: envelope(lt, call) }))
+    .filter((a) => a.e > 0).sort((a, b) => a.e - b.e || a.i - b.i);
+  for (const { call, e } of active) {
+    const r = call.r, pad = (call.pad ?? 10) + 4, side = call.label ? (call.side || "below") : null;
+    let ml = 80 + pad, mr = 80 + pad, mt = 110 + pad, mb = 50 + pad;
+    if (side === "above") mt += 62; if (side === "below") mb += 62;
+    if (side === "left") ml += labW(call.label) + 16; if (side === "right") mr += labW(call.label) + 16;
+    // zoom out if it cannot fit (caption height reserved when it would collide)
+    const capH = cb ? vh - cb.t + 16 : 0;
+    const needS = Math.min((vw - ml - mr) / r.w, (vh - mt - mb - capH * 0.5) / r.h);
+    let s = vw / W;
+    if (s > needS) W = lerp(W, vw / needS, e);
+    s = vw / W;
+    const sx0 = (r.x - cx) * s + vw / 2, sx1 = sx0 + r.w * s;
+    const sy0 = (r.y - cy) * s + vh / 2, sy1 = sy0 + r.h * s;
+    let bottom = vh;
+    if (cb && sx1 + mr > cb.l && sx0 - ml < cb.r) bottom = cb.t - 12;
+    let dx = 0, dy = 0;
+    if (sx0 < ml) dx = ml - sx0; else if (sx1 > vw - mr) dx = (vw - mr) - sx1;
+    if (sy0 < mt) dy = mt - sy0; else if (sy1 > bottom - mb) dy = (bottom - mb) - sy1;
+    cx -= e * dx / s; cy -= e * dy / s;
+  }
+  return [cx, cy, W];
+}
 function place(i, sh, lt, alpha, scale){
   const w = wins[i], v = vids[i];
   w.classList.toggle("phone", !!sh.phone);
@@ -121,7 +164,8 @@ function place(i, sh, lt, alpha, scale){
   const vp = w.querySelector(".vp");
   const vw = vp.clientWidth, vh = vp.clientHeight;
   const cw = v.videoWidth || 2880, ch = v.videoHeight || 1800;
-  const c = camAt(sh, lt) || [cw/2, 0, cw];
+  const c0 = camAt(sh, lt) || [cw/2, ch/2, cw];
+  const c = sh.phone ? c0 : fitCam(sh, lt, c0, vw, vh);
   const s = vw / Math.min(c[2], cw);
   let x = -(c[0]*s - vw/2), y = -(c[1]*s - vh/2);
   x = cw*s <= vw ? (vw - cw*s)/2 : clamp(x, vw - cw*s, 0);
@@ -144,7 +188,7 @@ function drawCalls(sh, lt, T){
     const x = T.ox + c.r.x * T.s - pad, y = T.oy + c.r.y * T.s - pad;
     const w = c.r.w * T.s + pad*2, h = c.r.h * T.s + pad*2;
     const sc = lerp(1.22, 1, p);
-    html += `<div class="ring${c.dim === false ? " nodim" : ""}" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px;opacity:${a};transform:scale(${sc})"></div>`;
+    html += `<div data-label="ring: ${c.label || ""}" class="ring${c.dim === false ? " nodim" : ""}" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px;opacity:${a};transform:scale(${sc})"></div>`;
     if (c.label) {
       const side = c.side || "below";
       let tx, ty, tr;
@@ -152,7 +196,7 @@ function drawCalls(sh, lt, T){
       else if (side === "above") { tx = x + w/2; ty = y - 14; tr = "translate(-50%,-100%)"; }
       else if (side === "left") { tx = x - 16; ty = y + h/2; tr = "translate(-100%,-50%)"; }
       else { tx = x + w + 16; ty = y + h/2; tr = "translate(0,-50%)"; }
-      html += `<div class="tag" style="left:${tx}px;top:${ty}px;opacity:${a};transform:${tr} translateY(${(1-p)*10}px)">${c.label}</div>`;
+      html += `<div data-label="${c.label}" class="tag" style="left:${tx}px;top:${ty}px;opacity:${a};transform:${tr} translateY(${(1-p)*10}px)">${c.label}</div>`;
     }
   }
   calls.innerHTML = html;
@@ -160,6 +204,7 @@ function drawCalls(sh, lt, T){
 let capKey = "";
 function drawCap(sh, lt, k){
   const c = sh.cap;
+  cap.dataset.on = c ? "1" : "";
   if (!c) { cap.style.opacity = 0; return; }
   const key = JSON.stringify(c);
   if (key !== capKey) {
@@ -239,6 +284,9 @@ window.__seek = async (t) => {
   const punch = sh.cont ? 1 : lerp(1.035, 1, out(clamp(lt / 0.32, 0, 1)));
   await load(cur, sh.clip);
   await seekVid(cur, pw(sh.map, lt));
+  let j = idx;
+  while (j > 0 && shots[j-1].cap && JSON.stringify(shots[j-1].cap) === JSON.stringify(sh.cap)) j--;
+  drawCap(sh, lt, t - shots[j].at);
   const T = place(cur, sh, lt, 1, punch);
   const XF = sh.cont ? 0 : 0.14;
   if (prev && prev.clip && lt < XF) {
@@ -248,9 +296,25 @@ window.__seek = async (t) => {
     wins[oth].style.zIndex = 4;
   } else wins[oth].style.display = "none";
   drawCalls(sh, lt, T);
-  let j = idx;
-  while (j > 0 && shots[j-1].cap && JSON.stringify(shots[j-1].cap) === JSON.stringify(sh.cap)) j--;
-  drawCap(sh, lt, t - shots[j].at);
+};
+/* Every active callout must be fully inside the window and clear of the
+ * caption. Returns the problems at the current frame (compose.mjs --audit). */
+window.__audit = () => {
+  const win = [...document.querySelectorAll(".win")].find((w) => w.style.display !== "none" && +w.style.opacity > 0.5);
+  if (!win) return [];
+  const vp = win.querySelector(".vp").getBoundingClientRect();
+  const cr = cap.getBoundingClientRect(), capOn = +cap.style.opacity > 0.3 && cap.dataset.on;
+  const bad = [];
+  for (const el of calls.children) {
+    if (+el.style.opacity < 0.6) continue;
+    const b = el.getBoundingClientRect(), tol = 3;
+    const name = el.dataset.label || "(ring)";
+    if (b.left < vp.left - tol || b.right > vp.right + tol || b.top < vp.top - tol || b.bottom > vp.bottom + tol)
+      bad.push(name + " clipped by the window");
+    if (capOn && b.right > cr.left && b.left < cr.right && b.bottom > cr.top && b.top < cr.bottom)
+      bad.push(name + " under the caption");
+  }
+  return [...new Set(bad)];
 };
 window.__ready = () => document.fonts.ready.then(() => true);
 </script>

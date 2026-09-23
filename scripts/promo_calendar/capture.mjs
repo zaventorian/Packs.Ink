@@ -130,6 +130,9 @@ function helpers(page, mobile, marks) {
     else { await glide(x, y, ms); await sleep(90); record(m, b); await page.mouse.down(); await sleep(60); await page.mouse.up(); }
     if (mobile) record(m, b);
     await sleep(after);
+    /* Where it is NOW: a click often re-flows the page (switching views moves
+     * the toolbar), so a callout that lingers after the click needs this box. */
+    if (m) { try { const a = await page.locator(sel).first().boundingBox({ timeout: 1500 }); record(m + "After", a); } catch { /* gone */ } }
   };
   const type = async (sel, text, delay = 110, m) => {
     await click(sel, { after: 150, mark: m });
@@ -273,6 +276,7 @@ const CLIPS_DEF = [
   { name: "c_mine", path: "/calendar", async run(page, h) {
     await sleep(1000);
     await h.click(".cal-follow-toggle", { mark: "drawer", after: 1800 });
+    await h.mark("drawerBody", ".cal-follow-body");
     await h.to("button:has-text('Export .ics')", { mark: "export", ms: 500 });
     await sleep(1500);
   }},

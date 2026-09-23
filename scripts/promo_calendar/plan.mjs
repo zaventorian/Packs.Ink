@@ -25,7 +25,7 @@ const ctr = (r, w, dx = 0, dy = 0) => [r.x + r.w / 2 + dx, r.y + r.h / 2 + dy, w
 
 /* Global pace. Every speed in the list is multiplied by this, so the whole
  * cut can be made snappier or calmer in one place. */
-const PACE = 1.28;
+const PACE = 1.08;
 function shot(clip, segs, build) {
   const map = [];
   let o = 0;
@@ -77,10 +77,10 @@ D.push({ card: { kind: "hook", per: 0.55, lines: ["Every set release.", "Every C
     calls: [
       call(0.05, at(2.3), R(c, "list", { x: 150, w: 20 }), "Month", "above", { dim: false }),
       call(at(T(c, "list") - 0.05), at(5.1), R(c, "list"), "List", "above", { dim: false }),
-      call(at(T(c, "timeline") - 0.05), at(8.2), R(c, "timeline"), "Timeline", "above", { dim: false }),
-      call(at(T(c, "map") - 0.05), end - 0.05, R(c, "map"), "Map", "above", { dim: false }),
+      call(at(T(c, "timeline") + 0.35), at(8.1), R(c, "timelineAfter"), "Timeline", "above", { dim: false }),
+      call(at(T(c, "map") + 0.35), end - 0.05, R(c, "mapAfter"), "Map", "above", { dim: false }),
     ],
-    cap: { chapter: "02 · Four views", title: "Month · List · Timeline · Map", top: true },
+    cap: { chapter: "02 · Four views", title: "Month · List · Timeline · Map" },
   })));
 }
 
@@ -94,7 +94,7 @@ D.push({ card: { kind: "hook", per: 0.55, lines: ["Every set release.", "Every C
     ch: 2, url: "/calendar",
     cam: [[0, [1440, 800, 2500]], [at(2.3), ctr(chip, 1900, 0, -40)], [at(3.6), FIN(260)], ["end", FIN(260)]],
     calls: [call(at(T(c, "nearChip") - 0.1), at(3.1), chip, "SCs near me", "below")],
-    cap: L("Find events near you", "One tap — no account needed."),
+    cap: L("Find events near you", "Tap SCs near me to open the event finder."),
   })));
   // b · type a town
   D.push(shot(c, [[5.4, 7.3, 1.9], [7.3, 8.5, 1.3], [8.5, 11.1, 2.6]], (at) => ({
@@ -107,7 +107,7 @@ D.push({ card: { kind: "hook", per: 0.55, lines: ["Every set release.", "Every C
   D.push(shot(c, [[11.1, 13.4, 1.05]], (at, end) => ({
     ch: 2, url: "/calendar", cont: true, cam: [[0, FIN(560)]],
     calls: [call(0.1, end - 0.05, { x: 844, y: 130, w: 200, h: 55 }, null, "below", { dim: false }),
-      call(0.25, end - 0.05, R(c, "scTile"), "Set Championship near you", "below")],
+      call(0.25, end - 0.05, R(c, "scTile"), "Set Championship near you", "above")],
     cap: L("Set Champs", "The shops near you running one — and when."),
   })));
   // d · prereleases
@@ -205,7 +205,7 @@ D.push({ card: { kind: "hook", per: 0.55, lines: ["Every set release.", "Every C
     ch: 5, url: "/calendar",
     cam: [[0, [1440, 900, 2300]], [at(7.6), [1440, 900, 2300]], [at(8.6), ctr(modal, 1900, 0, -170)], [at(11.6), ctr(modal, 1900, 0, -170)], [at(12.7), ctr(modal, 1900, 0, 230)], ["end", ctr(modal, 1900, 0, 230)]],
     calls: [
-      call(at(T(c, "row") - 0.1), at(7.4), R(c, "row"), null),
+      call(at(T(c, "row") - 0.1), at(6.7), R(c, "row"), null),
       call(at(9.0), at(11.5), R(c, "products", { h: 300 }), "What's out that day — with prices", "right", { dim: false }),
       call(at(T(c, "add") - 0.1), end - 0.05, R(c, "add"), "Add to my calendar", "right"),
     ],
@@ -220,7 +220,7 @@ D.push({ card: { kind: "hook", per: 0.55, lines: ["Every set release.", "Every C
     ch: 6, url: "/calendar", cam: [[0, [1440, 700, 2300]], [at(3.0), [1440, 900, 2300]], ["end", [1440, 900, 2300]]],
     calls: [
       call(at(T(c, "drawer") - 0.1), at(3.0), R(c, "drawer"), null),
-      call(at(3.1), at(5.2), { x: 440, y: 1040, w: 2000, h: 180 }, "Your stores, and which events you want", "above", { dim: false }),
+      call(at(3.1), at(5.2), R(c, "drawerBody"), "Your stores, and which events you want", "above", { dim: false }),
       call(at(T(c, "export") - 0.05), end - 0.05, R(c, "export"), "Export to any calendar app", "below"),
     ],
     cap: { chapter: "07 · Yours", title: "Your stores, your season", sub: "Follow, save, hide — then send it to your phone's calendar." },
@@ -231,7 +231,7 @@ D.push({ card: { kind: "hook", per: 0.55, lines: ["Every set release.", "Every C
 }
 
 // ── CTA ───────────────────────────────────────────────────────────────────
-D.push({ card: { eyebrow: "Free · no sign-up needed", big: "Lorcana <span class='gold'>Calendar</span>", url: "packs.ink/calendar" }, dur: 3.4 });
+D.push({ card: { big: "Lorcana <span class='gold'>Calendar</span>", url: "packs.ink/calendar" }, dur: 3.4 });
 
 function finalize(shots) {
   let at = 0;
