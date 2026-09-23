@@ -2839,6 +2839,29 @@ const calTodayYmd = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
+// "Today" as React state that MOVES. An installed PWA is left open for days, and
+// a plain `calTodayYmd()` read at render only changes when something else
+// happens to re-render — so the today ring, every countdown and "upcoming"
+// stayed on yesterday. It re-reads at the next local midnight and whenever the
+// tab comes back into view (a sleeping laptop misses its timer).
+const useCalToday = () => {
+  const [d, setD] = useState(calTodayYmd);
+  useEffect(() => {
+    let t = null;
+    const sync = () => setD(p => { const n = calTodayYmd(); return n === p ? p : n; });
+    const arm = () => {
+      clearTimeout(t);
+      const now = new Date();
+      const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
+      t = setTimeout(() => { sync(); arm(); }, Math.max(1000, next - now));
+    };
+    const onVis = () => { if(document.visibilityState === "visible"){ sync(); arm(); } };
+    arm();
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearTimeout(t); document.removeEventListener("visibilitychange", onVis); };
+  }, []);
+  return d;
+};
 // The calendar day an instant falls on IN THE EVENT'S OWN ZONE. A Friday 9pm
 // league night in Los Angeles is Friday for the people going, whatever zone the
 // person reading the calendar is in. Intl throws on a bad zone name (RPH does
@@ -41620,6 +41643,28 @@ const CalendarAddMenu = ({ev, subs, compact}) => {
   </div>`;
 };
 
+const CalendarModalFoot = ({ev, subs}) => {
+  const subRef = ev.kind === "store" ? String(ev.event_id) : (ev.derived ? null : String(ev.id));
+  const on = !!subRef && subs.has("event", subRef);
+  const hidden = subs.has("hide", String(ev.id));
+  const label = calEventFullLabel(ev);
+  return html`<div class="cal-modal-foot">
+    ${subRef && html`<button type="button" class=${"cal-foot-btn" + (on ? " on" : "")}
+      aria-pressed=${on ? "true" : "false"}
+      onClick=${() => {
+        subs.toggle({kind: "event", ref: subRef, label,
+                     meta: ev.kind === "store" ? {store_id: ev.store_id} : null});
+        flashToast(on ? "Removed from your calendar" : "Added to your calendar");
+      }}>${uiIcon(on ? "check" : "calendarPlus", 13)} ${on ? "On my calendar" : "Add to my calendar"}</button>`}
+    <button type="button" class="cal-foot-btn cal-foot-btn--quiet" onClick=${() => {
+      const id = String(ev.id);
+      if(hidden){ subs.remove("hide", id); flashToast("Back on your calendar"); return; }
+      subs.add({kind: "hide", ref: id, label});
+      flashToast(`Hidden — undo it under "My calendar"`);
+    }}>${uiIcon(hidden ? "eye" : "close", 13)} ${hidden ? "Un-hide this event" : "Hide this event"}</button>
+  </div>`;
+};
+
 const CalendarRow = ({ev, today, subs, onOpen, art}) => {
   const k = CALENDAR_KIND_BY_KEY.get(ev.kind);
   // Line two is the event's own name — "Core Constructed" under "Dice Dojo".
@@ -42515,8 +42560,10 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art, backLabel}) 
         lat=${ev.latitude} lng=${ev.longitude} label=${ev.location || title}
         zoom=${ev.kind === "store" ? 13 : 10}/>`}
 
-      ${!ev.derived && html`<div class="cal-modal-foot"><${CalendarAddMenu} ev=${ev} subs=${subs}/>
-        <span class="muted">Add to your Packs.Ink calendar</span></div>`}
+      ${/* The footer used to be the ✚ MENU, whose Google Calendar and .ics
+            entries repeat the actions row directly above it. It is the two
+            things that row cannot do: save it to YOUR calendar, and hide it. */
+        subs && html`<${CalendarModalFoot} ev=${ev} subs=${subs}/>`}
       </>`}
     </div>
   </div>`;
@@ -43063,7 +43110,7 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
 const CalendarAdminModal = ({row, onClose, onSaved}) => {
   const blank = {kind: "product", title: "", subtitle: "", starts_on: calTodayYmd(),
                  ends_on: "", location: "", url: "", set_name: "", notes: "", image_url: "",
-                 confirmed: true};
+                 country: "", latitude: "", longitude: "", confirmed: true};
   // ⚠ Every nullable text column is coerced back to "" when seeding. The spread
   // let a DB null overwrite the blank default, and save() then called .trim()
   // on it — so editing nearly any seeded row (most DLCs have no set_name, many
@@ -43074,6 +43121,7 @@ const CalendarAdminModal = ({row, onClose, onSaved}) => {
     return {...blank, ...r,
       title: txt("title"), subtitle: txt("subtitle"), location: txt("location"), url: txt("url"),
       set_name: txt("set_name"), notes: txt("notes"), image_url: txt("image_url"),
+      country: txt("country"), latitude: txt("latitude"), longitude: txt("longitude"),
       kind: r.kind || blank.kind,
       starts_on: CAL_D(r.starts_on || calTodayYmd()),
       ends_on: CAL_D(r.ends_on) || "",
@@ -43087,6 +43135,34 @@ const CalendarAdminModal = ({row, onClose, onSaved}) => {
   const dlgRef = useRef(null);
   useCalDialog(dlgRef, onClose);
   const tr = (v) => String(v == null ? "" : v).trim();
+  // A number somebody actually typed, in range — never Number("") (0 is Null
+  // Island, a perfectly finite point in the Atlantic).
+  const coordOf = (v, lim) => { const t = tr(v); if(!t) return null; const n = Number(t); return Number.isFinite(n) && Math.abs(n) <= lim ? n : null; };
+  const [geoBusy, setGeoBusy] = useState(false);
+  // Fills country + coordinates from "Where", through the same resolver the
+  // event finder uses. A venue line is "Disneyland Hotel, Anaheim", and the
+  // resolver wants a town or a postal code, so the parts are tried right to
+  // left (the town is usually last) before the whole string.
+  const lookup = async () => {
+    const parts = tr(f.location).split(/[,·|]/).map(x => x.trim()).filter(Boolean);
+    const tries = parts.slice().reverse().concat(parts.length > 1 ? [tr(f.location)] : []);
+    if(!tries.length){ flashToast("Type where it is first"); return; }
+    setGeoBusy(true);
+    try {
+      for(const q of tries){
+        try {
+          const o = await scResolveOrigin(q);
+          if(o && Number.isFinite(o.lat) && Number.isFinite(o.lng)){
+            setF(p => ({...p, country: String(o.country || p.country || "").toUpperCase(),
+              latitude: o.lat.toFixed(4), longitude: o.lng.toFixed(4)}));
+            flashToast(`Placed at ${[o.city, o.state, o.country].filter(Boolean).join(", ")}`);
+            return;
+          }
+        } catch {}
+      }
+      flashToast("Couldn't place that — type the coordinates instead");
+    } finally { setGeoBusy(false); }
+  };
   const set = (k) => (e) => setF(p => ({...p, [k]: e.target.value}));
   const save = async () => {
     if(!tr(f.title) || !calYmdParts(f.starts_on)){ flashToast("A title and a start date are required"); return; }
@@ -43098,6 +43174,10 @@ const CalendarAdminModal = ({row, onClose, onSaved}) => {
       location: tr(f.location) || null, url: tr(f.url) || null,
       set_name: tr(f.set_name) || null, notes: tr(f.notes) || null,
       image_url: tr(f.image_url) || null,
+      // ⚠ An ungeocoded row falls into "Elsewhere" on the region filter and is
+      // never drawn on a map, which is what every row added here used to do.
+      country: tr(f.country).toUpperCase() || null,
+      latitude: coordOf(f.latitude, 90), longitude: coordOf(f.longitude, 180),
       confirmed: !!f.confirmed, updated_at: new Date().toISOString(),
     };
     let error = null;
@@ -43145,6 +43225,16 @@ const CalendarAdminModal = ({row, onClose, onSaved}) => {
           <input type="date" value=${f.ends_on} onInput=${set("ends_on")}/></label>
         <label class="cal-field"><span>Where</span>
           <input type="text" value=${f.location} onInput=${set("location")} placeholder="Disneyland Hotel, Anaheim"/></label>
+        <div class="cal-field cal-field--wide cal-geo-row">
+          <label><span>Country</span><input type="text" maxlength="2" value=${f.country}
+            onInput=${set("country")} placeholder="US"/></label>
+          <label><span>Latitude</span><input type="text" inputmode="decimal" value=${f.latitude}
+            onInput=${set("latitude")} placeholder="33.81"/></label>
+          <label><span>Longitude</span><input type="text" inputmode="decimal" value=${f.longitude}
+            onInput=${set("longitude")} placeholder="-117.92"/></label>
+          <button type="button" class="cal-modal-link" disabled=${geoBusy} onClick=${lookup}>
+            ${uiIcon("pin", 13)} ${geoBusy ? "Looking…" : "Look up from Where"}</button>
+        </div>
         <label class="cal-field"><span>Link</span>
           <input type="url" value=${f.url} onInput=${set("url")} placeholder="https://…"/></label>
         <label class="cal-field"><span>Set <em>(for a set release)</em></span>
@@ -43381,7 +43471,7 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
   const [sel, setSel] = useState(null);
   const [dayList, setDayList] = useState(null);     // {day, events} — a busy day's list
   const [month, setMonth] = useState(() => calMonthOf(calTodayYmd()));
-  const today = calTodayYmd();
+  const today = useCalToday();
   useEffect(() => { try { localStorage.setItem(CAL_KINDS_LS, kinds.join(",")); } catch {} }, [kinds]);
   useEffect(() => { try { localStorage.setItem(CAL_REGION_LS, region); } catch {} }, [region]);
   useEffect(() => { try { localStorage.setItem(CAL_PANEL_VIEW_LS, mode); } catch {} }, [mode]);
@@ -43714,7 +43804,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     catch { return false; }
   });
   const nearby = useNearbyScEvents(near);
-  const today = calTodayYmd();
+  const today = useCalToday();
 
   // ⚠ A LINK MAY CHOOSE FOR YOU, NEVER OVER YOU — the rule the map prefs
   // already follow. These six wrote their state on mount, link-seeded values
@@ -43810,13 +43900,30 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   // into the memo that places every date chip, so a fresh identity each render
   // re-runs the whole label-collision pass on every unrelated keystroke.
   const mapIconOf = useCallback((ev) => calendarEventIcon(ev, art), [art]);
+  // Declared up here, not beside `listed`: the counts memo below reads it, and a
+  // useMemo runs at its own declaration point (the screenerPayload TDZ trap).
+  const [showPast, setShowPast] = useState(false);
+  // ⚠ The kind chips count what the ACTIVE VIEW draws. They counted upcoming
+  // events only, while Month and Timeline also draw past ones — so a chip could
+  // say 0 over a month grid full of that kind. List/Map: upcoming, or everything
+  // with Show past on. Month: events touching the month on screen. Timeline:
+  // events touching its window. Still counted BEFORE the kind filter, so an
+  // option switched off still says what it would add.
   const counts = useMemo(() => {
     const c = {};
     for(const k of CALENDAR_KIND_KEYS) c[k] = 0;
-    for(const e of calendarUpcoming(all.filter(e => calMatchesQuery(e, dQuery)), today, 0))
-      if(c[e.kind] != null) c[e.kind]++;
+    const base = all.filter(e => calMatchesRegion(e, region) && calMatchesQuery(e, dQuery));
+    let pool;
+    if(mode === "month" || mode === "timeline"){
+      const lo = month, hi = mode === "month" ? month : calShiftMonth(month, span - 1);
+      pool = base.filter(e => {
+        const a = calMonthOf(e.starts_on), b = calMonthOf(calEndOf(e));
+        return a && b && a <= hi && b >= lo && !(mode === "timeline" && calTimelineSkip(e));
+      });
+    } else pool = showPast ? base : calendarUpcoming(base, today, 0);
+    for(const e of pool) if(c[e.kind] != null) c[e.kind]++;
     return c;
-  }, [all, today, dQuery]);
+  }, [all, today, dQuery, region, mode, month, span, showPast]);
   // Region counts are computed BEFORE the region filter is applied — a picker
   // whose options all read (0) because you already narrowed by them is useless.
   const regionCounts = useMemo(() => {
@@ -43878,7 +43985,6 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   // "nothing coming up" in that window reads as broken, so past events stay one
   // click away — seeing "Attack of the Vine! · retail release · Jul 24" is how
   // you know where you are in the season.
-  const [showPast, setShowPast] = useState(false);
   const listed = showPast ? shown : upcoming;
   // Every event around the map's focus — fetched only in map mode, only when
   // focused, and only while the scope is All.
