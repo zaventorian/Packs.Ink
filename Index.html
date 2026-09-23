@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=475">
+<link rel="stylesheet" href="styles.css?v=476">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -13983,6 +13983,7 @@ const Tooltip=({text,children})=>html`<span class="tip-wrap">${children}<span cl
 // it must never match AUX_EVICTABLE_PREFIXES, or a wipe strands the thread.
 const FEEDBACK_TOKENS_KEY = "packsink:feedback:tokens";
 const FEEDBACK_NOTICE_KEY = "packsink:feedback:noticeDismissed";
+const FEEDBACK_POLL_MS = 2 * 60_000;
 const FEEDBACK_TOKEN_RE = /^[A-Za-z0-9_-]{22,64}$/;
 const normalizeFeedbackTokens = (v) => Array.isArray(v)
   ? Array.from(new Set(v.filter(t => typeof t === "string" && FEEDBACK_TOKEN_RE.test(t)))).slice(-100)
@@ -38909,30 +38910,6 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     aria-label=${hideValue ? "Show collection value" : "Hide collection value"}>
     ${hideValue ? EYE_OFF_ICON : EYE_ICON}
   </button>`;
-  // Controls for the in-panel "Your Top Movers" list. Independent from the
-  // main movers banners so the user can ask "what moved most in MY cards
-  // this week" without changing the global window.
-  const [moversWindow, setMoversWindow] = useState("1w");
-  const [moversUp, setMoversUp] = useState(true);
-  const [moversDown, setMoversDown] = useState(true);
-  // Raw (prices_daily Δ%) vs Graded (graded_prices_daily Δ%) mode. The tab
-  // only renders when the user owns any graded card — see hasGraded below.
-  // Persisted so a graded-focused user doesn't have to re-pick every visit.
-  const [moversMode, setMoversMode] = useState(() => {
-    try { return localStorage.getItem("packsink:home:moversMode") === "graded" ? "graded" : "raw"; }
-    catch { return "raw"; }
-  });
-  useEffect(() => { try { localStorage.setItem("packsink:home:moversMode", moversMode); } catch {} }, [moversMode]);
-  // Collapse the movers list on its own, independently of the panel's own
-  // minimize: the chart and the headline value are what most people keep
-  // open, and the movers table is the tallest thing under them.
-  const [moversMin, setMoversMin] = useState(() => {
-    try { return localStorage.getItem("packsink:home:colMoversMin") === "1"; }
-    catch { return false; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("packsink:home:colMoversMin", moversMin ? "1" : "0"); } catch {}
-  }, [moversMin]);
   // Two-layer cache. (1) In-memory historyCache keyed by (productsHash,
   // rangeKey) holds the raw fetched rows for instant within-session range
   // switching. (2) A localStorage cache holds the COMPUTED value series
@@ -39157,21 +39134,18 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     return out;
   }, [gradedItems, pidByCardId]);
   const gradedSlotsKey = useMemo(() => gradedSlots.map(s => `${s.pid}|${s.printing}|${s.grader}|${s.grade}|${s.qty}`).sort().join(","), [gradedSlots]);
-  // Pull the user's individual graded SALES. Drives BOTH the value line and the
-  // graded movers list. Fetched whenever the graded chart line is on OR the
-  // movers panel is in graded mode (>=365d so the 1Y window has a reference).
+  // Pull the user's individual graded SALES — drives the graded value line.
   const [gradedSalesRows, setGradedSalesRows] = useState(null);
   const gradedRangeDays = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
   useEffect(() => {
-    if(!(gradedPremium && (showGraded || moversMode === "graded") && gradedSlots.length)){ setGradedSalesRows(null); return; }
-    const days = (moversMode === "graded") ? Math.max(gradedRangeDays, 365) : gradedRangeDays;
-    const since = new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10);
+    if(!(gradedPremium && showGraded && gradedSlots.length)){ setGradedSalesRows(null); return; }
+    const since = new Date(Date.now() - gradedRangeDays*24*3600*1000).toISOString().slice(0,10);
     let cancelled = false;
     fetchGradedSalesFor(gradedSlots, since)
       .then(rows => { if(!cancelled) setGradedSalesRows(rows); })
       .catch(() => { if(!cancelled) setGradedSalesRows([]); });
     return () => { cancelled = true; };
-  }, [gradedSlotsKey, rangeKey, gradedPremium, showGraded, moversMode]);
+  }, [gradedSlotsKey, rangeKey, gradedPremium, showGraded]);
   // The sales fetch above only reaches back as far as the selected range, so a
   // slab whose last sale predates the window is absent from it entirely. Pull the
   // rollup — which is range-independent — to value those.
@@ -39275,110 +39249,6 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   const rangeDelta = (combinedStartValue != null && combinedStartValue > 0) ? (combinedCurrentValue - combinedStartValue) : null;
   const rangeDeltaPct = (combinedStartValue != null && combinedStartValue > 0) ? ((combinedCurrentValue - combinedStartValue) / combinedStartValue * 100) : null;
 
-  // Auto-flip the panel back to Raw when the user no longer has any graded
-  // items (e.g. deleted them all). Otherwise the tabs would render but the
-  // graded list would be permanently empty.
-  const hasGraded = gradedSlots.length > 0;
-  useEffect(() => { if(!hasGraded && moversMode === "graded") setMoversMode("raw"); }, [hasGraded, moversMode]);
-
-  // Top 5 movers within owned collection — filtered + sorted by the in-panel
-  // window/direction controls.
-  const moversWin = MOVER_WIN_BY_KEY[moversWindow] || MOVER_WIN_BY_KEY["1d"];
-  const collectionMovers = useMemo(() => {
-    if(!user || !owned.ownedRows.length) return [];
-    const out = [];
-    for(const {row} of owned.ownedRows){
-      const m = moversByKey[row.card_id + ":" + row.tcg_printing];
-      if(!m) continue;
-      const pct = m[moversWin.pctLow];
-      if(pct == null || pct === 0) continue;
-      if(pct > 0 && !moversUp) continue;
-      if(pct < 0 && !moversDown) continue;
-      // Hide low-dollar noise: skip cards where both today and prior price
-      // sit under $5. A 50% move on a $0.30 card isn't a real signal.
-      const maxPx = Math.max(m.low_today ?? 0, m.low_prev ?? 0);
-      if(maxPx < 5) continue;
-      out.push({row, mover:m, pct});
-    }
-    const cmpAbs  = (a,b) => Math.abs(b.pct) - Math.abs(a.pct);
-    const cmpDesc = (a,b) => b.pct - a.pct;
-    const cmpAsc  = (a,b) => a.pct - b.pct;
-    out.sort((moversUp && moversDown) ? cmpAbs : moversUp ? cmpDesc : moversDown ? cmpAsc : cmpAbs);
-    return out.slice(0, 10);
-  }, [user, owned.ownedRows, moversByKey, moversWin.pctLow, moversUp, moversDown]);
-
-  // Catalog lookup so a graded slot (which only carries pid + grader + grade)
-  // can resolve back to the card's name + image for the mover tile.
-  const rowByPid = useMemo(() => {
-    const m = new Map();
-    for(const r of (raw||[])) if(r.tcgplayer_product_id) m.set(r.tcgplayer_product_id, r);
-    return m;
-  }, [raw]);
-  // Graded counterpart to collectionMovers. Window/direction controls are
-  // shared with raw — only the data source differs. Same shape (image, name,
-  // price, Δ%) so the render path can stay uniform; the only graded-specific
-  // addition is the grader/grade pill instead of the Foil tag.
-  const gradedCollectionMovers = useMemo(() => {
-    if(moversMode !== "graded" || !user || !gradedSlots.length) return [];
-    const out = [];
-    {
-      // Per-slot Δ% from the user's raw sales (gradedSalesRows), grouped by
-      // card_id|grader|grade. computeGradedSaleWindows returns
-      // pct_1w/1m/3m/6m/1y; map the movers window onto those (no 1D for sparse
-      // graded — 1D falls back to 1W).
-      if(!gradedSalesRows) return [];
-      const SALEWIN = {"1d":"pct_1w","1w":"pct_1w","1m":"pct_1m","3m":"pct_3m","6m":"pct_6m","1y":"pct_1y"};
-      const wk = SALEWIN[moversWindow] || "pct_1w";
-      // Printing is part of the slot key, same rule as makeGradedSlotSeries:
-      // a Challenge Promo shares one card_id across Top Prize foil and Prize
-      // Wall non-foil, which are different markets. Keyed without it, the most
-      // recent sale from either side becomes "the" price — Cinderella -
-      // Stouthearted PSA 10 read $3,265.91 / +402% on a ~$460 Prize Wall copy.
-      // Only enforce the split where the card really has two labelled
-      // printings; with one or none, every sale prices the slot, because a
-      // foil-only chase card's slot is stamped "Normal" by the migration-50
-      // backfill and a strict match would silently drop it.
-      // Split decision comes from the rollup when loaded (its printing column
-      // encodes the curated split_printing/foil_split flags — authoritative and
-      // range-independent), falling back to the window's own labels before it
-      // lands. Sale labels alone both miss splits (short window) and invent
-      // them (stray "foil" on an all-foil card) — see makeGradedSlotSeries.
-      const bucketsByCard = new Map();
-      for(const r of ((gradedRollupRows && gradedRollupRows.length) ? gradedRollupRows : gradedSalesRows)){
-        const b = gradedSlotBucket(r.printing);
-        if(!b) continue;
-        let s = bucketsByCard.get(r.card_id); if(!s){ s = new Set(); bucketsByCard.set(r.card_id, s); } s.add(b);
-      }
-      const isSplit = (cid) => (bucketsByCard.get(cid)?.size || 0) > 1;
-      const slotKey = (cid, printing, grader, grade) =>
-        `${cid}|${isSplit(cid) ? (gradedSlotBucket(printing) || "?") : ""}|${(grader||"").toLowerCase()}|${grade}`;
-      const bySlot = new Map();
-      for(const r of gradedSalesRows){
-        if(r.sale_price == null || !r.sold_date) continue;
-        const k = slotKey(r.card_id, r.printing, r.grader, r.grade);
-        let arr = bySlot.get(k); if(!arr){ arr = []; bySlot.set(k, arr); } arr.push(r);
-      }
-      for(const slot of gradedSlots){
-        if((slot.qty||0) <= 0) continue;
-        const w = computeGradedSaleWindows(bySlot.get(slotKey(slot.card_id, slot.printing, slot.grader, slot.grade)));
-        if(!w) continue;
-        const pct = w[wk];
-        if(pct == null || pct === 0) continue;
-        if(pct > 0 && !moversUp) continue;
-        if(pct < 0 && !moversDown) continue;
-        if((w.lastSold ?? 0) < 5) continue;
-        const row = rowByPid.get(slot.pid);
-        if(!row) continue;
-        out.push({row, slot, mover:{low_today: w.lastSold}, pct});
-      }
-    }
-    const cmpAbs  = (a,b) => Math.abs(b.pct) - Math.abs(a.pct);
-    const cmpDesc = (a,b) => b.pct - a.pct;
-    const cmpAsc  = (a,b) => a.pct - b.pct;
-    out.sort((moversUp && moversDown) ? cmpAbs : moversUp ? cmpDesc : moversDown ? cmpAsc : cmpAbs);
-    return out.slice(0, 10);
-  }, [moversMode, user, gradedSalesRows, gradedRollupRows, rowByPid, moversWindow, moversUp, moversDown, gradedSlots]);
-
   if(!user) return html`<aside class="collection-panel">
     <div class="panel-header">
       ${popTitle || (onTitleClick
@@ -39470,109 +39340,6 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
           : historyState.error
             ? html`<div style=${{padding:"40px 0",textAlign:"center",color:"var(--red)",fontSize:11}}>${historyState.error}</div>`
             : html`<div class="muted" style=${{padding:"40px 0",textAlign:"center",fontSize:12}}>No price history for the selected range yet.</div>`}
-    </div>
-    <div class=${"panel-movers" + (moversMin ? " is-min" : "")}>
-      <button class="panel-movers-title" onClick=${()=>setMoversMin(m => !m)}
-        aria-expanded=${!moversMin}
-        title=${moversMin ? "Show your top movers" : "Hide your top movers"}>
-        <span>Your Top Movers</span>
-        <span class="panel-movers-caret" aria-hidden="true">${moversMin ? "▸" : "▾"}</span>
-      </button>
-      ${!moversMin && hasGraded && html`<div class="panel-movers-mode-tabs" role="tablist"
-        style=${{display:"flex",gap:4,marginBottom:6}}>
-        <button class=${moversMode==="raw"?"active":""}
-          onClick=${()=>setMoversMode("raw")}
-          style=${{fontSize:11,padding:"3px 10px"}}
-          title="Raw card Δ% (TCGCSV prices)">Raw</button>
-        <button class=${moversMode==="graded"?"active":""}
-          onClick=${()=>setMoversMode("graded")}
-          style=${{fontSize:11,padding:"3px 10px"}}
-          title="Graded card Δ% (eBay sale averages)">Graded</button>
-      </div>`}
-      ${!moversMin && html`<div class="panel-movers-controls">
-        <div class="panel-range-buttons">
-          ${MOVER_WINDOWS.map(w => html`<button key=${w.key}
-            class=${moversWindow===w.key?"active":""}
-            onClick=${()=>setMoversWindow(w.key)}>${w.label}</button>`)}
-        </div>
-        <div class="panel-dir-toggle">
-          <label class=${moversUp?"on-up":""}>
-            <input type="checkbox" checked=${moversUp} onChange=${e=>setMoversUp(e.target.checked)}/>
-            ▲ Gainers
-          </label>
-          <label class=${moversDown?"on-down":""}>
-            <input type="checkbox" checked=${moversDown} onChange=${e=>setMoversDown(e.target.checked)}/>
-            ▼ Droppers
-          </label>
-        </div>
-      </div>`}
-      ${moversMin ? null : moversMode === "raw"
-        ? (collectionMovers.length === 0
-          ? html`<div class="muted" style=${{fontSize:11,padding:"10px 2px",textAlign:"center"}}>
-              No ${moversWin.label} movement in your collection matching the filters.</div>`
-          : html`<table class="panel-movers-table"><tbody>
-            ${collectionMovers.map(({row, mover, pct}) => {
-              // Foil sub-label. Rendered on a second line below the name so name
-              // X-alignment stays consistent across rows regardless of badge
-              // presence; "FOIL" rather than "Cold Foil" because the column is
-              // narrow and the identifier users care about is "not the base
-              // printing". printingBadge is what decides there IS a base
-              // printing to differ from — a chase card has only the one.
-              const prBadge = printingBadge(row.tcg_printing, row.card_id);
-              const printingLabel = prBadge ? prBadge.toUpperCase() : null;
-              return html`<tr key=${row.card_id+":"+row.tcg_printing}
-                onClick=${()=>onTileClick && onTileClick(mover)}>
-                <td class="panel-movers-img">${row.img_small
-                  ? html`<img src=${row.img_small} alt="" loading="lazy"/>`
-                  : ""}</td>
-                <td class="panel-movers-name">
-                  <div class="panel-movers-name-text">${row["Product Name"]}</div>
-                  ${printingLabel
-                    ? html`<div class="panel-movers-foil-tag">${printingLabel}</div>`
-                    : ""}
-                </td>
-                <td class="panel-movers-price">${fmt(parseP(mover.low_today))}</td>
-                <td class="panel-movers-pct" style=${{color:pctColor(pct)}}>${fmtPct(pct)}</td>
-              </tr>`;
-            })}
-          </tbody></table>`)
-        : (gradedSalesRows == null
-          ? html`<div class="muted" style=${{fontSize:11,padding:"10px 2px",textAlign:"center"}}>Loading graded history…</div>`
-          : gradedCollectionMovers.length === 0
-            ? html`<div class="muted" style=${{fontSize:11,padding:"10px 2px",textAlign:"center"}}>
-                No ${moversWin.label} movement in your graded slots matching the filters.</div>`
-            : html`<table class="panel-movers-table"><tbody>
-              ${gradedCollectionMovers.map(({row, slot, mover, pct}) => {
-                // Grader/grade pill replaces the Foil tag for graded rows.
-                // Uppercased so "PSA 10" reads at a glance in the narrow
-                // sub-line beneath the card name.
-                // Append the printing on split cards (C1 → Top Prize / Prize
-                // Wall) so two slabs sharing a card_id are tellable apart —
-                // without it the row just said "PSA 10" twice.
-                // Version only (C1 Top Prize / Prize Wall, Two Swords, Text
-                // Error) — never the bare finish, which would tag nearly every
-                // row and is what the foil badge is for (see variantBadge).
-                const variant = gradedVariantLabel(gradedSlotBucket(slot.printing), row.Set);
-                const slotLabel = `${(slot.grader||"").toUpperCase()} ${slot.grade}`.trim()
-                  + ((variant && variant !== "Foil" && variant !== "Non-Foil") ? ` · ${variant}` : "");
-                return html`<tr key=${`g:${slot.pid}|${slot.printing}|${slot.grader}|${slot.grade}`}
-                  onClick=${()=>onTileClick && onTileClick({
-                    card_id: row.card_id,
-                    tcgplayer_product_id: row.tcgplayer_product_id,
-                    _initialTab: "graded",
-                  })}>
-                  <td class="panel-movers-img">${row.img_small
-                    ? html`<img src=${row.img_small} alt="" loading="lazy"/>`
-                    : ""}</td>
-                  <td class="panel-movers-name">
-                    <div class="panel-movers-name-text">${row["Product Name"]}</div>
-                    <div class="panel-movers-foil-tag">${slotLabel}</div>
-                  </td>
-                  <td class="panel-movers-price">${fmt(parseP(mover.low_today))}</td>
-                  <td class="panel-movers-pct" style=${{color:pctColor(pct)}}>${fmtPct(pct)}</td>
-                </tr>`;
-              })}
-            </tbody></table>`)}
     </div>
     </div>`}
   </aside>`;
@@ -56375,16 +56142,29 @@ function App(){
       else if(feedbackThreadsUnavailable(error)) feedbackThreadsOff.current = true;
     } catch {}
   }, [feedbackUid, isGradedAdmin]);
+  // It also POLLS while the tab is visible. Asking only on load and on return
+  // meant a reply written while someone had the site open never reached them:
+  // the badge and the corner notice waited for a reload, or for the tab to sit
+  // hidden five minutes and come back. Nobody who holds neither an account nor
+  // a token is ever polled (refreshFeedbackUnread short-circuits before any
+  // request), so the poll costs only the people who can actually get a reply.
   useEffect(() => {
     refreshFeedbackUnread();
     let last = Date.now();
-    const onVisible = () => {
-      if(document.visibilityState !== "visible" || Date.now() - last < 5 * 60_000) return;
+    const ask = (minGap) => {
+      if(document.visibilityState !== "visible" || Date.now() - last < minGap) return;
       last = Date.now();
       refreshFeedbackUnread();
     };
+    const onVisible = () => ask(30_000);
+    const poll = setInterval(() => ask(FEEDBACK_POLL_MS - 5_000), FEEDBACK_POLL_MS);
     document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", onVisible);
+    return () => {
+      clearInterval(poll);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onVisible);
+    };
   }, [refreshFeedbackUnread]);
   // The corner notice dismisses per reply: it stays away until a newer one lands.
   const dismissFeedbackNotice = useCallback(() => {
