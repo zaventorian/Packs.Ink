@@ -11119,7 +11119,7 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
    day's TOTAL rather than what is hidden -- one mark standing for three
    qualifiers still has to say three. --bg-modal, not --bg-surface: it sits ON a
    mark, and --bg-surface is translucent in the dark themes. */
-.cal-month--dense .cal-cell-more{position:absolute;right:1px;bottom:1px;z-index:2;
+.cal-month--dense .cal-cell-more{position:absolute;left:1px;top:1px;z-index:2;
   width:auto;flex:none;padding:0 3px;font-size:8px;font-weight:800;line-height:1.3;
   text-align:center;border-radius:999px;background:var(--bg-modal);color:var(--text-muted);
   box-shadow:0 0 0 1px var(--border);font-variant-numeric:tabular-nums;}
@@ -11482,12 +11482,35 @@ html[data-mode="dark"] .sc-map-box img{filter:brightness(0.82) saturate(0.85);}
 .cal-modal-kind .cal-ico{width:22px;height:22px;}
 .cal-row-title .cal-ico,.cal-panel-title .cal-ico{margin-right:1px;}
 .cal-chip .cal-ico{width:13px;height:13px;border-radius:2px;}
-/* ⚠ The per-chip `×N` stays HIDDEN in a compact cell -- the cell's own corner
-   badge is the count there, and it already covers this case: a lone group of
-   three is one mark over a total of three. Inline it was a 10px sibling of a
-   13px mark inside an 18px box, so it overflowed the chip by 3px and squeezed
-   the mark it was describing. Two numbers in one 45px cell is the other way to
-   get this wrong: with the cap at two marks, a `×N` on the second chip lands in
-   the same corner as the cell badge. The `> span:not(.cal-ico)` rule above does
-   the hiding; this note is here so nobody "restores" the count that moved. */
-.cal-month--dense .cal-cell-events > .cal-chip > span.cal-chip-x{display:none;}
+/* ⚠ In a dense cell the `×N` is a corner pill ON its own mark, not an inline
+   sibling (inline it overflowed the 18px chip and squeezed the mark). It used to
+   be hidden in favour of one cell-wide TOTAL, which read "4" over a CCQ mark on a
+   day holding three CCQs and one SC -- the count of everything, pinned to one
+   kind (2026-09-23). The cell's own badge now counts only HIDDEN events and sits
+   top-LEFT, so the two numbers can never share a corner. Four classes so this
+   beats the `> span:not(.cal-ico){display:none}` rule outright. */
+.cal-month--dense .cal-cell-events > .cal-chip.cal-chip--group > span.cal-chip-x{display:block;
+  position:absolute;right:0;bottom:0;z-index:2;margin:0;padding:0 3px;font-size:8px;
+  font-weight:800;line-height:1.3;opacity:1;border-radius:999px;background:var(--bg-modal);
+  color:var(--text);box-shadow:0 0 0 1px var(--border);overflow:visible;}
+
+/* ── calendar review pass (2026-09-23) ─────────────────────────────────────── */
+/* The dense cell's "+N" is ~12x10px of 8px type in a cell corner; the ::after
+   lends it a finger-sized hit area without growing what is drawn. */
+.cal-month--dense .cal-cell-more::after{content:"";position:absolute;inset:-7px;}
+/* "‹ Sat Sep 19" — back to the day list this event was opened from. */
+.cal-modal-back{display:inline-flex;align-items:center;gap:2px;margin:0 0 6px;padding:2px 0;
+  border:none;background:none;font:inherit;font-size:12px;font-weight:700;color:var(--accent);cursor:pointer;}
+.cal-modal-back:hover{text-decoration:underline;}
+.cal-danger.armed{color:#fff;background:var(--negative, #c0392b);border-color:transparent;}
+.cal-act[disabled]{opacity:0.45;cursor:default;}
+.cal-foot-btn{display:inline-flex;align-items:center;gap:5px;padding:6px 11px;border-radius:999px;
+  border:1px solid var(--border);background:var(--btn-bg);color:var(--text);font:inherit;font-size:12.5px;
+  font-weight:700;cursor:pointer;}
+.cal-foot-btn:hover{border-color:var(--accent);color:var(--accent);}
+.cal-foot-btn.on{border-color:var(--accent);color:var(--accent);background:var(--accent-glow);}
+.cal-foot-btn--quiet{color:var(--text-muted);font-weight:600;}
+.cal-geo-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px;}
+.cal-geo-row > label{display:flex;flex-direction:column;gap:3px;flex:1 1 80px;min-width:0;}
+.cal-geo-row > label > span{font-size:11px;color:var(--text-muted);}
+.cal-geo-row input{width:100%;box-sizing:border-box;}

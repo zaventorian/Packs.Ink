@@ -6559,6 +6559,24 @@ hover card lists every member; clicking expands the group in place.
   three-day Challenge sitting beside two one-day qualifiers would otherwise head the
   list with the wrong dates.
 
+### A dense cell's count belongs to its MARK, not the day (2026-09-23)
+
+Zaven, on the home rail: three CCQs and one SC drew a **"4" on the CCQ mark** —
+the day's TOTAL, pinned to one kind of thing. Each group mark now wears its own
+`×N` as a corner pill (`.cal-chip--group > span.cal-chip-x`, four classes so it
+beats the dense label-hide), and the cell's `.cal-cell-more` counts only events
+that did NOT fit, drawn TOP-LEFT so the two numbers never share a corner.
+Measured at 375px: Sep 26 reads CCQ ×2 and SC ×2, two 22px marks, pills clear.
+
+Same review pass added **`?ce=<id>`** — a link to ONE event (Copy link in the
+detail modal; registered in `dirtyParams` + `VIEW_OWNED.calendar`). An `ev:<rph
+id>` the reader does not follow is fetched directly, since it will never be in
+their `all`. The six calendar prefs now write through `usePrefWrite`, so a shared
+link no longer repoints the reader's home tile. `useCalDialog` is the one
+keyboard contract for the three calendar dialogs (focus in/out, Tab trap, Esc
+only for the innermost). ⚠ A store event is SAVED as `"123"` and HIDDEN as
+`"ev:123"`; `calSavedRefOf` is the one place that reconciles them.
+
 ### The cell's day number stops owning a row (2026-09-15)
 
 Zaven: *"make the logos a tinny bit bigger, and the numbers a lil smaller. use the
