@@ -25,12 +25,17 @@ class Supabase:
                 "Copy scripts/.env.example to scripts/.env and fill it in."
             )
 
+    def auth_headers(self) -> dict[str, str]:
+        # In a Claude Code cloud session the key is an API credential that the
+        # agent proxy attaches on the way out, and the session only ever sees the
+        # placeholder "proxy-injected". Sending that placeholder would put a bogus
+        # key on the wire for the proxy to fight with, so send no auth at all.
+        if self.key == "proxy-injected":
+            return {}
+        return {"apikey": self.key, "Authorization": f"Bearer {self.key}"}
+
     def _headers(self, prefer: str = "") -> dict[str, str]:
-        h = {
-            "apikey": self.key,
-            "Authorization": f"Bearer {self.key}",
-            "Content-Type": "application/json",
-        }
+        h = {**self.auth_headers(), "Content-Type": "application/json"}
         if prefer:
             h["Prefer"] = prefer
         return h
