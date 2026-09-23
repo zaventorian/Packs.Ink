@@ -40726,7 +40726,12 @@ const _calNearCache = new Map();
 function useNearbyScEvents(on){
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
-  const origin = useMemo(calNearOrigin, [on]);
+  // ⚠ Read on EVERY render, never memoized on `on`: a first-time visitor sets
+  // their town in the finder with the chip still off, so a memo keyed on the
+  // toggle kept the empty origin and the next click on "SCs near me" said
+  // "set a postal code first" and reopened the finder they had just used.
+  // Three localStorage reads; the effect keys on the `key` string, not this.
+  const origin = calNearOrigin();
   const ready = scZipReady(origin.zip);
   const key = `${origin.country}|${origin.zip}|${origin.radius}`;
   useEffect(() => {
