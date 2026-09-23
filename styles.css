@@ -499,13 +499,14 @@ input[type="checkbox"]:disabled{opacity:0.4;cursor:not-allowed;}
    (2n-1) gaps, so -50% lands half a gap out and the reel visibly jumps every
    loop. With a trailing margin per card each copy is n*(card+gap) and the two
    halves are identical. Do not "tidy" this into a gap. */
-.reveal-track{display:flex;width:max-content;will-change:transform;
-  animation:reveal-scroll linear infinite;}
-@keyframes reveal-scroll{from{transform:translateX(0);}to{transform:translateX(-50%);}}
-/* Pause while a pointer is over the reel or a card holds keyboard focus —
-   otherwise the card you are reaching for walks out from under the cursor. */
-.reveal-strip:hover .reveal-track,
-.reveal-strip:focus-within .reveal-track{animation-play-state:paused;}
+/* The offset is written from JS each frame (RevealStrip), not a CSS animation:
+   a drag has to move the same offset the auto-scroll does. JS also pauses it
+   while a mouse is over the reel or a card holds focus. */
+.reveal-track{display:flex;width:max-content;will-change:transform;}
+/* Drag-to-scroll. pan-y hands vertical swipes back to the page, so on a phone
+   the reel only claims a SIDEWAYS drag. */
+.reveal-window{cursor:grab;touch-action:pan-y;user-select:none;-webkit-user-select:none;}
+.reveal-window--grabbing,.reveal-window--grabbing .reveal-card{cursor:grabbing;}
 /* The global `button` rule paints border/background/radius/padding, so a
    control meant to read as bare art has to unset all four. */
 .reveal-card{flex:0 0 auto;display:block;height:var(--reveal-card-h);

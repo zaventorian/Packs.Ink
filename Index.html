@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=474">
+<link rel="stylesheet" href="styles.css?v=475">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1701,6 +1701,9 @@ const PROMO_PARENT_SET_SEED = {
   "Judy Hopps - Day Camp Instructor":     "Hyperia City",  // 13/PD1 · EN · 14
   "The Beanstalk - Onward and Upward":    "Hyperia City",  // 17/PD1 · EN · 14
   "Donald Duck - Taxi Driver":            "Hyperia City",  // 1/P4  · EN · 14
+  // A D23 Collection promo, and it stays filed there — but the card itself is
+  // a Hyperia City card, so it also shows under that set's filter.
+  "Héctor Rivera - Gone to Pieces":       "Hyperia City",  // 13/D23 · EN · 14
 };
 const setPromoBaseSet = (rows) => {
   const m = new Map();
@@ -25187,24 +25190,43 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, splitTiers, raw, theme, o
     : html`<div class="gco-val">${valStr(e)}</div>`;
 
 
-  // Export the list you are LOOKING AT — same filters, same sort, same
-  // per-set grouping — so "export" means "this, as a file" and there is no
-  // second layout to reason about. Prices never enter: see gradedExportRow.
-  const exportBuckets = useCallback(() => buckets.map(b => ({
-    label: b.label, rows: b.items.map(gradedExportRow),
-  })), [buckets]);
+  // ⚠ Export EVERYTHING you own — the search box and the filter drawer do NOT
+  // narrow it. Both persist to localStorage, so a filter set weeks ago would
+  // otherwise silently cut cards out of "here is my collection" with nothing
+  // on the export to say so. It keeps the screen's SORT and per-set grouping,
+  // so the list still reads against the grid. Prices never enter: see
+  // gradedExportRow.
+  const exportBuckets = useCallback(() => {
+    const cmp = GRADED_OWNED_SORTS[sortKey];
+    const all = cmp ? entries.slice().sort(cmp) : entries.slice();
+    if(!separateBySet) return [{label: null, rows: all.map(gradedExportRow)}];
+    const m = new Map();
+    for(const e of all){ const k = e.set || "Other"; if(!m.has(k)) m.set(k, []); m.get(k).push(e); }
+    return Array.from(m, ([k, items]) => ({label: k, rows: items.map(gradedExportRow)}));
+  }, [entries, sortKey, separateBySet]);
+  const exportCount = entries.length;
 
   const copyGradedList = useCallback(() => {
     const text = buildGradedExportText(exportBuckets());
     if(!text){ flashToast("No graded cards to export"); return; }
+    const done = () => flashToast(`Copied ${exportCount} graded card${exportCount===1?"":"s"} as text — paste it anywhere. No prices included`);
+    // Fallback for browsers that refuse the async clipboard: a hidden textarea
+    // + execCommand still works inside the click in every engine we ship to.
+    const legacy = () => {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text; ta.setAttribute("readonly", "");
+        ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
+        document.body.appendChild(ta); ta.select();
+        const ok = document.execCommand("copy");
+        ta.remove();
+        ok ? done() : flashToast("Couldn't copy the list here");
+      } catch { flashToast("Couldn't copy the list here"); }
+    };
     if(navigator.clipboard && navigator.clipboard.writeText){
-      navigator.clipboard.writeText(text)
-        .then(() => flashToast(`Copied ${visible.length} graded card${visible.length===1?"":"s"} — no prices included`))
-        .catch(() => flashToast("Couldn't copy the list — try the CSV instead"));
-    } else {
-      flashToast("Clipboard not supported here — try the CSV instead");
-    }
-  }, [exportBuckets, visible.length]);
+      navigator.clipboard.writeText(text).then(done).catch(legacy);
+    } else legacy();
+  }, [exportBuckets, exportCount]);
 
   const downloadGradedCsv = useCallback(() => {
     const csv = buildGradedExportCsv(exportBuckets());
@@ -25217,9 +25239,9 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, splitTiers, raw, theme, o
       a.download = "packs-ink-graded-" + new Date().toISOString().slice(0,10) + ".csv";
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(()=>URL.revokeObjectURL(url), 1000);
-      flashToast(`Exported ${visible.length} graded card${visible.length===1?"":"s"} — no prices included`);
+      flashToast(`Downloaded ${exportCount} graded card${exportCount===1?"":"s"} as a CSV spreadsheet — no prices included`);
     } catch(e){ flashToast("Couldn't build the CSV: " + (e.message || e)); }
-  }, [exportBuckets, visible.length]);
+  }, [exportBuckets, exportCount]);
 
   if(!entries.length) return html`<div class="gc-empty">
     <div class="gc-empty-title">No graded cards owned yet</div>
@@ -25255,12 +25277,12 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, splitTiers, raw, theme, o
         <button class=${viewMode==="grid"?"active":""} onClick=${()=>setViewMode("grid")} title="Card grid">▦</button>
       </div>
       <button class="import-csv-btn gco-export-btn" onClick=${copyGradedList}
-        title="Copy these cards as a plain-text list you can paste into a message. No prices — names, sets, numbers and grades only.">
+        title="Copy every graded card you own to the clipboard as plain text, ready to paste into a message. Ignores the search and filters. No prices — names, sets, numbers and grades only.">
         Copy list
       </button>
       <button class="import-csv-btn gco-export-btn" onClick=${downloadGradedCsv}
-        title="Download these cards as a CSV. No prices — names, sets, numbers, printings and grades only.">
-        CSV
+        title="Download every graded card you own as a .csv spreadsheet file (on a Mac this opens in Numbers). Ignores the search and filters. No prices.">
+        Download CSV
       </button>
     </div>
     <div class="gco-summary">${visible.length} card${visible.length===1?"":"s"} · <span class="green">${fmt(totalValue)}</span></div>
@@ -48245,12 +48267,29 @@ const REVEAL_EXCLUDED_SETS = new Set([EXTRAS_SET_NAME]);
 // ⚠ Rows with no art are dropped outright: this reel is nothing BUT art, so a
 // card that cannot render one has nothing to contribute and an empty slot in a
 // marquee reads as a broken image rather than as a card we are missing.
+// ⚠ A REPRINT is not a reveal. A new printing of a card we already had — a
+// Curator's Collection box of Fabled / Floodborn cards, say — lands with a
+// fresh `inserted_at` like anything else, and put six old Beauty and the Beast
+// cards in a reel headed "Hyperia City just revealed cards!". The test is by
+// NAME against the rest of the catalog: if any row carrying this Product Name
+// was already here before the window, the card is not new. A promo of a
+// brand-new card still counts (its name is new too), which is the half of the
+// "and its promos" ask that has to survive.
 const revealRotation = (rows, nowMs) => {
   const cutoff = nowMs - REVEAL_WINDOW_HOURS * 36e5;
+  const oldNames = new Set();
+  for(const r of (rows || [])){
+    if(!r) continue;
+    const nm = r["Product Name"];
+    if(!nm) continue;
+    const t = r.added_at ? Date.parse(r.added_at) : NaN;
+    if(!Number.isFinite(t) || t < cutoff) oldNames.add(nm);
+  }
   const best = new Map();
   for(const r of (rows || [])){
     if(!r || !r.card_id || !r.added_at) continue;
     if(REVEAL_EXCLUDED_SETS.has(r.Set)) continue;
+    if(oldNames.has(r["Product Name"])) continue;
     const t = Date.parse(r.added_at);
     // ⚠ A stamp in the FUTURE is clock skew or a bad backfill, never a reveal.
     // Trusting it would pin that card to the head of the reel permanently,
@@ -48371,9 +48410,83 @@ const RevealStrip = ({cards, variant, setLabel, onOpen, onOpenSet}) => {
   // full-screen view, which is the better answer on a phone regardless.
   const canHover = variant === "nav";
   const enterFor = (c) => canHover ? mouseHoverOnly((e) => {
+    if(drag.current.moved) return;
     // Store the ELEMENT, not its rect — see placeFloat.
     setHover({el: e.currentTarget, src: (c.row && c.row.img_large) || c.art, name: c.name});
   }) : undefined;
+
+  // ── Drag-to-scroll ─────────────────────────────────────────────────────
+  // The marquee is driven from JS (a transform written each frame), NOT a CSS
+  // animation, because a drag has to move the SAME offset the auto-scroll
+  // moves — a CSS keyframe can't be grabbed and nudged. `pos` wraps at half
+  // the track, which is exactly one copy (see the note on the duplicate pass).
+  // ⚠ Reduced motion keeps the old answer: no auto-advance, native overflow
+  // scroll, and a mouse drag drives scrollLeft instead of the transform.
+  const winRef = useRef(null), trackRef = useRef(null);
+  const pos = useRef(0);
+  const paused = useRef({hover:false, focus:false});
+  const drag = useRef({id:null, x0:0, p0:0, moved:false, until:0});
+  const [grabbing, setGrabbing] = useState(false);
+  const nCards = cards ? cards.length : 0;
+  const reduced = typeof matchMedia === "function"
+    && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  useEffect(() => {
+    if(!nCards || reduced) return;
+    let raf = 0, last = 0;
+    const tick = (t) => {
+      raf = requestAnimationFrame(tick);
+      const tr = trackRef.current;
+      if(!tr) return;
+      const half = tr.scrollWidth / 2;
+      if(!half){ last = t; return; }
+      const dt = last ? Math.min(0.1, (t - last) / 1000) : 0;
+      last = t;
+      const p = paused.current;
+      if(!p.hover && !p.focus && drag.current.id == null){
+        pos.current += dt * half / (nCards * REVEAL_SECS_PER_CARD);
+      }
+      pos.current = ((pos.current % half) + half) % half;
+      tr.style.transform = "translateX(" + (-pos.current) + "px)";
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [nCards, reduced]);
+  const onDown = (e) => {
+    if(e.button != null && e.button !== 0) return;
+    const w = winRef.current;
+    drag.current = {id: e.pointerId, x0: e.clientX,
+      p0: reduced ? (w ? w.scrollLeft : 0) : pos.current, moved: false, until: 0};
+  };
+  const onMoveDrag = (e) => {
+    const d = drag.current;
+    if(d.id !== e.pointerId) return;
+    const dx = e.clientX - d.x0;
+    if(!d.moved){
+      // 5px before a drag starts, so a click on a card is still a click.
+      if(Math.abs(dx) < 5) return;
+      d.moved = true;
+      setGrabbing(true);
+      setHover(null);
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+    }
+    if(reduced){ if(winRef.current) winRef.current.scrollLeft = d.p0 - dx; }
+    else pos.current = d.p0 - dx;
+  };
+  const onUp = (e) => {
+    const d = drag.current;
+    if(d.id !== e.pointerId) return;
+    // A released drag must not also open whichever card it ended over.
+    drag.current = {...d, id: null, until: d.moved ? Date.now() + 250 : 0, moved: false};
+    setGrabbing(false);
+  };
+  const onClickCapture = (e) => {
+    if(Date.now() < drag.current.until){ e.preventDefault(); e.stopPropagation(); }
+  };
+  const onWheel = (e) => {
+    // Sideways trackpad swipes only — a vertical wheel still scrolls the page.
+    if(reduced || Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+    pos.current += e.deltaX;
+  };
   if(!cards || !cards.length) return null;
   const title = setLabel ? setLabel + " just revealed cards!" : "New cards revealed!";
   // ⚠ Rendered TWICE, and -50% of the track is therefore exactly one copy —
@@ -48405,7 +48518,10 @@ const RevealStrip = ({cards, variant, setLabel, onOpen, onOpenSet}) => {
         onError=${e => { const b = e.currentTarget.closest("button"); if(b) b.hidden = true; }}/>
     </button>`);
   return html`<div class=${"reveal-strip reveal-strip--" + variant}
-    onPointerLeave=${() => setHover(null)}>
+    onPointerEnter=${e => { if(e.pointerType === "mouse") paused.current.hover = true; }}
+    onPointerLeave=${() => { paused.current.hover = false; setHover(null); }}
+    onFocus=${() => { paused.current.focus = true; }}
+    onBlur=${e => { if(!e.currentTarget.contains(e.relatedTarget)) paused.current.focus = false; }}>
     <a class="reveal-head" href=${setLabel ? "/cards?set=" + encodeURIComponent(setLabel) : "/cards"}
       onClick=${navHandler(() => onOpenSet && onOpenSet(setLabel))}
       title=${title + " — open the Cards tab"}>
@@ -48419,8 +48535,11 @@ const RevealStrip = ({cards, variant, setLabel, onOpen, onOpenSet}) => {
             is the number anyone means); the reel owns the pictures. */""}
       <span class="reveal-count">See them →</span>
     </a>
-    <div class="reveal-window">
-      <div class="reveal-track" style=${{animationDuration: (cards.length * REVEAL_SECS_PER_CARD) + "s"}}>
+    <div class=${"reveal-window" + (grabbing ? " reveal-window--grabbing" : "")} ref=${winRef}
+      onPointerDown=${onDown} onPointerMove=${onMoveDrag}
+      onPointerUp=${onUp} onPointerCancel=${onUp}
+      onClickCapture=${onClickCapture} onWheel=${onWheel}>
+      <div class="reveal-track" ref=${trackRef}>
         ${seq("a")}${seq("b")}
       </div>
     </div>
