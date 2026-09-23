@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=473">
+<link rel="stylesheet" href="styles.css?v=474">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1675,12 +1675,45 @@ const SUPPRESSED_CARD_IDS = new Set([
 // so non-Cards consumers of matchesCardFilter (Screener, Price Graphing) see the
 // same fold; CardBrowser re-calls it idempotently.
 let _promoBaseSet = new Map();
+// ⚠ The index above can only place a promo whose BASE card we already hold —
+// it works by matching names — and during a reveal season that is most of them
+// backwards: the promos of a new set are handed out at prereleases and league
+// nights BEFORE the set's own cards are revealed. Hyperia City on 2026-09-22 is
+// the case: five of its promos were live (4/RPH, 9/PD1, 10/PD1, 13/PD1, 17/PD1,
+// 1/P4) while none of their base cards existed, so a reader filtering Cards to
+// Hyperia City saw a set with no promos and no way to tell why.
+//
+// Every Lorcana card states its own set in the corner — "17/PD1 · EN · 14" — and
+// that is the fact this map records until the base card lands. Each entry below
+// was READ OFF THE PRINTED CARD, never inferred from the art or the character.
+//
+// ⚠ Keyed by PRODUCT NAME, not card id. A prestage row's id is temporary —
+// retire_prestaged deletes it the day Lorcast publishes the real promo — where
+// the printed name survives that swap, which is the same reason _promoBaseSet
+// itself is name-keyed.
+// ⚠ It is a SEED, not an override: see setPromoBaseSet, where a real base card
+// always wins. So an entry left here after the set lands cannot outvote the
+// catalog, and clearing them is tidying rather than a correctness fix.
+const PROMO_PARENT_SET_SEED = {
+  "Minnie Mouse - Urban Visionary":       "Hyperia City",  // 4/RPH · EN · 14
+  "Nick Wilde - Inquisitive Harbormaster":"Hyperia City",  // 9/PD1 · EN · 14
+  "Merlin - Ink Drop Tinkerer":           "Hyperia City",  // 10/PD1 · EN · 14
+  "Judy Hopps - Day Camp Instructor":     "Hyperia City",  // 13/PD1 · EN · 14
+  "The Beanstalk - Onward and Upward":    "Hyperia City",  // 17/PD1 · EN · 14
+  "Donald Duck - Taxi Driver":            "Hyperia City",  // 1/P4  · EN · 14
+};
 const setPromoBaseSet = (rows) => {
   const m = new Map();
   for(const r of rows || []){
     const set = r.Set, name = r["Product Name"];
     if(!name || !set || r.Rarity === "Promo" || SET_PARENT[set]) continue; // index bases only
     if(!m.has(name)) m.set(name, set);
+  }
+  // Fill ONLY the gaps. The loop above has already recorded every base card the
+  // catalog actually holds, so a seeded name that has since been revealed keeps
+  // the real answer — the seed can never contradict the catalog, only precede it.
+  for(const name in PROMO_PARENT_SET_SEED){
+    if(!m.has(name)) m.set(name, PROMO_PARENT_SET_SEED[name]);
   }
   _promoBaseSet = m;
 };
