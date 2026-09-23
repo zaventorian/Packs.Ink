@@ -52,7 +52,9 @@ const hoursAgo = (h) => new Date(NOW - h * 36e5).toISOString();
 // Minimal row in the shape buildRow emits.
 const row = (o = {}) => ({
   card_id: o.card_id ?? "c1",
-  "Product Name": o.name ?? "Card One",
+  // Each card its own name by default: the reprint rule matches on NAME, so a
+  // shared default would make every fixture row a reprint of every other.
+  "Product Name": o.name ?? ("Card " + (o.card_id ?? "c1")),
   Set: o.set ?? "Hyperia City",
   Number: o.num ?? "1",
   Printing: o.printing ?? "Normal",
@@ -91,6 +93,25 @@ eq("promo sets ride along with the set being spoiled",
      row({card_id: "p4", set: "Promo Set 4"}),
      row({card_id: "pd1", set: "PD1"}),
    ], NOW)).sort(), ["hc", "p4", "pd1"]);
+// ⚠ A reprint is not a reveal: a new printing of a card we already had (the
+// Curator's Collection: Beauty and the Beast box, 2026-09-22) landed with fresh
+// stamps and six old cards headlined a Hyperia City reel.
+eq("a new printing of an OLD card is a reprint, not a reveal",
+   ids(revealRotation([
+     row({card_id: "fabled31", name: "Be Our Guest", set: "Fabled", added_at: hoursAgo(9000)}),
+     row({card_id: "cc2-1", name: "Be Our Guest", set: "Curator's Collection: Beauty and the Beast"}),
+     row({card_id: "hc", name: "Brand New Card", set: "Hyperia City"}),
+   ], NOW)), ["hc"]);
+eq("a promo of a brand-new card still rides along",
+   ids(revealRotation([
+     row({card_id: "hc5", name: "Fresh Hero", set: "Hyperia City", num: "5"}),
+     row({card_id: "p4-12", name: "Fresh Hero", set: "Promo Set 4", num: "12"}),
+   ], NOW)).sort(), ["hc5", "p4-12"]);
+eq("an old row with NO stamp still marks its name as old",
+   ids(revealRotation([
+     row({card_id: "old", name: "Old Card", added_at: null}),
+     row({card_id: "reprint", name: "Old Card"}),
+   ], NOW)), []);
 eq("a card with no art at all is dropped — the reel is nothing but art",
    ids(revealRotation([row({img: null})], NOW)), []);
 
