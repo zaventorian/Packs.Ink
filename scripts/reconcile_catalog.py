@@ -294,6 +294,25 @@ SEALED_NO_SET_SKIP_TYPES = {"Promo Single"}
 # synthetic rows, not TCGplayer products, so they can never carry a pid.
 CARD_NO_PID_SKIP_SETS = {"Format Coconut"}
 
+# A set we prestage (Hyperia City from its first reveal, a Curator's drop from
+# its announcement) has every card pid-less until TCGplayer lists its singles,
+# which it does around release. Reporting that daily is noise: 75 findings the
+# day the reveals landed, growing with every import, all saying "not listed
+# yet". So card_no_pid waits until the set's released_at plus a grace window
+# for link_preorder_pids.py to catch up — after that a still-null pid is real
+# and reports like any other. A set with no released_at is never deferred.
+CARD_NO_PID_GRACE_DAYS = 14
+
+
+def card_no_pid_deferred(released_at: str | None, today: str) -> bool:
+    if not released_at:
+        return False
+    try:
+        rel = date.fromisoformat(str(released_at)[:10])
+    except ValueError:
+        return False
+    return date.fromisoformat(today) < rel + timedelta(days=CARD_NO_PID_GRACE_DAYS)
+
 
 def load_ack(path: str) -> dict:
     try:
@@ -549,8 +568,10 @@ def collect_findings(sb: Supabase, ack: dict | None = None, today: str | None = 
                             order="tcgplayer_product_id.asc")
     sealed_pids = {r["tcgplayer_product_id"] for r in sealed_rows
                    if r.get("tcgplayer_product_id") is not None}
-    sets_rows = sb.select("sets", columns="id,code,name,tcgplayer_group_id", order="id.asc")
+    sets_rows = sb.select("sets", columns="id,code,name,tcgplayer_group_id,released_at", order="id.asc")
     set_name = {r["id"]: r.get("name") or r["id"] for r in sets_rows}
+    set_released = {r["id"]: r.get("released_at") for r in sets_rows}
+    today_s = today or date.today().isoformat()
     # Code -> the id we hold it under. Promo sets get hand-minted ids (migration
     # 107's set_curators_cc1) whenever Lorcast hasn't indexed them yet, so once
     # Lorcast does, its id is one we have never seen and check 6 below would call
@@ -628,6 +649,8 @@ def collect_findings(sb: Supabase, ack: dict | None = None, today: str | None = 
                        filters={"tcgplayer_product_id": "is.null"}, order="set_id.asc"):
         sname = set_name.get(r.get("set_id"), r.get("set_id") or "?")
         if sname in CARD_NO_PID_SKIP_SETS:
+            continue
+        if card_no_pid_deferred(set_released.get(r.get("set_id")), today_s):
             continue
         disp = r["name"] + (f" - {r['version']}" if r.get("version") else "")
         out.append({

@@ -440,5 +440,49 @@ check("a set we hold by id is not reported at all", "set_tfc" in found, False)
 check("exactly the two expected sets are reported", len(found), 2)
 
 
+# ── check 5: a prestaged set's pid-less cards wait for release ─────────────
+#
+# Both directions fail silently: deferring forever hides a card that can never
+# price, and not deferring buries every real finding under a whole unreleased
+# set's worth of "not listed yet" (75 of them the day Hyperia City's reveals
+# landed).
+
+d = rc.card_no_pid_deferred
+check("an unreleased set is deferred", d("2026-10-16", "2026-09-23"), True)
+check("...still deferred inside the grace window", d("2026-10-16", "2026-10-29"), True)
+check("...reports once the grace window closes", d("2026-10-16", "2026-10-30"), False)
+check("a long-released set is never deferred", d("2023-08-18", "2026-09-23"), False)
+check("a set with no released_at is never deferred", d(None, "2026-09-23"), False)
+check("a timestamp released_at still parses", d("2026-10-16T00:00:00+00:00", "2026-09-23"), True)
+check("a malformed released_at is not deferred", d("soon", "2026-09-23"), False)
+
+
+class _PidStub:
+    def select(self, table, **kw):
+        return {"sets": [{"id": "set_new", "code": None, "name": "New Set",
+                          "released_at": "2099-01-01", "tcgplayer_group_id": None},
+                         {"id": "set_old", "code": None, "name": "Old Set",
+                          "released_at": "2023-08-18", "tcgplayer_group_id": None}],
+                "sealed_products": [],
+                "cards": [{"name": "A", "version": None, "collector_number": "1",
+                           "set_id": "set_new", "tcgplayer_product_id": None},
+                          {"name": "B", "version": None, "collector_number": "2",
+                           "set_id": "set_old", "tcgplayer_product_id": None}],
+                "graded_pop": [{"pulled_at": date.today().isoformat()}]}[table]
+
+
+_real = (rc.fetch_all_products, rc.column_pids, rc.fetch_results)
+rc.fetch_all_products = lambda *a, **k: ([], {})
+rc.column_pids = lambda *a, **k: set()
+rc.fetch_results = lambda url: []
+try:
+    pidless = sorted(f["key"] for f in rc.collect_findings(_PidStub())
+                     if f["kind"] == "card_no_pid")
+finally:
+    rc.fetch_all_products, rc.column_pids, rc.fetch_results = _real
+check("collect_findings reports only the released set's pid-less card",
+      pidless, ["Old Set|2"])
+
+
 print(f"\n{failed} FAILED" if failed else "\nall passed")
 raise SystemExit(1 if failed else 0)
