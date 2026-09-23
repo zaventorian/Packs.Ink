@@ -23,7 +23,7 @@ const ONLY = opt("only", "");
 const FPS = 30;
 const STILLS = (opt("stills", "") || "").split(",").map(Number).filter(Number.isFinite).filter((x) => opt("stills", "") !== "");
 const OUT = path.join(ROOT, "promo", "calendar");
-const AUDIO = opt("audio", "");   // music is laid on later; pass --audio <file> to mux one
+const AUDIO_OPT = opt("audio", "");   // override the plan's music; "none" for a silent cut
 const LOCAL = process.env.LOCALAPPDATA || "";
 const CHROME = process.env.PROMO_CHROME || "C:/Program Files/Google/Chrome/Application/chrome.exe";
 const FFMPEG = process.env.PROMO_FFMPEG ||
@@ -90,10 +90,15 @@ async function run(browser, fmt) {
     return ctx.close();
   }
   const total = Math.round(plan.total * FPS);
+  /* The music is part of the PLAN: it decides where video 0 sits in the song
+   * and where the fade starts, because the cuts are snapped to its beat. */
+  const mu = plan.music || {};
+  const AUDIO = AUDIO_OPT === "none" ? "" : AUDIO_OPT || (mu.file ? path.join(ROOT, mu.file) : "");
   const hasAudio = !!AUDIO && fs.existsSync(AUDIO);
+  if (AUDIO && !hasAudio) log(`  ! no audio at ${AUDIO} — silent cut`);
   const args = ["-y", "-loglevel", "error", "-f", "image2pipe", "-framerate", String(FPS), "-i", "-"];
-  if (hasAudio) args.push("-i", AUDIO, "-map", "0:v", "-map", "1:a", "-c:a", "aac", "-b:a", "192k", "-ac", "2",
-    "-af", `afade=t=in:st=0:d=1,afade=t=out:st=${(plan.total - 2.5).toFixed(2)}:d=2.5`, "-shortest");
+  if (hasAudio) args.push("-ss", String(mu.start || 0), "-i", AUDIO, "-map", "0:v", "-map", "1:a", "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+    "-af", `afade=t=in:st=0:d=0.3,afade=t=out:st=${(mu.fadeAt ?? plan.total - 2.5).toFixed(2)}:d=${(mu.fadeLen ?? 2.5).toFixed(2)}`, "-shortest");
   args.push("-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-r", String(FPS), file);
   const ff = spawn(FFMPEG, args, { stdio: ["pipe", "ignore", "pipe"] });
   let err = ""; ff.stderr.on("data", (d) => (err += d));

@@ -11,7 +11,7 @@ node scripts/promo_calendar/capture.mjs                    # raw clips + marks -
 node scripts/promo_calendar/compose.mjs                    # -> promo/calendar/lorcana-calendar-desktop.mp4
 node scripts/promo_calendar/compose.mjs --stills 6,23,51   # PNG frames, no encode
 node scripts/promo_calendar/compose.mjs --audit            # every callout on screen + clear of the caption?
-node scripts/promo_calendar/compose.mjs --audio track.mp3  # mux music (none by default)
+node scripts/promo_calendar/compose.mjs --audio none       # silent cut (music comes from the plan)
 node scripts/promo_calendar/marksheet.mjs c_local out.png  # one labelled frame per mark
 ```
 
@@ -63,3 +63,17 @@ node scripts/promo_calendar/marksheet.mjs c_local out.png  # one labelled frame 
   errors. Look at the marksheet before composing.
 - **The finder's ✕ sits over the "Just revealed" card strip**, so moving the
   cursor off it pops a card preview for a second; the edit starts after it.
+
+## The music is part of the edit
+
+`plan.mjs` carries the track (`MUSIC`) and its measured beat grid (107.88 BPM,
+first beat 0.050s). `finalize()` builds the hook to 12 beats, scales the body
+so it ends exactly on the finale's downbeat, snaps every cut to a beat, and
+tells compose where video 0 sits in the song and when to fade. Change a shot's
+length and the whole cut re-snaps; change the track and those constants have
+to be re-measured (onset-envelope autocorrelation, then a phase search).
+
+⚠ The track is a commercial Disney recording (`promo/audio/`, gitignored, never
+committed). Automated rights matching will likely mute or block an upload with
+it baked in. `--audio none` gives the silent cut for adding music inside an
+app's licensed library instead.

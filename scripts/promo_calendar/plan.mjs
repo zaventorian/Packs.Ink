@@ -52,7 +52,7 @@ const FULL = [1440, 900, 2300];
 
 const D = [];
 // ── 0 · hook ───────────────────────────────────────────────────────────────
-D.push({ card: { kind: "hook", per: 0.55, lines: ["Every set release.", "Every Challenge.", "Every Set Champ near you."] }, dur: 3.4 });
+D.push({ card: { kind: "hook", lines: ["Every set release.", "Every Challenge.", "Every Set Champ near you.", "One calendar."] }, dur: 0 });
 
 // ── 1 · glance: the home tile ─────────────────────────────────────────────
 {
@@ -233,9 +233,54 @@ D.push({ card: { kind: "hook", per: 0.55, lines: ["Every set release.", "Every C
 // ── CTA ───────────────────────────────────────────────────────────────────
 D.push({ card: { big: "Lorcana <span class='gold'>Calendar</span>", url: "packs.ink/calendar" }, dur: 3.4 });
 
+/* ── the music ──────────────────────────────────────────────────────────────
+ * "When Will My Life Begin" (Tangled), measured off the file: 107.88 BPM,
+ * first beat at 0.050s, downbeats every 4 beats. Lyric times come from a
+ * word-timestamped transcription and are used for placement only.
+ *   - 0-5s is spoken dialogue: never used.
+ *   - the verse ("7 a.m. …") enters on the downbeat at 17.85s, which is where
+ *     the home-page calendar first appears.
+ *   - the last full "when will my life begin" starts 102.92s; the end card
+ *     comes in on the downbeat before it (102.39s), and the audio fades as the
+ *     song drops into its quiet coda (~106s).
+ * The hook is 12 beats: four lines two beats apart, then the title on the
+ * downbeat for a bar. Every shot boundary after it is snapped to a beat, with
+ * the footage scaled a hair to make the whole run land on 102.39s. */
+const BPM = 107.88, PHASE = 0.05, BEAT = 60 / BPM;
+const VERSE = 17.85, FINALE = 102.39, FADE_AT = 105.7, SONG_END = 107.3;
+export const MUSIC = { file: "promo/audio/when-will-my-life-begin.mp3", bpm: BPM };
+
+function scaleShot(sh, f) {
+  sh.dur *= f;
+  if (sh.map) sh.map = sh.map.map(([o, c]) => [o * f, c]);
+  if (sh.cam) sh.cam = sh.cam.map(([t, ...r]) => [t * f, ...r]);
+  if (sh.calls) sh.calls = sh.calls.map((c) => ({ ...c, from: c.from * f, to: c.to * f }));
+}
 function finalize(shots) {
-  let at = 0;
-  for (const s of shots) { s.at = +at.toFixed(4); at += s.dur; }
-  return { shots, total: +at.toFixed(3), chapters: CH };
+  const hook = shots[0], cta = shots[shots.length - 1], body = shots.slice(1, -1);
+  hook.card.per = 2 * BEAT;
+  hook.dur = 12 * BEAT;
+  const start = VERSE - hook.dur;                   // song time at video 0
+  const bodyEnd = FINALE - start;                   // video time the CTA starts
+  const raw = body.reduce((a, s) => a + s.dur, 0);
+  const k = (bodyEnd - hook.dur) / raw;
+  body.forEach((s) => scaleShot(s, k));
+  // snap each cut to the nearest beat (song-time grid), keeping the last on FINALE
+  let at = hook.dur;
+  body.forEach((s, i) => {
+    const end = at + s.dur;
+    const songEnd = end + start;
+    let snapped = i === body.length - 1 ? bodyEnd
+      : PHASE + Math.round((songEnd - PHASE) / BEAT) * BEAT - start;
+    if (snapped - at < 1) snapped = end;            // never crush a short shot
+    scaleShot(s, (snapped - at) / s.dur);
+    at = snapped;
+  });
+  cta.dur = SONG_END - FINALE;
+  let t = 0;
+  for (const s of shots) { s.at = +t.toFixed(4); t += s.dur; }
+  const total = +t.toFixed(3);
+  return { shots, total, chapters: CH,
+    music: { ...MUSIC, start: +start.toFixed(3), fadeAt: +(FADE_AT - start).toFixed(3), fadeLen: +(total - (FADE_AT - start)).toFixed(3) } };
 }
 export const PLANS = { desktop: finalize(D) };
