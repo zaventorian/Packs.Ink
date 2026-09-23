@@ -161,8 +161,6 @@ const callers = [
     '<span class="gmover-foil">${c.prBadge}</span>'],
   ["paintGradedTile (Graded Market PNG export)",
     '(c.prBadge?" · "+c.prBadge:"")'],
-  ["Your Top Movers row",
-    "const prBadge = printingBadge(row.tcg_printing, row.card_id);"],
   ["Graded bulk-add row",
     "printingBadge(c.printing, c.card_id)"],
   ["stamped during App's render, before any child",

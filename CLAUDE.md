@@ -1517,7 +1517,8 @@ goes out in the shareable PNG exports too.
 stamped from the catalog in App's render beside `setSetReleaseDates` (same reason — an effect
 lands a frame late and paints the wrong label first; nothing renders before `raw` is non-empty,
 see `bootLoading`). Converted: `MoverTile`, `paintMoverTile` (banner + single-tile PNG),
-the Graded Market tile, `paintGradedTile` (its PNG), Your Top Movers, and the graded bulk-add row.
+the Graded Market tile, `paintGradedTile` (its PNG) and the graded bulk-add row. (Your Top Movers was a sixth, until it was
+removed from the home collection panel 2026-09-23.)
 
 - **⚠ The rule is NOT "is this a chase rarity", and the live catalog holds counterexamples in
   BOTH directions.** Challenge Promo (C1) is rarity *Promo* and its 8 cards genuinely split, into
@@ -2987,7 +2988,6 @@ The avatar gate is one-shot — closing the picker once flips `packsink:avatarPr
 ## Home page surface
 
 - **No "Lorcana Market" h1 or "Click a card for details" subtitle** — both removed 2026-05-26. The search bar sits directly under the top nav. The logo IS the home click target (the title was redundant).
-- **Your Top Movers tiles show a printing badge** when the moving row is the foil printing — class `.panel-movers-foil-tag`, accent-color chip with text "Foil" / "Cold Foil" / "Holo" (Holofoil shortens to "Holo" to fit the tight column). Logic: `row.tcg_printing && row.tcg_printing !== "Normal" && row.tcg_printing !== "Non-Foil"` → render. Lets users tell foil-vs-non-foil movers of the same card apart.
 - **Tournament Results panel: `.ht-place` is `white-space: nowrap`** and `.home-tourney-deck` grid is `auto minmax(0,1fr) auto` (was `28px 1fr auto`). The 28px column wasn't wide enough for `"Top 4"` / `"Top 8"` — the place text wrapped to two lines, doubling row height on the narrow signed-in mobile home grid. Auto-width + nowrap keeps each row on a single line; player column's `minmax(0,1fr)` still shrinks with ellipsis when needed.
 
 ### Configurable layout (2026-08-04)
