@@ -139,7 +139,6 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const CAL_TL_MONTHS = "),
   grabLine("const CAL_TL_MIN_PX = "),
   grabLine("const CAL_TL_LABEL_PX = "),
-  grabLine("const CAL_TL_GAP_PX = "),
   grabLine("const CAL_TL_RELEASE_LANE = "),
   grabLine("const CAL_TL_STORE_PREFIX = "),
   grabLine("const CAL_TL_CIRCUIT_KINDS = "),
@@ -1234,8 +1233,8 @@ ok("each followed shop gets its own lane", dojo && gng && dojo.count === 3 && gn
 ok("a shop's lane is named by the SHOP, off its own first entry",
   dojo.label === "Dice Dojo" && gng.label === "Griffonest", `${dojo.label} / ${gng.label}`);
 ok("a shop lane is never a region filter", dojo.region === false && dojo.store === true);
-ok("a shop lane draws no gap chips — 7 days, all year, answering nothing",
-  dojo.gaps.length === 0 && gng.gaps.length === 0);
+ok("no lane carries gap chips (removed 2026-09-23)",
+  tl.lanes.every(l => l.gaps === undefined));
 ok("store events stay out of their country's region lane",
   !laneR("na").items.some(i => i.ev.kind === "store"));
 
@@ -1276,13 +1275,9 @@ ok("calTimelineLane keys a followed shop by its store id",
 ok("a store event with no store id still lands in one bucket",
   calTimelineLane({kind: "store"}) === "store:");
 
-// ⚠ The gap is measured END to START. Measuring start to start counts a
-// three-day Challenge's own length as part of the wait for the next one.
-const naGaps = laneR("na").gaps;
-ok("the gap to the next event is measured end to start",
-  naGaps.length === 1 && naGaps[0].days === 82, JSON.stringify(naGaps));
-ok("a gap chip sits between the two markers it describes",
-  naGaps[0].x > laneR("na").items[0].x && naGaps[0].x < laneR("na").items[1].x);
+// The "82d" chips between events were removed 2026-09-23 — neither the DOM nor
+// the canvas export may draw one again.
+ok("the timeline renders no gap chips", !/cal-tl-gap/.test(src) && !/lane\.gaps/.test(src));
 
 // Label de-collision. Two markers closer than a label's width cannot share a
 // row, or the later title is drawn on top of the earlier one.

@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=478">
+<link rel="stylesheet" href="styles.css?v=479">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -41003,11 +41003,6 @@ const CAL_TL_MONTHS = 12;          // one competitive season
 // the layout and the thing being laid out quietly stop agreeing.
 const CAL_TL_MIN_PX = 1120;
 const CAL_TL_LABEL_PX = 140;       // .cal-tl-label's width — keep the two in step
-// Room a "119d" chip needs between two markers. Measured generously on
-// purpose: at 46 the chip fitted its own box and still sat on the dots
-// either side of it, and a 47-day gap is not the number anybody opened a
-// season chart to read. Only a real drought earns a chip.
-const CAL_TL_GAP_PX = 64;
 // Sets and products are not in a PLACE. A set release happens everywhere at
 // once, so it gets its own rail under the lanes — which is also what makes the
 // lanes readable as "where you would travel to".
@@ -41231,26 +41226,11 @@ const calendarTimeline = (events, opts) => {
     // is exactly the information the chart exists to carry. Its row count IS
     // the density read.
     const rows = _calTlStack(items, labelW, store ? CAL_TL_STORE_ROWS : 0);
-    // The gap between one event and the NEXT in the same lane — the number a
-    // list cannot show you, and the reason to draw this at all. Measured end to
-    // start, so a three-day Challenge's own length is not counted as a wait.
-    //
-    // ⚠ Region lanes only. "Days since this shop's last league night" is 7, all
-    // year, on every lane — a true number answering nothing, printed over the
-    // one chip that does mean something.
-    const gaps = [];
-    if(!store){
-      for(let i = 0; i + 1 < items.length; i++){
-        const a = items[i], b = items[i + 1];
-        const days = calDayDiff(a.end, b.start);
-        const left = a.x + a.w, right = b.x;
-        if(days > 0 && (right - left) * CAL_TL_MIN_PX >= CAL_TL_GAP_PX){
-          gaps.push({days, x: (left + right) / 2, key: `${a.ev.id}>${b.ev.id}`});
-        }
-      }
-    }
+    // ⚠ No "82d" gap chips between events any more (Zaven, 2026-09-23: "remove
+    // the xd between events"). The spacing on the axis already IS the gap, and
+    // the chips sat on the rail between markers as a second reading of it.
     const grp = CAL_TL_GROUP_OF(key);
-    lanes.push({key, label: laneLabel(key, items), rows, items, gaps, count: items.length,
+    lanes.push({key, label: laneLabel(key, items), rows, items, count: items.length,
       group: grp, first: grp !== (lanes.length ? lanes[lanes.length - 1].group : null),
       // Only a real region lane offers itself as a filter — "Challenges" is
       // every region at once, so clicking it could only mean "all", which is
@@ -42731,7 +42711,6 @@ const CAL_TL_ROW_H = 32;           // one stacked label (title 11.5 + date 9.5 +
 const CAL_TL_RAIL_H = 16;          // the marker rail under the labels
 
 const CalendarTimelineMarks = ({lane, below, onOpen, art}) => html`<${React.Fragment}>
-  ${lane.gaps.map(g => html`<span key=${g.key} class="cal-tl-gap" style=${{left: g.x * 100 + "%"}}>${g.days}d</span>`)}
   ${lane.items.map(it => html`<button key=${it.ev.id} type="button"
     class=${"cal-tl-mark" + (it.label ? "" : " cal-tl-mark--tick") + (it.label && it.w > 0.004 ? " cal-tl-mark--span" : "")
       + (calEstimated(it.ev) ? " cal-tl-mark--est" : "")}
@@ -42789,7 +42768,7 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
   const W = G.pad * 2 + G.gutter + track;
   const rail = tl.release;
   const laneList = tl.lanes.concat(rail.items.length
-    ? [{key: "__rel", label: "Releases", rows: rail.rows, items: rail.items, gaps: [],
+    ? [{key: "__rel", label: "Releases", rows: rail.rows, items: rail.items,
        group: "release", below: true}]
     : []);
   const bodyH = laneList.reduce((h, l) => h + _calTlLaneH(l), 0);
@@ -42912,18 +42891,6 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
     ctx.lineWidth = lane.below ? 2 : 1;
     ctx.beginPath(); ctx.moveTo(x0, Math.round(railY) + 0.5); ctx.lineTo(x0 + track, Math.round(railY) + 0.5); ctx.stroke();
     ctx.lineWidth = 1; ctx.globalAlpha = 1;
-
-    for(const g of lane.gaps){
-      font(600, 9);
-      const label = `${g.days}d`;
-      const tw = ctx.measureText(label).width;
-      const gx = at(g.x) - tw / 2 - 6;
-      ctx.fillStyle = P.bg;
-      roundRectPath(ctx, gx, railY - 8, tw + 12, 16, 8); ctx.fill();
-      ctx.strokeStyle = P.border; ctx.stroke();
-      ctx.fillStyle = P.muted;
-      ctx.fillText(label, gx + 6, railY + 3.5);
-    }
 
     for(const it of lane.items){
       const hue = calendarEventIcon(it.ev, null).hue;
@@ -43088,7 +43055,7 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
               <div class="cal-tl-name"><span>Releases</span><span class="cal-tl-name-n">${rail.items.length}</span></div>
               <div class="cal-tl-track" style=${{height: (rail.rows * CAL_TL_ROW_H + CAL_TL_RAIL_H) + "px"}}>
                 <span class="cal-tl-rail" aria-hidden="true"/>
-                <${CalendarTimelineMarks} lane=${{...rail, gaps: []}} below=${true} onOpen=${onOpen} art=${art}/>
+                <${CalendarTimelineMarks} lane=${rail} below=${true} onOpen=${onOpen} art=${art}/>
               </div>
             </div>`}
           </div>
