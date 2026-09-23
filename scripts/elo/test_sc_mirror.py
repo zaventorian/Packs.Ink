@@ -75,5 +75,56 @@ check("every sent key is a real column", set(payload[0]) <= table_cols, True)
 check("the row's identity survives", payload[0]["event_id"], 42)
 check("the caller's row is not mutated", "description" in row, True)
 
+
+# ── a gateway 5xx is retried, a 4xx is not ─────────────────────────────────
+#
+# 2026-09-23: one 502 "Network connection lost" 8,800 rows into the 22k-row
+# lorcana_events upsert failed the whole run, because HTTPError was fatal on
+# the first try while only socket errors were retried. Both writers share the
+# shape, so both are driven here.
+import io  # noqa: E402
+import urllib.error  # noqa: E402
+import discover_events as de  # noqa: E402
+
+
+def _http_err(code):
+    return urllib.error.HTTPError("u", code, "x", {}, io.BytesIO(b'"gateway error"'))
+
+
+def drive(fn, codes):
+    """Run fn([row]) with urlopen answering each code in turn (None = 200)."""
+    calls = []
+    seq = list(codes)
+
+    def fake(req, timeout=None):
+        calls.append(1)
+        c = seq.pop(0) if seq else None
+        if c is None:
+            return _Resp()
+        raise _http_err(c)
+
+    saved = (m.urllib.request.urlopen, m.time.sleep, de.time.sleep)
+    m.urllib.request.urlopen = fake
+    m.time.sleep = de.time.sleep = lambda s: None
+    try:
+        fn([dict(row)])
+        return len(calls), None
+    except SystemExit as e:
+        return len(calls), str(e)
+    finally:
+        m.urllib.request.urlopen, m.time.sleep, de.time.sleep = saved
+
+
+for label, fn in (("set_championships", m.upsert), ("lorcana_events", de.upsert_events)):
+    n, err = drive(fn, [502, None])
+    check(f"{label}: a single 502 is retried and the batch lands", (n, err), (2, None))
+    n, err = drive(fn, [503, 502, None])
+    check(f"{label}: consecutive 5xx keep retrying", (n, err), (3, None))
+    n, err = drive(fn, [400])
+    check(f"{label}: a 400 fails at once, no retry", n, 1)
+    check(f"{label}: ...and names the status", "[400]" in (err or ""), True)
+    n, err = drive(fn, [502] * 6)
+    check(f"{label}: a 5xx that never clears still fails after 5 tries", (n, "[502]" in (err or "")), (5, True))
+
 print(f"\n{failed} FAILED" if failed else "\nall passed")
 raise SystemExit(1 if failed else 0)

@@ -146,7 +146,15 @@ def upsert_events(rows: list[dict], chunk: int = 200) -> None:
                     _ = r.read()
                 break
             except urllib.error.HTTPError as e:
-                raise SystemExit(f"upsert failed [{e.code}]: {e.read().decode('utf-8','ignore')[:400]}")
+                # A 5xx is the gateway, not the payload (a one-off 502 "Network
+                # connection lost" took down the 2026-09-23 run 8,800 rows into
+                # 22k). The upsert merges duplicates, so re-sending is safe. A 4xx
+                # is the payload and would fail identically every time.
+                msg = e.read().decode('utf-8', 'ignore')[:400]
+                if e.code < 500 or attempt == 4:
+                    raise SystemExit(f"upsert failed [{e.code}]: {msg}")
+                print(f"\n  ! upsert got {e.code}, retrying ({attempt + 1}/4): {msg[:120]}")
+                time.sleep(1.5 * (attempt + 1))
             except Exception as e:
                 if attempt == 4:
                     raise SystemExit(f"upsert batch failed after retries: {e}")
