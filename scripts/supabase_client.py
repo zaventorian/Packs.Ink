@@ -15,6 +15,10 @@ from typing import Iterable
 import requests
 
 
+# Public by design - the site ships it to every browser.
+PUBLISHABLE_KEY = "sb_publishable_B2qq0Dsfij-7X2CZSxl2uQ_7PWc6Ob0"
+
+
 class Supabase:
     def __init__(self, url: str | None = None, key: str | None = None) -> None:
         self.url = (url or os.environ.get("SUPABASE_URL", "")).rstrip("/")
@@ -26,12 +30,17 @@ class Supabase:
             )
 
     def auth_headers(self) -> dict[str, str]:
-        # In a Claude Code cloud session the key is an API credential that the
-        # agent proxy attaches on the way out, and the session only ever sees the
-        # placeholder "proxy-injected". Sending that placeholder would put a bogus
-        # key on the wire for the proxy to fight with, so send no auth at all.
+        # In a Claude Code cloud session the service key is an API credential the
+        # agent proxy attaches on the way out (Authorization: Bearer <key>), and the
+        # session only ever sees the placeholder "proxy-injected". Supabase ALSO
+        # demands an `apikey` header, but it accepts the PUBLIC publishable key
+        # there - the request runs as whatever role the Authorization JWT carries.
+        # So send the publishable key (already public in Index.html) and let the
+        # proxy supply the secret. Without it every call is 401 "No API key found".
+        # If the proxy is NOT injecting, calls come back as the anon role instead
+        # ("permission denied for table ..."), which says exactly that.
         if self.key == "proxy-injected":
-            return {}
+            return {"apikey": os.environ.get("SUPABASE_PUBLISHABLE_KEY", PUBLISHABLE_KEY)}
         return {"apikey": self.key, "Authorization": f"Bearer {self.key}"}
 
     def _headers(self, prefer: str = "") -> dict[str, str]:
