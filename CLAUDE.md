@@ -6170,9 +6170,10 @@ row is one row tall whether the next thing is tomorrow or in June. A third mode
 - **⚠ The label stack starts ABOVE the rail** (`CAL_TL_RAIL_H`). Offsetting row 0
   from zero puts the titles on top of the dots, the span bars and the gap chips
   they describe, and it looks deliberate.
-- **The gap chip is measured END to START** - the number a list cannot show you,
-  and the reason to draw any of this. Start to start would count a three-day
-  Challenge's own length as part of the wait for the next one.
+- **⚠ There are NO gap chips any more** (removed 2026-09-23, Zaven: "remove the xd
+  between events"). The timeline used to print "82d" on the rail between markers;
+  the axis spacing already says it. `calendarTimeline` no longer computes `gaps`,
+  and `test_calendar.mjs` fails if `cal-tl-gap` or `lane.gaps` reappears.
 - **⚠ Sets and products are not in a PLACE**, so they get a release rail of their
   own under the lanes - which is also what lets the lanes read as "where you would
   travel to". Their `country` is null, so a lane assignment that only asks
@@ -6357,9 +6358,6 @@ structure and which was content.
   files** - the packing is measured against it. It grew from 126 with this pass,
   which also moved a test fixture: a date chosen to anchor LEFT at 126px anchors
   right at 140px, and the pair then tests nothing.
-- **⚠ `CAL_TL_GAP_PX` is 64, not 46.** At 46 the chip fitted its own box and
-  still sat on the dots either side of it, and a 47-day gap is not the number
-  anybody opened a season chart to read. Only a real drought earns a chip.
 - **The canvas export is set in the SAME TWO FACES as the screen** - Nunito Sans for
   the body, Cinzel for the title and the structural row names - and loads every
   (weight, size) it paints up front, best-effort. A canvas falls back to the generic
@@ -6630,9 +6628,6 @@ drawing it as an anonymous strip of ticks. Two halves:
   flat empty band either side of it — unreadable in both directions at once.
   Region lanes are uncapped; a season is ~17 Challenges across five of them, so
   they never come close, and capping one would silently drop a Challenge's name.
-- **⚠ Gap chips are REGION LANES ONLY.** "Days since this shop's last league
-  night" is 7, all year, on every lane — a true number answering nothing, printed
-  over the one chip that does mean something.
 - **⚠ A shop you FOLLOW wins over the same shop inside your radius**
   (`calendarMergeStore`, keyed on the RPH event id, the only stable key either
   side carries). Without it one SC draws in two lanes, which reads as a
