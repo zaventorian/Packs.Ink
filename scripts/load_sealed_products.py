@@ -163,6 +163,15 @@ def existing_card_pids(sb: Supabase) -> set[int]:
     return {r["tcgplayer_product_id"] for r in rows if r.get("tcgplayer_product_id") is not None}
 
 
+# A sealed SKU filed under a TCGplayer group that isn't its set's (promo-set
+# boxes land in the generic promo group), so the group map can't bind it and it
+# renders under "Other / Promo". Keyed by pid, and it only fills a set the group
+# map left empty. The set id must exist in `sets` or the upsert FK-fails loudly.
+SEALED_SET_OVERRIDES: dict[int, str] = {
+    702474: "set_curators_cc1",  # Curator's Collection: Heroines Edition
+}
+
+
 def transform_product(p: dict, group_id: int, set_id: str | None) -> dict | None:
     pid = p.get("productId")
     if pid is None:
@@ -176,7 +185,7 @@ def transform_product(p: dict, group_id: int, set_id: str | None) -> dict | None
     return {
         "tcgplayer_product_id": int(pid),
         "tcgplayer_group_id":   group_id,
-        "set_id":               set_id,
+        "set_id":               set_id or SEALED_SET_OVERRIDES.get(int(pid)),
         "name":                 name,
         "clean_name":           (p.get("cleanName") or "").strip() or None,
         "product_type":         classify(name),
