@@ -13983,6 +13983,7 @@ const Tooltip=({text,children})=>html`<span class="tip-wrap">${children}<span cl
 // it must never match AUX_EVICTABLE_PREFIXES, or a wipe strands the thread.
 const FEEDBACK_TOKENS_KEY = "packsink:feedback:tokens";
 const FEEDBACK_NOTICE_KEY = "packsink:feedback:noticeDismissed";
+const FEEDBACK_POLL_MS = 2 * 60_000;
 const FEEDBACK_TOKEN_RE = /^[A-Za-z0-9_-]{22,64}$/;
 const normalizeFeedbackTokens = (v) => Array.isArray(v)
   ? Array.from(new Set(v.filter(t => typeof t === "string" && FEEDBACK_TOKEN_RE.test(t)))).slice(-100)
@@ -56375,16 +56376,29 @@ function App(){
       else if(feedbackThreadsUnavailable(error)) feedbackThreadsOff.current = true;
     } catch {}
   }, [feedbackUid, isGradedAdmin]);
+  // It also POLLS while the tab is visible. Asking only on load and on return
+  // meant a reply written while someone had the site open never reached them:
+  // the badge and the corner notice waited for a reload, or for the tab to sit
+  // hidden five minutes and come back. Nobody who holds neither an account nor
+  // a token is ever polled (refreshFeedbackUnread short-circuits before any
+  // request), so the poll costs only the people who can actually get a reply.
   useEffect(() => {
     refreshFeedbackUnread();
     let last = Date.now();
-    const onVisible = () => {
-      if(document.visibilityState !== "visible" || Date.now() - last < 5 * 60_000) return;
+    const ask = (minGap) => {
+      if(document.visibilityState !== "visible" || Date.now() - last < minGap) return;
       last = Date.now();
       refreshFeedbackUnread();
     };
+    const onVisible = () => ask(30_000);
+    const poll = setInterval(() => ask(FEEDBACK_POLL_MS - 5_000), FEEDBACK_POLL_MS);
     document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", onVisible);
+    return () => {
+      clearInterval(poll);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onVisible);
+    };
   }, [refreshFeedbackUnread]);
   // The corner notice dismisses per reply: it stays away until a newer one lands.
   const dismissFeedbackNotice = useCallback(() => {

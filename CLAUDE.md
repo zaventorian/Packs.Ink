@@ -1399,9 +1399,12 @@ the migration against the client (every RPC defined, every grant on the declared
   replies can't resurrect it for the other. z-index 50: under the Lore Tracker board (60) and
   every modal, over the deck editor's docked bars.
 - **App asks for one cheap count** (`get_my_feedback_unread`, plus `get_feedback_admin_unread`
-  for admins) on sign-in change, on return to the tab (at most every 5 min) and when either box
-  closes — and **not at all for an anonymous visitor holding no tokens**, which is almost
-  everyone. After a `feedbackThreadsUnavailable` error it stops asking for the session.
+  for admins) on sign-in change, on return to the tab (at most every 30s), **every 2 minutes
+  while the tab is visible** (`FEEDBACK_POLL_MS`), and when either box closes — and **not at
+  all for an anonymous visitor holding no tokens**, which is almost everyone. ⚠ The poll is
+  the fix for "an admin replied and the user never saw a badge" (2026-09-23): asking only on
+  load and on a 5-minute-throttled return meant someone with the site already open never
+  learned a reply had landed until they reloaded. After a `feedbackThreadsUnavailable` error it stops asking for the session.
 - **Opening the box lands on the newest unread thread**; the badge or the notice is why it was
   opened. Opening a thread marks it read.
 - **A follow-up reopens a resolved thread** and spends from the same per-IP (10/h) and global
