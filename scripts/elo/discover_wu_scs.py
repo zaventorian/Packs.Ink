@@ -427,6 +427,25 @@ def to_row(ev: dict, set_name: str) -> dict:
     }
 
 
+# set_championships' columns (migration 66). to_row() is shared with
+# lorcana_events, which is WIDER: `description` landed there on 2026-09-21 and
+# took this mirror down with PGRST204 for three nights, because PostgREST
+# rejects a body naming any column the table lacks. So the mirror sends only
+# what the table has. Guarded by test_sc_mirror.py, which reads the table's
+# columns out of the migration.
+SC_COLS = (
+    "event_id", "name", "set_name", "store_id", "store_name", "store_website",
+    "start_datetime", "end_datetime", "timezone", "full_address", "city",
+    "state", "country", "latitude", "longitude", "registered_user_count",
+    "capacity", "cost_cents", "currency", "gameplay_format", "display_status",
+    "url",
+)
+
+
+def sc_row(row: dict) -> dict:
+    return {k: row[k] for k in SC_COLS if k in row}
+
+
 def upsert(rows: list[dict], chunk: int = 200) -> None:
     # Smaller batches + retries: the Supabase TLS endpoint intermittently throws
     # SSLV3_ALERT_BAD_RECORD_MAC on large/back-to-back POSTs.
@@ -439,6 +458,7 @@ def upsert(rows: list[dict], chunk: int = 200) -> None:
         "Content-Type": "application/json",
         "Prefer": "resolution=merge-duplicates,return=minimal",
     }
+    rows = [sc_row(r) for r in rows]
     done = 0
     for i in range(0, len(rows), chunk):
         batch = rows[i:i + chunk]
