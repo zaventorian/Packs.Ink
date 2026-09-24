@@ -65,8 +65,20 @@ s=sb.select('sets',columns='id,name',filters={'name':'ilike.*<name>*'});print(s)
 for r in sb.select('cards',columns='collector_number,name,version',filters={'set_id':'eq.'+s[0]['id']}): print(r)"
 ```
 
-Known: set 14 Hyperia City = `set_hyperia_city`, tag `set14`, gallery slug `set14`. Skip any
-collector number already present unless the photo shows it's a different printing.
+Known: set 14 Hyperia City = `set_03ecae5ead004dd5a51cf133b9b224ef` (Lorcast's id), tag `set14`,
+gallery slug `set14`. Skip any collector number already present unless the photo shows it's a
+different printing.
+
+⚠ **If the lookup returns TWO sets with the same name, stop and converge them first.** A
+hand-minted placeholder set (migration 166's `set_hyperia_city`, used until Lorcast indexed set 14
+on 2026-09-23) sits beside Lorcast's real one, and `retire_prestaged.py` matches on
+`(set_id, collector_number)` — so every card Lorcast publishes shows up TWICE and is never retired.
+Converge = move `cards` + `sealed_products` to Lorcast's id, move `tcgplayer_group_id` across, run
+`retire_prestaged.py` (dry, then `--commit`), then delete the placeholder set row. Always prestage
+into Lorcast's id once it exists.
+
+⚠ `Supabase.update(table, match, patch)` takes `match` as PLAIN values (`{"id": "crd_x"}`) and
+adds `eq.` itself. Passing `{"id": "eq.crd_x"}` matches nothing and returns no error.
 
 ## Stage 3 — Read each card (the part that can go wrong)
 

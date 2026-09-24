@@ -63,6 +63,7 @@ LEADERS = {
     "winnie-the-pooh-hunny-wizard":      ("Amethyst", "Winnie the Pooh - Hunny Wizard", {}),
     "donald-duck-fred-honeywell":        ("Emerald",  "Donald Duck - Fred Honeywell", {}),
     "robin-hood-sneaky-sleuth":          ("Emerald",  "Robin Hood - Sneaky Sleuth", {}),
+    "pete-bad-guy":                      ("Emerald",  "Pete - Bad Guy", {}),
     "ursula-deceiver-of-all":            ("Emerald",  "Ursula - Deceiver of All", {}),
     "mickey-mouse-brave-little-tailor":  ("Ruby",     "Mickey Mouse - Brave Little Tailor", {}),
     "mr-incredible-super-strong":        ("Ruby",     "Mr. Incredible - Super Strong", {}),
