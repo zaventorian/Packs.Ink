@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=476">
+<link rel="stylesheet" href="styles.css?v=479">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2839,6 +2839,29 @@ const calTodayYmd = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
+// "Today" as React state that MOVES. An installed PWA is left open for days, and
+// a plain `calTodayYmd()` read at render only changes when something else
+// happens to re-render — so the today ring, every countdown and "upcoming"
+// stayed on yesterday. It re-reads at the next local midnight and whenever the
+// tab comes back into view (a sleeping laptop misses its timer).
+const useCalToday = () => {
+  const [d, setD] = useState(calTodayYmd);
+  useEffect(() => {
+    let t = null;
+    const sync = () => setD(p => { const n = calTodayYmd(); return n === p ? p : n; });
+    const arm = () => {
+      clearTimeout(t);
+      const now = new Date();
+      const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
+      t = setTimeout(() => { sync(); arm(); }, Math.max(1000, next - now));
+    };
+    const onVis = () => { if(document.visibilityState === "visible"){ sync(); arm(); } };
+    arm();
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearTimeout(t); document.removeEventListener("visibilitychange", onVis); };
+  }, []);
+  return d;
+};
 // The calendar day an instant falls on IN THE EVENT'S OWN ZONE. A Friday 9pm
 // league night in Los Angeles is Friday for the people going, whatever zone the
 // person reading the calendar is in. Intl throws on a bad zone name (RPH does
@@ -3067,6 +3090,10 @@ const CAL_EST_SUFFIX = " (estimated)";
 // Where ONE line has to name an event completely: an .ics SUMMARY, a month
 // cell's tooltip, the standing list of what you have hidden. One helper so the
 // four of them cannot drift into naming the same event differently.
+// A link to ONE event. The id is stable for all three shapes a calendar row
+// takes — a curated uuid, `ev:<rph id>`, `set:<Set>:<phase>` — so it is the
+// whole identity; CalendarView resolves it on arrival (see `?ce=`).
+const calEventLink = (ev) => SITE_ORIGIN + "/calendar?ce=" + encodeURIComponent(String(ev && ev.id || ""));
 const calEventFullLabel = (ev) => [calEventTitle(ev), calEventSubtitle(ev)].filter(Boolean).join(" — ")
   + (calEstimated(ev) ? CAL_EST_SUFFIX : "");
 
@@ -3546,9 +3573,15 @@ const calendarHiddenSet = (subs) => new Set((subs || []).filter(s => s.kind === 
 // you may not remember making, so saving an event brings it back whatever the
 // hide list says. Without a rule like this a stale hide silently defeats a
 // deliberate add, which is exactly the bug that killed the graded version.
+// ⚠ A STORE event is SAVED under its bare RPH id ("123") but HIDDEN under its
+// entry id ("ev:123") — CalendarAddMenu has always keyed them that way, and
+// both are in the wild. Comparing the saved set against `e.id` therefore never
+// matched a store event, so the bypass above silently failed for exactly the
+// kind of event most likely to be hidden. This is the one place that knows.
+const calSavedRefOf = (e) => (e && e.kind === "store" && e.event_id != null) ? String(e.event_id) : String(e && e.id);
 const calendarApplyHidden = (events, hidden, saved) => {
   if(!hidden || !hidden.size) return events || [];
-  return (events || []).filter(e => !hidden.has(String(e.id)) || (saved && saved.has(String(e.id))));
+  return (events || []).filter(e => !hidden.has(String(e.id)) || (saved && saved.has(calSavedRefOf(e))));
 };
 
 // One lorcana_events row (or one occurrence of a grouped series) as a calendar
@@ -3635,10 +3668,18 @@ const calendarMonthGrid = (year, month, events) => {
 // The next `limit` entries from `fromYmd` forward. An entry that STARTED but has
 // not ended (day 2 of a 3-day championship) still counts as upcoming — it is
 // happening right now, which is the most useful thing a "what's next" box can say.
+// An event's last day. ⚠ An ends_on EARLIER than its start (a typo in the
+// editor) is ignored rather than trusted, or it would drop an event that has
+// not happened yet out of "upcoming" — calCountdown and the detail modal
+// already applied this test; the list paths did not.
+const calEndOf = (e) => {
+  const st = CAL_D(e && e.starts_on), en = CAL_D(e && e.ends_on);
+  return calYmdParts(en) && en > st ? en : st;
+};
 const calendarUpcoming = (events, fromYmd, limit) => {
   const from = CAL_D(fromYmd) || calTodayYmd();
   const live = (events || []).filter(e => {
-    const end = calYmdParts(CAL_D(e.ends_on)) ? CAL_D(e.ends_on) : CAL_D(e.starts_on);
+    const end = calEndOf(e);
     return !!calYmdParts(CAL_D(e.starts_on)) && end >= from;
   });
   const sorted = calendarSort(live);
@@ -3695,7 +3736,7 @@ const icsEventLines = (ev, nowMs) => {
   }
   lines.push(`SUMMARY:${icsEscape(calEventFullLabel(ev))}`);
   if(ev.location) lines.push(`LOCATION:${icsEscape(ev.location)}`);
-  const desc = [ev.notes, ev.url].filter(Boolean).join("\n");
+  const desc = [ev.notes, ev.description, ev.url].filter(Boolean).join("\n");
   if(desc) lines.push(`DESCRIPTION:${icsEscape(desc)}`);
   if(ev.url) lines.push(`URL:${icsEscape(ev.url)}`);
   lines.push("END:VEVENT");
@@ -3736,7 +3777,7 @@ const googleCalUrl = (ev) => {
     dates,
   });
   if(ev.location) q.set("location", ev.location);
-  const details = [ev.notes, ev.url].filter(Boolean).join("\n");
+  const details = [ev.notes, ev.description, ev.url].filter(Boolean).join("\n");
   if(details) q.set("details", details);
   return `https://calendar.google.com/calendar/render?${q.toString()}`;
 };
@@ -11207,8 +11248,10 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
             /* Coconut is near-singleton, so a "1x" on 55 of 56 tiles is noise —
                only the multiples are worth calling out. The badge lives INSIDE
                the card's own box on a landscape card, or it would pin to the
-               far corner of the row rather than to the card it counts. */
-            const qty = (!posterCoconut || c.quantity > 1) && html`<span style=${{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.82)",color:"#fff",
+               far corner of the row rather than to the card it counts. On a
+               landscape card the quarter turn puts the COST in the top-right
+               corner, so the badge steps left of it rather than covering it. */
+            const qty = (!posterCoconut || c.quantity > 1) && html`<span style=${{position:"absolute",top:6,right:landscape ? "calc(14% + 6px)" : 6,background:"rgba(0,0,0,0.82)",color:"#fff",
               fontSize:14,fontWeight:800,padding:"3px 8px",borderRadius:6,
               fontVariantNumeric:"tabular-nums",letterSpacing:"-0.3px",
               boxShadow:"0 2px 5px rgba(0,0,0,0.35)"}}>${c.quantity}x</span>`;
@@ -40369,6 +40412,14 @@ const calReadLocalSubs = () => {
   } catch { return []; }
 };
 const calWriteLocalSubs = (subs) => { try { localStorage.setItem(CAL_SUBS_LS, JSON.stringify(subs)); } catch {} };
+// ⚠ Whose list the local mirror is. Signed in, the mirror holds the ACCOUNT's
+// follows; without an owner stamp, signing out showed them to whoever used the
+// device next as their own, and the next sign-in by a DIFFERENT account adopted
+// them as "orphans" and upserted them into that account. The stamp makes a
+// signed-out visit start clean and restricts the orphan migration to rows that
+// really were made signed-out (no owner) or by this same account.
+const CAL_SUBS_OWNER_LS = "packsink:calSubsOwner";
+const calSubsOwner = () => { try { return localStorage.getItem(CAL_SUBS_OWNER_LS) || ""; } catch { return ""; } };
 
 // `skip` is for a component that has been HANDED a subs object by its parent:
 // the hook still has to run (hook order), but it must not fetch the same rows
@@ -40382,7 +40433,14 @@ function useCalendarSubs(user, skip){
   useEffect(() => {
     let cancelled = false;
     if(skip) return;
-    if(!uid){ setSubs(calReadLocalSubs()); return; }
+    if(!uid){
+      if(calSubsOwner()){
+        calWriteLocalSubs([]);
+        try { localStorage.removeItem(CAL_SUBS_OWNER_LS); } catch {}
+        setSubs([]);
+      } else setSubs(calReadLocalSubs());
+      return;
+    }
     (async () => {
       // .eq(user_id) even though the policy is owner-only with no OR branch —
       // the house rule from the RLS-broadening trap, free insurance if a future
@@ -40392,7 +40450,9 @@ function useCalendarSubs(user, skip){
       if(cancelled || error) return;              // not deployed → stay local, silently
       const remote = data || [];
       const have = new Set(remote.map(calSubKey));
-      const orphans = calReadLocalSubs().filter(s => !have.has(calSubKey(s)));
+      const owner = calSubsOwner();
+      const orphans = (owner && owner !== uid) ? []
+        : calReadLocalSubs().filter(s => !have.has(calSubKey(s)));
       let merged = remote;
       if(orphans.length && !migrated.current){
         migrated.current = true;
@@ -40401,7 +40461,10 @@ function useCalendarSubs(user, skip){
           {onConflict: "user_id,kind,ref"});
         if(!upErr) merged = remote.concat(orphans);
       }
-      if(!cancelled){ setSubs(merged); calWriteLocalSubs(merged); }
+      if(!cancelled){
+        setSubs(merged); calWriteLocalSubs(merged);
+        try { localStorage.setItem(CAL_SUBS_OWNER_LS, uid); } catch {}
+      }
     })();
     return () => { cancelled = true; };
   }, [uid, skip]);
@@ -40416,15 +40479,20 @@ function useCalendarSubs(user, skip){
     // the Hide button silently did nothing. Doing it here rather than at the
     // call sites means every future caller inherits both halves.
     const opposite = row.kind === "event" ? "hide" : row.kind === "hide" ? "event" : null;
+    // ⚠ Both spellings of the opposite ref — see calSavedRefOf: a store event is
+    // saved as "123" and hidden as "ev:123", so retiring only the identical ref
+    // left the other row standing and the two never cancelled.
+    const oppRefs = !opposite ? [] : row.kind === "event" ? [row.ref, "ev:" + row.ref]
+      : [row.ref].concat(/^ev:/.test(row.ref) ? [row.ref.slice(3)] : []);
     setSubs(prev => {
-      let next = opposite ? prev.filter(s => !(s.kind === opposite && String(s.ref) === row.ref)) : prev;
+      let next = opposite ? prev.filter(s => !(s.kind === opposite && oppRefs.includes(String(s.ref)))) : prev;
       next = next.some(s => calSubKey(s) === calSubKey(row)) ? next : next.concat([row]);
       calWriteLocalSubs(next);
       return next;
     });
     if(uid){
       if(opposite) sbClient.from("calendar_subscriptions").delete()
-        .eq("user_id", uid).eq("kind", opposite).eq("ref", row.ref).then(() => {}, () => {});
+        .eq("user_id", uid).eq("kind", opposite).in("ref", oppRefs).then(() => {}, () => {});
       sbClient.from("calendar_subscriptions")
         .upsert({user_id: uid, ...row}, {onConflict: "user_id,kind,ref"}).then(() => {}, () => {});
     }
@@ -40580,16 +40648,22 @@ function useStoreCalendarEvents(subs){
       const out = new Map();
       try {
         if(storeIds.length){
-          const {data} = await calSelectEvents((cols) =>
+          const {data, error} = await calSelectEvents((cols) =>
             sbClient.from("lorcana_events").select(cols)
               .in("store_id", storeIds).gte("start_datetime", from).lte("start_datetime", to)
               .order("start_datetime", {ascending: true}).limit(1000));
+          // ⚠ supabase-js RETURNS an error rather than throwing, offline included,
+          // so without this a dropped connection fell through to setRows([]) and
+          // wiped every followed-store event — the "keep what we had" below
+          // never ran.
+          if(error) return;
           for(const r of data || []) out.set(r.event_id, r);
         }
         if(eventIds.length){
-          const {data} = await calSelectEvents((cols) =>
+          const {data, error} = await calSelectEvents((cols) =>
             sbClient.from("lorcana_events").select(cols)
               .in("event_id", eventIds).order("start_datetime", {ascending: true}).limit(1000));
+          if(error) return;
           for(const r of data || []) out.set(r.event_id, r);
         }
       } catch {/* offline → keep what we had */}
@@ -40702,18 +40776,32 @@ function useNearbyScEvents(on){
 // map of them is not a map, and the RPC that walks them is the most expensive
 // read on this screen. No focus, no fetch.
 const _calMapNearCache = new Map();
+const CAL_MAP_NEAR_MIN_Z = 6;
 function useMapNearbyEvents(focus, radius, on){
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
-  const lat = focus ? focus.lat : null, lng = focus ? focus.lng : null;
-  const key = `${lat}|${lng}|${radius}`;
+  // ⚠ The key is ROUNDED to a grid scaled to the radius. Raw floats made every
+  // drag release a fresh key — the most expensive query on the page, re-run per
+  // gesture, and a module cache that grew without bound. A tenth of the radius
+  // is far finer than anything the radius itself can distinguish.
+  // ⚠ And it only asks once the map is zoomed in far enough to be "somewhere".
+  // A drag on the whole-season view lands in focus mode at zoom 2, where a
+  // 50-mile radius around the middle of an ocean answers nothing.
+  const tooWide = !focus || !(focus.zoom >= CAL_MAP_NEAR_MIN_Z);
+  const grid = Math.max(0.01, (radius || 50) / 690);
+  const snap = (v) => v == null ? null : Math.round(v / grid) * grid;
+  const lat = focus && !tooWide ? snap(focus.lat) : null, lng = focus && !tooWide ? snap(focus.lng) : null;
+  const key = `${lat != null ? lat.toFixed(3) : ""}|${lng != null ? lng.toFixed(3) : ""}|${radius}`;
   useEffect(() => {
     if(!on || lat == null || lng == null){ setRows(null); setErr(null); setBusy(false); return; }
-    if(_calMapNearCache.has(key)){ setRows(_calMapNearCache.get(key)); setErr(null); return; }
+    // ⚠ busy has to be cleared here too: a fetch in flight when you moved to an
+    // already-cached spot was cancelled, and nothing else ever set it false, so
+    // "Finding events…" stayed up for good.
+    if(_calMapNearCache.has(key)){ setRows(_calMapNearCache.get(key)); setErr(null); setBusy(false); return; }
     let cancelled = false;
     setErr(null); setBusy(true);
-    (async () => {
+    const t = setTimeout(() => (async () => {
       try {
         const {data, error} = await sbClient.rpc("get_nearby_lorcana_events", {
           p_lat: lat, p_lng: lng, p_radius_mi: radius, p_kind: null,
@@ -40736,8 +40824,8 @@ function useMapNearbyEvents(focus, radius, on){
       } catch(e){
         if(!cancelled){ setRows(null); setErr(String(e && e.message || e)); setBusy(false); }
       }
-    })();
-    return () => { cancelled = true; };
+    })(), 350);
+    return () => { cancelled = true; clearTimeout(t); };
   }, [on, lat, lng, radius, key]);
   return {rows: rows || [], err, busy};
 }
@@ -40848,7 +40936,7 @@ const calendarPanelWindow = (pool, todayYmd, size, page) => {
   const list = pool || [];
   const n = Math.max(1, size || 1);
   const today = CAL_D(todayYmd) || calTodayYmd();
-  const endOf = (e) => calYmdParts(CAL_D(e.ends_on)) ? CAL_D(e.ends_on) : CAL_D(e.starts_on);
+  const endOf = calEndOf;
   let base = list.findIndex(e => endOf(e) >= today);
   // Nothing ahead at all: anchor on the last page so the box shows the most
   // recent thing that happened instead of going blank — several times a year
@@ -40861,8 +40949,12 @@ const calendarPanelWindow = (pool, todayYmd, size, page) => {
   const minPage = -Math.ceil(base / n);
   const maxPage = Math.max(0, Math.ceil((list.length - base) / n) - 1);
   const pg = Math.max(minPage, Math.min(maxPage, page || 0));
-  const start = Math.max(0, base + pg * n);
-  const rows = list.slice(start, start + n);
+  // ⚠ The slice's END comes from the unclamped start. Clamping start first and
+  // taking n from there made the earliest page overlap the one after it (base
+  // 40, n 6: page -7 was rows 0-5, page -6 rows 4-9), repeating rows 4 and 5.
+  const raw = base + pg * n;
+  const start = Math.max(0, raw);
+  const rows = list.slice(start, raw + n);
   return {
     rows, start,
     canPrev: start > 0,
@@ -40873,11 +40965,18 @@ const calendarPanelWindow = (pool, todayYmd, size, page) => {
   };
 };
 
+// The time as the STORE'S clock reads it — 7pm in LA is 7pm for the people
+// going. ⚠ When that clock is not the reader's, it says so ("7:00 PM PDT"):
+// a bare "7:00 PM" beside a shop two zones away reads as the reader's time.
+let _calLocalTz = null;
 const calTimeLabel = (ev) => {
   if(!ev || !ev.starts_at) return "";
   try {
+    if(_calLocalTz == null) _calLocalTz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+    const foreign = !!ev.timezone && ev.timezone !== _calLocalTz;
     return new Intl.DateTimeFormat(undefined, {
       hour: "numeric", minute: "2-digit", timeZone: ev.timezone || undefined,
+      ...(foreign ? {timeZoneName: "short"} : {}),
     }).format(new Date(ev.starts_at));
   } catch { return ""; }
 };
@@ -40904,11 +41003,6 @@ const CAL_TL_MONTHS = 12;          // one competitive season
 // the layout and the thing being laid out quietly stop agreeing.
 const CAL_TL_MIN_PX = 1120;
 const CAL_TL_LABEL_PX = 140;       // .cal-tl-label's width — keep the two in step
-// Room a "119d" chip needs between two markers. Measured generously on
-// purpose: at 46 the chip fitted its own box and still sat on the dots
-// either side of it, and a 47-day gap is not the number anybody opened a
-// season chart to read. Only a real drought earns a chip.
-const CAL_TL_GAP_PX = 64;
 // Sets and products are not in a PLACE. A set release happens everywhere at
 // once, so it gets its own rail under the lanes — which is also what makes the
 // lanes readable as "where you would travel to".
@@ -41132,26 +41226,11 @@ const calendarTimeline = (events, opts) => {
     // is exactly the information the chart exists to carry. Its row count IS
     // the density read.
     const rows = _calTlStack(items, labelW, store ? CAL_TL_STORE_ROWS : 0);
-    // The gap between one event and the NEXT in the same lane — the number a
-    // list cannot show you, and the reason to draw this at all. Measured end to
-    // start, so a three-day Challenge's own length is not counted as a wait.
-    //
-    // ⚠ Region lanes only. "Days since this shop's last league night" is 7, all
-    // year, on every lane — a true number answering nothing, printed over the
-    // one chip that does mean something.
-    const gaps = [];
-    if(!store){
-      for(let i = 0; i + 1 < items.length; i++){
-        const a = items[i], b = items[i + 1];
-        const days = calDayDiff(a.end, b.start);
-        const left = a.x + a.w, right = b.x;
-        if(days > 0 && (right - left) * CAL_TL_MIN_PX >= CAL_TL_GAP_PX){
-          gaps.push({days, x: (left + right) / 2, key: `${a.ev.id}>${b.ev.id}`});
-        }
-      }
-    }
+    // ⚠ No "82d" gap chips between events any more (Zaven, 2026-09-23: "remove
+    // the xd between events"). The spacing on the axis already IS the gap, and
+    // the chips sat on the rail between markers as a second reading of it.
     const grp = CAL_TL_GROUP_OF(key);
-    lanes.push({key, label: laneLabel(key, items), rows, items, gaps, count: items.length,
+    lanes.push({key, label: laneLabel(key, items), rows, items, count: items.length,
       group: grp, first: grp !== (lanes.length ? lanes[lanes.length - 1].group : null),
       // Only a real region lane offers itself as a filter — "Challenges" is
       // every region at once, so clicking it could only mean "all", which is
@@ -41413,9 +41492,16 @@ function useCalHoverCard(art){
     if(now) setHov(next);
     else timer.current = setTimeout(() => setHov(next), CAL_HOVER_DELAY);
   }, [stop]);
+  // ⚠ Activation closes it. Keyboard focus opens the card instantly, so Enter
+  // used to open the event's modal with the card still showing through the
+  // backdrop — and still there after Esc. Pointer-down and the activating keys
+  // close it before the click handler runs; Esc dismisses it on its own
+  // (WCAG 1.4.13 — a hover card must be dismissible without moving focus).
   const bindMany = useCallback((evs, day) => ({
     onPointerEnter: (e) => { if(e.pointerType === "mouse") open(evs, e.currentTarget, false, day); },
     onPointerLeave: close,
+    onPointerDown: close,
+    onKeyDown: (e) => { if(e.key === "Enter" || e.key === " " || e.key === "Escape") close(); },
     onFocus: (e) => open(evs, e.currentTarget, true, day),
     onBlur: close,
   }), [open, close]);
@@ -41537,6 +41623,28 @@ const CalendarAddMenu = ({ev, subs, compact}) => {
   </div>`;
 };
 
+const CalendarModalFoot = ({ev, subs}) => {
+  const subRef = ev.kind === "store" ? String(ev.event_id) : (ev.derived ? null : String(ev.id));
+  const on = !!subRef && subs.has("event", subRef);
+  const hidden = subs.has("hide", String(ev.id));
+  const label = calEventFullLabel(ev);
+  return html`<div class="cal-modal-foot">
+    ${subRef && html`<button type="button" class=${"cal-foot-btn" + (on ? " on" : "")}
+      aria-pressed=${on ? "true" : "false"}
+      onClick=${() => {
+        subs.toggle({kind: "event", ref: subRef, label,
+                     meta: ev.kind === "store" ? {store_id: ev.store_id} : null});
+        flashToast(on ? "Removed from your calendar" : "Added to your calendar");
+      }}>${uiIcon(on ? "check" : "calendarPlus", 13)} ${on ? "On my calendar" : "Add to my calendar"}</button>`}
+    <button type="button" class="cal-foot-btn cal-foot-btn--quiet" onClick=${() => {
+      const id = String(ev.id);
+      if(hidden){ subs.remove("hide", id); flashToast("Back on your calendar"); return; }
+      subs.add({kind: "hide", ref: id, label});
+      flashToast(`Hidden — undo it under "My calendar"`);
+    }}>${uiIcon(hidden ? "eye" : "close", 13)} ${hidden ? "Un-hide this event" : "Hide this event"}</button>
+  </div>`;
+};
+
 const CalendarRow = ({ev, today, subs, onOpen, art}) => {
   const k = CALENDAR_KIND_BY_KEY.get(ev.kind);
   // Line two is the event's own name — "Core Constructed" under "Dice Dojo".
@@ -41568,15 +41676,30 @@ const CalendarRow = ({ev, today, subs, onOpen, art}) => {
 // OSM's tile policy REQUIRES the attribution, so it is not decoration; don't
 // remove it. `loading="lazy"` keeps the tiles off the wire until a modal opens.
 const CAL_MAP_W = 400, CAL_MAP_H = 150;
+// ⚠ The box is MEASURED, not assumed. It is capped at 100% of the modal, which
+// on a 375px phone is ~303px — while the tiles and the pin were laid out for
+// 400, so the pin sat two-thirds across a map whose east side was cut off. Same
+// lesson as EventMapView: CSS gets the last word on a box's size.
 const CalendarMiniMap = ({lat, lng, label, zoom}) => {
-  const layout = useMemo(() => osmTileLayout(lat, lng, zoom || 11, CAL_MAP_W, CAL_MAP_H),
-    [lat, lng, zoom]);
+  const wrapRef = useRef(null);
+  const [w, setW] = useState(CAL_MAP_W);
+  useLayoutEffect(() => {
+    const el = wrapRef.current;
+    if(!el) return;
+    const m = () => { const cw = Math.floor(el.clientWidth); if(cw > 0) setW(Math.min(CAL_MAP_W, cw)); };
+    m();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(m) : null;
+    if(ro) ro.observe(el);
+    return () => { if(ro) ro.disconnect(); };
+  }, []);
+  const layout = useMemo(() => osmTileLayout(lat, lng, zoom || 11, w, CAL_MAP_H),
+    [lat, lng, zoom, w]);
   if(!layout) return null;
-  return html`<div class="cal-map">
+  return html`<div class="cal-map" ref=${wrapRef}>
     <a class="cal-map-box" href=${osmViewUrl(lat, lng, layout.zoom)}
        target="_blank" rel="noopener noreferrer"
        title=${label ? `${label} — open in OpenStreetMap` : "Open in OpenStreetMap"}
-       style=${{width: CAL_MAP_W + "px", height: CAL_MAP_H + "px"}}>
+       style=${{width: w + "px", height: CAL_MAP_H + "px"}}>
       ${/* ⚠ NOT loading="lazy". These <img>s only exist while the modal is open
             and are in view the moment they are created, so lazy buys nothing —
             and Chrome defers lazy images whenever document.visibilityState is
@@ -41895,6 +42018,14 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf,
     setPan(null);
     if(d && d.moved) panBy(e.clientX - d.x0, e.clientY - d.y0);
   }, [panBy]);
+  // ⚠ A CANCELLED gesture pans nowhere. pointercancel often arrives with
+  // clientX/Y of 0, so routing it through onDragEnd flung the map by the whole
+  // distance from the finger to the top-left corner of the screen.
+  const onDragCancel = useCallback((e) => {
+    dragRef.current = null;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+    setPan(null);
+  }, []);
   // One label per MARKER, not per event: a merged pin is one place, and the
   // date it shows is the first one under it — the count on the dot is what says
   // there are more, and the callout is what names them.
@@ -41972,7 +42103,7 @@ const EventMapView = ({events, onPick, labelOf, subLabelOf, dateOf, worldwideOf,
         onPointerDown=${onPan ? onDragStart : undefined}
         onPointerMove=${onPan ? onDragMove : undefined}
         onPointerUp=${onPan ? onDragEnd : undefined}
-        onPointerCancel=${onPan ? onDragEnd : undefined}>
+        onPointerCancel=${onPan ? onDragCancel : undefined}>
         ${/* ⚠ ONE transformed layer, not a transform per tile and per pin: the
              pins are positioned in the same pixel space as the tiles, so moving
              their shared parent keeps them on the streets they belong to. */""}
@@ -42188,17 +42319,51 @@ const EventDescription = ({text}) => {
   </div>`;
 };
 
-const CalendarDayModal = ({day, events, onOpen, onClose, art}) => {
+// The calendar's three dialogs share one keyboard contract:
+//  * focus moves INTO the dialog on open (its close button) and goes back to
+//    whatever opened it on close — a keyboard user was left on the page behind;
+//  * Tab is trapped inside, which aria-modal promises and nothing enforced;
+//  * Esc closes the INNERMOST thing only. The ✚ menu and the scouting panel's
+//    player history both open on top of the detail modal, and both listen on
+//    document too, so one keypress used to close the menu AND the modal under it.
+const CAL_DIALOG_INNER = ".scout-history-modal, .cal-add-pop";
+const useCalDialog = (ref, onClose) => {
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
-    const onKey = (e) => { if(e.key === "Escape") onClose(); };
+    const prev = document.activeElement;
+    const box = ref.current;
+    const first = box && box.querySelector(".cal-modal-close");
+    try { if(first) first.focus({preventScroll: true}); } catch {}
+    const onKey = (e) => {
+      if(document.querySelector(CAL_DIALOG_INNER)) return;
+      if(e.key === "Escape"){ closeRef.current && closeRef.current(); return; }
+      const b = ref.current;
+      if(e.key !== "Tab" || !b) return;
+      const f = [...b.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')]
+        .filter(x => x.offsetParent !== null);
+      if(!f.length) return;
+      const a = f[0], z = f[f.length - 1];
+      if(!b.contains(document.activeElement)){ e.preventDefault(); a.focus(); }
+      else if(e.shiftKey && document.activeElement === a){ e.preventDefault(); z.focus(); }
+      else if(!e.shiftKey && document.activeElement === z){ e.preventDefault(); a.focus(); }
+    };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      try { if(prev && prev.isConnected && prev.focus) prev.focus({preventScroll: true}); } catch {}
+    };
+  }, []);
+};
+
+const CalendarDayModal = ({day, events, onOpen, onClose, art}) => {
+  const dlgRef = useRef(null);
+  useCalDialog(dlgRef, onClose);
   if(!day || !events || !events.length) return null;
   return html`<div class="cal-modal-overlay" onClick=${onClose}>
-    <div class="cal-modal cal-modal--day" role="dialog" aria-modal="true"
+    <div class="cal-modal cal-modal--day" role="dialog" aria-modal="true" ref=${dlgRef}
       aria-label=${calDayLabel(day)} onClick=${e => e.stopPropagation()}>
-      <button class="cal-modal-close" aria-label="Close" onClick=${onClose}>×</button>
+      <button type="button" class="cal-modal-close" aria-label="Close" onClick=${onClose}>×</button>
       <div class="cal-modal-kind">${uiIcon("calendar", 13)}${
         events.length === 1 ? "1 event" : `${events.length} events`}</div>
       <h3 class="cal-modal-title">${calDayLabel(day)}</h3>
@@ -42222,14 +42387,12 @@ const CalendarDayModal = ({day, events, onOpen, onClose, art}) => {
   </div>`;
 };
 
-const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
-  useEffect(() => {
-    // Same rule as ScoutEventModal: the scouting panel's player-history dialog
-    // opens on top of this one, and Esc belongs to whichever is innermost.
-    const onKey = (e) => { if(e.key === "Escape" && !document.querySelector(".scout-history-modal")) onClose(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art, backLabel}) => {
+  // Same rule as ScoutEventModal: the scouting panel's player-history dialog —
+  // and the ✚ menu — open on top of this one, and Esc belongs to whichever is
+  // innermost. useCalDialog owns that now, plus focus in and out.
+  const dlgRef = useRef(null);
+  useCalDialog(dlgRef, onClose);
   const isSet = !!ev && ev.kind === "set";
   const products = useSetProducts(isSet ? ev.title : null, isSet);
   // Scouting is offered on any real RPH listing. It used to be gated here on
@@ -42257,8 +42420,11 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
   const wide = !!(isSet && products && products.length > 0);
   return html`<div class="cal-modal-overlay" onClick=${onClose}>
     <div class=${"cal-modal" + (wide ? " cal-modal--wide" : "")} role="dialog" aria-modal="true"
-      onClick=${e => e.stopPropagation()}>
-      <button class="cal-modal-close" aria-label="Close" onClick=${onClose}>×</button>
+      ref=${dlgRef} aria-label=${title} onClick=${e => e.stopPropagation()}>
+      <button type="button" class="cal-modal-close" aria-label="Close" onClick=${onClose}>×</button>
+      ${/* Opened from a busy day's list, closing drops you back ON that list —
+            so it says so, rather than leaving you to discover it. */
+        backLabel && html`<button type="button" class="cal-modal-back" onClick=${onClose}>‹ ${backLabel}</button>`}
       ${/* The one place a set's own logo is legible. The row icon cannot be a
             wordmark, and a booster-pack thumbnail said nothing useful at 13px
             and the same nothing for all three of a set's dates — so the art
@@ -42360,14 +42526,24 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
           const done = downloadIcs([ev], `packsink-${slug || "event"}.ics`, title);
           flashToast(done ? "Calendar file downloaded" : "Couldn't download — try the Google Calendar link");
         }}>${uiIcon("save", 13)} Download .ics</button>
+        ${/* A link to THIS event. Until now only whole views could be sent, so
+              "that CCQ in Essen" was "open the calendar and find it". */
+          ev.id && html`<button type="button" class="cal-modal-link" onClick=${() => {
+          const url = calEventLink(ev);
+          const ok = () => flashToast("Link to this event copied");
+          try { navigator.clipboard.writeText(url).then(ok, () => window.prompt("Copy this link", url)); }
+          catch { window.prompt("Copy this link", url); }
+        }}>${uiIcon("link", 13)} Copy link</button>`}
       </div>
 
       ${ev.latitude != null && ev.longitude != null && html`<${CalendarMiniMap}
         lat=${ev.latitude} lng=${ev.longitude} label=${ev.location || title}
         zoom=${ev.kind === "store" ? 13 : 10}/>`}
 
-      ${!ev.derived && html`<div class="cal-modal-foot"><${CalendarAddMenu} ev=${ev} subs=${subs}/>
-        <span class="muted">Add to your Packs.Ink calendar</span></div>`}
+      ${/* The footer used to be the ✚ MENU, whose Google Calendar and .ics
+            entries repeat the actions row directly above it. It is the two
+            things that row cannot do: save it to YOUR calendar, and hide it. */
+        subs && html`<${CalendarModalFoot} ev=${ev} subs=${subs}/>`}
       </>`}
     </div>
   </div>`;
@@ -42446,17 +42622,16 @@ const CalendarMonthView = ({month, events, today, onOpen, onOpenDay, onMonth, co
         const items = calCellItems(day.events, art, day.date);
         const cap = dense ? CAL_CELL_MAX : CAL_CELL_MAX_FULL;
         const shown = items.slice(0, cap);
-        // ⚠ Compact draws ONE number and it is the day's TOTAL, never what is
-        // hidden. A `×3` group mark hides nothing, so a hidden-count reads "0"
-        // over a cell holding three qualifiers — and the whole reason the count
-        // exists is that one mark is standing for three things. The full grid
-        // keeps "+N more": there its marks carry their own `×N` inline, beside a
-        // label, where a two-field phrase has the room to read as one.
+        // ⚠ Each group mark carries its OWN `×N`, and the cell's number counts
+        // only what is HIDDEN. A dense cell used to print the day's TOTAL in the
+        // corner, so three CCQs and one SC read as a "4" sitting on the CCQ mark
+        // — the number of everything, pinned to one kind of thing (Zaven,
+        // 2026-09-23: "it's really CCQ ×3 and 1 SC"). Now the qualifier says ×3
+        // on itself, the trophy stands alone, and a "+N" appears only when a
+        // third kind of event genuinely did not fit.
         const hiddenEvents = day.events.length
           - shown.reduce((a, it) => a + (it.group ? it.events.length : 1), 0);
-        const cellCount = dense
-          ? (day.events.length > shown.length ? String(day.events.length) : "")
-          : (hiddenEvents > 0 ? "+" + hiddenEvents + " more" : "");
+        const cellCount = hiddenEvents > 0 ? "+" + hiddenEvents + (dense ? "" : " more") : "";
         return html`<div key=${day.date}
         class=${"cal-cell" + (day.inMonth ? "" : " out") + (day.date === today ? " today" : "")}>
         <div class="cal-cell-num">${day.day}</div>
@@ -42536,7 +42711,6 @@ const CAL_TL_ROW_H = 32;           // one stacked label (title 11.5 + date 9.5 +
 const CAL_TL_RAIL_H = 16;          // the marker rail under the labels
 
 const CalendarTimelineMarks = ({lane, below, onOpen, art}) => html`<${React.Fragment}>
-  ${lane.gaps.map(g => html`<span key=${g.key} class="cal-tl-gap" style=${{left: g.x * 100 + "%"}}>${g.days}d</span>`)}
   ${lane.items.map(it => html`<button key=${it.ev.id} type="button"
     class=${"cal-tl-mark" + (it.label ? "" : " cal-tl-mark--tick") + (it.label && it.w > 0.004 ? " cal-tl-mark--span" : "")
       + (calEstimated(it.ev) ? " cal-tl-mark--est" : "")}
@@ -42594,7 +42768,7 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
   const W = G.pad * 2 + G.gutter + track;
   const rail = tl.release;
   const laneList = tl.lanes.concat(rail.items.length
-    ? [{key: "__rel", label: "Releases", rows: rail.rows, items: rail.items, gaps: [],
+    ? [{key: "__rel", label: "Releases", rows: rail.rows, items: rail.items,
        group: "release", below: true}]
     : []);
   const bodyH = laneList.reduce((h, l) => h + _calTlLaneH(l), 0);
@@ -42718,18 +42892,6 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
     ctx.beginPath(); ctx.moveTo(x0, Math.round(railY) + 0.5); ctx.lineTo(x0 + track, Math.round(railY) + 0.5); ctx.stroke();
     ctx.lineWidth = 1; ctx.globalAlpha = 1;
 
-    for(const g of lane.gaps){
-      font(600, 9);
-      const label = `${g.days}d`;
-      const tw = ctx.measureText(label).width;
-      const gx = at(g.x) - tw / 2 - 6;
-      ctx.fillStyle = P.bg;
-      roundRectPath(ctx, gx, railY - 8, tw + 12, 16, 8); ctx.fill();
-      ctx.strokeStyle = P.border; ctx.stroke();
-      ctx.fillStyle = P.muted;
-      ctx.fillText(label, gx + 6, railY + 3.5);
-    }
-
     for(const it of lane.items){
       const hue = calendarEventIcon(it.ev, null).hue;
       const col = hue.startsWith("var(") ? P.accent : hue;
@@ -42800,6 +42962,9 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
       copiedMsg: "Timeline image copied to clipboard"});
   };
   const step = (n) => onMonth(calShiftMonth(fromMonth, n));
+  // A quarter of the window per press: 3 months moved a 24-month chart an
+  // eighth of its width, which read as the button barely working.
+  const stepN = Math.max(3, Math.round(months / 4));
   // Jump to where the events actually are. The calendar is empty for
   // weeks at a time, so a 12-month window landing on nothing is NORMAL — and a
   // blank chart that does not say which way to go reads as broken.
@@ -42812,9 +42977,9 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
 
   return html`<div class="cal-tl">
     <div class="cal-tl-bar">
-      <button type="button" class="cal-month-nav" aria-label="Earlier" onClick=${() => step(-3)}>‹</button>
+      <button type="button" class="cal-month-nav" aria-label="Earlier" onClick=${() => step(-stepN)}>‹</button>
       <div class="cal-month-label">${calMonthLabelShort(tl.fromMonth)} – ${calMonthLabelShort(calShiftMonth(tl.fromMonth, months - 1))}</div>
-      <button type="button" class="cal-month-nav" aria-label="Later" onClick=${() => step(3)}>›</button>
+      <button type="button" class="cal-month-nav" aria-label="Later" onClick=${() => step(stepN)}>›</button>
       <button type="button" class="cal-month-today" onClick=${() => onMonth(calMonthOf(calTodayYmd()))}>Today</button>
       ${/* Region rows are a pick, not the default — see CAL_TL_CIRCUIT_KINDS. */""}
       ${onGroup && html`<div class="seg-toggle cal-tl-group" role="group" aria-label="Group Challenges by">
@@ -42890,7 +43055,7 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
               <div class="cal-tl-name"><span>Releases</span><span class="cal-tl-name-n">${rail.items.length}</span></div>
               <div class="cal-tl-track" style=${{height: (rail.rows * CAL_TL_ROW_H + CAL_TL_RAIL_H) + "px"}}>
                 <span class="cal-tl-rail" aria-hidden="true"/>
-                <${CalendarTimelineMarks} lane=${{...rail, gaps: []}} below=${true} onOpen=${onOpen} art=${art}/>
+                <${CalendarTimelineMarks} lane=${rail} below=${true} onOpen=${onOpen} art=${art}/>
               </div>
             </div>`}
           </div>
@@ -42912,46 +43077,104 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
 const CalendarAdminModal = ({row, onClose, onSaved}) => {
   const blank = {kind: "product", title: "", subtitle: "", starts_on: calTodayYmd(),
                  ends_on: "", location: "", url: "", set_name: "", notes: "", image_url: "",
-                 confirmed: true};
-  const [f, setF] = useState(() => ({...blank, ...(row || {}),
-    starts_on: CAL_D((row && row.starts_on) || calTodayYmd()),
-    ends_on: CAL_D(row && row.ends_on) || "",
-    image_url: (row && row.image_url) || "",
-  }));
+                 country: "", latitude: "", longitude: "", confirmed: true};
+  // ⚠ Every nullable text column is coerced back to "" when seeding. The spread
+  // let a DB null overwrite the blank default, and save() then called .trim()
+  // on it — so editing nearly any seeded row (most DLCs have no set_name, many
+  // rows no notes) threw, and the button stuck on "Saving…".
+  const [f, setF] = useState(() => {
+    const r = row || {};
+    const txt = (k) => r[k] == null ? "" : String(r[k]);
+    return {...blank, ...r,
+      title: txt("title"), subtitle: txt("subtitle"), location: txt("location"), url: txt("url"),
+      set_name: txt("set_name"), notes: txt("notes"), image_url: txt("image_url"),
+      country: txt("country"), latitude: txt("latitude"), longitude: txt("longitude"),
+      kind: r.kind || blank.kind,
+      starts_on: CAL_D(r.starts_on || calTodayYmd()),
+      ends_on: CAL_D(r.ends_on) || "",
+    };
+  });
   const [busy, setBusy] = useState(false);
+  // Delete is two taps (the graded slot-remove contract): it is permanent, it
+  // removes the row for every visitor, and it sat one click from Save.
+  const [armDel, setArmDel] = useState(false);
+  useEffect(() => { if(!armDel) return; const t = setTimeout(() => setArmDel(false), 3000); return () => clearTimeout(t); }, [armDel]);
+  const dlgRef = useRef(null);
+  useCalDialog(dlgRef, onClose);
+  const tr = (v) => String(v == null ? "" : v).trim();
+  // A number somebody actually typed, in range — never Number("") (0 is Null
+  // Island, a perfectly finite point in the Atlantic).
+  const coordOf = (v, lim) => { const t = tr(v); if(!t) return null; const n = Number(t); return Number.isFinite(n) && Math.abs(n) <= lim ? n : null; };
+  const [geoBusy, setGeoBusy] = useState(false);
+  // Fills country + coordinates from "Where", through the same resolver the
+  // event finder uses. A venue line is "Disneyland Hotel, Anaheim", and the
+  // resolver wants a town or a postal code, so the parts are tried right to
+  // left (the town is usually last) before the whole string.
+  const lookup = async () => {
+    const parts = tr(f.location).split(/[,·|]/).map(x => x.trim()).filter(Boolean);
+    const tries = parts.slice().reverse().concat(parts.length > 1 ? [tr(f.location)] : []);
+    if(!tries.length){ flashToast("Type where it is first"); return; }
+    setGeoBusy(true);
+    try {
+      for(const q of tries){
+        try {
+          const o = await scResolveOrigin(q);
+          if(o && Number.isFinite(o.lat) && Number.isFinite(o.lng)){
+            setF(p => ({...p, country: String(o.country || p.country || "").toUpperCase(),
+              latitude: o.lat.toFixed(4), longitude: o.lng.toFixed(4)}));
+            flashToast(`Placed at ${[o.city, o.state, o.country].filter(Boolean).join(", ")}`);
+            return;
+          }
+        } catch {}
+      }
+      flashToast("Couldn't place that — type the coordinates instead");
+    } finally { setGeoBusy(false); }
+  };
   const set = (k) => (e) => setF(p => ({...p, [k]: e.target.value}));
   const save = async () => {
-    if(!f.title.trim() || !calYmdParts(f.starts_on)){ flashToast("A title and a start date are required"); return; }
+    if(!tr(f.title) || !calYmdParts(f.starts_on)){ flashToast("A title and a start date are required"); return; }
+    if(calYmdParts(f.ends_on) && f.ends_on < f.starts_on){ flashToast("The end date is before the start date"); return; }
     setBusy(true);
     const payload = {
-      kind: f.kind, title: f.title.trim(), subtitle: f.subtitle.trim() || null,
+      kind: f.kind, title: tr(f.title), subtitle: tr(f.subtitle) || null,
       starts_on: f.starts_on, ends_on: calYmdParts(f.ends_on) ? f.ends_on : null,
-      location: f.location.trim() || null, url: f.url.trim() || null,
-      set_name: f.set_name.trim() || null, notes: f.notes.trim() || null,
-      image_url: (f.image_url || "").trim() || null,
+      location: tr(f.location) || null, url: tr(f.url) || null,
+      set_name: tr(f.set_name) || null, notes: tr(f.notes) || null,
+      image_url: tr(f.image_url) || null,
+      // ⚠ An ungeocoded row falls into "Elsewhere" on the region filter and is
+      // never drawn on a map, which is what every row added here used to do.
+      country: tr(f.country).toUpperCase() || null,
+      latitude: coordOf(f.latitude, 90), longitude: coordOf(f.longitude, 180),
       confirmed: !!f.confirmed, updated_at: new Date().toISOString(),
     };
-    const q = row && row.id
-      ? sbClient.from("calendar_events").update(payload).eq("id", row.id)
-      : sbClient.from("calendar_events").insert(payload);
-    const {error} = await q;
-    setBusy(false);
+    let error = null;
+    try {
+      const q = row && row.id
+        ? sbClient.from("calendar_events").update(payload).eq("id", row.id)
+        : sbClient.from("calendar_events").insert(payload);
+      ({error} = await q);
+    } catch(e){ error = e || new Error("network"); }
+    finally { setBusy(false); }
     if(error){ flashToast(calendarUnavailable(error) ? "Apply migration 139 first" : "Couldn't save — " + error.message); return; }
     flashToast(row && row.id ? "Event updated" : "Event added");
     onSaved();
   };
   const del = async () => {
     if(!row || !row.id) return;
+    if(!armDel){ setArmDel(true); return; }
     setBusy(true);
-    const {error} = await sbClient.from("calendar_events").delete().eq("id", row.id);
-    setBusy(false);
+    let error = null;
+    try { ({error} = await sbClient.from("calendar_events").delete().eq("id", row.id)); }
+    catch(e){ error = e || new Error("network"); }
+    finally { setBusy(false); setArmDel(false); }
     if(error){ flashToast("Couldn't delete — " + error.message); return; }
     flashToast("Event deleted");
     onSaved();
   };
   return html`<div class="cal-modal-overlay" onClick=${onClose}>
-    <div class="cal-modal cal-admin" role="dialog" aria-modal="true" onClick=${e => e.stopPropagation()}>
-      <button class="cal-modal-close" aria-label="Close" onClick=${onClose}>×</button>
+    <div class="cal-modal cal-admin" role="dialog" aria-modal="true" ref=${dlgRef}
+      aria-label=${row && row.id ? "Edit calendar event" : "Add a calendar event"} onClick=${e => e.stopPropagation()}>
+      <button type="button" class="cal-modal-close" aria-label="Close" onClick=${onClose}>×</button>
       <h3 class="cal-modal-title">${row && row.id ? "Edit calendar event" : "Add a calendar event"}</h3>
       <div class="cal-form">
         <label class="cal-field"><span>Type</span>
@@ -42969,6 +43192,16 @@ const CalendarAdminModal = ({row, onClose, onSaved}) => {
           <input type="date" value=${f.ends_on} onInput=${set("ends_on")}/></label>
         <label class="cal-field"><span>Where</span>
           <input type="text" value=${f.location} onInput=${set("location")} placeholder="Disneyland Hotel, Anaheim"/></label>
+        <div class="cal-field cal-field--wide cal-geo-row">
+          <label><span>Country</span><input type="text" maxlength="2" value=${f.country}
+            onInput=${set("country")} placeholder="US"/></label>
+          <label><span>Latitude</span><input type="text" inputmode="decimal" value=${f.latitude}
+            onInput=${set("latitude")} placeholder="33.81"/></label>
+          <label><span>Longitude</span><input type="text" inputmode="decimal" value=${f.longitude}
+            onInput=${set("longitude")} placeholder="-117.92"/></label>
+          <button type="button" class="cal-modal-link" disabled=${geoBusy} onClick=${lookup}>
+            ${uiIcon("pin", 13)} ${geoBusy ? "Looking…" : "Look up from Where"}</button>
+        </div>
         <label class="cal-field"><span>Link</span>
           <input type="url" value=${f.url} onInput=${set("url")} placeholder="https://…"/></label>
         <label class="cal-field"><span>Set <em>(for a set release)</em></span>
@@ -42989,8 +43222,8 @@ const CalendarAdminModal = ({row, onClose, onSaved}) => {
       <div class="cal-modal-actions">
         <button type="button" class="cal-modal-cta" disabled=${busy} onClick=${save}>
           ${busy ? "Saving…" : "Save"}</button>
-        ${row && row.id && html`<button type="button" class="cal-modal-link cal-danger" disabled=${busy}
-          onClick=${del}>${uiIcon("trash", 13)} Delete</button>`}
+        ${row && row.id && html`<button type="button" class=${"cal-modal-link cal-danger" + (armDel ? " armed" : "")} disabled=${busy}
+          onClick=${del}>${uiIcon("trash", 13)} ${armDel ? "Tap again to delete" : "Delete"}</button>`}
       </div>
     </div>
   </div>`;
@@ -43205,7 +43438,7 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
   const [sel, setSel] = useState(null);
   const [dayList, setDayList] = useState(null);     // {day, events} — a busy day's list
   const [month, setMonth] = useState(() => calMonthOf(calTodayYmd()));
-  const today = calTodayYmd();
+  const today = useCalToday();
   useEffect(() => { try { localStorage.setItem(CAL_KINDS_LS, kinds.join(",")); } catch {} }, [kinds]);
   useEffect(() => { try { localStorage.setItem(CAL_REGION_LS, region); } catch {} }, [region]);
   useEffect(() => { try { localStorage.setItem(CAL_PANEL_VIEW_LS, mode); } catch {} }, [mode]);
@@ -43333,10 +43566,15 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
           is selected: opening a row swaps the list for that event's own modal
           rather than stacking two dialogs, so Esc and the backdrop always belong
           to exactly one of them. */""}
+    ${/* ⚠ The day list is KEPT while an event from it is open, so closing the
+          event lands back on the list rather than on the grid — a busy day is
+          read one event at a time, and losing your place after each one was
+          the friction. Still one dialog at a time: `!sel` gates the list. */""}
     ${!sel && dayList && html`<${CalendarDayModal} day=${dayList.day} events=${dayList.events}
-      art=${art} onOpen=${(ev) => { setDayList(null); setSel(ev); }}
+      art=${art} onOpen=${(ev) => setSel(ev)}
       onClose=${() => setDayList(null)}/>`}
     ${sel && html`<${CalendarDetailModal} ev=${sel} subs=${subs} onFindEvents=${onFindEvents} art=${art}
+      backLabel=${dayList ? calDayLabel(dayList.day) : null}
       onClose=${() => setSel(null)}/>`}
   </aside>`;
 };
@@ -43400,7 +43638,8 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     try { const q = new URLSearchParams(location.search);
       return {ck: q.get("ck"), cv: q.get("cv"), cm: q.get("cm"), cr: q.get("cr"),
               cq: q.get("cq"), cspan: q.get("cspan"), cn: q.get("cn"), cg: q.get("cg"),
-              cmap: q.get("cmap"), cmr: q.get("cmr"), cms: q.get("cms"), cmk: q.get("cmk")}; }
+              cmap: q.get("cmap"), cmr: q.get("cmr"), cms: q.get("cms"), cmk: q.get("cmk"),
+              ce: q.get("ce")}; }
     catch { return {}; }
   }, []);
   const [kinds, setKinds] = useState(() => calReadKindPref(seed.ck));
@@ -43532,14 +43771,19 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     catch { return false; }
   });
   const nearby = useNearbyScEvents(near);
-  const today = calTodayYmd();
+  const today = useCalToday();
 
-  useEffect(() => { try { localStorage.setItem(CAL_KINDS_LS, kinds.join(",")); } catch {} }, [kinds]);
-  useEffect(() => { try { localStorage.setItem(CAL_REGION_LS, region); } catch {} }, [region]);
-  useEffect(() => { try { localStorage.setItem(CAL_VIEW_LS, mode); } catch {} }, [mode]);
-  useEffect(() => { try { localStorage.setItem(CAL_SPAN_LS, String(span)); } catch {} }, [span]);
-  useEffect(() => { try { localStorage.setItem(CAL_NEAR_ON_LS, near ? "1" : "0"); } catch {} }, [near]);
-  useEffect(() => { try { localStorage.setItem(CAL_GROUP_LS, group); } catch {} }, [group]);
+  // ⚠ A LINK MAY CHOOSE FOR YOU, NEVER OVER YOU — the rule the map prefs
+  // already follow. These six wrote their state on mount, link-seeded values
+  // included, and CAL_KINDS_LS / CAL_REGION_LS are SHARED with the home panel:
+  // opening somebody's "Europe CCQs" link quietly narrowed the reader's own home
+  // tile. usePrefWrite skips the first write of a value that arrived by URL.
+  usePrefWrite(CAL_KINDS_LS, kinds.join(","), seed.ck != null);
+  usePrefWrite(CAL_REGION_LS, region, seed.cr != null);
+  usePrefWrite(CAL_VIEW_LS, mode, seed.cv != null);
+  usePrefWrite(CAL_SPAN_LS, String(span), seed.cspan != null);
+  usePrefWrite(CAL_NEAR_ON_LS, near ? "1" : "0", seed.cn != null);
+  usePrefWrite(CAL_GROUP_LS, group, seed.cg != null);
   // replaceState, never push: a filter is not a page, and pushing would make Back
   // walk backwards through every chip the user toggled.
   useEffect(() => {
@@ -43623,13 +43867,30 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   // into the memo that places every date chip, so a fresh identity each render
   // re-runs the whole label-collision pass on every unrelated keystroke.
   const mapIconOf = useCallback((ev) => calendarEventIcon(ev, art), [art]);
+  // Declared up here, not beside `listed`: the counts memo below reads it, and a
+  // useMemo runs at its own declaration point (the screenerPayload TDZ trap).
+  const [showPast, setShowPast] = useState(false);
+  // ⚠ The kind chips count what the ACTIVE VIEW draws. They counted upcoming
+  // events only, while Month and Timeline also draw past ones — so a chip could
+  // say 0 over a month grid full of that kind. List/Map: upcoming, or everything
+  // with Show past on. Month: events touching the month on screen. Timeline:
+  // events touching its window. Still counted BEFORE the kind filter, so an
+  // option switched off still says what it would add.
   const counts = useMemo(() => {
     const c = {};
     for(const k of CALENDAR_KIND_KEYS) c[k] = 0;
-    for(const e of calendarUpcoming(all.filter(e => calMatchesQuery(e, dQuery)), today, 0))
-      if(c[e.kind] != null) c[e.kind]++;
+    const base = all.filter(e => calMatchesRegion(e, region) && calMatchesQuery(e, dQuery));
+    let pool;
+    if(mode === "month" || mode === "timeline"){
+      const lo = month, hi = mode === "month" ? month : calShiftMonth(month, span - 1);
+      pool = base.filter(e => {
+        const a = calMonthOf(e.starts_on), b = calMonthOf(calEndOf(e));
+        return a && b && a <= hi && b >= lo && !(mode === "timeline" && calTimelineSkip(e));
+      });
+    } else pool = showPast ? base : calendarUpcoming(base, today, 0);
+    for(const e of pool) if(c[e.kind] != null) c[e.kind]++;
     return c;
-  }, [all, today, dQuery]);
+  }, [all, today, dQuery, region, mode, month, span, showPast]);
   // Region counts are computed BEFORE the region filter is applied — a picker
   // whose options all read (0) because you already narrowed by them is useless.
   const regionCounts = useMemo(() => {
@@ -43649,13 +43910,48 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     kinds.includes(e.kind) && calMatchesRegion(e, region) && calMatchesQuery(e, dQuery)),
     [all, kinds, region, dQuery]);
   const upcoming = useMemo(() => calendarUpcoming(shown, today, 0), [shown, today]);
+  // `?ce=<id>` opens ONE event. Resolved against `all` (it lands as the curated
+  // rows and followed stores load), and for a store event the reader does not
+  // follow — the usual case for a link somebody SENT — fetched directly, since
+  // it will never appear in their `all`.
+  const cePending = useRef(seed.ce || null);
+  useEffect(() => {
+    const want = cePending.current;
+    if(!want) return;
+    const hit = all.find(e => String(e.id) === want);
+    if(hit){ cePending.current = null; setSel(hit); }
+  }, [all]);
+  useEffect(() => {
+    const want = cePending.current;
+    const m = want && /^ev:(\d+)$/.exec(want);
+    if(!m) return;
+    let cancelled = false;
+    (async () => {
+      const {data, error} = await calSelectEvents((cols) =>
+        sbClient.from("lorcana_events").select(cols).eq("event_id", Number(m[1])).limit(1));
+      if(cancelled || error || !data || !data[0] || cePending.current !== want) return;
+      const entry = calendarStoreEntry(data[0]);
+      if(entry){ cePending.current = null; setSel(entry); }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  // replaceState, like every other calendar param: an open event is not a page
+  // you step Back through. Held off while the arrival link is still resolving,
+  // or the first render would strip the very param it is about to read.
+  useEffect(() => {
+    if(cePending.current) return;
+    try {
+      const url = new URL(location.href);
+      sel && sel.id ? url.searchParams.set("ce", String(sel.id)) : url.searchParams.delete("ce");
+      if(url.toString() !== location.href) history.replaceState(history.state, "", url.toString());
+    } catch {}
+  }, [sel]);
   // ⚠ The calendar is EMPTY for weeks at a time and that is normal, not a
   // bug: sets ship roughly quarterly, so between a retail release and the next
   // set's announcement there is genuinely nothing ahead. A page that says only
   // "nothing coming up" in that window reads as broken, so past events stay one
   // click away — seeing "Attack of the Vine! · retail release · Jul 24" is how
   // you know where you are in the season.
-  const [showPast, setShowPast] = useState(false);
   const listed = showPast ? shown : upcoming;
   // Every event around the map's focus — fetched only in map mode, only when
   // focused, and only while the scope is All.
@@ -43665,8 +43961,14 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   // you zoom would answer a narrower question than the one you asked. The merge
   // keys on event_id, so a shop you follow is not drawn twice.
   const mapRows = useMemo(() => {
+    // ⚠ The nearby feed passes the SAME filters as everything else on the page.
+    // It skipped all of them, so with "My stores" off, a region picked or a
+    // search typed, zooming in still poured every league night in the radius
+    // onto the map while the Filters badge said the view was narrowed.
+    const nearOk = (e) => kinds.includes("store") && calMatchesRegion(e, region)
+      && calMatchesQuery(e, dQuery) && (!hidden.has(String(e.id)) || savedIds.has(calSavedRefOf(e)));
     const base = (mapScope === "all" && mapFocus)
-      ? calendarMergeStore(listed, mapNear.rows.filter(e => !hidden.has(e.id)))
+      ? calendarMergeStore(listed, mapNear.rows.filter(nearOk))
       : listed;
     // ⚠ Only STORE rows carry an rph_kind, and only they are filtered. A DLC, a
     // CCQ and a set release are not "locals" and must not vanish because the
@@ -43674,7 +43976,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     if(mapStoreKinds.length === CAL_STORE_KIND_KEYS.length) return base;
     const keep = new Set(mapStoreKinds);
     return base.filter(e => e.kind !== "store" || keep.has(e.rph_kind || "other"));
-  }, [mapScope, mapFocus, listed, mapNear.rows, hidden, mapStoreKinds]);
+  }, [mapScope, mapFocus, listed, mapNear.rows, hidden, savedIds, mapStoreKinds, kinds, region, dQuery]);
   const byMonth = useMemo(() => {
     const m = new Map();
     for(const ev of listed){
@@ -43710,9 +44012,14 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   const followCount = followedStores.length + followedSeries.length + savedEvents.length
     + hiddenEvents.length;
 
+  // Exports what the list/map are SHOWING (`listed` — so "Show past" counts),
+  // and refuses an empty file rather than downloading one and toasting
+  // "Exported 0 events".
+  const exportRows = listed;
   const exportAll = () => {
-    const done = downloadIcs(upcoming, "packsink-lorcana-calendar.ics", "Lorcana Calendar");
-    flashToast(done ? `Exported ${upcoming.length} events` : "Couldn't download the calendar file");
+    if(!exportRows.length){ flashToast("Nothing to export — loosen the filters first"); return; }
+    const done = downloadIcs(exportRows, "packsink-lorcana-calendar.ics", "Lorcana Calendar");
+    flashToast(done ? `Exported ${exportRows.length} event${exportRows.length === 1 ? "" : "s"}` : "Couldn't download the calendar file");
   };
 
   // ⚠ Counts a DIMENSION, not a chip: "3 of 5 kinds off" is one narrowing, not
@@ -43721,7 +44028,8 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   const activeFilters = (query.trim() ? 1 : 0)
     + (region !== "all" ? 1 : 0)
     + (near ? 1 : 0)
-    + (kinds.length < CALENDAR_KIND_KEYS.length ? 1 : 0);
+    + (kinds.length < CALENDAR_KIND_KEYS.length ? 1 : 0)
+    + (showPast && (mode === "list" || mode === "map") ? 1 : 0);
 
   return html`<div class=${"cal-view" + (mode === "timeline" ? " cal-view--wide" : "")}>
     <header class="ev-header mkt-header cal-header">
@@ -43754,7 +44062,8 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
               a bare text node cannot be hidden in CSS, and this is the one
               button on the row with a label long enough to force a wrap. */""}
         <button type="button" class="cal-act cal-act--export" onClick=${exportAll}
-          aria-label="Export .ics" title="Download everything shown as an .ics file">
+          disabled=${!exportRows.length}
+          aria-label="Export .ics" title=${`Download the ${exportRows.length} event${exportRows.length === 1 ? "" : "s"} shown as an .ics file`}>
           ${uiIcon("save", 14)}<span>Export .ics</span></button>
         ${isAdmin && html`<button type="button" class="cal-act cal-act--admin"
           onClick=${() => setEditing({})}>${uiIcon("edit", 14)} Add event</button>`}
@@ -43870,12 +44179,15 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           ${CAL_TL_SPANS.map(m => html`<button key=${m} type="button" class=${span === m ? "active" : ""}
             title=${`Draw ${m} months at a time`} onClick=${() => setSpan(m)}>${m} mo</button>`)}
         </div>`}
-        ${mode === "list" && html`<label class="cal-past">
+        ${/* Map draws `listed` too, so the switch has to be reachable there —
+              tick it in List, switch to Map, and the past pins used to stay
+              with no control on screen to take them away. */
+          (mode === "list" || mode === "map") && html`<label class="cal-past">
           <input type="checkbox" checked=${showPast} onChange=${e => setShowPast(e.target.checked)}/>
           <span>Show past</span></label>`}
-        ${(query.trim() || region !== "all" || near || kinds.length < CALENDAR_KIND_KEYS.length) && html`<button
+        ${activeFilters > 0 && html`<button
           type="button" class="cal-linkish cal-filters-reset"
-          onClick=${() => { setQuery(""); setRegion("all"); setNear(false); setKinds(CALENDAR_KIND_KEYS.slice()); }}>
+          onClick=${() => { setQuery(""); setRegion("all"); setNear(false); setKinds(CALENDAR_KIND_KEYS.slice()); setShowPast(false); }}>
           Reset filters</button>`}
       </div>
     </div>`}
@@ -44085,7 +44397,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
               <p>Nothing coming up${off.length ? " in the types you've got switched on" : ""}.</p>
               ${off.length > 0 && html`<p class="muted">${off.join(", ")} ${off.length === 1 ? "is" : "are"} switched off.</p>`}
               ${last && !showPast && html`<p class="muted">
-                The last thing was <strong>${last.title}</strong> on ${calDayLabel(last.starts_on)} —
+                The last thing was <strong>${calEventTitle(last)}</strong> on ${calDayLabel(last.starts_on)} —
                 <button type="button" class="cal-linkish" onClick=${() => setShowPast(true)}>show past events</button>.</p>`}
               ${isAdmin && html`<p class="muted">
                 <button type="button" class="cal-linkish" onClick=${() => setEditing({})}>Add the next set's dates</button>${" "}
@@ -44118,10 +44430,15 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           is selected: opening a row swaps the list for that event's own modal
           rather than stacking two dialogs, so Esc and the backdrop always belong
           to exactly one of them. */""}
+    ${/* ⚠ The day list is KEPT while an event from it is open, so closing the
+          event lands back on the list rather than on the grid — a busy day is
+          read one event at a time, and losing your place after each one was
+          the friction. Still one dialog at a time: `!sel` gates the list. */""}
     ${!sel && dayList && html`<${CalendarDayModal} day=${dayList.day} events=${dayList.events}
-      art=${art} onOpen=${(ev) => { setDayList(null); setSel(ev); }}
+      art=${art} onOpen=${(ev) => setSel(ev)}
       onClose=${() => setDayList(null)}/>`}
     ${sel && html`<${CalendarDetailModal} ev=${sel} subs=${subs} onFindEvents=${onFindEvents} art=${art}
+      backLabel=${dayList ? calDayLabel(dayList.day) : null}
       onClose=${() => setSel(null)}/>`}
     ${editing && html`<${CalendarAdminModal} row=${editing} onClose=${() => setEditing(null)}
       onSaved=${() => { setEditing(null); reload(true); }}/>`}
@@ -55148,7 +55465,7 @@ function App(){
                            "g","hm","hr","hs",
                            "q","ink","rarity","cost","type","inkable","legal","owned",
                            "ck","cv","cm","cr","cq","cspan","cn","cg",
-                           "cmap","cmr","cms","cmk",
+                           "cmap","cmr","cms","cmk","ce",
                            ...ELO_URL_PARAMS, ...SC_DEEP_PARAMS];
       // Each view "owns" the deep-link params it actually consumes — those
       // survive a same-view strip so /decks?tourney=<id> deep-links + ctrl-
@@ -55176,7 +55493,7 @@ function App(){
         // months the timeline draws, ?cn= pull in the Set Championships inside
         // the event finder's saved radius.
         calendar:   new Set(["ck","cv","cm","cr","cq","cspan","cn","cg",
-                             "cmap","cmr","cms","cmk"]),
+                             "cmap","cmr","cms","cmk","ce"]),
       };
       const owned = VIEW_OWNED[view] || new Set();
       const stripList = dirtyParams.filter(p => !owned.has(p));

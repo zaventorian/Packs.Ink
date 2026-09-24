@@ -103,6 +103,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const calCellItems = (events, art, date) => {", NL + "};"),
   grabLine("const CAL_CELL_MAX = "),
   grabLine("const calendarHiddenSet = (subs) =>"),
+  grabLine("const calSavedRefOf = "),
   grab("const calendarApplyHidden = (events, hidden, saved) => {", NL + "};"),
   grab("const CAL_STORE_KINDS = [", NL + "];"),
   grabLine("const CAL_STORE_KIND_KEYS = "),
@@ -112,6 +113,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const CAL_MAX_SPAN_DAYS = "),
   grab("const calendarEventDays = (ev) => {", NL + "};"),
   grab("const calendarMonthGrid = (year, month, events) => {", NL + "};"),
+  grab("const calEndOf = (e) => {", NL + "};"),
   grab("const calendarUpcoming = (events, fromYmd, limit) => {", NL + "};"),
   grabLine("const CAL_MONTHS = "),   // one line — a block grab here runs on and swallows calShortDay
   grab("const calShortDay = (ymd) => {", NL + "};"),
@@ -137,7 +139,6 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const CAL_TL_MONTHS = "),
   grabLine("const CAL_TL_MIN_PX = "),
   grabLine("const CAL_TL_LABEL_PX = "),
-  grabLine("const CAL_TL_GAP_PX = "),
   grabLine("const CAL_TL_RELEASE_LANE = "),
   grabLine("const CAL_TL_STORE_PREFIX = "),
   grabLine("const CAL_TL_CIRCUIT_KINDS = "),
@@ -1232,8 +1233,8 @@ ok("each followed shop gets its own lane", dojo && gng && dojo.count === 3 && gn
 ok("a shop's lane is named by the SHOP, off its own first entry",
   dojo.label === "Dice Dojo" && gng.label === "Griffonest", `${dojo.label} / ${gng.label}`);
 ok("a shop lane is never a region filter", dojo.region === false && dojo.store === true);
-ok("a shop lane draws no gap chips — 7 days, all year, answering nothing",
-  dojo.gaps.length === 0 && gng.gaps.length === 0);
+ok("no lane carries gap chips (removed 2026-09-23)",
+  tl.lanes.every(l => l.gaps === undefined));
 ok("store events stay out of their country's region lane",
   !laneR("na").items.some(i => i.ev.kind === "store"));
 
@@ -1274,13 +1275,9 @@ ok("calTimelineLane keys a followed shop by its store id",
 ok("a store event with no store id still lands in one bucket",
   calTimelineLane({kind: "store"}) === "store:");
 
-// ⚠ The gap is measured END to START. Measuring start to start counts a
-// three-day Challenge's own length as part of the wait for the next one.
-const naGaps = laneR("na").gaps;
-ok("the gap to the next event is measured end to start",
-  naGaps.length === 1 && naGaps[0].days === 82, JSON.stringify(naGaps));
-ok("a gap chip sits between the two markers it describes",
-  naGaps[0].x > laneR("na").items[0].x && naGaps[0].x < laneR("na").items[1].x);
+// The "82d" chips between events were removed 2026-09-23 — neither the DOM nor
+// the canvas export may draw one again.
+ok("the timeline renders no gap chips", !/cal-tl-gap/.test(src) && !/lane\.gaps/.test(src));
 
 // Label de-collision. Two markers closer than a label's width cannot share a
 // row, or the later title is drawn on top of the earlier one.
@@ -1809,10 +1806,12 @@ ok("the dense cell's count is out of flow",
   /\.cal-month--dense \.cal-cell-more\{[^}]*position:absolute/.test(cgCSS));
 ok("and it is opaque, so it can sit on a mark",
   /\.cal-month--dense \.cal-cell-more\{[^}]*background:var\(--bg-modal\)/.test(cgCSS));
-// The per-chip `×N` stays hidden: inline it was a 10px sibling of a 13px mark
-// in an 18px box, so it overflowed by 3px and squeezed what it was describing.
-ok("the dense chip's own count stays hidden",
-  /\.cal-month--dense \.cal-cell-events > \.cal-chip > span\.cal-chip-x\{display:none/.test(cgCSS));
+// A dense group mark wears its OWN `×N` as a corner pill (never inline -- that
+// overflowed the 18px chip), so "CCQ ×3 + an SC" stops reading as a "4" on the CCQ.
+ok("a dense group mark carries its own count as a corner pill",
+  /\.cal-month--dense \.cal-cell-events > \.cal-chip\.cal-chip--group > span\.cal-chip-x\{display:block;[^}]*position:absolute/.test(cgCSS));
+ok("and the cell badge sits in a DIFFERENT corner, so two numbers never collide",
+  /\.cal-month--dense \.cal-cell-more\{position:absolute;left:1px;top:1px/.test(cgCSS));
 // ⚠ The mark is sized off the SHORTER axis. 72% of EACH axis gave a 13x25 box
 // in a shared cell, and object-fit:contain renders at the min -- a 13px mark
 // with 12px of height thrown away.
@@ -1844,7 +1843,7 @@ ok("and nothing styles a cell by :not(--compact) any more",
     /const narrow = useMaxWidth\(CAL_DENSE_PX\);[\s\S]{0,40}const dense = compact \|\| narrow;/.test(src));
   ok("and the cap and the count both follow dense, not compact",
     /const cap = dense \? CAL_CELL_MAX : CAL_CELL_MAX_FULL/.test(src) &&
-    /const cellCount = dense\s/.test(src));
+    /const cellCount = hiddenEvents > 0 \? "\+" \+ hiddenEvents \+ \(dense \? "" : " more"\)/.test(src));
 }
 // And the version badge that used to paint over everything is contained.
 ok("the graded tile isolates its version badge",
@@ -2065,7 +2064,7 @@ ok("the graded tile isolates its version badge",
 // it looks like or where to get it, which are the two things anyone reading a
 // release date is about to ask.
 {
-  const modal = grab("const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {",
+  const modal = grab("const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art, backLabel}) => {",
                      NL + "};");
   const links = grab("const calProductLinks = (row, setName) => {", NL + "};");
   // ⚠ isUnpricedSealed, not a bare pid check: a jigsaw, a pin and a
@@ -2152,14 +2151,16 @@ ok("the graded tile isolates its version badge",
   // qualifiers -- and the whole reason the count exists is that one mark is
   // standing for three things. Wrong either way it is a plausible number
   // beside the right marks, which is the worst kind of wrong available here.
-  ok("the dense count is the day's total",
-    /dense\s*\?\s*\(day\.events\.length > shown\.length \? String\(day\.events\.length\)/.test(monthView));
+  // ⚠ SUPERSEDED 2026-09-23: the dense count is what is HIDDEN, never the day's
+  // total -- each group mark now says its own ×N, so a total double-counts it.
+  ok("the dense count is no longer the day's total",
+    !/String\(day\.events\.length\)/.test(monthView));
   // ⚠ ...and the full grid's "+N more" counts EVENTS, not chips: a hidden
   // `×2` group is two more events, and "+1 more" under-reports it.
   ok("the full grid's +N counts events, not chips",
     /shown\.reduce\(\(a, it\) => a \+ \(it\.group \? it\.events\.length : 1\), 0\)/.test(monthView));
   ok("and that is what the +N branch reads",
-    /hiddenEvents > 0 \? "\+" \+ hiddenEvents \+ " more"/.test(monthView));
+    /hiddenEvents > 0 \? "\+" \+ hiddenEvents \+ \(dense \? "" : " more"\)/.test(monthView));
   // ⚠ TWO marks, measured: three share a ~45px cell at 13px each, too small to
   // tell a shield from a hexagon, which is the one thing a mark is for. The cap
   // can be flat now because the count is out of flow -- it used to have to drop
@@ -2172,13 +2173,21 @@ ok("the graded tile isolates its version badge",
                         NL + "};");
   ok("the day list names every event", /events\.map\(ev =>/.test(dayModal));
   ok("a row opens that event's own modal", /onClick=\$\{\(\) => onOpen\(ev\)\}/.test(dayModal));
-  ok("Esc closes it", /e\.key === "Escape"/.test(dayModal));
+  ok("Esc closes it (through the shared dialog hook)", /useCalDialog\(dlgRef, onClose\)/.test(dayModal)
+    && /const useCalDialog[\s\S]{0,900}e\.key === "Escape"/.test(src));
+  // ⚠ Esc belongs to the innermost thing: the add menu and the scout history
+  // open over the detail modal and listen on document too.
+  ok("Esc skips while an inner popover is open",
+    /const CAL_DIALOG_INNER = "\.scout-history-modal, \.cal-add-pop"/.test(src));
   // ⚠ Only ONE dialog at a time: opening a row swaps the list for the event's
   // modal rather than stacking, so Esc and the backdrop always belong to one.
   ok("the list yields to the detail modal rather than stacking under it",
     (src.match(/\$\{!sel && dayList && html`<\$\{CalendarDayModal\}/g) || []).length === 2);
-  ok("and picking a row closes the list as it opens the event",
-    (src.match(/setDayList\(null\); setSel\(ev\);/g) || []).length === 2);
+  // SUPERSEDED 2026-09-23: the list is KEPT behind the event so closing it
+  // lands back on the day, not the grid. `!sel` still gates the list.
+  ok("picking a row keeps the list to come back to",
+    (src.match(/onOpen=\$\{\(ev\) => setSel\(ev\)\}/g) || []).length === 2
+    && (src.match(/backLabel=\$\{dayList \? calDayLabel\(dayList\.day\) : null\}/g) || []).length === 2);
   // A <button> with the global button paint left on reads as a chip, and a list
   // of chips stops looking like a list.
   const css4 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
@@ -2242,7 +2251,7 @@ ok("the graded tile isolates its version badge",
     css6.indexOf(".cal-modal--wide{") > css6.indexOf(".cal-modal{position:relative"));
   ok("the buy chips claim no auto margin",
     !/\.cal-buy\{[^}]*margin-left:auto/.test(css6));
-  const modal2 = grab("const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {",
+  const modal2 = grab("const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art, backLabel}) => {",
                       NL + "};");
   ok("and only a modal that actually lists products is widened",
     /const wide = !!\(isSet && products && products\.length > 0\);/.test(modal2));
@@ -2377,7 +2386,7 @@ ok("the graded tile isolates its version badge",
   ok("the flag is one-way, so an outage cannot flap it",
     !/_calDescCol = true;/.test(sel));
   ok("both event fetches go through it",
-    (src.match(/await calSelectEvents\(\(cols\) =>/g) || []).length === 2);
+    (src.match(/await calSelectEvents\(\(cols\) =>/g) || []).length === 3);
 }
 console.log(failed ? `\n${failed} FAILED` : "\nall calendar checks passed");
 process.exit(failed ? 1 : 0);

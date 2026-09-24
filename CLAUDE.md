@@ -6170,9 +6170,10 @@ row is one row tall whether the next thing is tomorrow or in June. A third mode
 - **⚠ The label stack starts ABOVE the rail** (`CAL_TL_RAIL_H`). Offsetting row 0
   from zero puts the titles on top of the dots, the span bars and the gap chips
   they describe, and it looks deliberate.
-- **The gap chip is measured END to START** - the number a list cannot show you,
-  and the reason to draw any of this. Start to start would count a three-day
-  Challenge's own length as part of the wait for the next one.
+- **⚠ There are NO gap chips any more** (removed 2026-09-23, Zaven: "remove the xd
+  between events"). The timeline used to print "82d" on the rail between markers;
+  the axis spacing already says it. `calendarTimeline` no longer computes `gaps`,
+  and `test_calendar.mjs` fails if `cal-tl-gap` or `lane.gaps` reappears.
 - **⚠ Sets and products are not in a PLACE**, so they get a release rail of their
   own under the lanes - which is also what lets the lanes read as "where you would
   travel to". Their `country` is null, so a lane assignment that only asks
@@ -6357,9 +6358,6 @@ structure and which was content.
   files** - the packing is measured against it. It grew from 126 with this pass,
   which also moved a test fixture: a date chosen to anchor LEFT at 126px anchors
   right at 140px, and the pair then tests nothing.
-- **⚠ `CAL_TL_GAP_PX` is 64, not 46.** At 46 the chip fitted its own box and
-  still sat on the dots either side of it, and a 47-day gap is not the number
-  anybody opened a season chart to read. Only a real drought earns a chip.
 - **The canvas export is set in the SAME TWO FACES as the screen** - Nunito Sans for
   the body, Cinzel for the title and the structural row names - and loads every
   (weight, size) it paints up front, best-effort. A canvas falls back to the generic
@@ -6559,6 +6557,24 @@ hover card lists every member; clicking expands the group in place.
   three-day Challenge sitting beside two one-day qualifiers would otherwise head the
   list with the wrong dates.
 
+### A dense cell's count belongs to its MARK, not the day (2026-09-23)
+
+Zaven, on the home rail: three CCQs and one SC drew a **"4" on the CCQ mark** —
+the day's TOTAL, pinned to one kind of thing. Each group mark now wears its own
+`×N` as a corner pill (`.cal-chip--group > span.cal-chip-x`, four classes so it
+beats the dense label-hide), and the cell's `.cal-cell-more` counts only events
+that did NOT fit, drawn TOP-LEFT so the two numbers never share a corner.
+Measured at 375px: Sep 26 reads CCQ ×2 and SC ×2, two 22px marks, pills clear.
+
+Same review pass added **`?ce=<id>`** — a link to ONE event (Copy link in the
+detail modal; registered in `dirtyParams` + `VIEW_OWNED.calendar`). An `ev:<rph
+id>` the reader does not follow is fetched directly, since it will never be in
+their `all`. The six calendar prefs now write through `usePrefWrite`, so a shared
+link no longer repoints the reader's home tile. `useCalDialog` is the one
+keyboard contract for the three calendar dialogs (focus in/out, Tab trap, Esc
+only for the innermost). ⚠ A store event is SAVED as `"123"` and HIDDEN as
+`"ev:123"`; `calSavedRefOf` is the one place that reconciles them.
+
 ### The cell's day number stops owning a row (2026-09-15)
 
 Zaven: *"make the logos a tinny bit bigger, and the numbers a lil smaller. use the
@@ -6612,9 +6628,6 @@ drawing it as an anonymous strip of ticks. Two halves:
   flat empty band either side of it — unreadable in both directions at once.
   Region lanes are uncapped; a season is ~17 Challenges across five of them, so
   they never come close, and capping one would silently drop a Challenge's name.
-- **⚠ Gap chips are REGION LANES ONLY.** "Days since this shop's last league
-  night" is 7, all year, on every lane — a true number answering nothing, printed
-  over the one chip that does mean something.
 - **⚠ A shop you FOLLOW wins over the same shop inside your radius**
   (`calendarMergeStore`, keyed on the RPH event id, the only stable key either
   side carries). Without it one SC draws in two lanes, which reads as a

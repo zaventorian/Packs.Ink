@@ -1,6 +1,6 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v476';
+const CACHE_VERSION = 'packsink-v479';
 // Card art + other images live in their own cache that is NOT wiped on
 // deploys. Before this existed, every CACHE_VERSION bump threw away every
 // runtime-cached card image, so devices never accumulated art for offline
@@ -17,7 +17,7 @@ const CORE_ASSETS = [
   '/vendor/react-dom.production.min.js?v=254',
   '/vendor/htm.js?v=254',
   '/vendor/supabase.js?v=254',
-  '/styles.css?v=476',
+  '/styles.css?v=479',
   '/logo.js?v=348',
   // scanner*.js intentionally NOT precached: the scanner is a modal most
   // visits never open — it runtime-caches on first use instead of costing
@@ -86,17 +86,35 @@ self.addEventListener('fetch', (event) => {
   // storage, and PostgREST/data responses are never destination:"image" so
   // they still fall through to the skip below.
   if (req.destination === 'image' || url.hostname.endsWith('lorcast.io')) {
+    // ⚠ The cache is keyed by URL, not by request mode. Supabase-storage art
+    // (prestaged cards, Coconut, collectibles) is the one card art NOT routed
+    // through a same-origin proxy, so a plain <img> caches an OPAQUE response
+    // for it — and a later crossOrigin="anonymous" load of the same URL (the
+    // deck poster, any canvas export) was handed that opaque response, which
+    // the browser rejects for a CORS request. The poster's fallback then
+    // reloaded it without CORS: visible on screen, blank in the export. Every
+    // Set 14 card vanished from exported posters this way. Storage sends
+    // ACAO:*, so fetch it in CORS mode always — a CORS response satisfies a
+    // plain <img> too — and never serve an opaque hit to a CORS request.
+    const corsable = url.hostname.endsWith('supabase.co') && url.pathname.includes('/storage/v1/object/public/');
+    const netReq = corsable && req.mode !== 'cors'
+      ? new Request(req.url, { mode: 'cors', credentials: 'omit' })
+      : req;
     event.respondWith(
       caches.open(IMG_CACHE).then((cache) =>
         // Global match (not cache.match) so precached entries in the
         // versioned cache (icons, wordmark) also satisfy image requests.
-        caches.match(req).then((cached) => {
-          const fetchPromise = fetch(req)
+        caches.match(req).then((hit) => {
+          const cached = hit && hit.type === 'opaque' && (req.mode === 'cors' || corsable) ? null : hit;
+          const fetchPromise = fetch(netReq)
+            .catch((err) => (netReq === req ? Promise.reject(err) : fetch(req)))
             .then((res) => {
               if (cacheable(res)) cache.put(req, res.clone());
               return res;
             })
-            .catch(() => cached);
+            // Offline, an opaque hit still serves a plain <img>; only a CORS
+            // request must never be handed one.
+            .catch(() => (req.mode === 'cors' ? cached : hit));
           return cached || fetchPromise;
         })
       )
