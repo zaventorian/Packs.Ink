@@ -107,6 +107,8 @@ COCONUT_SLUGS = {
     23: "aladdin-genie-mischievous-pals",
     24: "belle-beast-certain-as-the-sun",
     25: "darkwing-duck-launchpad-st-canards-finest",
+    # Beta 2, revealed 2026-09-24.
+    26: "pete-bad-guy",
 }
 
 
