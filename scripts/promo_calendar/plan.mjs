@@ -57,13 +57,12 @@ D.push({ card: { kind: "hook", lines: ["Every set release.", "Every Challenge.",
 // ── 1 · glance: the home tile ─────────────────────────────────────────────
 {
   const c = "c_home", tile = R(c, "tile");
-  D.push(shot(c, [[0.6, 2.4, 2.2], [2.4, 5.2, 1.15], [5.2, 6.4, 3], [6.4, 8.4, 1.3], [8.4, 11.9, 2.8], [11.9, 13.6, 1.2]], (at, end) => ({
+  D.push(shot(c, [[0.6, 2.4, 2.2], [2.4, 5.2, 1.15], [5.2, 6.4, 3], [6.4, 9.6, 1.3]], (at, end) => ({
     ch: 0, url: "/",
     cam: [[0, [1440, 800, 2880]], [at(2.3), ctr(tile, 1500, -160, 60)], [at(6.4), ctr(tile, 1500, -160, 60)], [at(8.0), ctr(tile, 1500, -160, 160)], ["end", ctr(tile, 1500, -160, 180)]],
     calls: [
       call(at(T(c, "group") + 0.1), at(5.1), R(c, "group"), "Busy day? It folds to one mark", "above", { dim: false }),
-      call(at(T(c, "flip") - 0.1), at(7.8), R(c, "flip"), "Flip to a list", "below"),
-      call(at(T(c, "page") - 0.1), end - 0.05, R(c, "page"), "Page through the season", "below"),
+      call(at(T(c, "flip") - 0.1), end - 0.05, R(c, "flip"), "Flip to a list", "below"),
     ],
     cap: { chapter: "01 · At a glance", title: "Right on the home page", sub: "Hover any day for the details." },
   })));
@@ -138,12 +137,6 @@ D.push({ card: { kind: "hook", lines: ["Every set release.", "Every Challenge.",
     ],
     cap: L("Follow your store", "Every event it runs lands on your calendar — you pick which."),
   })));
-  // g · the finder's map
-  D.push(shot(c, [[41.9, 43.4, 1.3], [43.4, 46.8, 2.3]], (at) => ({
-    ch: 2, url: "/calendar", cam: [[0, FIN(560, 1900)], [at(43.6), FIN(900, 1900)], ["end", FIN(900, 1900)]],
-    calls: [call(at(T(c, "finderMap") - 0.1), at(43.4), R(c, "finderMap"), "Map", "below")],
-    cap: L("…or on a map"),
-  })));
   // h · back on the calendar
   D.push(shot(c, [[51.6, 52.8, 1.2], [52.8, 53.3, 2], [53.3, 55.2, 1.3], [55.2, 56.3, 2.4], [56.3, 60.6, 1.2]], (at) => ({
     ch: 2, url: "/calendar",
@@ -154,16 +147,29 @@ D.push({ card: { kind: "hook", lines: ["Every set release.", "Every Challenge.",
     ],
     cap: L("Now it's on your calendar", "Your store's Set Champ and prerelease, right on the month."),
   })));
+  // h2 · …and the home page tile updates too
+  {
+    const hm = "c_homeMine", tile = R(hm, "tile");
+    D.push(shot(hm, [[0.8, 2.6, 1.8], [2.6, 5.4, 1.1], [5.4, 6.0, 2], [6.0, 7.6, 1.3], [7.6, 8.9, 2.5], [8.9, 11.0, 1.1]], (at, end) => ({
+      ch: 2, url: "/",
+      cam: [[0, [1440, 800, 2880]], [at(2.4), ctr(tile, 1500, -160, 60)], [at(6.2), ctr(tile, 1500, -160, 60)], ["end", ctr(tile, 1500, -160, 120)]],
+      calls: [
+        call(at(T(hm, "storeChip") + 0.1), at(5.3), R(hm, "storeChip"), "Your store's Set Champ", "above", { dim: false }),
+        call(at(T(hm, "flip") - 0.1), at(7.4), R(hm, "flip"), "List", "below"),
+        call(at(T(hm, "storeRow") - 0.1), end - 0.05, R(hm, "storeRow"), "Right on your home page", "below"),
+      ],
+      cap: L("…and on your home page", "The same events land on the calendar you see every visit."),
+    })));
+  }
   // i · the calendar's own map, zoomed to town
   {
     const m = "c_map";
-    D.push(shot(m, [[1.0, 2.4, 1.3], [2.4, 4.0, 3], [4.0, 5.6, 1.9], [5.6, 7.0, 1.3], [7.0, 10.3, 2.6], [10.3, 11.3, 1.2], [11.3, 12.0, 1.3], [12.0, 15.1, 2.6], [15.1, 16.9, 1.3], [16.9, 18.4, 2.6], [18.4, 20.8, 1.1]], (at, end) => ({
+    D.push(shot(m, [[1.0, 2.4, 1.3], [2.4, 4.0, 3], [4.0, 5.6, 1.9], [5.6, 7.0, 1.3], [7.0, 10.3, 2.6], [10.3, 11.6, 1.2], [11.6, 18.3, 5], [18.3, 20.8, 1.1]], (at, end) => ({
       ch: 2, url: "/calendar?cv=map",
       cam: [[0, [1440, 1150, 2350]]],
       calls: [
         call(at(T(m, "place")), at(5.8), R(m, "place"), "Type a town", "below"),
         call(at(T(m, "zoomGo") - 0.1), at(7.2), R(m, "zoomGo"), null),
-        call(at(T(m, "mapLocalsOff") - 0.1), at(17.0), R(m, "mapLocalsOff"), "Filter by kind", "below"),
         call(at(T(m, "pin") - 0.1), end - 0.05, R(m, "pin"), "Every pin is dated", "above"),
       ],
       cap: L("Every event, on a map", "Zoom to your town and it all appears."),
@@ -174,12 +180,11 @@ D.push({ card: { kind: "hook", lines: ["Every set release.", "Every Challenge.",
 // ── 4 · plan the season ───────────────────────────────────────────────────
 {
   const c = "c_timeline";
-  D.push(shot(c, [[0.8, 2.8, 1.7], [2.8, 4.6, 1.2], [4.6, 5.3, 2], [5.3, 7.4, 1.2], [7.4, 8.7, 2.6], [8.7, 10.8, 1.2], [10.8, 12.2, 3], [12.2, 14.4, 1.2]], (at) => ({
+  D.push(shot(c, [[0.8, 2.8, 1.7], [2.8, 4.6, 1.2], [4.6, 5.3, 2], [5.3, 8.4, 1.2]], (at, end) => ({
     ch: 3, url: "/calendar?cv=timeline",
     cam: [[0, [1440, 1150, 2650]], [at(8.6), [1440, 1150, 2650]], [at(10.0), [1440, 1200, 2750]], ["end", [1440, 1200, 2750]]],
     calls: [
-      call(at(T(c, "byRegion") - 0.1), at(7.4), R(c, "byRegion"), "By region", "below", { dim: false }),
-      call(at(T(c, "span24") - 0.1), at(10.8), R(c, "span24"), "Up to 24 months", "below", { dim: false }),
+      call(at(T(c, "byRegion") - 0.1), end - 0.05, R(c, "byRegion"), "By region", "below", { dim: false }),
     ],
     cap: { chapter: "04 · Plan the season", title: "The whole season on one line", sub: "Challenges, qualifiers and set releases — spot the gaps before you book travel." },
   })));
@@ -188,13 +193,12 @@ D.push({ card: { kind: "hook", lines: ["Every set release.", "Every Challenge.",
 // ── 5 · find anything ─────────────────────────────────────────────────────
 {
   const c = "c_filter", d = R(c, "chipDlc"), q = R(c, "chipCcq");
-  D.push(shot(c, [[1.7, 3.5, 1.3], [3.5, 4.6, 2.2], [4.6, 6.2, 1.3], [6.2, 11.2, 4.5], [11.2, 13.0, 1.7], [13.0, 15.4, 1.2]], (at, end) => ({
+  D.push(shot(c, [[10.6, 11.2, 2], [11.2, 13.0, 1.7], [13.0, 15.4, 1.2]], (at, end) => ({
     ch: 4, url: "/calendar?cv=list", cam: [[0, [1440, 900, 2300]]],
     calls: [
-      call(at(T(c, "chipDlc") - 0.1), at(6.0), { x: d.x, y: d.y, w: q.x + q.w - d.x, h: d.h }, "Show or hide each kind", "below"),
       call(at(T(c, "search") - 0.05), end - 0.05, R(c, "search"), "Search events, stores, cities", "below"),
     ],
-    cap: { chapter: "05 · Find anything", title: "Filter. Search. Done.", right: true },
+    cap: { chapter: "05 · Find anything", title: "Search it all", sub: "Events, stores and cities — as you type.", right: true },
   })));
 }
 
@@ -215,18 +219,34 @@ D.push({ card: { kind: "hook", lines: ["Every set release.", "Every Challenge.",
 
 // ── 7 · yours ─────────────────────────────────────────────────────────────
 {
-  const c = "c_mine";
-  D.push(shot(c, [[1.4, 3.0, 1.3], [3.0, 5.0, 1.4], [5.0, 7.6, 1.2]], (at, end) => ({
-    ch: 6, url: "/calendar", cam: [[0, [1440, 700, 2300]], [at(3.0), [1440, 900, 2300]], ["end", [1440, 900, 2300]]],
+  // a · the home tile's own filters
+  const hm = "c_homeMine", tile = R(hm, "tile");
+  const c0 = R(hm, "offSets"), c1 = R(hm, "offCCQs");
+  D.push(shot(hm, [[11.2, 12.0, 2], [12.0, 13.6, 1.2], [13.6, 14.4, 2], [14.4, 22.4, 2.1], [22.4, 24.0, 1.1], [24.0, 24.6, 2], [24.6, 27.2, 1.1]], (at, end) => ({
+    ch: 6, url: "/",
+    cam: [[0, ctr(tile, 1500, -160, 120)], [at(13.4), ctr(tile, 1500, -160, 60)], ["end", ctr(tile, 1500, -160, 60)]],
     calls: [
-      call(at(T(c, "drawer") - 0.1), at(3.0), R(c, "drawer"), null),
-      call(at(3.1), at(5.2), R(c, "drawerBody"), "Your stores, and which events you want", "above", { dim: false }),
+      call(at(T(hm, "gear") - 0.1), at(13.9), R(hm, "gear"), "Filters", "below"),
+      call(at(14.3), at(22.4), { x: c0.x, y: c0.y, w: c1.x + c1.w - c0.x, h: c0.h }, "Switch off what you don't play", "below"),
+      call(at(22.6), at(24.2), R(hm, "onlyMine", { h: -40 }), "Just your stores", "below", { dim: false }),
+      call(at(T(hm, "region") - 0.1), end - 0.05, R(hm, "region"), "…and your region", "below"),
+    ],
+    cap: { chapter: "07 · Yours", title: "Only what you care about", sub: "Filter the home calendar by type and region." },
+  })));
+  // b · edit, remove, unfollow — and watch the list change
+  const c = "c_mine", first = R(c, "rows0");
+  D.push(shot(c, [[1.3, 2.8, 1.3], [2.8, 4.6, 1.4], [4.6, 7.9, 1.1], [7.9, 11.4, 999], [11.4, 13.8, 1.2], [13.8, 16.4, 3], [16.4, 19.0, 1.2], [19.0, 20.6, 2.5], [20.6, 22.6, 1.2]], (at, end) => ({
+    ch: 6, url: "/calendar",
+    cam: [[0, [1440, 800, 2300]], [at(3.2), [1440, 1060, 2300]], ["end", [1440, 1060, 2300]]],
+    calls: [
+      call(at(T(c, "drawer") - 0.1), at(2.9), R(c, "drawer"), "My calendar", "below"),
+      call(at(T(c, "localsOn") - 0.1), at(7.8), R(c, "localsOn"), "Add their weekly nights", "right"),
+      call(at(6.0), at(7.9), { x: first.x, y: first.y, w: first.w, h: 90 }, "…and there they are", "below", { dim: false }),
+      call(at(T(c, "remove") - 0.1), at(13.6), R(c, "remove"), "Remove a saved date", "left"),
+      call(at(T(c, "unfollow") - 0.1), at(18.8), R(c, "unfollow"), "Unfollow a store", "left"),
       call(at(T(c, "export") - 0.05), end - 0.05, R(c, "export"), "Export to any calendar app", "below"),
     ],
-    cap: { chapter: "07 · Yours", title: "Your stores, your season", sub: "Follow, save, hide — then send it to your phone's calendar." },
-  })));
-  D.push(shot("c_phone", [[0.6, 8.6, 2.2]], () => ({
-    ch: 6, phone: true, cap: { chapter: "07 · Yours", title: "…and in your pocket", right: true },
+    cap: { chapter: "07 · Yours", title: "Change your mind anytime", sub: "Pick what each store sends you, remove dates, unfollow — it updates instantly." },
   })));
 }
 
@@ -247,7 +267,7 @@ D.push({ card: { big: "Lorcana <span class='gold'>Calendar</span>", url: "packs.
  * downbeat for a bar. Every shot boundary after it is snapped to a beat, with
  * the footage scaled a hair to make the whole run land on 102.39s. */
 const BPM = 107.88, PHASE = 0.05, BEAT = 60 / BPM;
-const VERSE = 17.85, FINALE = 102.39, FADE_AT = 105.7, SONG_END = 107.3;
+const INTRO = 5.3, VERSE = 17.85, FINALE = 102.39, FADE_AT = 105.7, SONG_END = 107.3;
 export const MUSIC = { file: "promo/audio/when-will-my-life-begin.mp3", bpm: BPM };
 
 function scaleShot(sh, f) {
@@ -260,10 +280,17 @@ function finalize(shots) {
   const hook = shots[0], cta = shots[shots.length - 1], body = shots.slice(1, -1);
   hook.card.per = 2 * BEAT;
   hook.dur = 12 * BEAT;
-  const start = VERSE - hook.dur;                   // song time at video 0
+  // Song time at video 0: the latest DOWNBEAT that still gives the body room
+  // at natural speed (k >= 1), and never earlier than the guitar intro — the
+  // track opens with ~5s of spoken dialogue.
+  const raw0 = body.reduce((a, s) => a + s.dur, 0);
+  const bar = 4 * BEAT, want = FINALE - hook.dur - raw0;
+  let start = PHASE + Math.floor((want - PHASE) / bar) * bar;
+  if (start < INTRO) start = PHASE + Math.ceil((INTRO - PHASE) / bar) * bar;
   const bodyEnd = FINALE - start;                   // video time the CTA starts
   const raw = body.reduce((a, s) => a + s.dur, 0);
   const k = (bodyEnd - hook.dur) / raw;
+  if (process.env.PLAN_DEBUG) console.log(`body raw ${raw.toFixed(2)}s -> ${(bodyEnd - hook.dur).toFixed(2)}s (k=${k.toFixed(3)}, <1 means sped up)`);
   body.forEach((s) => scaleShot(s, k));
   // snap each cut to the nearest beat (song-time grid), keeping the last on FINALE
   let at = hook.dur;

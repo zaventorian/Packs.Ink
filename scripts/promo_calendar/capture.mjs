@@ -50,7 +50,7 @@ const BOOT = (() => {
     `for(const [a,b] of Object.entries(k))localStorage.setItem(a,b);` +
     // Filter prefs are per-clip: a region picked in one clip must not leak into
     // the next. Follows (packsink:calSubs) deliberately DO carry over.
-    `for(const x of Object.keys(localStorage))if(/^packsink:cal:|^packsink:sc(Zip|Country|Pinned|View)/.test(x))localStorage.removeItem(x);` +
+    `for(const x of Object.keys(localStorage))if(/^packsink:cal:|^packsink:sc[A-Z]/.test(x))localStorage.removeItem(x);` +
     `sessionStorage.setItem('__promoBooted','1');}` +
     `sessionStorage.setItem('packsink:autoTourFired','1');}catch(e){}`;
 })();
@@ -201,6 +201,25 @@ const CLIPS_DEF = [
     await h.mark("octMonth", ".cal-month");
     await sleep(1500);
   }},
+  // The payoff: the home tile now carries the followed store — and its own filters.
+  { name: "c_homeMine", path: "/", async run(page, h) {
+    await sleep(1000);
+    await h.mark("tile", ".cal-month--compact");
+    await h.to(".cal-month--compact .cal-chip[aria-label*='Card Pop']", { mark: "storeChip", ms: 500 });
+    await sleep(2200);
+    await h.click(".cal-panel-tool--view", { mark: "flip", after: 1600 });
+    await h.to(".cal-panel-list li:has-text('Card Pop') >> nth=0", { mark: "storeRow", ms: 400 });
+    await sleep(1800);
+    await h.click(".cal-panel-tool[title='Filter by type and region']", { mark: "gear", after: 1300 });
+    await h.mark("filters", ".cal-panel-filters");
+    for (const k of ["Sets", "Products", "DLCs", "CCQs"])
+      await h.click(`.cal-panel-filters .cal-chip-filter:has-text('${k}')`, { mark: "off" + k, after: 700 });
+    await sleep(900);
+    await h.mark("onlyMine", ".cal-panel-list, .cal-month--compact");
+    await h.click(".cal-panel-filters .cal-region-chip:has-text('North America')", { mark: "region", after: 1600 });
+    await h.mark("filtersDone", ".cal-panel-filters");
+    await sleep(1400);
+  }},
   // Local, on the map.
   { name: "c_map", path: "/calendar?cv=map", async run(page, h) {
     await sleep(1600);
@@ -272,13 +291,42 @@ const CLIPS_DEF = [
     await h.mark("modalAfter", ".cal-modal");
     await sleep(1000);
   }},
-  // Yours: the drawer + export.
-  { name: "c_mine", path: "/calendar", async run(page, h) {
+  // Yours: edit what you follow, and watch the list change. LIST view on
+  // purpose: in month view the open drawer pushes the store's dates below the
+  // fold, so following/unfollowing changed nothing you could see.
+  // setup() (unrecorded) re-creates the follow + saved date if an earlier take
+  // of this clip already removed them.
+  { name: "c_mine", path: "/calendar?cv=list",
+    async setup(page, h) {
+      const subs = await page.evaluate(() => localStorage.getItem("packsink:calSubs") || "[]");
+      if (/"store"/.test(subs) && /"event"/.test(subs)) return;
+      await h.type(".cal-search input", "Hyperia City Prerelease", 20);
+      await sleep(800);
+      await h.click(".cal-row >> nth=0", { after: 1500 });
+      await h.click(".cal-modal button:has-text('Add to my calendar')", { after: 800 }).catch(() => {});
+      await page.keyboard.press("Escape"); await sleep(500);
+      await h.click(".cal-search-x", { after: 500 }).catch(() => {});
+      await h.click(".cal-near-chip:not(.cal-follow-add)", { after: 1200 });
+      await h.type(".sc-zip-input", "Chicago", 20);
+      await h.click(".sc-search-btn", { after: 3000 });
+      await h.click(".sc-viewtoggle-btn:has-text('List')", { after: 800 }).catch(() => {});
+      await h.click(".sc-tile >> nth=0 >> .cal-add-btn", { after: 800 });
+      await h.click(".cal-add-pop .cal-add-store .cal-add-item >> nth=0", { after: 1000 });
+      await h.click(".cal-add-pop .cal-add-check:has-text('Locals')", { after: 800 });
+    },
+    async run(page, h) {
     await sleep(1000);
-    await h.click(".cal-follow-toggle", { mark: "drawer", after: 1800 });
+    await h.click(".cal-follow-toggle", { mark: "drawer", after: 1600 });
     await h.mark("drawerBody", ".cal-follow-body");
-    await h.to("button:has-text('Export .ics')", { mark: "export", ms: 500 });
-    await sleep(1500);
+    await h.mark("rows0", ".cal-rows");
+    await h.click(".cal-follow-kinds .cal-kind-chip:has-text('Locals')", { mark: "localsOn", after: 2200 });
+    await h.mark("rowsLocals", ".cal-rows");
+    await h.click(".cal-follow-kinds .cal-kind-chip:has-text('Locals')", { mark: "localsOff", after: 1800 });
+    await h.click(".cal-follow-body button[aria-label='Remove']", { mark: "remove", after: 1800 });
+    await h.click(".cal-follow-body button[aria-label='Unfollow']", { mark: "unfollow", after: 2200 });
+    await h.mark("rowsAfter", ".cal-rows");
+    await h.to("button:has-text('Export .ics')", { mark: "export", ms: 450 });
+    await sleep(1300);
   }},
   // Phone.
   { name: "c_phone", path: "/calendar", mobile: true, async run(page, h) {
@@ -309,6 +357,12 @@ async function recordClip(browsers, def, state) {
   if (mobile) await pre.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
   await page.goto(ORIGIN + def.path, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(7500);
+  if (def.setup) {
+    try { await def.setup(page, helpers(page, mobile, [])); }
+    catch (e) { await page.screenshot({ path: path.join(OUT, "_setup_fail.png") }); throw e; }
+    await page.goto(ORIGIN + def.path, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(6000);
+  }
   await page.evaluate(() => document.fonts && document.fonts.ready).catch(() => {});
   log("  viewport " + await page.evaluate(() => innerWidth + "x" + innerHeight + " @" + devicePixelRatio));
 
