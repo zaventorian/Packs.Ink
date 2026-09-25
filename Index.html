@@ -7332,8 +7332,8 @@ const matchesCardFilter = (row, f, parsed) => {
       const ok = all ? _wantKw.every(matchOne) : _wantKw.some(matchOne);
       if(!ok) return false;
     }
-    if(parsed.filters.legality === "core"){
-      const coreSets = typeof computeCoreSets === "function" ? new Set(computeCoreSets()) : null;
+    if(parsed.filters.legality === "core" || parsed.filters.legality === "corenext"){
+      const coreSets = typeof computeCoreSets === "function" ? new Set(computeCoreSets(parsed.filters.legality === "corenext")) : null;
       if(coreSets && !coreSets.has(row.Set)) return false;
     }
     if(parsed.filters.legality === "japan" && typeof isJapanCoreLegal === "function" && !isJapanCoreLegal(row)) return false;
@@ -7484,8 +7484,8 @@ const matchesCardFilter = (row, f, parsed) => {
     for(const want of f.illustrators){ if(ills.some(i => i.includes(want.toLowerCase()))){ any = true; break; } }
     if(!any) return false;
   }
-  if(f.legality === "core"){
-    const coreSets = typeof computeCoreSets === "function" ? new Set(computeCoreSets()) : null;
+  if(f.legality === "core" || f.legality === "corenext"){
+    const coreSets = typeof computeCoreSets === "function" ? new Set(computeCoreSets(f.legality === "corenext")) : null;
     if(coreSets && !coreSets.has(row.Set)) return false;
   }
   if(f.legality === "japan" && typeof isJapanCoreLegal === "function" && !isJapanCoreLegal(row)) return false;
@@ -10013,9 +10013,12 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
       <div class="drawer-section">
         <div class="drawer-section-head">Legality</div>
         <div class="cards-chipgroup">
-          <button class=${"chip "+(filter.legality==="core"?"active":"")}
+          <button class=${"chip "+((filter.legality==="core" || (filter.legality==="corenext" && !CORE_NEXT_SET))?"active":"")}
             title="Core Constructed — only cards legal in the current rotation"
             onClick=${()=>setFilter(f=>({...f,legality:f.legality==="core"?null:"core"}))}>Core</button>
+          ${CORE_NEXT_SET && html`<button class=${"chip "+(filter.legality==="corenext"?"active":"")}
+            title=${"Core as it will stand once " + CORE_NEXT_SET + " releases — today's Core plus " + CORE_NEXT_SET + ", with any rotation it brings"}
+            onClick=${()=>setFilter(f=>({...f,legality:f.legality==="corenext"?null:"corenext"}))}>Core: ${CORE_NEXT_SET}</button>`}
           <button class=${"chip "+(filter.legality==="infinity"?"active":"")}
             title="Infinity — every mainline-legal card"
             onClick=${()=>setFilter(f=>({...f,legality:f.legality==="infinity"?null:"infinity"}))}>Infinity</button>
@@ -10169,7 +10172,7 @@ const cardParamsToFilter = (search) => {
   }
   const inkable = p.get("inkable");
   if(inkable === "1") f.inkable = true; else if(inkable === "0") f.inkable = false;
-  const legal = p.get("legal"); if(legal) f.legality = legal;
+  const legal = p.get("legal"); if(legal) f.legality = (legal === "corenext" && !CORE_NEXT_SET) ? "core" : legal;
   if(p.get("owned") === "1") f.onlyOwned = true;
   if(p.get("dual") === "1") f.dualInk = true;
   const _px = (k) => { const v = parseFloat(p.get(k)); return Number.isFinite(v) && v >= 0 ? v : null; };
@@ -13514,9 +13517,12 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
           </button>`)}
         </div>
         <div class="cards-quickfilter-sub">
-          <button class=${"chip "+(filter.legality==="core"?"active":"")}
+          <button class=${"chip "+((filter.legality==="core" || (filter.legality==="corenext" && !CORE_NEXT_SET))?"active":"")}
             title="Core Constructed — only cards legal in the current rotation"
             onClick=${()=>setFilter(f=>({...f,legality:f.legality==="core"?null:"core"}))}>Core</button>
+          ${CORE_NEXT_SET && html`<button class=${"chip "+(filter.legality==="corenext"?"active":"")}
+            title=${"Core as it will stand once " + CORE_NEXT_SET + " releases — today's Core plus " + CORE_NEXT_SET + ", with any rotation it brings"}
+            onClick=${()=>setFilter(f=>({...f,legality:f.legality==="corenext"?null:"corenext"}))}>Core: ${CORE_NEXT_SET}</button>`}
           <button class=${"chip "+(filter.legality==="infinity"?"active":"")}
             title="Infinity — every mainline-legal card"
             onClick=${()=>setFilter(f=>({...f,legality:f.legality==="infinity"?null:"infinity"}))}>Infinity</button>
@@ -34469,7 +34475,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       push("inkable", filterInkable ? "Inkable" : "Uninkable", () => setFilterInkable(null));
     if(filterDualInk) push("dualink", "Dual ink", () => setFilterDualInk(false));
     if(filterLegality)
-      push("legality", filterLegality === "core" ? "Core" : filterLegality === "japan" ? "Japan Core" : "Infinity",
+      push("legality", filterLegality === "core" ? "Core" : filterLegality === "corenext" ? (CORE_NEXT_SET ? "Core: " + CORE_NEXT_SET : "Core") : filterLegality === "japan" ? "Japan Core" : "Infinity",
         () => setFilterLegality(""));
     fromSet("kw",  "Keyword",        filterKeywords,        setFilterKeywords);
     fromSet("cls", "Classification", filterClassifications, setFilterClassifications);
@@ -35316,9 +35322,12 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         </div>
         <label style=${{marginLeft:16}}>Legality</label>
         <div class="cards-chipgroup" style=${{gap:4}}>
-          <button class=${"chip "+(filterLegality==="core"?"active":"")}
+          <button class=${"chip "+((filterLegality==="core" || (filterLegality==="corenext" && !CORE_NEXT_SET))?"active":"")}
             onClick=${()=>setFilterLegality(v=>v==="core"?"":"core")}
             title="Core Constructed — current rotation">Core</button>
+          ${CORE_NEXT_SET && html`<button class=${"chip "+(filterLegality==="corenext"?"active":"")}
+            onClick=${()=>setFilterLegality(v=>v==="corenext"?"":"corenext")}
+            title=${"Core as it will stand once " + CORE_NEXT_SET + " releases"}>Core: ${CORE_NEXT_SET}</button>`}
           <button class=${"chip "+(filterLegality==="infinity"?"active":"")}
             onClick=${()=>setFilterLegality(v=>v==="infinity"?"":"infinity")}
             title="Infinity — any legally-built deck">Infinity</button>
@@ -48165,10 +48174,19 @@ const PRERELEASE_SETS = new Set([
 // number. Rotation drops the oldest 4-set group, keeping the two most
 // recent complete groups + the in-progress group. Result is the 5-8 most
 // recent sets depending on where we sit in the cycle.
-function computeCoreSets(){
+// The next set to become Core-legal, while it is still pre-release — what the
+// "Core: <set>" legality chip previews (2026-09-25, Zaven: see it before
+// release day, and have it go away once the set IS legal). Derived from the
+// same date-gated PRERELEASE_SETS the rotation uses, so on release morning
+// this goes null, the chip stops rendering, and a stored/linked "corenext"
+// filter quietly means plain Core — no code change, no stale preview.
+const CORE_NEXT_SET = MAINLINE_RELEASE_ORDER.find(s => PRERELEASE_SETS.has(s)) || null;
+function computeCoreSets(withNext = false){
   // Core rotation counts only RELEASED sets — a pre-release set listed for
-  // display ordering must not rotate the format early.
-  const released = MAINLINE_RELEASE_ORDER.filter(s => !PRERELEASE_SETS.has(s));
+  // display ordering must not rotate the format early. `withNext` previews
+  // the rotation as it will stand once CORE_NEXT_SET releases.
+  const released = MAINLINE_RELEASE_ORDER.filter(s => !PRERELEASE_SETS.has(s)
+    || (withNext && s === CORE_NEXT_SET));
   const latest = released.length; // 1-indexed set number
   if(latest <= 0) return [];
   const groupOfLatest = Math.ceil(latest / 4);          // 12 → group 3
