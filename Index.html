@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=480">
+<link rel="stylesheet" href="styles.css?v=481">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -39542,27 +39542,31 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav
       <div class="home-ev-strip-row home-ev-strip-head-row">
         <div>Set</div>
         <div class="num">EV / box</div>
-        <div class="num">EV / pack</div>
-        <div class="num">Box price</div>
+        <div class="num">Box</div>
+        <div class="num" title="EV per box against the box price: positive means the cards inside are worth more than the sealed box.">vs box</div>
       </div>
       ${lastFour.map(setName => {
         const ev = calcEV(avgs, setName, nc, excludeSet, "low");
         const box = boxForSet(setName);
+        // ⚠ One line per set (2026-09-24, Zaven: "too spread out"). EV/pack is
+        // EV/box ÷ 24, so it moved to the tooltip and its column went to the
+        // one number the strip exists to answer — is the box worth cracking.
+        const diff = ev != null && box && box.price > 0 ? (ev / box.price - 1) * 100 : null;
+        const az = box && box.row ? amazonForSealed(box.row, setName) : null;
         return html`<div key=${setName} class="home-ev-strip-row">
-          <div class="home-ev-strip-set">${setName}</div>
-          <div class="num">${fmt(ev)}</div>
-          <div class="num muted">${fmt(ev ? ev/24 : null)}</div>
-          <div class="num">
+          <div class="home-ev-strip-set" title=${setName}>${setName}</div>
+          <div class="num" title=${ev ? `${fmt(ev/24)} per pack` : ""}>${fmt(ev)}</div>
+          <div class="num home-ev-strip-box">
             ${box
               ? (box.url
-                  ? html`<a href=${box.url} target="_blank" rel="noopener nofollow sponsored" class="home-ev-strip-box-link">${fmt(box.price)}<span class="ext">↗</span></a>`
+                  ? html`<a href=${box.url} target="_blank" rel="noopener nofollow sponsored" class="home-ev-strip-box-link" title="Booster box on TCGplayer (affiliate link)">${fmt(box.price)}</a>`
                   : fmt(box.price))
               : html`<span class="muted">—</span>`}
-            ${(() => {
-              const az = box && box.row ? amazonForSealed(box.row, setName) : null;
-              return az && html`<a class="home-ev-strip-amzn" href=${az.url} target="_blank" rel="noopener nofollow sponsored"
-                title=${az.exact ? "Buy this box on Amazon (affiliate link)" : "Search Amazon for this box (affiliate link)"}>Amazon ↗</a>`;
-            })()}
+            ${az && html`<a class="home-ev-strip-amzn" href=${az.url} target="_blank" rel="noopener nofollow sponsored"
+                title=${az.exact ? "Buy this box on Amazon (affiliate link)" : "Search Amazon for this box (affiliate link)"}>Amazon</a>`}
+          </div>
+          <div class=${"num home-ev-strip-diff " + (diff == null ? "muted" : diff >= 0 ? "green" : "red")}>
+            ${diff == null ? "—" : `${diff >= 0 ? "+" : "−"}${Math.abs(diff).toFixed(0)}%`}
           </div>
         </div>`;
       })}
@@ -46535,7 +46539,9 @@ const HOME_TOOLS = [
   {k:"trade",  label:"Trade Compare"},
   {k:"avg",    label:"Set Breakdown"},
   {k:"setval", label:"Playset Cost"},
-  {k:"swiss",  label:"Swiss Odds"},
+  // Swiss Odds is NOT here (removed 2026-09-24, Zaven: "I only want 6 in the
+  // toolbox") — six chips fill three even rows of the two-column grid, and a
+  // seventh left one chip alone on a fourth. It stays an Analytics tab.
   // Simulator is NOT here (removed 2026-08-27, Zaven) — it still lives in the
   // Analytics tab bar and in the Overview. The toolbox is a shortcut strip on
   // the home page, not a mirror of the tab bar, so it holds the tools you open
