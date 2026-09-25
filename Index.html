@@ -7732,6 +7732,22 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
   const fQty = (collection && fKey) ? (collection[fKey]||0) : 0;
   const ownedAny = nQty > 0 || fQty > 0;
   const deckMode = typeof onDeckQtyChange === "function";
+  // Quick-add is a STEPPER, not a one-tap add (2026-09-25, Zaven): the bare +
+  // added a copy on the first tap, so a misclick while scrolling put a card in
+  // your collection with nothing on screen to take it back. The first tap now
+  // only opens − N +; the count shown is the printing it edits (Normal, or the
+  // foil on a foil-only card), so − can undo a mis-tap on the spot. Closes on
+  // a tap anywhere else, or after a few idle seconds.
+  const [qaOpen, setQaOpen] = React.useState(false);
+  const qaRef = React.useRef(null);
+  const qaQty = group.normal ? nQty : fQty;
+  React.useEffect(() => {
+    if(!qaOpen) return;
+    const t = setTimeout(() => setQaOpen(false), 6000);
+    const away = (e) => { if(qaRef.current && !qaRef.current.contains(e.target)) setQaOpen(false); };
+    document.addEventListener("pointerdown", away, true);
+    return () => { clearTimeout(t); document.removeEventListener("pointerdown", away, true); };
+  }, [qaOpen, qaQty]);
   // In deck mode, tapping the tile body adds a copy (like the + button).
   // The dedicated expand button (bottom-left) opens the detail modal. Outside
   // deck mode, tile click opens the modal as before.
@@ -7863,9 +7879,19 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
       </div>`}
       ${deckMode && openModal && html`<button class="tile-expand-btn" onClick=${onExpand}
         title="View card details" aria-label="View card details">⤢</button>`}
-      ${!deckMode && onQuickAdd && html`<button class="tile-quickadd-btn"
-        onClick=${e=>{ e.stopPropagation(); onQuickAdd(group); }}
-        title="Add one copy to your collection" aria-label="Add one copy to your collection">+</button>`}
+      ${!deckMode && onQuickAdd && (qaOpen
+        ? html`<div class="tile-quickadd-step" ref=${qaRef}
+            onClick=${e => e.stopPropagation()} onKeyDown=${e => e.stopPropagation()}>
+            <button type="button" disabled=${qaQty <= 0}
+              onClick=${() => onQuickAdd(group, -1)}
+              aria-label="Remove one copy from your collection">−</button>
+            <span class="tile-quickadd-n" aria-live="polite">${qaQty}</span>
+            <button type="button" onClick=${() => onQuickAdd(group, 1)}
+              aria-label="Add one copy to your collection">+</button>
+          </div>`
+        : html`<button type="button" class="tile-quickadd-btn"
+            onClick=${e=>{ e.stopPropagation(); setQaOpen(true); }}
+            title="Change how many you own" aria-label="Change how many you own">+</button>`)}
       ${onMagnify && html`<button class="tile-magnify-btn" onClick=${onMagnify}
         title="Enlarge card art" aria-label="Enlarge card art">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none"
@@ -13828,14 +13854,16 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
   // One-tap add from the grid: +1 of the group's Normal printing (foil-only
   // chase cards fall back to the foil). The detail modal remains the place
   // for foil/qty fine-tuning; this is the fast path for logging a set.
-  const quickAddOne = useCallback((g) => {
+  const quickAddOne = useCallback((g, delta = 1) => {
     if(!user){ onSignIn && onSignIn(); return; }
     const row = g.normal || g.foil;
     if(!row || !g.card_id) return;
     const key = g.card_id + ":" + row.tcg_printing;
     const cur = (collection && collection[key]) || 0;
-    updateQty(g.card_id, row.tcg_printing, cur + 1);
-    showToast(`Added ${g["Product Name"]} — you now have ${cur + 1}`);
+    const next = Math.max(0, cur + delta);
+    if(next === cur) return;
+    updateQty(g.card_id, row.tcg_printing, next);
+    showToast(`${delta > 0 ? "Added" : "Removed"} ${g["Product Name"]} — you now have ${next}`);
   }, [user, collection, updateQty, onSignIn, showToast]);
   // Build a card_id -> first-row index so we can find the canonical
   // tcg_printing key for each selected card without scanning raw on
