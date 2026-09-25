@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=482">
+<link rel="stylesheet" href="styles.css?v=483">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -47643,11 +47643,27 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // The popped-out panel is MOVED into the modal, not copied — a second
   // mount would re-run its fetches and (for the collapsible ones) fork its
   // open/closed state. The page behind is dimmed, so the gap is never seen.
+  // ── Phone: the news box sits UNDER THE CALENDAR ─────────────────────────
+  // (2026-09-25, Zaven: "mobile home page lost the news section … wanna add
+  // it under calendar?"). With the movers collapsed to one picked row, the
+  // lifted news box read as part of whichever movers row was showing, and a
+  // full screen of it between the movers and the calendar is easy to scroll
+  // straight past. Under the calendar it is "what's coming, then what's new".
+  // Only in the one-row picker view: "All" keeps the old pair row beside
+  // Rare–Legendary, and editing renders every banner at every width. If the
+  // calendar is hidden or popped out, the news stays under the movers.
+  const calEntry = homeLayout.find(p => p.key === "calendar");
+  const newsUnderCalendar = !!(newsFeedRl && !wideHome && !editing
+    && moversPick !== MOVERS_PICK_ALL
+    && calEntry && calEntry.on && !calEntry.pair && panelCol["calendar"] != null
+    && openPanel !== "calendar");
+  const newsMain = newsUnderCalendar ? null : newsFeedRl;
   const columnNodes = (col) => {
     if(!editing) return homeLayout
       .filter(p => panelCol[p.key] === col && p.key !== openPanel
                    && !HOME_FIXED_KEYS.has(p.key) && !p.pair)
-      .map(p => panelNode(p.key))
+      .flatMap(p => (p.key === "calendar" && newsUnderCalendar)
+        ? [panelNode(p.key), newsFeedRl] : [panelNode(p.key)])
       .filter(Boolean);
     const out = [];
     // A paired panel's editor bar follows it to the banner, so it must not
@@ -47763,11 +47779,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
           </button>
         </div>
         ${state.loading
-          ? html`<div>${newsFeedRl}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>Loading movers…</div></div>`
+          ? html`<div>${newsMain}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>Loading movers…</div></div>`
           : state.error
-            ? html`<div>${newsFeedRl}<div style=${{padding:"40px 0",textAlign:"center",color:"var(--red)",fontSize:13}}>${state.error}</div></div>`
+            ? html`<div>${newsMain}<div style=${{padding:"40px 0",textAlign:"center",color:"var(--red)",fontSize:13}}>${state.error}</div></div>`
             : (!showUp && !showDown)
-              ? html`<div>${newsFeedRl}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>
+              ? html`<div>${newsMain}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>
                   Toggle on at least one direction (Gainers or Droppers) to see movers.</div></div>`
               : (() => {
                   const newestBanner = NEWEST_SET && html`<${MoversBanner}
@@ -47936,9 +47952,12 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                     // make half the page appear and disappear as you tap along
                     // the strip.
                     const lifted = [];
-                    if(newsFeedRl) lifted.push(html`<${React.Fragment} key="lift-news">${newsFeedRl}<//>`);
+                    if(newsMain) lifted.push(html`<${React.Fragment} key="lift-news">${newsMain}<//>`);
                     for(const p of Object.values(pairedByBanner)){
-                      const panel = panelNode(p.key);
+                      // ⚠ A PAIRED news box is the --rail copy, which is
+                      // display:none below 1100px — lifted bare it rendered
+                      // into the DOM invisibly. Lift the rl copy instead.
+                      const panel = p.key === "news" ? newsFeedAside("rl") : panelNode(p.key);
                       if(panel) lifted.push(html`<${React.Fragment} key=${"lift-"+p.key}>${panel}<//>`);
                     }
                     return html`<${React.Fragment}>
