@@ -22942,14 +22942,19 @@ function parseDreambornCsv(text, rowsByName, raw){
       else w.f += qty;
     }
   } else {
-    const idx = {normal:col("normal"), foil:col("foil"), name:col("name"), number:col("card number")};
+    // Our own export carries a Set column (the catalog's display name). Read
+    // it: a reprint can share BOTH name and collector number with its
+    // original (Dewey - Showy Nephew is #139 in Into the Inklands AND Fabled),
+    // and without the set the import had to guess between the two.
+    const idx = {normal:col("normal"), foil:col("foil"), name:col("name"), number:col("card number"), set:col("set")};
     for(let i=1; i<rows.length; i++){
       const cols = rows[i];
       const n = parseInt((cols[idx.normal]||"").trim(), 10) || 0;
       const f = parseInt((cols[idx.foil]||"").trim(), 10) || 0;
       const name = (cols[idx.name]||"").trim();
       if((n<=0 && f<=0) || !name) continue;
-      wants.push({name, cn: idx.number>=0 ? (cols[idx.number]||"").trim() : "", setNum:0, n, f});
+      wants.push({name, cn: idx.number>=0 ? (cols[idx.number]||"").trim() : "", setNum:0,
+        setName: idx.set>=0 ? (cols[idx.set]||"").trim() : "", n, f});
     }
   }
 
@@ -23033,10 +23038,25 @@ function parseDreambornCsv(text, rowsByName, raw){
       unmatched.push({name, normal:w.n, foil:w.f});
       continue;
     }
+    // A known set narrows the name pool before the number does — the set is
+    // what separates an original from a reprint that kept its number.
+    const wantSet = w.setName ? w.setName.toLowerCase() : (setNum ? (MAINLINE_SETS[setNum-1] || "").toLowerCase() : "");
+    if(wantSet){
+      const inSet = candidates.filter(r => (r.Set || "").toLowerCase() === wantSet);
+      if(inSet.length) candidates = inSet;
+    }
     if(cn){
       const wantCn = cnKey(cn);
       const byNum = candidates.filter(r => cnKey(r.Number) === wantCn);
       if(byNum.length) candidates = byNum;
+      // Same name AND same number in two sets, with nothing to pick between
+      // them: taking the first row is how an Into the Inklands playset ended
+      // up on the Fabled reprint. Say so instead of guessing.
+      if(byNum.length && new Set(byNum.map(r => r.Set)).size > 1){
+        unmatched.push({name, normal:w.n, foil:w.f,
+          reason:"#"+cn+" exists in "+[...new Set(byNum.map(r => r.Set))].join(" and ")+" — add a Set column to choose"});
+        continue;
+      }
     }
     const byPrint = {};
     for(const r of candidates){ if(!byPrint[r.tcg_printing]) byPrint[r.tcg_printing] = r; }
@@ -28572,8 +28592,8 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           ${importState.report.unmatched.length > 0 && html`<div class="import-unmatched">
             <strong>${importState.report.unmatched.length.toLocaleString()}</strong> rows couldn't be matched
             ${importState.report.unmatched.length <= 8
-              ? html`<ul>${importState.report.unmatched.map((u,i)=>html`<li key=${i}>${u.name}</li>`)}</ul>`
-              : html`<ul>${importState.report.unmatched.slice(0,6).map((u,i)=>html`<li key=${i}>${u.name}</li>`)}
+              ? html`<ul>${importState.report.unmatched.map((u,i)=>html`<li key=${i}>${u.name}${u.reason ? html` <span class="muted">— ${u.reason}</span>` : ""}</li>`)}</ul>`
+              : html`<ul>${importState.report.unmatched.slice(0,6).map((u,i)=>html`<li key=${i}>${u.name}${u.reason ? html` <span class="muted">— ${u.reason}</span>` : ""}</li>`)}
                   <li>…and ${(importState.report.unmatched.length-6).toLocaleString()} more</li></ul>`}
           </div>`}
         </div>
