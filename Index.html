@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=482">
+<link rel="stylesheet" href="styles.css?v=483">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -7332,8 +7332,8 @@ const matchesCardFilter = (row, f, parsed) => {
       const ok = all ? _wantKw.every(matchOne) : _wantKw.some(matchOne);
       if(!ok) return false;
     }
-    if(parsed.filters.legality === "core"){
-      const coreSets = typeof computeCoreSets === "function" ? new Set(computeCoreSets()) : null;
+    if(parsed.filters.legality === "core" || parsed.filters.legality === "corenext"){
+      const coreSets = typeof computeCoreSets === "function" ? new Set(computeCoreSets(parsed.filters.legality === "corenext")) : null;
       if(coreSets && !coreSets.has(row.Set)) return false;
     }
     if(parsed.filters.legality === "japan" && typeof isJapanCoreLegal === "function" && !isJapanCoreLegal(row)) return false;
@@ -7484,8 +7484,8 @@ const matchesCardFilter = (row, f, parsed) => {
     for(const want of f.illustrators){ if(ills.some(i => i.includes(want.toLowerCase()))){ any = true; break; } }
     if(!any) return false;
   }
-  if(f.legality === "core"){
-    const coreSets = typeof computeCoreSets === "function" ? new Set(computeCoreSets()) : null;
+  if(f.legality === "core" || f.legality === "corenext"){
+    const coreSets = typeof computeCoreSets === "function" ? new Set(computeCoreSets(f.legality === "corenext")) : null;
     if(coreSets && !coreSets.has(row.Set)) return false;
   }
   if(f.legality === "japan" && typeof isJapanCoreLegal === "function" && !isJapanCoreLegal(row)) return false;
@@ -7732,6 +7732,22 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
   const fQty = (collection && fKey) ? (collection[fKey]||0) : 0;
   const ownedAny = nQty > 0 || fQty > 0;
   const deckMode = typeof onDeckQtyChange === "function";
+  // Quick-add is a STEPPER, not a one-tap add (2026-09-25, Zaven): the bare +
+  // added a copy on the first tap, so a misclick while scrolling put a card in
+  // your collection with nothing on screen to take it back. The first tap now
+  // only opens − N +; the count shown is the printing it edits (Normal, or the
+  // foil on a foil-only card), so − can undo a mis-tap on the spot. Closes on
+  // a tap anywhere else, or after a few idle seconds.
+  const [qaOpen, setQaOpen] = React.useState(false);
+  const qaRef = React.useRef(null);
+  const qaQty = group.normal ? nQty : fQty;
+  React.useEffect(() => {
+    if(!qaOpen) return;
+    const t = setTimeout(() => setQaOpen(false), 6000);
+    const away = (e) => { if(qaRef.current && !qaRef.current.contains(e.target)) setQaOpen(false); };
+    document.addEventListener("pointerdown", away, true);
+    return () => { clearTimeout(t); document.removeEventListener("pointerdown", away, true); };
+  }, [qaOpen, qaQty]);
   // In deck mode, tapping the tile body adds a copy (like the + button).
   // The dedicated expand button (bottom-left) opens the detail modal. Outside
   // deck mode, tile click opens the modal as before.
@@ -7863,9 +7879,19 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
       </div>`}
       ${deckMode && openModal && html`<button class="tile-expand-btn" onClick=${onExpand}
         title="View card details" aria-label="View card details">⤢</button>`}
-      ${!deckMode && onQuickAdd && html`<button class="tile-quickadd-btn"
-        onClick=${e=>{ e.stopPropagation(); onQuickAdd(group); }}
-        title="Add one copy to your collection" aria-label="Add one copy to your collection">+</button>`}
+      ${!deckMode && onQuickAdd && (qaOpen
+        ? html`<div class="tile-quickadd-step" ref=${qaRef}
+            onClick=${e => e.stopPropagation()} onKeyDown=${e => e.stopPropagation()}>
+            <button type="button" disabled=${qaQty <= 0}
+              onClick=${() => onQuickAdd(group, -1)}
+              aria-label="Remove one copy from your collection">−</button>
+            <span class="tile-quickadd-n" aria-live="polite">${qaQty}</span>
+            <button type="button" onClick=${() => onQuickAdd(group, 1)}
+              aria-label="Add one copy to your collection">+</button>
+          </div>`
+        : html`<button type="button" class="tile-quickadd-btn"
+            onClick=${e=>{ e.stopPropagation(); setQaOpen(true); }}
+            title="Change how many you own" aria-label="Change how many you own">+</button>`)}
       ${onMagnify && html`<button class="tile-magnify-btn" onClick=${onMagnify}
         title="Enlarge card art" aria-label="Enlarge card art">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none"
@@ -9987,9 +10013,12 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
       <div class="drawer-section">
         <div class="drawer-section-head">Legality</div>
         <div class="cards-chipgroup">
-          <button class=${"chip "+(filter.legality==="core"?"active":"")}
+          <button class=${"chip "+((filter.legality==="core" || (filter.legality==="corenext" && !CORE_NEXT_SET))?"active":"")}
             title="Core Constructed — only cards legal in the current rotation"
             onClick=${()=>setFilter(f=>({...f,legality:f.legality==="core"?null:"core"}))}>Core</button>
+          ${CORE_NEXT_SET && html`<button class=${"chip "+(filter.legality==="corenext"?"active":"")}
+            title=${"Core as it will stand once " + CORE_NEXT_SET + " releases — today's Core plus " + CORE_NEXT_SET + ", with any rotation it brings"}
+            onClick=${()=>setFilter(f=>({...f,legality:f.legality==="corenext"?null:"corenext"}))}>Core: ${CORE_NEXT_SET}</button>`}
           <button class=${"chip "+(filter.legality==="infinity"?"active":"")}
             title="Infinity — every mainline-legal card"
             onClick=${()=>setFilter(f=>({...f,legality:f.legality==="infinity"?null:"infinity"}))}>Infinity</button>
@@ -10143,7 +10172,7 @@ const cardParamsToFilter = (search) => {
   }
   const inkable = p.get("inkable");
   if(inkable === "1") f.inkable = true; else if(inkable === "0") f.inkable = false;
-  const legal = p.get("legal"); if(legal) f.legality = legal;
+  const legal = p.get("legal"); if(legal) f.legality = (legal === "corenext" && !CORE_NEXT_SET) ? "core" : legal;
   if(p.get("owned") === "1") f.onlyOwned = true;
   if(p.get("dual") === "1") f.dualInk = true;
   const _px = (k) => { const v = parseFloat(p.get(k)); return Number.isFinite(v) && v >= 0 ? v : null; };
@@ -13488,9 +13517,12 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
           </button>`)}
         </div>
         <div class="cards-quickfilter-sub">
-          <button class=${"chip "+(filter.legality==="core"?"active":"")}
+          <button class=${"chip "+((filter.legality==="core" || (filter.legality==="corenext" && !CORE_NEXT_SET))?"active":"")}
             title="Core Constructed — only cards legal in the current rotation"
             onClick=${()=>setFilter(f=>({...f,legality:f.legality==="core"?null:"core"}))}>Core</button>
+          ${CORE_NEXT_SET && html`<button class=${"chip "+(filter.legality==="corenext"?"active":"")}
+            title=${"Core as it will stand once " + CORE_NEXT_SET + " releases — today's Core plus " + CORE_NEXT_SET + ", with any rotation it brings"}
+            onClick=${()=>setFilter(f=>({...f,legality:f.legality==="corenext"?null:"corenext"}))}>Core: ${CORE_NEXT_SET}</button>`}
           <button class=${"chip "+(filter.legality==="infinity"?"active":"")}
             title="Infinity — every mainline-legal card"
             onClick=${()=>setFilter(f=>({...f,legality:f.legality==="infinity"?null:"infinity"}))}>Infinity</button>
@@ -13828,14 +13860,16 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
   // One-tap add from the grid: +1 of the group's Normal printing (foil-only
   // chase cards fall back to the foil). The detail modal remains the place
   // for foil/qty fine-tuning; this is the fast path for logging a set.
-  const quickAddOne = useCallback((g) => {
+  const quickAddOne = useCallback((g, delta = 1) => {
     if(!user){ onSignIn && onSignIn(); return; }
     const row = g.normal || g.foil;
     if(!row || !g.card_id) return;
     const key = g.card_id + ":" + row.tcg_printing;
     const cur = (collection && collection[key]) || 0;
-    updateQty(g.card_id, row.tcg_printing, cur + 1);
-    showToast(`Added ${g["Product Name"]} — you now have ${cur + 1}`);
+    const next = Math.max(0, cur + delta);
+    if(next === cur) return;
+    updateQty(g.card_id, row.tcg_printing, next);
+    showToast(`${delta > 0 ? "Added" : "Removed"} ${g["Product Name"]} — you now have ${next}`);
   }, [user, collection, updateQty, onSignIn, showToast]);
   // Build a card_id -> first-row index so we can find the canonical
   // tcg_printing key for each selected card without scanning raw on
@@ -34441,7 +34475,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       push("inkable", filterInkable ? "Inkable" : "Uninkable", () => setFilterInkable(null));
     if(filterDualInk) push("dualink", "Dual ink", () => setFilterDualInk(false));
     if(filterLegality)
-      push("legality", filterLegality === "core" ? "Core" : filterLegality === "japan" ? "Japan Core" : "Infinity",
+      push("legality", filterLegality === "core" ? "Core" : filterLegality === "corenext" ? (CORE_NEXT_SET ? "Core: " + CORE_NEXT_SET : "Core") : filterLegality === "japan" ? "Japan Core" : "Infinity",
         () => setFilterLegality(""));
     fromSet("kw",  "Keyword",        filterKeywords,        setFilterKeywords);
     fromSet("cls", "Classification", filterClassifications, setFilterClassifications);
@@ -35288,9 +35322,12 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         </div>
         <label style=${{marginLeft:16}}>Legality</label>
         <div class="cards-chipgroup" style=${{gap:4}}>
-          <button class=${"chip "+(filterLegality==="core"?"active":"")}
+          <button class=${"chip "+((filterLegality==="core" || (filterLegality==="corenext" && !CORE_NEXT_SET))?"active":"")}
             onClick=${()=>setFilterLegality(v=>v==="core"?"":"core")}
             title="Core Constructed — current rotation">Core</button>
+          ${CORE_NEXT_SET && html`<button class=${"chip "+(filterLegality==="corenext"?"active":"")}
+            onClick=${()=>setFilterLegality(v=>v==="corenext"?"":"corenext")}
+            title=${"Core as it will stand once " + CORE_NEXT_SET + " releases"}>Core: ${CORE_NEXT_SET}</button>`}
           <button class=${"chip "+(filterLegality==="infinity"?"active":"")}
             onClick=${()=>setFilterLegality(v=>v==="infinity"?"":"infinity")}
             title="Infinity — any legally-built deck">Infinity</button>
@@ -47643,11 +47680,27 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // The popped-out panel is MOVED into the modal, not copied — a second
   // mount would re-run its fetches and (for the collapsible ones) fork its
   // open/closed state. The page behind is dimmed, so the gap is never seen.
+  // ── Phone: the news box sits UNDER THE CALENDAR ─────────────────────────
+  // (2026-09-25, Zaven: "mobile home page lost the news section … wanna add
+  // it under calendar?"). With the movers collapsed to one picked row, the
+  // lifted news box read as part of whichever movers row was showing, and a
+  // full screen of it between the movers and the calendar is easy to scroll
+  // straight past. Under the calendar it is "what's coming, then what's new".
+  // Only in the one-row picker view: "All" keeps the old pair row beside
+  // Rare–Legendary, and editing renders every banner at every width. If the
+  // calendar is hidden or popped out, the news stays under the movers.
+  const calEntry = homeLayout.find(p => p.key === "calendar");
+  const newsUnderCalendar = !!(newsFeedRl && !wideHome && !editing
+    && moversPick !== MOVERS_PICK_ALL
+    && calEntry && calEntry.on && !calEntry.pair && panelCol["calendar"] != null
+    && openPanel !== "calendar");
+  const newsMain = newsUnderCalendar ? null : newsFeedRl;
   const columnNodes = (col) => {
     if(!editing) return homeLayout
       .filter(p => panelCol[p.key] === col && p.key !== openPanel
                    && !HOME_FIXED_KEYS.has(p.key) && !p.pair)
-      .map(p => panelNode(p.key))
+      .flatMap(p => (p.key === "calendar" && newsUnderCalendar)
+        ? [panelNode(p.key), newsFeedRl] : [panelNode(p.key)])
       .filter(Boolean);
     const out = [];
     // A paired panel's editor bar follows it to the banner, so it must not
@@ -47763,11 +47816,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
           </button>
         </div>
         ${state.loading
-          ? html`<div>${newsFeedRl}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>Loading movers…</div></div>`
+          ? html`<div>${newsMain}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>Loading movers…</div></div>`
           : state.error
-            ? html`<div>${newsFeedRl}<div style=${{padding:"40px 0",textAlign:"center",color:"var(--red)",fontSize:13}}>${state.error}</div></div>`
+            ? html`<div>${newsMain}<div style=${{padding:"40px 0",textAlign:"center",color:"var(--red)",fontSize:13}}>${state.error}</div></div>`
             : (!showUp && !showDown)
-              ? html`<div>${newsFeedRl}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>
+              ? html`<div>${newsMain}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>
                   Toggle on at least one direction (Gainers or Droppers) to see movers.</div></div>`
               : (() => {
                   const newestBanner = NEWEST_SET && html`<${MoversBanner}
@@ -47936,9 +47989,12 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                     // make half the page appear and disappear as you tap along
                     // the strip.
                     const lifted = [];
-                    if(newsFeedRl) lifted.push(html`<${React.Fragment} key="lift-news">${newsFeedRl}<//>`);
+                    if(newsMain) lifted.push(html`<${React.Fragment} key="lift-news">${newsMain}<//>`);
                     for(const p of Object.values(pairedByBanner)){
-                      const panel = panelNode(p.key);
+                      // ⚠ A PAIRED news box is the --rail copy, which is
+                      // display:none below 1100px — lifted bare it rendered
+                      // into the DOM invisibly. Lift the rl copy instead.
+                      const panel = p.key === "news" ? newsFeedAside("rl") : panelNode(p.key);
                       if(panel) lifted.push(html`<${React.Fragment} key=${"lift-"+p.key}>${panel}<//>`);
                     }
                     return html`<${React.Fragment}>
@@ -48118,10 +48174,19 @@ const PRERELEASE_SETS = new Set([
 // number. Rotation drops the oldest 4-set group, keeping the two most
 // recent complete groups + the in-progress group. Result is the 5-8 most
 // recent sets depending on where we sit in the cycle.
-function computeCoreSets(){
+// The next set to become Core-legal, while it is still pre-release — what the
+// "Core: <set>" legality chip previews (2026-09-25, Zaven: see it before
+// release day, and have it go away once the set IS legal). Derived from the
+// same date-gated PRERELEASE_SETS the rotation uses, so on release morning
+// this goes null, the chip stops rendering, and a stored/linked "corenext"
+// filter quietly means plain Core — no code change, no stale preview.
+const CORE_NEXT_SET = MAINLINE_RELEASE_ORDER.find(s => PRERELEASE_SETS.has(s)) || null;
+function computeCoreSets(withNext = false){
   // Core rotation counts only RELEASED sets — a pre-release set listed for
-  // display ordering must not rotate the format early.
-  const released = MAINLINE_RELEASE_ORDER.filter(s => !PRERELEASE_SETS.has(s));
+  // display ordering must not rotate the format early. `withNext` previews
+  // the rotation as it will stand once CORE_NEXT_SET releases.
+  const released = MAINLINE_RELEASE_ORDER.filter(s => !PRERELEASE_SETS.has(s)
+    || (withNext && s === CORE_NEXT_SET));
   const latest = released.length; // 1-indexed set number
   if(latest <= 0) return [];
   const groupOfLatest = Math.ceil(latest / 4);          // 12 → group 3
