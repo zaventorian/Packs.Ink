@@ -10678,19 +10678,20 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
      the heading stays (it is the page's h1, and its orientation) and the
      sentence goes. Desktop, which has the room, keeps it. */
   .cal-lede{display:none;}
-  /* ⚠ FLUID, not a second breakpoint. Measured at 375px: the title's share of
-     the header row is 158px, and "Lorcana Calendar" in Cinzel small caps wants
-     166px at 16 and 156 at 15 — so a fixed 15 fits this phone by two pixels
-     and clips the next one down. 3.6vw gives ~13.5px at 375 (140px, fits) and
-     ~13px at 360 (135 against 143, fits), while a tablet still reads 16.
-     The ellipsis below stays as the backstop, not the plan. */
-  .cal-h1{font-size:clamp(12px, 3.6vw, 16px);}
+  /* The title has its own line now (the actions wrap below it), so it no
+     longer needs to shrink to share one. */
+  .cal-h1{font-size:16px;}
   /* ⚠ The heading and its actions share ONE line. `> div` is the h1's wrapper;
      without flex:1 1 auto + min-width:0 it sizes to the h1's max-content, and
      at 375px that is just wide enough to push the actions onto a second line —
      35px of nothing, at the very top of the page this work exists to shorten. */
-  .cal-header{align-items:center;gap:8px;padding:10px 12px;flex-wrap:nowrap;}
-  .cal-header > div{flex:1 1 auto;min-width:0;}
+  /* ⚠ WRAPS now (2026-09-25, Zaven: "some stuff hidden unless you scroll").
+     Once "My calendar" moved up here the actions ran to three buttons (four
+     for an admin) and the one-line header pushed "Add event" off the right
+     edge and ellipsed the title to "LORCANA CALE". A second row costs ~40px;
+     a control you cannot see costs the control. Title gets the full width. */
+  .cal-header{align-items:center;gap:8px;padding:10px 12px;flex-wrap:wrap;}
+  .cal-header > div{flex:1 1 100%;min-width:0;}
   /* ⚠ The heading's own glyph goes, not the words. 20px of icon plus its gap
      is 28px, and without it "Lorcana Calendar" fits the line whole instead of
      ellipsing to "LORCANA CALEND…" — a clipped page title reads as breakage.
@@ -10701,7 +10702,12 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
      the "one line" header came back at 64px — taller than the two-line one it
      replaced. The title beside it ellipses instead, which is the right thing
      to give: it is a fixed word you can read from the tab. */
-  .cal-header-actions{width:auto;flex:0 0 auto;gap:6px;flex-wrap:nowrap;}
+  .cal-header-actions{width:100%;flex:1 1 100%;gap:6px;flex-wrap:wrap;}
+  /* A FILTER never hides behind a sideways scroll on a phone — the kind chips
+     wrap. (The timeline scrolling sideways is fine: that is scrolling through
+     time, not through controls.) The home tile's compact row is untouched. */
+  .cal-toolbar .cal-chips{flex-wrap:wrap;overflow:visible;flex:1 1 100%;}
+  .cal-toolbar .cal-chips::after{display:none;}
   /* Glyph only. The accessible name is on the button's aria-label. */
   .cal-act--export span{display:none;}
   .cal-toolbar{align-items:center;gap:8px;}
@@ -10908,7 +10914,10 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
      390px, squeezed between the steppers and three controls, flex crushed it to
      37px and it wrapped into a 100px-tall three-line stack. Full width above,
      controls below. */
-  .cal-tl-bar{flex-wrap:wrap;row-gap:6px;}
+  /* 6px, not 8: at 375px the five controls want 349px of a 347px row at 8, so
+     the camera button wrapped onto a line of its own. */
+  .cal-tl-bar{flex-wrap:wrap;row-gap:6px;column-gap:6px;}
+  .cal-tl-group button{padding:4px 7px;}
   .cal-tl-bar .cal-month-label{order:-1;flex:1 0 100%;text-align:left;}
   .cal-tl-export{margin-left:auto;}
 }
