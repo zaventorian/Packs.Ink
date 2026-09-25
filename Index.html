@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=481">
+<link rel="stylesheet" href="styles.css?v=482">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -40726,7 +40726,12 @@ const _calNearCache = new Map();
 function useNearbyScEvents(on){
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
-  const origin = useMemo(calNearOrigin, [on]);
+  // ⚠ Read on EVERY render, never memoized on `on`: a first-time visitor sets
+  // their town in the finder with the chip still off, so a memo keyed on the
+  // toggle kept the empty origin and the next click on "SCs near me" said
+  // "set a postal code first" and reopened the finder they had just used.
+  // Three localStorage reads; the effect keys on the `key` string, not this.
+  const origin = calNearOrigin();
   const ready = scZipReady(origin.zip);
   const key = `${origin.country}|${origin.zip}|${origin.radius}`;
   useEffect(() => {

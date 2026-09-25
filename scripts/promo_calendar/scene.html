@@ -1,0 +1,322 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<!-- The calendar promo's stage (desktop 16:9). A pure function of time:
+     __seek(t) seeks the clip <video>s and positions everything; the recorder
+     screenshots frame by frame. No CSS transitions or keyframes anywhere.
+
+     Per shot (see plan.mjs):
+       map   [[outT, clipT], ...]  piecewise-linear speed ramp
+       cam   [[outT, cx, cy, w], ...] camera in CLIP px (eased between keys)
+       calls [{from, to, r:{x,y,w,h}, label, side}] spotlight callouts, CLIP px
+       cap   {chapter, title, sub} lower-third caption
+       ch    index into PLAN.chapters for the rail -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=block">
+<style>
+  :root{--gold:#f2c94c;--ink:#f6f1ea;--muted:#c3b7d6}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:1920px;height:1080px;overflow:hidden;background:#12091f}
+  body{font-family:"Nunito Sans",system-ui,sans-serif;color:var(--ink)}
+  #bg{position:absolute;inset:0;background:
+      radial-gradient(1100px 700px at 12% 0%, rgba(125,72,210,.55), transparent 62%),
+      radial-gradient(900px 600px at 100% 100%, rgba(242,201,76,.14), transparent 60%),
+      linear-gradient(160deg,#1d0d37 0%,#12091f 55%,#0b0615 100%)}
+  .win{position:absolute;left:40px;top:34px;width:1840px;height:936px;border-radius:16px;overflow:hidden;background:#0b0614;
+       box-shadow:0 28px 70px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.09);transform-origin:50% 50%}
+  .win .bar{position:absolute;left:0;right:0;top:0;height:34px;background:#1a1127;display:flex;align-items:center;gap:8px;padding:0 16px;z-index:2}
+  .win .bar i{width:11px;height:11px;border-radius:50%;background:#3a2d4d;display:block}
+  .win .url{margin-left:16px;width:420px;height:22px;border-radius:11px;background:#0f0919;color:#a99bbd;font-size:12.5px;display:flex;align-items:center;padding:0 12px}
+  .win .url b{color:#ece4f7;font-weight:700}
+  .vp{position:absolute;left:0;right:0;top:34px;bottom:0;overflow:hidden}
+  .vp video{position:absolute;left:0;top:0;transform-origin:0 0}
+  .win.phone{left:710px;top:34px;width:500px;height:936px;border-radius:52px;
+       box-shadow:0 30px 80px rgba(0,0,0,.6),0 0 0 10px #221832,0 0 0 12px rgba(255,255,255,.08)}
+  .win.phone .bar{display:none}.win.phone .vp{top:0}
+  #calls{position:absolute;inset:0;pointer-events:none;z-index:5}
+  .ring{position:absolute;border:3px solid var(--gold);border-radius:12px;
+        box-shadow:0 0 0 9999px rgba(8,4,16,.42),0 0 26px rgba(242,201,76,.55)}
+  .ring.nodim{box-shadow:0 0 26px rgba(242,201,76,.55)}
+  .tag{position:absolute;white-space:nowrap;background:var(--gold);color:#1b0f2c;font-weight:800;
+       font-size:22px;padding:8px 16px;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.45)}
+  #cap{position:absolute;left:84px;bottom:150px;z-index:6;max-width:900px}
+  #cap .glass{background:linear-gradient(90deg,rgba(18,9,31,.94),rgba(18,9,31,.82));border:1px solid rgba(242,201,76,.28);
+       border-radius:18px;padding:22px 30px 24px;box-shadow:0 20px 50px rgba(0,0,0,.5)}
+  #cap .chap{font-family:Cinzel,serif;font-weight:700;color:var(--gold);letter-spacing:.16em;font-size:17px;text-transform:uppercase}
+  #cap .title{font-family:Cinzel,serif;font-weight:700;font-size:50px;line-height:1.05;margin-top:8px}
+  #cap .title span{display:inline-block;margin-right:.26em}
+  #cap .sub{color:var(--muted);font-size:23px;font-weight:600;margin-top:10px;line-height:1.3}
+  #rail{position:absolute;left:40px;right:40px;top:992px;height:56px;display:flex;gap:10px;z-index:4}
+  #rail div{flex:1;position:relative;font-family:Cinzel,serif;font-weight:700;font-size:15px;letter-spacing:.12em;
+       text-transform:uppercase;color:rgba(255,255,255,.34);padding-top:16px}
+  #rail div::before{content:"";position:absolute;left:0;right:0;top:0;height:4px;border-radius:2px;background:rgba(255,255,255,.12)}
+  #rail div b{position:absolute;left:0;top:0;height:4px;border-radius:2px;background:var(--gold)}
+  #rail div.on{color:var(--gold)}
+  #rail div.done{color:rgba(255,255,255,.6)}
+  #card{position:absolute;inset:0;z-index:8;display:none;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+  #card .line{font-family:Cinzel,serif;font-weight:700;font-size:68px;line-height:1.15;position:absolute;left:0;right:0}
+  #card .big{font-family:Cinzel,serif;font-weight:700;font-size:150px;line-height:1;letter-spacing:.01em}
+  #card .gold{color:var(--gold)}
+  #card .url2{font-weight:800;color:var(--gold);font-size:56px;margin-top:34px}
+  #card .small{font-family:Cinzel,serif;font-weight:700;color:var(--gold);letter-spacing:.18em;font-size:24px;text-transform:uppercase}
+</style></head>
+<body>
+<div id="bg"></div>
+<div class="win" id="w0"><div class="bar"><i></i><i></i><i></i><div class="url">packs.ink<b></b></div></div><div class="vp"><video muted preload="auto"></video></div></div>
+<div class="win" id="w1"><div class="bar"><i></i><i></i><i></i><div class="url">packs.ink<b></b></div></div><div class="vp"><video muted preload="auto"></video></div></div>
+<div id="calls"></div>
+<div id="cap"><div class="glass"><div class="chap"></div><div class="title"></div><div class="sub"></div></div></div>
+<div id="rail"></div>
+<div id="card"></div>
+<script>
+const Q = new URLSearchParams(location.search);
+const PLAN = JSON.parse(decodeURIComponent(Q.get("plan")));
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const ease = (t) => (t < .5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2);
+const out = (t) => 1 - Math.pow(1 - t, 3);
+const back = (t) => { const c = 1.9; return 1 + (c+1)*Math.pow(t-1,3) + c*Math.pow(t-1,2); };
+const lerp = (a, b, k) => a + (b - a) * k;
+const wins = [document.getElementById("w0"), document.getElementById("w1")];
+const vids = wins.map((w) => w.querySelector("video"));
+const loaded = [null, null];
+const cap = document.getElementById("cap"), rail = document.getElementById("rail"),
+      card = document.getElementById("card"), calls = document.getElementById("calls");
+rail.innerHTML = PLAN.chapters.map((c) => `<div>${c}<b></b></div>`).join("");
+
+async function load(i, name){
+  if (loaded[i] === name) return;
+  loaded[i] = name; const v = vids[i];
+  v.src = "/clips/" + name + ".mp4";
+  await new Promise((r) => { if (v.readyState >= 1) r(); else v.addEventListener("loadedmetadata", r, {once:true}); });
+}
+async function seekVid(i, t){
+  const v = vids[i];
+  const tt = clamp(t, 0, (v.duration || 1) - 0.04);
+  if (Math.abs(v.currentTime - tt) < 0.001 && v.readyState >= 2) return;
+  await new Promise((r) => { v.addEventListener("seeked", r, {once:true}); v.currentTime = tt; });
+}
+function pw(k, x){
+  if (x <= k[0][0]) return k[0][1];
+  for (let i = 1; i < k.length; i++) if (x <= k[i][0]) {
+    const a = k[i-1], b = k[i]; if (b[0] - a[0] < 0.02) return b[1];   // a jump cut
+    return lerp(a[1], b[1], (x - a[0]) / (b[0] - a[0]));
+  }
+  return k[k.length-1][1];
+}
+function camAt(sh, lt){
+  const k = sh.cam;
+  if (!k) return null;
+  if (lt <= k[0][0]) return k[0].slice(1);
+  for (let i = 1; i < k.length; i++) if (lt <= k[i][0]) {
+    const a = k[i-1], b = k[i], q = ease((lt - a[0]) / Math.max(1e-6, b[0] - a[0]));
+    return [lerp(a[1],b[1],q), lerp(a[2],b[2],q), lerp(a[3],b[3],q)];
+  }
+  return k[k.length-1].slice(1);
+}
+/* The camera FITS the callouts. Each active callout (with a lead-in before it
+ * appears and a tail after) pulls the camera — zooming out if its box plus its
+ * label would not fit, then shifting — until the box and label sit inside the
+ * window and clear of the caption. Weighted by a smooth envelope, so it eases
+ * rather than jumps, and still a pure function of time. */
+const LEAD = 0.5, TAIL = 0.35;
+const labW = (l) => (l ? 32 + l.length * 12.5 : 0);
+function envelope(lt, c){
+  return ease(clamp((lt - (c.from - LEAD)) / LEAD, 0, 1)) * ease(clamp(((c.to + TAIL) - lt) / TAIL, 0, 1));
+}
+function capBoxVp(){
+  if (!cap.dataset.on) return null;
+  return { l: cap.offsetLeft - 40, r: cap.offsetLeft - 40 + cap.offsetWidth, t: cap.offsetTop - 68 };
+}
+function fitCam(sh, lt, c, vw, vh){
+  let [cx, cy, W] = c;
+  const cb = capBoxVp();
+  // Weakest first: whichever callout is most on screen is applied LAST, so its
+  // box is guaranteed to fit even while a neighbour is easing in or out.
+  const active = (sh.calls || []).map((call, i) => ({ call, i, e: envelope(lt, call) }))
+    .filter((a) => a.e > 0).sort((a, b) => a.e - b.e || a.i - b.i);
+  for (const { call, e } of active) {
+    const r = call.r, pad = (call.pad ?? 10) + 4, side = call.label ? (call.side || "below") : null;
+    let ml = 80 + pad, mr = 80 + pad, mt = 110 + pad, mb = 50 + pad;
+    if (side === "above") mt += 62; if (side === "below") mb += 62;
+    if (side === "left") ml += labW(call.label) + 16; if (side === "right") mr += labW(call.label) + 16;
+    // zoom out if it cannot fit (caption height reserved when it would collide)
+    const capH = cb ? vh - cb.t + 16 : 0;
+    const needS = Math.min((vw - ml - mr) / r.w, (vh - mt - mb - capH * 0.5) / r.h);
+    let s = vw / W;
+    if (s > needS) W = lerp(W, vw / needS, e);
+    s = vw / W;
+    const sx0 = (r.x - cx) * s + vw / 2, sx1 = sx0 + r.w * s;
+    const sy0 = (r.y - cy) * s + vh / 2, sy1 = sy0 + r.h * s;
+    let bottom = vh;
+    if (cb && sx1 + mr > cb.l && sx0 - ml < cb.r) bottom = cb.t - 12;
+    let dx = 0, dy = 0;
+    if (sx0 < ml) dx = ml - sx0; else if (sx1 > vw - mr) dx = (vw - mr) - sx1;
+    if (sy0 < mt) dy = mt - sy0; else if (sy1 > bottom - mb) dy = (bottom - mb) - sy1;
+    cx -= e * dx / s; cy -= e * dy / s;
+  }
+  return [cx, cy, W];
+}
+function place(i, sh, lt, alpha, scale){
+  const w = wins[i], v = vids[i];
+  w.classList.toggle("phone", !!sh.phone);
+  w.style.display = alpha > 0 ? "block" : "none";
+  w.style.opacity = alpha;
+  w.style.transform = `scale(${scale})`;
+  w.style.zIndex = 2 + i;
+  w.querySelector(".url b").textContent = sh.url || "";
+  const vp = w.querySelector(".vp");
+  const vw = vp.clientWidth, vh = vp.clientHeight;
+  const cw = v.videoWidth || 2880, ch = v.videoHeight || 1800;
+  const c0 = camAt(sh, lt) || [cw/2, ch/2, cw];
+  const c = sh.phone ? c0 : fitCam(sh, lt, c0, vw, vh);
+  const s = vw / Math.min(c[2], cw);
+  let x = -(c[0]*s - vw/2), y = -(c[1]*s - vh/2);
+  x = cw*s <= vw ? (vw - cw*s)/2 : clamp(x, vw - cw*s, 0);
+  y = ch*s <= vh ? 0 : clamp(y, vh - ch*s, 0);
+  v.style.width = cw + "px"; v.style.height = ch + "px";
+  v.style.transform = `translate(${x}px,${y}px) scale(${s})`;
+  // screen transform (the window's own punch scale is about its centre)
+  const wl = w.offsetLeft, wt = w.offsetTop, ww = w.offsetWidth, wh = w.offsetHeight;
+  const vx = wl + vp.offsetLeft + x, vy = wt + vp.offsetTop + y;
+  const cx = wl + ww/2, cy = wt + wh/2;
+  return { s: s*scale, ox: cx + (vx - cx)*scale, oy: cy + (vy - cy)*scale };
+}
+function drawCalls(sh, lt, T){
+  let html = "";
+  for (const c of sh.calls || []) {
+    if (lt < c.from || lt > c.to) continue;
+    const a = out(clamp((lt - c.from) / 0.22, 0, 1)) * clamp((c.to - lt) / 0.18, 0, 1);
+    const p = back(clamp((lt - c.from) / 0.34, 0, 1));
+    const pad = c.pad ?? 10;
+    const x = T.ox + c.r.x * T.s - pad, y = T.oy + c.r.y * T.s - pad;
+    const w = c.r.w * T.s + pad*2, h = c.r.h * T.s + pad*2;
+    const sc = lerp(1.22, 1, p);
+    html += `<div data-label="ring: ${c.label || ""}" class="ring${c.dim === false ? " nodim" : ""}" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px;opacity:${a};transform:scale(${sc})"></div>`;
+    if (c.label) {
+      const side = c.side || "below";
+      let tx, ty, tr;
+      if (side === "below") { tx = x + w/2; ty = y + h + 14; tr = "translate(-50%,0)"; }
+      else if (side === "above") { tx = x + w/2; ty = y - 14; tr = "translate(-50%,-100%)"; }
+      else if (side === "left") { tx = x - 16; ty = y + h/2; tr = "translate(-100%,-50%)"; }
+      else { tx = x + w + 16; ty = y + h/2; tr = "translate(0,-50%)"; }
+      html += `<div data-label="${c.label}" class="tag" style="left:${tx}px;top:${ty}px;opacity:${a};transform:${tr} translateY(${(1-p)*10}px)">${c.label}</div>`;
+    }
+  }
+  calls.innerHTML = html;
+}
+let capKey = "";
+function drawCap(sh, lt, k){
+  const c = sh.cap;
+  cap.dataset.on = c ? "1" : "";
+  if (!c) { cap.style.opacity = 0; return; }
+  const key = JSON.stringify(c);
+  if (key !== capKey) {
+    capKey = key;
+    cap.querySelector(".chap").textContent = c.chapter || "";
+    cap.querySelector(".title").innerHTML = (c.title || "").split(" ").map((w) => `<span>${w}</span>`).join("");
+    cap.querySelector(".sub").textContent = c.sub || "";
+    cap.querySelector(".sub").style.display = c.sub ? "block" : "none";
+  }
+  const a = out(clamp(k / 0.28, 0, 1));
+  cap.style.opacity = a;
+  cap.style.transform = `translateX(${(1-a)*-40}px)`;
+  cap.querySelectorAll(".title span").forEach((s, i) => {
+    const q = out(clamp((k - 0.06 - i*0.055) / 0.3, 0, 1));
+    s.style.opacity = q; s.style.transform = `translateY(${(1-q)*26}px)`;
+  });
+  cap.style.left = (c.right ? 1920 - 84 - cap.offsetWidth : 84) + "px";
+  cap.style.bottom = (c.top ? 1080 - 60 - cap.offsetHeight : 150) + "px";
+}
+function drawRail(t){
+  const shots = PLAN.shots, divs = rail.children;
+  const cur = shots.find((x) => t >= x.at && t < x.at + x.dur);
+  const on = cur && cur.ch;
+  rail.style.opacity = on == null ? 0 : 1;
+  for (let i = 0; i < divs.length; i++) {
+    const segs = shots.filter((s) => s.ch === i);
+    if (!segs.length) continue;
+    const a0 = segs[0].at, a1 = segs[segs.length-1].at + segs[segs.length-1].dur;
+    const f = clamp((t - a0) / (a1 - a0), 0, 1);
+    divs[i].querySelector("b").style.width = (f*100) + "%";
+    divs[i].className = i === on ? "on" : (f >= 1 ? "done" : "");
+  }
+}
+function drawCard(sh, lt){
+  const c = sh.card;
+  let h = "";
+  if (c.kind === "hook") {
+    const L = c.lines, per = c.per || 0.6, end = L.length * per;
+    L.forEach((ln, i) => {
+      const k = lt - i*per;
+      if (k < 0 || k > per + 0.1 || lt > end) return;
+      const q = out(clamp(k/0.25,0,1));
+      const a = q * clamp((per + 0.08 - k)/0.1, 0, 1);
+      h += `<div class="line" style="top:490px;opacity:${a};transform:translateY(${(1-q)*36}px) scale(${lerp(1.15,1,q)})">${ln}</div>`;
+    });
+    if (lt >= end) {
+      const k = lt - end, a = out(clamp(k/0.22,0,1)), p = back(clamp(k/0.42,0,1));
+      h += `<div style="opacity:${a};transform:scale(${lerp(1.35,1,p)})"><div class="small">New on packs.ink</div><div class="big" style="margin-top:18px">Lorcana<br><span class="gold">Calendar</span></div></div>`;
+    }
+  } else {
+    const a = out(clamp(lt/0.28,0,1)), p = back(clamp(lt/0.45,0,1));
+    h = `<div style="opacity:${a};transform:scale(${lerp(1.2,1,p)})">
+      <div class="small">${c.eyebrow || ""}</div>
+      <div class="big" style="margin-top:18px;font-size:124px">${c.big}</div>
+      <div class="url2">${c.url || ""}</div>
+      <div style="color:var(--muted);font-size:28px;margin-top:16px;font-weight:600">${c.sub || ""}</div></div>`;
+  }
+  card.innerHTML = h;
+  card.style.display = "flex";
+}
+
+window.__seek = async (t) => {
+  const shots = PLAN.shots;
+  let idx = shots.findIndex((s) => t < s.at + s.dur);
+  if (idx < 0) idx = shots.length - 1;
+  const sh = shots[idx], lt = t - sh.at, prev = shots[idx-1];
+  drawRail(t);
+  if (sh.card) {
+    drawCard(sh, lt); wins.forEach((w) => (w.style.display = "none"));
+    cap.style.opacity = 0; calls.innerHTML = "";
+    return;
+  }
+  card.style.display = "none";
+  const cur = idx % 2, oth = 1 - cur;
+  // `cont` = same take continuing (no punch, no dissolve): a caption change
+  // mid-action must not look like a cut.
+  const punch = sh.cont ? 1 : lerp(1.035, 1, out(clamp(lt / 0.32, 0, 1)));
+  await load(cur, sh.clip);
+  await seekVid(cur, pw(sh.map, lt));
+  let j = idx;
+  while (j > 0 && shots[j-1].cap && JSON.stringify(shots[j-1].cap) === JSON.stringify(sh.cap)) j--;
+  drawCap(sh, lt, t - shots[j].at);
+  const T = place(cur, sh, lt, 1, punch);
+  const XF = sh.cont ? 0 : 0.14;
+  if (prev && prev.clip && lt < XF) {
+    await load(oth, prev.clip);
+    await seekVid(oth, pw(prev.map, prev.dur));
+    place(oth, prev, prev.dur, 1 - lt / XF, 1);
+    wins[oth].style.zIndex = 4;
+  } else wins[oth].style.display = "none";
+  drawCalls(sh, lt, T);
+};
+/* Every active callout must be fully inside the window and clear of the
+ * caption. Returns the problems at the current frame (compose.mjs --audit). */
+window.__audit = () => {
+  const win = [...document.querySelectorAll(".win")].find((w) => w.style.display !== "none" && +w.style.opacity > 0.5);
+  if (!win) return [];
+  const vp = win.querySelector(".vp").getBoundingClientRect();
+  const cr = cap.getBoundingClientRect(), capOn = +cap.style.opacity > 0.3 && cap.dataset.on;
+  const bad = [];
+  for (const el of calls.children) {
+    if (+el.style.opacity < 0.6) continue;
+    const b = el.getBoundingClientRect(), tol = 3;
+    const name = el.dataset.label || "(ring)";
+    if (b.left < vp.left - tol || b.right > vp.right + tol || b.top < vp.top - tol || b.bottom > vp.bottom + tol)
+      bad.push(name + " clipped by the window");
+    if (capOn && b.right > cr.left && b.left < cr.right && b.bottom > cr.top && b.top < cr.bottom)
+      bad.push(name + " under the caption");
+  }
+  return [...new Set(bad)];
+};
+window.__ready = () => document.fonts.ready.then(() => true);
+</script>
+</body></html>
