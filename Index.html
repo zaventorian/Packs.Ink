@@ -29489,19 +29489,41 @@ function EloLeaderboardTable({rows, onPlayerClick, sortCol, sortDir, setSort, al
   </div>`;
 }
 
+// A list's search box, sort and filters survive opening a row and coming back
+// — the list unmounts while a player or event page is open, and every one of
+// them used to reset. Session-scoped on purpose: a new visit starts fresh.
+const useSessionPref = (key, init) => {
+  const [v, setV] = useState(() => {
+    try { const raw = sessionStorage.getItem(key); if(raw != null) return JSON.parse(raw); } catch {}
+    return init;
+  });
+  useEffect(() => { try { sessionStorage.setItem(key, JSON.stringify(v)); } catch {} }, [key, v]);
+  return [v, setV];
+};
+// The two Elo lists change weekly. Holding them for a few minutes means Back
+// from a player lands on the list you left, drawn at once, instead of a
+// spinner and a refetch of every player.
+const _eloListCache = {};
+const ELO_LIST_TTL = 10 * 60 * 1000;
+const eloListCached = (k) => {
+  const c = _eloListCache[k];
+  return c && Date.now() - c.t < ELO_LIST_TTL ? c.rows : null;
+};
+
 function EloLeaderboard({onPlayerClick, aliasMap}){
-  const [allRows, setAllRows] = useState(null);  // null = loading
+  const [allRows, setAllRows] = useState(() => eloListCached("leaderboard"));  // null = loading
   // A failed fetch is an error to retry, not "No players match".
   const [loadErr, setLoadErr] = useState(false);
   const [reloadN, setReloadN] = useState(0);
-  const [platform, setPlatform] = useState("all"); // all | rph | melee
-  const [search, setSearch] = useState("");
-  const [minMatches, setMinMatches] = useState(5);
-  const [sortCol, setSortCol] = useState("rank");
-  const [sortDir, setSortDir] = useState("asc");
+  const [platform, setPlatform] = useSessionPref("packsink:elo:lb:platform", "all"); // all | rph | melee
+  const [search, setSearch] = useSessionPref("packsink:elo:lb:search", "");
+  const [minMatches, setMinMatches] = useSessionPref("packsink:elo:lb:min", 5);
+  const [sortCol, setSortCol] = useSessionPref("packsink:elo:lb:sort", "rank");
+  const [sortDir, setSortDir] = useSessionPref("packsink:elo:lb:dir", "asc");
   const setSort = (col, dir) => { setSortCol(col); setSortDir(dir); };
 
   useEffect(() => {
+    if(reloadN === 0 && eloListCached("leaderboard")) return;
     (async () => {
       try {
         // PostgREST defaults to 1000 rows even with .limit() — use the
@@ -29513,6 +29535,7 @@ function EloLeaderboard({onPlayerClick, aliasMap}){
           select: "player_id,display_name,platform,current_rating,n_matches,peak_rating,wins,losses,draws,gw_pct,mw_pct,rank",
           order: "rank.asc,player_id.asc",
         }, null);
+        _eloListCache.leaderboard = {rows: rows || [], t: Date.now()};
         setAllRows(rows || []);
         setLoadErr(false);
       } catch(e){
@@ -29581,7 +29604,7 @@ function EloLeaderboard({onPlayerClick, aliasMap}){
   </div>`;
 }
 
-function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasMap}){
+function EloPlayerProfile({playerId, onBack, backLabel, onEventClick, onPlayerClick, aliasMap}){
   const [profile, setProfile] = useState(null);   // {display_name, platform, rank, ...}
   const [events, setEvents] = useState(null);      // per-event summaries
   const [rounds, setRounds] = useState(null);      // round-by-round (chronological)
@@ -29828,11 +29851,11 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
   };
 
   if(error) return html`<div class="elo-placeholder">
-    <button class="elo-back" onClick=${onBack}>← Back to leaderboard</button>
+    <button class="elo-back" onClick=${onBack}>${backLabel || "← Back to leaderboard"}</button>
     <h3>Couldn't load player</h3><p>${error}</p>
   </div>`;
   if(!profile && loaded) return html`<div class="elo-placeholder">
-    <button class="elo-back" onClick=${onBack}>← Back to leaderboard</button>
+    <button class="elo-back" onClick=${onBack}>${backLabel || "← Back to leaderboard"}</button>
     <h3>Player not found</h3><p>No ranked player matches this link.</p>
   </div>`;
   if(!profile) return html`<div class="elo-loading">Loading player…</div>`;
@@ -29842,7 +29865,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
   const totalEvents = events ? events.length : null;
 
   return html`<div class="elo-profile">
-    <button class="elo-back" onClick=${onBack}>← Leaderboard</button>
+    <button class="elo-back" onClick=${onBack}>${backLabel || "← Leaderboard"}</button>
 
     <div class="elo-profile-hero">
       <div class="elo-profile-name">
@@ -30028,16 +30051,17 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
 }
 
 function EloTournaments({onEventClick, onPlayerClick}){
-  const [events, setEvents] = useState(null);
+  const [events, setEvents] = useState(() => eloListCached("tournaments"));
   const [loadErr, setLoadErr] = useState(false);
   const [reloadN, setReloadN] = useState(0);
-  const [seasonFilter, setSeasonFilter] = useState("all");
-  const [search, setSearch] = useState("");
-  const [sortCol, setSortCol] = useState("event_date");
-  const [sortDir, setSortDir] = useState("desc");
+  const [seasonFilter, setSeasonFilter] = useSessionPref("packsink:elo:ev:season", "all");
+  const [search, setSearch] = useSessionPref("packsink:elo:ev:search", "");
+  const [sortCol, setSortCol] = useSessionPref("packsink:elo:ev:sort", "event_date");
+  const [sortDir, setSortDir] = useSessionPref("packsink:elo:ev:dir", "desc");
   const setSort = (col, dir) => { setSortCol(col); setSortDir(dir); };
 
   useEffect(() => {
+    if(reloadN === 0 && eloListCached("tournaments")) return;
     (async () => {
       try {
         // event_id breaks the tie between events on the same date (see above).
@@ -30045,6 +30069,7 @@ function EloTournaments({onEventClick, onPlayerClick}){
           select: "event_id,name,store,location,event_date,season,platform,num_players,rated_players,avg_start_elo,top_seed_elo,champion_name,champion_player_id",
           order: "event_date.desc.nullslast,event_id.desc",
         }, null);
+        _eloListCache.tournaments = {rows: rows || [], t: Date.now()};
         setEvents(rows || []);
         setLoadErr(false);
       } catch(e){
@@ -30128,7 +30153,7 @@ function EloTournaments({onEventClick, onPlayerClick}){
   </div>`;
 }
 
-function EloEventDetail({eventId, onBack, onPlayerClick, canViewStore, onStoreClick, canScout, onOpenScout}){
+function EloEventDetail({eventId, onBack, backLabel, onPlayerClick, canViewStore, onStoreClick, canScout, onOpenScout}){
   const [ev, setEv] = useState(null);
   // "missing" (no such event) or "error" (the read failed): both used to leave
   // "Loading event…" up forever, with no way back.
@@ -30217,7 +30242,7 @@ function EloEventDetail({eventId, onBack, onPlayerClick, canViewStore, onStoreCl
   , [matches, activeRound]);
 
   if(!ev && evStatus) return html`<div class="elo-placeholder">
-    <button class="elo-back" onClick=${onBack}>← Back to tournaments</button>
+    <button class="elo-back" onClick=${onBack}>${backLabel || "← Back to tournaments"}</button>
     ${evStatus === "missing"
       ? html`<${React.Fragment}><h3>Tournament not found</h3><p>No tournament on the board matches this link.</p></>`
       : html`<${React.Fragment}><h3>Couldn't load tournament</h3><p>Check your connection and try again.</p></>`}
@@ -30226,7 +30251,7 @@ function EloEventDetail({eventId, onBack, onPlayerClick, canViewStore, onStoreCl
 
   const scSet = inferEventSet(ev.name, ev.event_date);
   return html`<div class="elo-event-detail">
-    <button class="elo-back" onClick=${onBack}>← Tournaments</button>
+    <button class="elo-back" onClick=${onBack}>${backLabel || "← Tournaments"}</button>
     <header class="elo-event-head">
       <h2>${ev.name || ev.store}</h2>
       <p class="elo-event-meta">
@@ -32163,13 +32188,19 @@ function EloView({eloPinned, setEloPinned, user, onSignIn}){
 
   // Mount: read incoming URL once.
   useEffect(() => { applyUrlToState(); }, []);
+  // How many entries deep inside Elo this page is (see the URL sync below).
+  const [eloDepth, setEloDepth] = useState(() => { try { return (window.history.state || {}).eloDepth || 0; } catch { return 0; } });
 
   // Browser Back/Forward: re-parse the URL. Setting fromPopstate so the
   // URL-sync effect below skips pushState on this state transition
   // (otherwise we'd push a duplicate history entry).
   const fromPopstate = useRef(false);
   useEffect(() => {
-    const onPop = () => { fromPopstate.current = true; applyUrlToState(); };
+    const onPop = () => {
+      fromPopstate.current = true;
+      setEloDepth((window.history.state || {}).eloDepth || 0);
+      applyUrlToState();
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
@@ -32198,7 +32229,13 @@ function EloView({eloPinned, setEloPinned, user, onSignIn}){
       else if(tab === "upcoming") url.searchParams.set("sub", "upcoming");
       else if(tab === "scout") url.searchParams.set("sub", "scout");
       if(url.toString() !== window.location.href){
-        window.history.pushState(window.history.state, "", url.toString());
+        // Each entry this view pushes records how deep inside Elo it is, so
+        // the in-page ← Back can tell "somewhere in Elo to return to" from a
+        // page somebody landed on by link.
+        const st = window.history.state || {};
+        const d = (st.eloDepth || 0) + 1;
+        window.history.pushState({...st, eloDepth: d}, "", url.toString());
+        setEloDepth(d);
       }
     } catch{}
   }, [tab, playerId, eventId, storeKey]);
@@ -32217,6 +32254,18 @@ function EloView({eloPinned, setEloPinned, user, onSignIn}){
   const onStoreClick  = (store) => { if(!store) return; setStoreKey(store); setTab("store"); window.scrollTo({top:0, behavior:"smooth"}); };
   const backToLeaderboard = () => { setTab("leaderboard"); setPlayerId(null); setEventId(null); setStoreKey(null); };
   const backToTournaments = () => { setTab("tournaments"); setEventId(null); };
+  // ← Back returns to the page you came FROM: a champion opened off the
+  // Tournaments tab goes back there, not to the Leaderboard; a store report
+  // opened from an event goes back to that event. Only a page you LANDED on
+  // (a shared link) falls back to its list.
+  const goBack = (fallback) => () => {
+    if(eloDepth > 0) window.history.back();
+    else fallback();
+  };
+  // A Back that goes somewhere other than its label says is worse than one
+  // that goes to the list — so when it returns to the previous page, it says
+  // only "Back".
+  const backLabel = eloDepth > 0 ? "← Back" : null;
 
   // Turning the pin ON while signed out would only ever write to this one
   // browser's localStorage — nothing syncs it to the account, so it reads as
@@ -32259,9 +32308,9 @@ function EloView({eloPinned, setEloPinned, user, onSignIn}){
     ${tab==="stores" && html`<${EloStores} canViewStore=${canViewStore} onStoreClick=${onStoreClick}/>`}
     ${tab==="upcoming" && html`<${EloUpcomingSCs} canViewStore=${canViewStore} canScout=${canScout} onStoreClick=${onStoreClick} onPlayerClick=${onPlayerClick} onScoutEvent=${onScoutEvent}/>`}
     ${tab==="scout" && canScout && html`<${EloRosterScout} onPlayerClick=${onPlayerClick} onOpenScout=${onScoutEvent} isEloAdmin=${isEloAdmin}/>`}
-    ${tab==="player" && html`<${EloPlayerProfile} playerId=${playerId} onBack=${backToLeaderboard} onEventClick=${onEventClick} onPlayerClick=${onPlayerClick} aliasMap=${aliasMap}/>`}
-    ${tab==="event" && html`<${EloEventDetail} eventId=${eventId} onBack=${backToTournaments} onPlayerClick=${onPlayerClick} canViewStore=${canViewStore} onStoreClick=${onStoreClick} canScout=${canScout} onOpenScout=${onScoutEvent}/>`}
-    ${tab==="store" && html`<${EloStoreReport} storeKey=${storeKey} onBack=${backToTournaments} onPlayerClick=${onPlayerClick} onEventClick=${onEventClick}/>`}
+    ${tab==="player" && html`<${EloPlayerProfile} playerId=${playerId} onBack=${goBack(backToLeaderboard)} backLabel=${backLabel} onEventClick=${onEventClick} onPlayerClick=${onPlayerClick} aliasMap=${aliasMap}/>`}
+    ${tab==="event" && html`<${EloEventDetail} eventId=${eventId} onBack=${goBack(backToTournaments)} backLabel=${backLabel} onPlayerClick=${onPlayerClick} canViewStore=${canViewStore} onStoreClick=${onStoreClick} canScout=${canScout} onOpenScout=${onScoutEvent}/>`}
+    ${tab==="store" && html`<${EloStoreReport} storeKey=${storeKey} onBack=${goBack(backToTournaments)} onPlayerClick=${onPlayerClick} onEventClick=${onEventClick}/>`}
     ${scoutEvent && canScout && html`<${ScoutEventModal} eventId=${scoutEvent.event_id} eventMeta=${scoutEvent}
       onClose=${()=>setScoutEvent(null)} onPlayerClick=${(pid)=>{ setScoutEvent(null); onPlayerClick(pid); }}/>`}
   </div>`;
