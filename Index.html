@@ -9327,6 +9327,41 @@ const CardTilePreview = ({artSrc, fallbackSrc, name, meta, low, market, aLabel, 
   </div>`;
 };
 
+// A dialog takes focus when it opens, gives it back when it closes, and keeps
+// Tab inside itself while it is the TOP layer. The card modal — the most-used
+// dialog on the site — did none of this: opened from the keyboard, focus stayed
+// on the tile behind it and Tab walked the page underneath.
+const MODAL_LAYERS = ".card-detail-overlay, .modal-backdrop, .scout-history-modal, .import-modal-backdrop";
+const useModalFocus = (overlayRef) => {
+  useEffect(() => {
+    const prev = document.activeElement;
+    const ov = overlayRef.current;
+    const first = ov && (ov.querySelector(".card-detail-close")
+      || ov.querySelector('button:not([disabled]),a[href],input:not([disabled]),select,textarea'));
+    try { if(first) first.focus({preventScroll: true}); } catch {}
+    const onKey = (e) => {
+      if(e.key !== "Tab") return;
+      const box = overlayRef.current;
+      if(!box || document.querySelector(".enlarged-card-overlay")) return;
+      const layers = document.querySelectorAll(MODAL_LAYERS);
+      if(layers.length && layers[layers.length - 1] !== box) return;
+      const f = [...box.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')]
+        .filter(x => x.offsetParent !== null);
+      if(!f.length) return;
+      const a = f[0], z = f[f.length - 1];
+      if(!box.contains(document.activeElement)){ e.preventDefault(); a.focus(); }
+      else if(e.shiftKey && document.activeElement === a){ e.preventDefault(); z.focus(); }
+      else if(!e.shiftKey && document.activeElement === z){ e.preventDefault(); a.focus(); }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      try { if(prev && prev.isConnected && prev.focus) prev.focus({preventScroll: true}); } catch {}
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+};
+
 const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, updateQty, onSignIn, initialTab, initialPrinting, gradedOwned, onGradedAdjust, onGradedMetaUpdate, onAddGraded, priceFirst, onGradeThis, gradedSummary, gradedCopies}) => {
   // When the modal is launched from the Graded collection view, the raw
   // +/- block is hidden (the user came here to manage graded slots, not
@@ -9568,6 +9603,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   }, [onNavigate, group]);
 
   const cdOverlayRef = useRef(null);
+  useModalFocus(cdOverlayRef);
   useEffect(()=>{
     const onKey = (e)=>{
       if(e.key === "Escape"){
@@ -9872,7 +9908,8 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   })();
 
   return html`<${React.Fragment}><div class="card-detail-overlay" ref=${cdOverlayRef} ...${backdropClose(onClose)}>
-    <div ref=${cardDetailRef} class=${"card-detail"+(effPriceFirst?" card-detail--price-first":"")} onClick=${e=>e.stopPropagation()}>
+    <div ref=${cardDetailRef} class=${"card-detail"+(effPriceFirst?" card-detail--price-first":"")} onClick=${e=>e.stopPropagation()}
+      role="dialog" aria-modal="true" aria-label=${group["Product Name"] || "Card details"}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       ${group.card_id && html`<button class="card-detail-close card-detail-share"
         aria-label="Copy a link to this card" title="Copy a link to this card"
@@ -23986,6 +24023,9 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+  // Focus in on open, back out on close, Tab kept inside (see useModalFocus).
+  const sdOverlayRef = useRef(null);
+  useModalFocus(sdOverlayRef);
   // Fetch the full available history once on open. Re-used the existing
   // per-card cache (readCardHistCache) — sealed pids slot into the same
   // (pid, printing) keyspace cleanly.
@@ -24033,7 +24073,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
     const qc = sealedCollection?.[pc] || 0;
     const bumpC = (delta) => { const next = Math.max(0, Math.min(99, qc + delta)); if(next !== qc) updateSealedQty(pc, next); };
     const kind = product.product_type === "Pin" ? "Pin" : "Lore counter";
-    return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
+    return html`<div class="card-detail-overlay" ref=${sdOverlayRef} ...${backdropClose(onClose)}>
       <div class="card-detail card-detail--price-first sealed-detail" onClick=${e=>e.stopPropagation()}>
         <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
         <div class="sealed-detail-head">
@@ -24079,7 +24119,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
     const px = product.tcgplayer_product_id;
     const qx = sealedCollection?.[px] || 0;
     const bumpX = (delta) => { const next = Math.max(0, Math.min(99, qx + delta)); if(next !== qx) updateSealedQty(px, next); };
-    return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
+    return html`<div class="card-detail-overlay" ref=${sdOverlayRef} ...${backdropClose(onClose)}>
       <div class="card-detail card-detail--price-first sealed-detail" onClick=${e=>e.stopPropagation()}>
         <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
         <div class="sealed-detail-head">
@@ -24121,7 +24161,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
     const pz = product.tcgplayer_product_id;
     const qz = sealedCollection?.[pz] || 0;
     const bumpZ = (delta) => { const next = Math.max(0, Math.min(99, qz + delta)); if(next !== qz) updateSealedQty(pz, next); };
-    return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
+    return html`<div class="card-detail-overlay" ref=${sdOverlayRef} ...${backdropClose(onClose)}>
       <div class="card-detail card-detail--price-first sealed-detail" onClick=${e=>e.stopPropagation()}>
         <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
         <div class="sealed-detail-head">
@@ -24171,7 +24211,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
   const lowToday    = product.low_price != null ? Number(product.low_price) : null;
   const marketToday = product.market_price != null ? Number(product.market_price) : null;
   const WINS = [["pct_1d","1D"],["pct_7d","1W"],["pct_30d","1M"],["pct_90d","3M"],["pct_180d","6M"],["pct_365d","1Y"]];
-  return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
+  return html`<div class="card-detail-overlay" ref=${sdOverlayRef} ...${backdropClose(onClose)}>
     <div class="card-detail card-detail--price-first sealed-detail" onClick=${e=>e.stopPropagation()}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <div class="sealed-detail-head">
