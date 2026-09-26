@@ -400,7 +400,11 @@ ok("the client falls back to removing by email pre-144",
 // ── the sheet ─────────────────────────────────────────────────────────────
 // Type, Tab, saved. No Edit/Save/Cancel — logging 24 people one modal at a time
 // is what makes a scouting tool go unused.
-ok("a cell commits on blur", /const commit = \(\) => \{[\s\S]{0,200}onCommit\(v\);/.test(src));
+ok("a cell commits on blur", /const commit = \(\) => \{[\s\S]{0,800}onCommit\(v\)/.test(src));
+// ⚠ A cell re-seeds from the server value only when that VALUE changes, never
+// because focus left — re-seeding on blur put the old text back mid-save.
+ok("blur does not re-seed a cell from the stale prop", !/if\(!focus\)\{ setV\(value/.test(src) && /nv === lastProp\.current/.test(src));
+ok("a failed save lets the next blur retry", /if\(ok === false\) base\.current = lastProp\.current/.test(src));
 ok("an unchanged cell writes nothing", /if\(v === base\.current\) return;/.test(src));
 ok("there is no Save button left in the sheet", !/ScoutNoteEditor|scout-btn--log/.test(src));
 

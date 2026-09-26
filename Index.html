@@ -19657,7 +19657,9 @@ function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSet
     const all=[];for(let i=0;i<24;i++) all.push(...simPack(pools,pull));
     const total=all.reduce((t,c)=>t+(c.price||0),0);
     const best=all.reduce((b,c)=>(!b||(c.price||0)>(b.price||0))?c:b,null);
-    const rc={};for(const c of all){const k=c.printing==="Cold Foil"||c.printing==="Foil"?c.rarity+" Foil":c.rarity;rc[k]=(rc[k]||0)+1;}
+    // getRarKey, the one place that knows Epic / Enchanted / Iconic are foil by
+    // nature and have no "Foil" tier — "Epic Foil" was being counted as its own.
+    const rc={};for(const c of all){const k=getRarKey(c.rarity,c.printing)||c.rarity;rc[k]=(rc[k]||0)+1;}
     const entry={total,best,rc,num:boxHist.length+1};
     setRes(entry);setBoxHist(h=>[...h,entry]);
   };
@@ -19683,7 +19685,9 @@ function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSet
             <${Stat} label="Best card $" value=${fmt(res.best?.price)} accent=${res.best?.price>=10?"var(--green)":null}/>
           </div>
           <div style=${{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(145px,1fr))",gap:5}}>
-            ${RARS.flatMap(r=>[r,r+" Foil"]).filter(k=>res.rc[k]).map(k=>{
+            ${/* RARS already lists the Foil tiers; doubling it with r+" Foil" drew
+                  every foil tile twice (and a "Common Foil Foil" key). */""}
+            ${[...RARS, ...Object.keys(res.rc).filter(k=>!RARS.includes(k))].filter(k=>res.rc[k]).map(k=>{
               const b=k.replace(" Foil",""),st=getBadgeStyle(b,theme),foil=k.includes("Foil");
               return html`<div class="card" key=${k} style=${{flexDirection:"row",alignItems:"center",padding:"5px 10px"}}>
                 <span class="badge" style=${{background:st.bg,color:st.fg,fontSize:9}}>${foil?"\u2726 ":""}${k}</span>
@@ -29360,6 +29364,9 @@ function EloLeaderboardTable({rows, onPlayerClick, sortCol, sortDir, setSort, al
 
 function EloLeaderboard({onPlayerClick, aliasMap}){
   const [allRows, setAllRows] = useState(null);  // null = loading
+  // A failed fetch is an error to retry, not "No players match".
+  const [loadErr, setLoadErr] = useState(false);
+  const [reloadN, setReloadN] = useState(0);
   const [platform, setPlatform] = useState("all"); // all | rph | melee
   const [search, setSearch] = useState("");
   const [minMatches, setMinMatches] = useState(5);
@@ -29373,17 +29380,20 @@ function EloLeaderboard({onPlayerClick, aliasMap}){
         // PostgREST defaults to 1000 rows even with .limit() — use the
         // project's sbFetchAll helper (parallel-range pagination) to actually
         // get every player. Requires an explicit order= param.
+        // player_id breaks rank ties: sbFetchAll pages in parallel, and a
+        // non-unique order key lets tied rows repeat or vanish between pages.
         const rows = await sbFetchAll("elo_leaderboard_v", {
           select: "player_id,display_name,platform,current_rating,n_matches,peak_rating,wins,losses,draws,gw_pct,mw_pct,rank",
-          order: "rank.asc",
+          order: "rank.asc,player_id.asc",
         }, null);
         setAllRows(rows || []);
+        setLoadErr(false);
       } catch(e){
         console.error("[elo] leaderboard fetch failed", e);
-        setAllRows([]);
+        setLoadErr(true);
       }
     })();
-  }, []);
+  }, [reloadN]);
 
   const filtered = useMemo(() => {
     if(!allRows) return null;
@@ -29436,8 +29446,11 @@ function EloLeaderboard({onPlayerClick, aliasMap}){
       </div>
     </div>
     ${filtered && html`<div class="elo-count">${filtered.length} of ${allRows.length} players</div>`}
-    <${EloLeaderboardTable} rows=${filtered} onPlayerClick=${onPlayerClick}
-      sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} aliasMap=${aliasMap}/>
+    ${loadErr && !allRows
+      ? html`<div class="elo-empty">Couldn't load the leaderboard.${" "}
+          <button class="elo-chip" onClick=${() => { setLoadErr(false); setReloadN(n => n + 1); }}>Try again</button></div>`
+      : html`<${EloLeaderboardTable} rows=${filtered} onPlayerClick=${onPlayerClick}
+          sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} aliasMap=${aliasMap}/>`}
   </div>`;
 }
 
@@ -29889,6 +29902,8 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
 
 function EloTournaments({onEventClick, onPlayerClick}){
   const [events, setEvents] = useState(null);
+  const [loadErr, setLoadErr] = useState(false);
+  const [reloadN, setReloadN] = useState(0);
   const [seasonFilter, setSeasonFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [sortCol, setSortCol] = useState("event_date");
@@ -29898,17 +29913,19 @@ function EloTournaments({onEventClick, onPlayerClick}){
   useEffect(() => {
     (async () => {
       try {
+        // event_id breaks the tie between events on the same date (see above).
         const rows = await sbFetchAll("elo_event_summary_v", {
           select: "event_id,name,store,location,event_date,season,platform,num_players,rated_players,avg_start_elo,top_seed_elo,champion_name,champion_player_id",
-          order: "event_date.desc.nullslast",
+          order: "event_date.desc.nullslast,event_id.desc",
         }, null);
         setEvents(rows || []);
+        setLoadErr(false);
       } catch(e){
         console.error("[elo] tournaments fetch failed", e);
-        setEvents([]);
+        setLoadErr(true);
       }
     })();
-  }, []);
+  }, [reloadN]);
 
   const seasons = useMemo(() => {
     if(!events) return [];
@@ -29945,7 +29962,9 @@ function EloTournaments({onEventClick, onPlayerClick}){
       </div>
     </div>
     ${filtered && html`<div class="elo-count">${filtered.length} of ${events.length} events</div>`}
-    ${filtered === null ? html`<div class="elo-loading">Loading tournaments…</div>` :
+    ${loadErr && !events ? html`<div class="elo-empty">Couldn't load the tournaments.${" "}
+        <button class="elo-chip" onClick=${() => { setLoadErr(false); setReloadN(n => n + 1); }}>Try again</button></div>` :
+      filtered === null ? html`<div class="elo-loading">Loading tournaments…</div>` :
       filtered.length === 0 ? html`<div class="elo-empty">No tournaments match.</div>` :
       html`<div class="elo-table-wrap">
         <table class="elo-table">
@@ -29984,6 +30003,9 @@ function EloTournaments({onEventClick, onPlayerClick}){
 
 function EloEventDetail({eventId, onBack, onPlayerClick, canViewStore, onStoreClick, canScout, onOpenScout}){
   const [ev, setEv] = useState(null);
+  // "missing" (no such event) or "error" (the read failed): both used to leave
+  // "Loading event…" up forever, with no way back.
+  const [evStatus, setEvStatus] = useState(null);
   const [standings, setStandings] = useState(null);
   const [matches, setMatches] = useState(null);
   const [matchPlayers, setMatchPlayers] = useState(null);
@@ -29992,12 +30014,14 @@ function EloEventDetail({eventId, onBack, onPlayerClick, canViewStore, onStoreCl
   useEffect(() => {
     if(eventId == null) return;
     let cancelled = false;  // drop stale responses when switching events fast
-    setEv(null); setStandings(null); setMatches(null); setActiveRound(null);
+    setEv(null); setEvStatus(null); setStandings(null); setMatches(null); setActiveRound(null);
     (async () => {
       try {
-        const {data: e} = await sbClient.from("elo_events").select("*").eq("event_id", eventId).limit(1);
+        const {data: e, error: evErr} = await sbClient.from("elo_events").select("*").eq("event_id", eventId).limit(1);
         if(cancelled) return;
-        setEv(e && e[0] ? e[0] : null);
+        if(evErr){ setEvStatus("error"); return; }
+        if(!(e && e[0])){ setEvStatus("missing"); return; }
+        setEv(e[0]);
 
         const {data: st} = await sbClient.from("elo_event_standings_v")
           .select("player_id,display_name,platform,wins,losses,draws,points,gw_pct,mw_pct,end_rating,event_rank")
@@ -30028,7 +30052,11 @@ function EloEventDetail({eventId, onBack, onPlayerClick, canViewStore, onStoreCl
             setMatchPlayers(ps || []);
           }
         }
-      } catch(e){ if(!cancelled) console.error("[elo] event fetch failed", e); }
+      } catch(e){
+        if(cancelled) return;
+        console.error("[elo] event fetch failed", e);
+        setEvStatus(s => s || "error");
+      }
     })();
     return () => { cancelled = true; };
   }, [eventId]);
@@ -30054,6 +30082,12 @@ function EloEventDetail({eventId, onBack, onPlayerClick, canViewStore, onStoreCl
     (matches || []).filter(m => m.round_number === activeRound)
   , [matches, activeRound]);
 
+  if(!ev && evStatus) return html`<div class="elo-placeholder">
+    <button class="elo-back" onClick=${onBack}>← Back to tournaments</button>
+    ${evStatus === "missing"
+      ? html`<${React.Fragment}><h3>Tournament not found</h3><p>No tournament on the board matches this link.</p></>`
+      : html`<${React.Fragment}><h3>Couldn't load tournament</h3><p>Check your connection and try again.</p></>`}
+  </div>`;
   if(!ev) return html`<div class="elo-loading">Loading event…</div>`;
 
   const scSet = inferEventSet(ev.name, ev.event_date);
@@ -30435,26 +30469,42 @@ const scoutStartedAgo = (iso, nowMs) => {
 // row reloads underneath it (a save re-reads the whole event).
 function ScoutCell({value, placeholder, multiline, saving, onCommit}){
   const [v, setV] = useState(value || "");
-  const [focus, setFocus] = useState(false);
+  const focusRef = useRef(false);
   const base = useRef(value || "");
-  useEffect(() => { if(!focus){ setV(value || ""); base.current = value || ""; } }, [value, focus]);
+  // ⚠ Re-seed only when the SERVER's value changes, never because focus left.
+  // Re-seeding on blur put the old prop straight back the moment you tabbed
+  // out, so a note vanished until its save came back — and for good if it
+  // failed.
+  const lastProp = useRef(value || "");
+  useEffect(() => {
+    const nv = value || "";
+    if(nv === lastProp.current) return;
+    lastProp.current = nv;
+    if(!focusRef.current){ setV(nv); base.current = nv; }
+  }, [value]);
+  // Esc means "put it back". The blur it triggers runs the handler from the
+  // render BEFORE the revert, so without this flag Esc saved the text instead.
+  const reverting = useRef(false);
   const commit = () => {
-    setFocus(false);
+    focusRef.current = false;
+    if(reverting.current){ reverting.current = false; return; }
     if(v === base.current) return;
     base.current = v;
-    onCommit(v);
+    // A failed save keeps the text on screen AND lets the next blur try again,
+    // rather than showing words that look saved and aren't.
+    Promise.resolve(onCommit(v)).then(ok => { if(ok === false) base.current = lastProp.current; });
   };
   const onKey = (e) => {
     // Enter commits a one-line cell; in the notes box it needs Ctrl/⌘ so a
     // multi-line note is still possible.
     if(e.key === "Enter" && (!multiline || e.metaKey || e.ctrlKey)){ e.preventDefault(); e.target.blur(); }
-    else if(e.key === "Escape"){ e.stopPropagation(); setV(base.current); e.target.blur(); }
+    else if(e.key === "Escape"){ e.stopPropagation(); reverting.current = true; setV(base.current); e.target.blur(); }
   };
   const props = {
     class: "scout-cell" + (saving ? " saving" : ""),
     value: v, placeholder, rows: multiline ? 1 : undefined,
     onInput: (e) => setV(e.target.value),
-    onFocus: () => setFocus(true),
+    onFocus: () => { focusRef.current = true; },
     onBlur: commit,
     onKeyDown: onKey,
     maxLength: multiline ? 4000 : 400,
@@ -30514,14 +30564,28 @@ function ScoutEventPanel({eventId, eventMeta, inline, onPlayerClick}){
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
 
+  // Only the newest load may land: two saves in quick succession each reload,
+  // and the older snapshot arriving last put the older text back.
+  const loadSeq = useRef(0);
+  const dataRef = useRef(null);
+  dataRef.current = data;
   const load = useCallback(async () => {
+    const my = ++loadSeq.current;
     try {
       const {data: d, error} = await sbClient.rpc("get_scout_event", {p_event_id: eventId});
       if(error) throw error;
+      if(my !== loadSeq.current) return d || {};
       setData(d || {});
       setErr(null);
       return d || {};
-    } catch(e){ setErr(scoutErrText(e)); return null; }
+    } catch(e){
+      if(my !== loadSeq.current) return null;
+      // A RELOAD that fails keeps the sheet you are typing in. Only the first
+      // load has nothing to show but the error.
+      if(dataRef.current == null) setErr(scoutErrText(e));
+      else flashToast("Couldn't refresh the sheet: " + scoutErrText(e));
+      return null;
+    }
   }, [eventId]);
 
   useEffect(() => { if(eventId != null){ setData(null); setErr(null); load(); } }, [eventId, load]);
@@ -30664,7 +30728,8 @@ function ScoutEventPanel({eventId, eventMeta, inline, onPlayerClick}){
       });
       if(error) throw error;
       await load();
-    } catch(e){ flashToast("Couldn't save: " + scoutErrText(e)); await load(); }
+      return true;
+    } catch(e){ flashToast("Couldn't save: " + scoutErrText(e)); await load(); return false; }
     finally { inflight.current.delete(p.player_key); setSavingKey(null); }
   };
 
@@ -31745,6 +31810,10 @@ function EloStores({canViewStore, onStoreClick}){
     <${EloSortTh} label="Avg"     col="avg"        sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
     <${EloSortTh} label="RPH tier" col="tier"       sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="elo-stores-tier-th" numeric=${true}/>
   </${React.Fragment}>`;
+  // How many columns totalsHead draws. The group row above it spanned 5 of these
+  // 6, so with the per-set breakdown on every set's label sat one column to the
+  // left and the last Tickets column had no label at all.
+  const TOTALS_COLS = 6;
 
   return html`<div class="elo-stores">
     <p class="elo-stores-intro">Every event a store has run on Ravensburger Play — Set Championships, prereleases, locals,
@@ -31812,11 +31881,11 @@ function EloStores({canViewStore, onStoreClick}){
     <div class="elo-table-wrap elo-stores-wrap ${wide?"elo-stores-wrap--wide":""}">
       <table class="elo-table elo-stores-table">
         <thead>
-          ${breakdown ? html`<${React.Fragment}>
+          ${breakdown && cols.length > 0 ? html`<${React.Fragment}>
             <tr>
               <${EloSortTh} label="Store" col="store" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort}
                 className="elo-stores-name" numeric=${false} rowspan=${2}/>
-              <th colspan=${5} class="elo-stores-grp elo-stores-grp--tot">${scopeLabel}</th>
+              <th colspan=${TOTALS_COLS} class="elo-stores-grp elo-stores-grp--tot">${scopeLabel}</th>
               ${cols.map(s => html`<th key=${s.key} colspan=${2} class="elo-stores-grp">${s.label}</th>`)}
             </tr>
             <tr>
@@ -31974,7 +32043,14 @@ function EloView({eloPinned, setEloPinned, user, onSignIn}){
   // in browser history and Back works as expected. Skip when this state
   // change came from a popstate (we'd loop / dupe history). Skip when the
   // URL already matches (initial mount).
+  // ⚠ The FIRST run sees the initial leaderboard state, before the mount
+  // effect's applyUrlToState has landed. It used to "sync" that onto the URL —
+  // pushing /elo over a /elo?p=… deep link, then pushing the link back a
+  // render later — so Back from a shared player page showed the leaderboard,
+  // and Back again the same player. The URL is already right on arrival.
+  const eloSyncedOnce = useRef(false);
   useEffect(() => {
+    if(!eloSyncedOnce.current){ eloSyncedOnce.current = true; return; }
     if(fromPopstate.current){ fromPopstate.current = false; return; }
     try {
       const url = new URL(window.location.href);
@@ -32565,13 +32641,17 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
   // Hydrate once the catalog is grouped. A share link (token via prop, captured
   // by App before its URL-cleanup runs) wins over the locally-saved trade.
   const hydrated = useRef(false);
+  const skipPersistOnce = useRef(false);
   useEffect(()=>{
     if(hydrated.current || !groups.length) return;
     hydrated.current = true;
     let cancelled = false;
     const clean = (arr) => (Array.isArray(arr)?arr:[]).filter(e => e && groupByKey.has(e.key));
-    const apply = (payload) => {
+    const apply = (payload, shared) => {
       if(!payload) return;
+      // Just LOOKING at someone's shared trade must not overwrite the trade you
+      // had in progress on this device; the first edit you make is what saves.
+      if(shared) skipPersistOnce.current = true;
       setSideA(clean(payload.a));
       setSideB(clean(payload.b));
       if(typeof payload.nameA === "string" && payload.nameA) setNameA(payload.nameA);
@@ -32580,11 +32660,11 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
     if(shareToken){
       fetchTradeRecord(shareToken).then(payload => {
         if(cancelled) return;
-        if(payload) apply(payload);
+        if(payload) apply(payload, true);
         else flashToast("That trade link is no longer available");
       });
     } else if(shareBlob){
-      apply(decodeTrade(shareBlob));
+      apply(decodeTrade(shareBlob), true);
     } else {
       try { apply(JSON.parse(localStorage.getItem(TRADE_PERSIST_KEY) || "null")); } catch {}
     }
@@ -32595,6 +32675,7 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
     // Skip the first invocation (mount): writing the empty default state here
     // would clobber a saved trade before the hydration effect's setState lands.
     if(!persistReady.current){ persistReady.current = true; return; }
+    if(skipPersistOnce.current){ skipPersistOnce.current = false; return; }
     try{ localStorage.setItem(TRADE_PERSIST_KEY, JSON.stringify({a:sideA, b:sideB, nameA, nameB})); }catch{}
   }, [sideA, sideB, nameA, nameB]);
 
@@ -32671,8 +32752,15 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
     if(!sideA.length && !sideB.length){ flashToast("Add some cards first"); return; }
     const token = genTradeToken();
     const url = SITE_ORIGIN + "/?t=" + token;
-    try { navigator.clipboard && navigator.clipboard.writeText(url); } catch {}
-    flashToast("Trade link copied — send it to the other party");
+    // Say "copied" only when it was: the link exists nowhere else on screen,
+    // so a silent failure left nothing to paste.
+    const fallback = () => { try { prompt("Copy this trade link:", url); } catch {} };
+    try {
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(url)
+          .then(() => flashToast("Trade link copied — send it to the other party"), fallback);
+      } else fallback();
+    } catch { fallback(); }
     saveTradeRecord(token, sideA, sideB, nameA, nameB).then(
       ({error}) => { if(error){ console.warn("create_trade failed:", error.message || error); flashToast("Couldn't save the link — tap Share again"); } },
       (e) => { console.warn("create_trade failed:", e); flashToast("Couldn't save the link — tap Share again"); }
@@ -32704,7 +32792,9 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
   const ta = sideTotals(sideA), tb = sideTotals(sideB);
   const diffLow = ta.low - tb.low;
   const diffMkt = ta.mkt - tb.mkt;
-  const favName = (d) => d > 0.005 ? nameA : (d < -0.005 ? nameB : null);
+  // A cleared name read as "" — falsy — so the Difference row said "even" for a
+  // lopsided trade.
+  const favName = (d) => d > 0.005 ? (nameA.trim() || "Side A") : (d < -0.005 ? (nameB.trim() || "Side B") : null);
 
   const renderPrinting = (side, e, g, field, label, klass) => {
     const row = klass === "normal" ? g.normal : g.foil;
@@ -36323,6 +36413,10 @@ function DiceTray({onOpen}){
   // mid-tumble remounts the wrapper and restarts the CSS animation — without
   // it the class never toggles off and the second roll doesn't animate.
   const [rollTick, setRollTick] = useState(0);
+  // Who is still in a roll-off. null = everyone; after "Reroll the tie" only
+  // the tied dice can win — [6,6,5] rerolled to [2,3,5] used to hand the turn
+  // to Player 3, who had already lost the first roll.
+  const [contenders, setContenders] = useState(null);
   const spinRef = useRef(null);
   useEffect(() => {
     try { localStorage.setItem(DICE_PREFS_KEY, JSON.stringify({kind, count})); } catch {}
@@ -36356,13 +36450,14 @@ function DiceTray({onOpen}){
   const setDiceCount = (n) => {
     const c = Math.min(DICE_MAX, Math.max(1, n));
     if(c === count) return;
+    setContenders(null);
     setCount(c);
     setVals(v => c <= v.length
       ? v.slice(0, c)
       : v.concat(Array.from({length: c - v.length}, () => rollDie(DICE_SIDES(kind)))));
   };
-  const pickKind = (k) => { if(k === kind) return; setKind(k); roll(vals.map((_, i) => i), k); };
-  const rollAll  = () => roll(vals.map((_, i) => i));
+  const pickKind = (k) => { if(k === kind) return; setContenders(null); setKind(k); roll(vals.map((_, i) => i), k); };
+  const rollAll  = () => { setContenders(null); roll(vals.map((_, i) => i)); };
 
   const numeric = kind !== "coin" && kind !== "rps";
   const settled = !spin;
@@ -36370,10 +36465,11 @@ function DiceTray({onOpen}){
   // table rerolls just the tied dice, exactly like it would with real ones.
   const top = useMemo(() => {
     if(!numeric || vals.length < 2) return {idxs: [], best: null, tied: false};
-    const best = Math.max(...vals);
-    const idxs = vals.reduce((a, v, i) => (v === best ? a.concat(i) : a), []);
+    const inPlay = vals.map((_, i) => i).filter(i => !contenders || contenders.has(i));
+    const best = Math.max(...inPlay.map(i => vals[i]));
+    const idxs = inPlay.filter(i => vals[i] === best);
     return {idxs, best, tied: idxs.length > 1};
-  }, [vals, numeric]);
+  }, [vals, numeric, contenders]);
   const highs = settled && top.idxs.length === 1 ? top.idxs : [];
   const summary = (() => {
     if(!settled) return kind === "coin" ? "Flipping…" : "Rolling…";
@@ -36393,6 +36489,9 @@ function DiceTray({onOpen}){
     if(vals.length === 1) return `Rolled ${vals[0]}`;
     const total = vals.reduce((a, b) => a + b, 0);
     if(top.tied) return `Tie at ${top.best} — ${top.idxs.map(i => "Player " + (i+1)).join(" & ")}`;
+    // In a roll-off the other dice are out of it, so "with 3" beside someone
+    // else's 5 needs saying which contest it won.
+    if(contenders) return `Player ${top.idxs[0] + 1} wins the roll-off with ${top.best} · goes first`;
     return `Player ${top.idxs[0] + 1} goes first with ${top.best} · total ${total}`;
   })();
 
@@ -36435,7 +36534,7 @@ function DiceTray({onOpen}){
           <button onClick=${()=>setDiceCount(count+1)} disabled=${count>=DICE_MAX} aria-label="One more die">+</button>
         </div>
         <button class="dice-roll" onClick=${rollAll}>${kind==="coin" ? "Flip" : "Roll"}</button>
-        ${settled && top.tied && html`<button class="dice-retie" onClick=${()=>roll(top.idxs)}>
+        ${settled && top.tied && html`<button class="dice-retie" onClick=${()=>{ setContenders(new Set(top.idxs)); roll(top.idxs); }}>
           Reroll the tie</button>`}
       </div>
       <div class=${"dice-tray"+(vals.length<=3?" dice-tray--few":"")+(spin?" is-rolling":"")}>
@@ -36595,7 +36694,10 @@ const loreReadGame = () => {
     if(g.players.length < 1 || g.players.length > LORE_MAX_PLAYERS) return null;
     return {
       v: 1,
-      startedAt: Number(g.startedAt) || Date.now(),
+      // A game nobody has scored in yet is the one auto-created when the board
+      // was last opened — maybe days ago. Its clock restarts now, or reopening
+      // the tracker showed "1440:00" and a red overtime countdown.
+      startedAt: g.events.length ? (Number(g.startedAt) || Date.now()) : Date.now(),
       win: loreWinOf(g),
       players: g.players.map((p, i) => ({
         name: String((p && p.name) || loreDefaultName(i)).slice(0, 24),
@@ -36608,6 +36710,13 @@ const loreReadGame = () => {
       mods: Array.isArray(g.mods)
         ? g.mods.filter(m => m && LORE_WIN_MODIFIERS.some(d => d.id === m.id) && m.p < g.players.length)
         : [],
+      // Seats taken away mid-game (see the seat-sync effect) — kept so raising
+      // the count again gives them back.
+      stash: (g.stash && Array.isArray(g.stash.events)) ? {
+        events: g.stash.events.filter(e => e && Number.isFinite(e.p) && Number.isFinite(e.d))
+          .map(e => ({t: Number(e.t) || 0, p: e.p | 0, d: e.d | 0})),
+        mods: Array.isArray(g.stash.mods) ? g.stash.mods.filter(m => m && LORE_WIN_MODIFIERS.some(d => d.id === m.id)) : [],
+      } : null,
     };
   } catch { return null; }
 };
@@ -36872,8 +36981,12 @@ function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim,
     </div>
     ${/* The whole panel is the +1 target — the biggest thing on the screen is
           also the thing you press most. */ ""}
+    ${/* Pointer presses are handled on pointerdown (so a hold repeats). A
+          keyboard Enter/Space or a screen reader sends only a CLICK, with
+          detail 0 — that used to do nothing at all. */""}
     <button class="lore-tap" onPointerDown=${press(+1)} onPointerUp=${stop}
       onPointerCancel=${stop} onLostPointerCapture=${stop}
+      onClick=${e => { if(e.detail === 0) bump(+1); }}
       aria-label=${"Add lore to " + name}>
       <span class="lore-num-v" key=${total}>${total}</span>
     </button>
@@ -36885,9 +36998,29 @@ function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim,
     </div>
     <button class="lore-minus" onPointerDown=${press(-1)} onPointerUp=${stop}
       onPointerCancel=${stop} onLostPointerCapture=${stop}
+      onClick=${e => { if(e.detail === 0) bump(-1); }}
       disabled=${total <= 0} aria-label=${"Remove lore from " + name}>−</button>
     <div class="lore-rail" aria-hidden="true"><i style=${{transform:"scaleX("+pct+")"}}/></div>
   </div>`;
+}
+
+// A number field you can clear and retype. The plain input clamped on every
+// keystroke, so deleting "20" jumped straight to "1", and each digit moved the
+// LIVE target — seats flashed as winners with "End game" at 1–9 lore on the way
+// to typing 12. It keeps a draft and commits on blur or Enter.
+function LoreNumInput({value, min, max, onCommit, klass, label}){
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => { setDraft(String(value)); }, [value]);
+  const commit = () => {
+    const n = Math.round(Number(draft));
+    const v = (draft.trim() !== "" && Number.isFinite(n)) ? loreClamp(n, min, max) : value;
+    setDraft(String(v));
+    if(v !== value) onCommit(v);
+  };
+  return html`<input class=${klass} type="number" inputMode="numeric" min=${min} max=${max}
+    value=${draft} aria-label=${label}
+    onChange=${e => setDraft(e.target.value)} onBlur=${commit}
+    onKeyDown=${e => { if(e.key === "Enter") e.target.blur(); }}/>`;
 }
 
 function LoreTracker({onOpen, onHome}){
@@ -36971,7 +37104,11 @@ function LoreTracker({onOpen, onHome}){
       const players = Array.from({length: want}, (_, i) => {
         const prev = g.players[i];
         return {
-          name: prev ? prev.name : ((names[i] || "").trim() || loreDefaultName(i)),
+          // The settings name wins when there is one — a rename under
+          // Settings → Seats changed ink and art live but not the name.
+          // ⚠ Untrimmed: the board's own name field writes here on every
+          // keystroke, and trimming would eat the space in "Bob Smith".
+          name: (names[i] && names[i].trim()) ? names[i] : (prev ? prev.name : loreDefaultName(i)),
           ink: loreInkOk(inks[i]) ? inks[i] : loreDefaultInk(i),
           art: loreCleanArt(arts[i]),
         };
@@ -36980,12 +37117,27 @@ function LoreTracker({onOpen, onHome}){
         p.name === g.players[i].name && p.ink === g.players[i].ink
         && (p.art && p.art.img) === (g.players[i].art && g.players[i].art.img));
       if(same) return g;
-      // Dropping a seat drops its events with it — they are keyed by index, and
-      // leaving them would re-attach that score to whoever takes the seat next.
-      const events = players.length < g.players.length
-        ? g.events.filter(e => e.p < players.length) : g.events;
-      const mods = (g.mods || []).filter(m => m.p < players.length);
-      return {...g, players, events, mods};
+      // Dropping a seat takes its events off the board — they are keyed by
+      // index, and leaving them would re-attach that score to whoever takes the
+      // seat next. They go into a stash for the rest of THIS game rather than
+      // away for good: tapping 2 instead of 4 mid-game used to destroy two
+      // players' scores, and raising it back gave them nothing.
+      const stash = g.stash || {events: [], mods: []};
+      let events = g.events, mods = g.mods || [], nextStash = stash;
+      if(players.length < g.players.length){
+        nextStash = {
+          events: stash.events.concat(g.events.filter(e => e.p >= players.length)),
+          mods: stash.mods.concat(mods.filter(m => m.p >= players.length)),
+        };
+        events = g.events.filter(e => e.p < players.length);
+        mods = mods.filter(m => m.p < players.length);
+      } else if(players.length > g.players.length && stash.events.length + stash.mods.length){
+        const back = (x) => x.p < players.length;
+        events = g.events.concat(stash.events.filter(back)).sort((a, b) => (a.t || 0) - (b.t || 0));
+        mods = mods.concat(stash.mods.filter(back));
+        nextStash = {events: stash.events.filter(x => !back(x)), mods: stash.mods.filter(x => !back(x))};
+      }
+      return {...g, players, events, mods, stash: nextStash};
     });
   }, [count, inks, arts, names]);
 
@@ -37042,7 +37194,10 @@ function LoreTracker({onOpen, onHome}){
       : (g.mods || []).concat({id, p})};
   }), []);
 
-  const newGame = useCallback(() => {
+  const newGame = useCallback((opts) => {
+    const g = gameRef.current;
+    if(!(opts && opts.force) && g && g.events.length && !loreWinners(g).length
+       && !confirm("Start a new game? The scores on this one will be cleared.")) return;
     setEnded(false); setShowLog(false); setShowMods(false); setMenuOpen(false); setArtFor(null);
     setGame(loreNewGame(names.slice(0, count),
       {inks: inks.slice(0, count), arts: arts.slice(0, count), win: winTarget}));
@@ -37136,11 +37291,8 @@ function LoreTracker({onOpen, onHome}){
             aria-pressed=${minsCustom}>Custom</button>
         </div>
         ${minsCustom && html`<label class="lore-numrow">
-          <input class="lore-numinput" type="number" inputMode="numeric"
-            min=${LORE_MINS_MIN} max=${LORE_MINS_MAX} value=${timerMins}
-            aria-label="Round length in minutes"
-            onChange=${e => setTimerMins(loreClamp(Math.round(Number(e.target.value)) || LORE_MINS_MIN,
-              LORE_MINS_MIN, LORE_MINS_MAX))}/>
+          <${LoreNumInput} klass="lore-numinput" min=${LORE_MINS_MIN} max=${LORE_MINS_MAX}
+            value=${timerMins} label="Round length in minutes" onCommit=${setTimerMins}/>
           <span>minutes</span>
         </label>`}
       </div>
@@ -37156,7 +37308,7 @@ function LoreTracker({onOpen, onHome}){
       </label>
     </div>
     <div class="lore-menu-acts">
-      <button class="lore-winbtn" onClick=${newGame}>New game</button>
+      <button class="lore-winbtn" onClick=${() => newGame()}>New game</button>
       ${onOpen && html`<button class="lore-winbtn lore-winbtn--ghost"
         onClick=${()=>onOpen("dice")}>${uiIcon("die", 14)} Roll for first player</button>`}
       ${/* Was "Exit full screen", which un-covered the page and left you on
@@ -37222,11 +37374,9 @@ function LoreTracker({onOpen, onHome}){
         title=${w.label+" — "+w.win+" lore"}>${w.label} <b>${w.win}</b></button>`)}
       <button class=${"lore-mod-btn"+(winCustom?" active":"")}
         onClick=${()=>setWinCustom(true)} aria-pressed=${winCustom}>Custom</button>
-      ${winCustom && html`<input class="lore-numinput lore-numinput--sm" type="number"
-        inputMode="numeric" min=${LORE_WIN_MIN} max=${LORE_WIN_MAX} value=${winTarget}
-        aria-label="Lore needed to win"
-        onChange=${e => setWinTarget(loreClamp(Math.round(Number(e.target.value)) || LORE_WIN_MIN,
-          LORE_WIN_MIN, LORE_WIN_MAX))}/>`}
+      ${winCustom && html`<${LoreNumInput} klass="lore-numinput lore-numinput--sm"
+        min=${LORE_WIN_MIN} max=${LORE_WIN_MAX} value=${winTarget}
+        label="Lore needed to win" onCommit=${setWinTarget}/>`}
     </div>`}
     ${(showMods || modsOn) && LORE_WIN_MODIFIERS.map(m => html`<div key=${m.id} class="lore-mods">
       <span class="lore-mods-lbl" title=${m.help}>${m.card}</span>
@@ -37257,7 +37407,7 @@ function LoreTracker({onOpen, onHome}){
         ? winners.map(i => game.players[i].name).join(" & ")
           + (winners.length > 1 ? " win." : " wins.")
         : "Game over."}</span>
-      <button class="lore-winbtn" onClick=${newGame}>Next game</button>
+      <button class="lore-winbtn" onClick=${() => newGame({force: true})}>Next game</button>
     </div>`}
     ${showLog && html`<div class="lore-log">
       ${!game.events.length
