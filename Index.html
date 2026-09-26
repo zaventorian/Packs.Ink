@@ -16916,6 +16916,18 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   const [detected, setDetected] = useState(false);
   const [ready, setReady] = useState(false);   // card detected AND held steady
   const [workerReady, setWorkerReady] = useState(false);
+  // The live detector (OpenCV, from a CDN) can fail to load — a school filter
+  // is enough. The shutter still identifies without it; the copy has to say so
+  // instead of promising "Loading detector…" forever.
+  const [workerFailed, setWorkerFailed] = useState(false);
+  // Bumped by "Try again" on a camera error: the mount effect re-runs (its
+  // cleanup stops the old stream and workers first). The consent gate is
+  // unchanged — the effect still returns early until consent is given.
+  const [camAttempt, setCamAttempt] = useState(0);
+  const onRetry = () => {
+    setErr(""); setWorkerReady(false); setWorkerFailed(false);
+    setStatus("Starting camera…"); setPhase("starting"); setCamAttempt(n => n + 1);
+  };
   const [result, setResult] = useState(null);
   const [addedMsg, setAddedMsg] = useState("");
   const [mode, setMode] = useState("ambient");   // "ambient" (hover & tap) | "single" (deliberate OCR)
@@ -16927,6 +16939,12 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   const [savedMsg, setSavedMsg] = useState("");   // "N cards saved to your collection ✓"
   const [qaCount, setQaCount] = useState(0);      // QA snaps saved this session (admin testing tool)
   const [qaResults, setQaResults] = useState([]); // in-session QA snaps: {id,ts,thumb,guess,alts}
+  const qaLenRef = useRef(0);                     // qaResults.length for callbacks (the 400-row cap warning)
+  qaLenRef.current = qaResults.length;
+  // The long "how this works" note under the live bar is ~100px on a phone —
+  // most of what's left for the list in landscape. It can be put away once read.
+  const [qaNoteHidden, setQaNoteHidden] = useState(() => { try { return localStorage.getItem("packsink:scanner:noteHidden") === "1"; } catch { return false; } });
+  const hideQaNote = () => { setQaNoteHidden(true); try { localStorage.setItem("packsink:scanner:noteHidden", "1"); } catch {} };
   const qaTapAtRef = useRef(0);                   // tap debounce (shutter + tap-anywhere both fire)
   const qaJobsRef = useRef({ q: [], running: false }); // background identify queue — a snap never blocks the camera
   const qaOcrHoldRef = useRef(0);                 // >0: a snap's name read wants the OCR worker → ambient reads yield
@@ -16946,6 +16964,29 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   };
   const [qaEditOpen, setQaEditOpen] = useState(null); // rid of the row with the inline editor open (one at a time)
   const [qaEditQ, setQaEditQ] = useState("");         // editor card-search query
+  // A full-screen takeover has to behave like a dialog: focus lands on it and
+  // Tab stays in it (on a desktop, Tab walked the page behind the overlay), and
+  // Esc steps out ONE layer — the card editor, then the review screen, then the
+  // scanner itself. Esc did nothing at all before.
+  const scanRootRef = useRef(null);
+  useModalFocus(scanRootRef);
+  const scanEscRef = useRef({});
+  scanEscRef.current = { editing: qaEditOpen != null, reviewing: !!qaReview, onClose };
+  useEffect(() => {
+    const onKey = (e) => {
+      if(e.key !== "Escape" || e.defaultPrevented) return;
+      // A search box with text in it: the first Esc clears the text (the
+      // browser does that for type=search); the next one leaves.
+      if(e.target && e.target.classList && e.target.classList.contains("scanner-qa-search") && e.target.value) return;
+      const st = scanEscRef.current;
+      e.preventDefault();
+      if(st.editing){ setQaEditOpen(null); setQaEditQ(""); return; }
+      if(st.reviewing){ setQaReview(false); return; }
+      if(st.onClose) st.onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
   // The matcher below is ~20ms over the catalog on a desktop and several times
   // that on the phone this runs on, with the camera and both scanner workers
   // beside it. Deferring keeps each keystroke in the input immediate and lets
@@ -17069,6 +17110,16 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   // localhost preview); scanner_consents (migration 114) is the durable record
   // and carries the upload preference across devices.
   const [consentOk, setConsentOk] = useState(false);
+  // "Got it" unmounts with the consent notice, which drops focus to <body> —
+  // hand it to the scanner's close button so the keyboard is still inside.
+  useEffect(() => {
+    if(!consentOk) return;
+    const root = scanRootRef.current;
+    if(root && !root.contains(document.activeElement)){
+      const b = root.querySelector(".scanner-close");
+      try { if(b) b.focus({preventScroll: true}); } catch(_e){}
+    }
+  }, [consentOk]);
   const [consentLoaded, setConsentLoaded] = useState(false);
   const [uploadsOn, setUploadsOn] = useState(true);
   // uploadSample runs from queue tails and deferred looks that captured an old
@@ -17140,13 +17191,13 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       w.onmessage = (e) => {
         const d = e.data;
         if(d.type === "ready"){ if(!cancelled) setWorkerReady(true); trc("cv-ready"); return; }
-        if(d.type === "failed"){ return; }   // stay on the fallback path
+        if(d.type === "failed"){ if(!cancelled) setWorkerFailed(true); return; }   // stay on the fallback path
         const cb = pendingRef.current.get(d.id);
         if(cb){ pendingRef.current.delete(d.id); cb(d); }
       };
-      w.onerror = () => {};
+      w.onerror = () => { if(!cancelled) setWorkerFailed(true); };
       workerRef.current = w;
-    } catch(e){ /* no worker → guide-crop fallback still works */ }
+    } catch(e){ /* no worker → guide-crop fallback still works */ setWorkerFailed(true); }
     // OCR worker (PP-OCR via onnxruntime-web) — its own worker so a ~1s read never
     // stalls the live hover loop. Loads in the background; capture works colour-only
     // until ready, then fuses the name/number in.
@@ -17221,7 +17272,11 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       } catch(e){
         setPhase(e && e.name === "NotAllowedError" ? "denied"
                : (e && e.name === "NotFoundError" ? "nocam" : "error"));
-        setErr((e && e.message) || "");
+        // The browser's own message ("Could not start video source") explains
+        // nothing; a camera held by another app is the common case.
+        setErr(e && (e.name === "NotReadableError" || e.name === "TrackStartError" || e.name === "AbortError")
+          ? "Another app is using the camera. Close it (a video call, the camera app), then try again."
+          : ((e && e.message) || ""));
       }
     })();
     return () => {
@@ -17251,7 +17306,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
         }
       } catch(_e){}
     };
-  }, [consentOk]);
+  }, [consentOk, camAttempt]);
 
   // post the rectified card to the OCR worker (promise-by-id). Transfers the pixel
   // buffer so there's no copy; resolves null if the worker isn't up.
@@ -17373,19 +17428,22 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
     const mid = (minX + maxX) / 2;
     const name = label.name || "";
+    // No price yet ("Identifying…") draws no price line — a gold dash there read
+    // as a $0 card.
+    const hasPrice = label.mkt != null || label.low != null;
     const price = label.mkt != null ? fmtUSD(Number(label.mkt))
-                : (label.low != null ? fmtUSD(Number(label.low)) : "—");
+                : (label.low != null ? fmtUSD(Number(label.low)) : "");
     const fs = Math.max(15, Math.round(bw * 0.028));
     const pfs = Math.max(18, Math.round(bw * 0.036));
     ctx.font = "700 " + fs + "px system-ui, sans-serif";
     const nameW = ctx.measureText(name).width;
     ctx.font = "800 " + pfs + "px system-ui, sans-serif";
-    const priceW = ctx.measureText(price).width;
+    const priceW = hasPrice ? ctx.measureText(price).width : 0;
     const padX = fs * 0.7;
     // matched-card art column on the left (when loaded) — the visual "is that
     // actually my card?" check without leaving the camera
     const im = label.img || null;
-    const textH = fs * 1.25 + pfs * 1.2 + fs * 0.5;
+    const textH = fs * 1.25 + (hasPrice ? pfs * 1.2 : 0) + fs * 0.5;
     const imH = im ? Math.max(textH, Math.round(bw * 0.085)) : 0;
     const imW = im ? Math.round(imH * 5 / 7) : 0;
     const imGap = im ? Math.round(padX * 0.7) : 0;
@@ -17394,7 +17452,11 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     const boxH = Math.max(textH, im ? imH + fs * 0.45 : 0);
     let bx = mid - boxW / 2;
     let by = minY - boxH - bw * 0.015;
-    if(by < 4) by = Math.min(maxY - boxH - 6, minY + 8);   // no room above → inside top
+    // The "Tap to snap" badge sits over the top ~46 CSS px of the stage, so the
+    // label keeps clear of it — the coaching says to FILL the frame, which is
+    // exactly when there's no room above and the label drops inside the card.
+    const topClear = 46 * (bw / ((ctx.canvas && ctx.canvas.clientWidth) || bw));
+    if(by < topClear) by = Math.min(maxY - boxH - 6, Math.max(minY + 8, topClear));   // no room above → inside top
     bx = Math.max(4, Math.min(bw - boxW - 4, bx));
     ctx.fillStyle = label.confident ? "rgba(10,26,16,0.93)" : "rgba(14,12,22,0.9)";
     roundRectPath(ctx, bx, by, boxW, boxH, 10); ctx.fill();
@@ -17417,8 +17479,10 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     while(ctx.measureText(nm).width > tw - padX * 2 && nm.length > 4){ nm = nm.slice(0, -2); }
     if(nm !== name) nm = nm.replace(/…?$/, "…");
     ctx.fillStyle = "#fff"; ctx.fillText(nm, tx + tw / 2, ty + fs * 0.5);
-    ctx.fillStyle = "#e8c850"; ctx.font = "800 " + pfs + "px system-ui, sans-serif";
-    ctx.fillText(price, tx + tw / 2, ty + fs * 0.5 + fs * 1.2);
+    if(hasPrice){
+      ctx.fillStyle = "#e8c850"; ctx.font = "800 " + pfs + "px system-ui, sans-serif";
+      ctx.fillText(price, tx + tw / 2, ty + fs * 0.5 + fs * 1.2);
+    }
     ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
   };
   const drawOutline = (quad, bw, bh, isReady, label) => {
@@ -18473,15 +18537,26 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     if(q.length < 2) return [];
     // collector-number search: the tester is HOLDING the card — "154" or
     // "154/204" reads straight off the bottom line and beats typing a name.
-    const cnm = q.match(/^(\d{1,3})(?:\s*\/\s*\d{1,3})?$/);
+    const cnm = q.match(/^(\d{1,3})(?:\s*\/\s*(\d{1,3}))?$/);
     if(cnm){
       const num = String(parseInt(cnm[1], 10));
+      // "/204" is the set's card count — the one thing that tells two #154s
+      // apart — so it narrows when the row knows its own total. Every match is
+      // returned (14 printings share #154) in release order; stopping at 12 in
+      // catalog order made two of them unreachable by number.
+      const tot = cnm[2] ? String(parseInt(cnm[2], 10)) : null;
       const hits = [];
       for(const r of qaSearchPool){
-        const rn = String(r.Number || "").split("/")[0].replace(/\D/g, "");
-        if(rn && String(parseInt(rn, 10)) === num){ hits.push(r); if(hits.length >= 12) break; }
+        const parts = String(r.Number || "").split("/");
+        const rn = parts[0].replace(/\D/g, "");
+        if(!rn || String(parseInt(rn, 10)) !== num) continue;
+        const rt = parts[1] ? parts[1].replace(/\D/g, "") : "";
+        if(tot && rt && String(parseInt(rt, 10)) !== tot) continue;
+        hits.push(r);
       }
-      return hits;
+      const rank = (r) => String((r.set_id && _setRankById.get(r.set_id)) || "9999");
+      hits.sort((a, b) => rank(a).localeCompare(rank(b)) || String(a.Set || "").localeCompare(String(b.Set || "")));
+      return hits.slice(0, 40);
     }
     // Everything else is the site's smart search, through the single canonical
     // matcher. This box is reached because the scanner picked the WRONG card,
@@ -19020,7 +19095,11 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
           : { guess: null, alts: "", cardImg: null, price: null, conf: null, status: "identifying" }) }].concat(prev).slice(0, 400));
       setQaCount(n => n + 1);
       trc("snap", { lock: lock ? 1 : 0 }); traceRef.current.n.snaps++;
-      if(lock){ setSavedMsg("✓ " + qaLabelOf(lock) + " — next card"); setTimeout(() => setSavedMsg(""), 1400); }
+      if(qaLenRef.current >= 400){
+        // The list holds 400; past that the OLDEST row falls off, saved or not.
+        setSavedMsg("400 scans in this session — each new one drops the oldest. Review & save to keep them.");
+        setTimeout(() => setSavedMsg(""), 4000);
+      } else if(lock){ setSavedMsg("✓ " + qaLabelOf(lock) + " — next card"); setTimeout(() => setSavedMsg(""), 1400); }
       // snapshot the telemetry BEFORE the release below extends it
       const job = { rid, tSnap: now, rawBlobP, capBlobP, stripBlobP, lock, lockVerify,
         lockNames: (lock && A.lockNames) || null, lockVerBy: (lock && A.lockVerBy) || null, live,
@@ -19228,7 +19307,12 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       const cardRows = Array.from(agg.values()).map(a => ({ deck_id: deckRow.id, ...a }));
       if(cardRows.length){
         const ins = await sbClient.from("deck_cards").insert(await encDeckCardRows(cardRows));
-        if(ins.error) throw ins.error;
+        if(ins.error){
+          // Don't leave an empty "Scanned <date>" deck behind — a retry would
+          // make another one each time.
+          try { await sbClient.from("decks").delete().eq("id", deckRow.id); } catch(_e){}
+          throw ins.error;
+        }
       }
       traceRef.current.n.deckRows += rows.length;
       trc("user-deck", { n: rows.length, uniq: agg.size });
@@ -19344,27 +19428,33 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     }
   };
 
-  const errBody = (title, body) => html`<div class="scanner-msg">
+  const errBody = (title, body, retry) => html`<div class="scanner-msg">
     <div class="scanner-msg-title">${title}</div>
     <div class="scanner-msg-body">${body}</div>
-    <button class="scanner-btn primary" onClick=${onClose}>Close</button>
+    <div class="scanner-msg-actions">
+      ${retry ? html`<button class="scanner-btn primary" onClick=${retry}>Try again</button>` : null}
+      <button class=${"scanner-btn" + (retry ? "" : " primary")} onClick=${onClose}>Close</button>
+    </div>
   </div>`;
 
   if(staleUpdating){
-    return html`<div class="scanner-overlay" role="dialog" aria-label="Card scanner">
+    return html`<div class="scanner-overlay" role="dialog" aria-modal="true" aria-label="Card scanner" ref=${scanRootRef}>
       <div class="scanner-head"><span class="scanner-title">Scan a card</span></div>
       ${errBody("Updating to the latest version…", "A newer scanner just went live — refreshing so you're testing the current build. One sec.")}
     </div>`;
   }
   if(phase === "denied" || phase === "nocam" || phase === "noindex" || phase === "error"){
+    const onPhone = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
     const m = { denied: ["Camera blocked", "Allow camera access for packs.ink in your browser settings, then reopen the scanner."],
-      nocam: ["No camera found", "This device doesn't expose a camera to the browser. Try on your phone."],
+      nocam: ["No camera found", onPhone
+        ? "This browser can't reach the camera. If you opened packs.ink from inside another app, open it in Chrome or Safari instead."
+        : "This device doesn't expose a camera to the browser. Try on your phone."],
       noindex: ["Scanner unavailable", err || "Couldn't load the scanner."],
       error: ["Camera error", err || "Something went wrong starting the camera."] }[phase];
-    return html`<div class="scanner-overlay" role="dialog" aria-label="Card scanner">
+    return html`<div class="scanner-overlay" role="dialog" aria-modal="true" aria-label="Card scanner" ref=${scanRootRef}>
       <div class="scanner-head"><span class="scanner-title">Scan a card</span>
         <button class="scanner-close" onClick=${onClose} aria-label="Close scanner">×</button></div>
-      ${errBody(m[0], m[1])}
+      ${errBody(m[0], m[1], (phase === "error" || phase === "denied") && onRetry ? onRetry : null)}
     </div>`;
   }
 
@@ -19440,7 +19530,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
             title=${scanVariantTitle(v)} onClick=${() => qaPickVariant(x.id, v)}>
             <img src=${v.img || SCAN_THUMB_SMALL(v.id)} alt=${v.label} loading="lazy"/>
             <span class="scanner-cand-name">${v.label}</span>
-            <span class="scanner-cand-sub">${v.set}</span>
+            <span class="scanner-cand-sub">${[v.number ? "#" + String(v.number).split("/")[0] : null, v.set].filter(Boolean).join(" · ")}</span>
           </button>`)}
         </div>` : null}
         ${others.length ? html`<div class="scanner-session-alts-lbl">Scanner's other guesses:</div>
@@ -19451,12 +19541,18 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
           </button>`)}
         </div>` : null}
         <input class="scanner-qa-search" type="search" placeholder="Search name or collector # (e.g. 154/204)…" value=${qaEditQ}
-          onInput=${e => setQaEditQ(e.target.value)} autocomplete="off" autocapitalize="off" spellcheck="false"/>
+          onInput=${e => setQaEditQ(e.target.value)} autocomplete="off" autocapitalize="off" spellcheck="false"
+          onKeyDown=${e => {
+            if(e.key !== "Enter" || !qaEditMatches.length) return;
+            e.preventDefault();
+            const r = qaEditMatches[0];
+            qaCorrectRow(x.id, { id: r.card_id, label: r["Product Name"], rarity: r.Rarity }, "search");
+          }}/>
         ${qaEditMatches.length ? html`<div class="scanner-qa-search-list">
           ${qaEditMatches.map(r => html`<button key=${r.card_id} class="scanner-qa-search-row" onClick=${() => qaCorrectRow(x.id, { id: r.card_id, label: r["Product Name"], rarity: r.Rarity }, "search")}>
             <img src=${r.img_small || SCAN_THUMB(r.card_id)} loading="lazy" alt=""/>
             <span class="scanner-qa-search-name">${r["Product Name"]}</span>
-            <span class="scanner-qa-search-meta">${[r.Set, r.Rarity].filter(Boolean).join(" · ")}</span>
+            <span class="scanner-qa-search-meta">${[r.Number ? "#" + String(r.Number).split("/")[0] : null, r.Set, r.Rarity].filter(Boolean).join(" · ")}</span>
           </button>`)}
         </div>` : (qaEditQd.trim().length >= 2 ? html`<div class="scanner-qa-search-none">No card matches "${qaEditQd.trim()}"</div>` : null)}
       </div>` : null}
@@ -19508,19 +19604,20 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       <div class="scanner-amb-bar">
         <div class="scanner-amb-now">
           ${qpv ? html`${qpv.disp && qpv.disp.thumb ? html`<img class="scanner-amb-now-img" src=${qpv.disp.thumb} alt=""/>` : null}<span class="scanner-amb-now-name">${qpv.verUnsure ? "≈ " : ""}${lbl(qpv.disp)}${qpv.textOk ? html` <span class="scanner-amb-ok">✓ name</span>` : null}</span><span class="scanner-amb-now-price">${qmoney(qpv.mkt ?? qpv.low)}</span>`
-                : html`<span class="scanner-amb-now-empty">${!workerReady ? "Loading detector…" : (detected ? "Identifying…" : "Point at one card")}</span>`}
+                : html`<span class="scanner-amb-now-empty">${!workerReady ? (workerFailed ? "Live detection unavailable — the shutter still identifies" : "Loading detector…") : (detected ? "Identifying…" : "Point at one card")}</span>`}
         </div>
         ${user ? html`<div class="scanner-amb-mid">
                  ${torchAvail ? html`<button class=${"scanner-torch" + (torchOn ? " on" : "")} onClick=${toggleTorch} aria-label="Toggle flashlight" title="Flashlight">${uiIcon("torch", 18)}</button>` : null}
-                 <button class=${"scanner-shutter scanner-amb-add ready" + (qpv && qpv.textOk ? " locked" : "")} onClick=${snapForQA} aria-label="Snap this card"
+                 <button class=${"scanner-shutter scanner-amb-add" + (detected ? " ready" : "") + (qpv && qpv.textOk ? " locked" : "")} onClick=${snapForQA} aria-label="Snap this card"
                    title=${qpv && qpv.textOk ? "Log this card and move to the next" : "Snap — identifies in the background"}>${uiIcon("camera", 26)}</button>
                </div>`
                : html`<button class="scanner-btn primary" onClick=${onSignIn}>Sign in to test</button>`}
-        <span class="scanner-amb-auto scanner-qa-count">${qaCount} snapped</span>
+        <span class="scanner-amb-auto scanner-qa-count">${qaResults.length} snapped</span>
       </div>
       ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
       ${qaUndo ? html`<div class="scanner-saved-msg">Removed ${qaUndo.label} · <button class="scanner-link" onClick=${qaUndoDelete}>Undo</button></div>` : null}
-      <div class="scanner-qa-note">Point at a card — when the name is <b>✓ confirmed</b>, the shutter logs it instantly. Not confirmed yet? It still captures and identifies in the background, so you can move straight to the next card. Wrong match? Tap <b>✎</b> on its row to fix it — every fix helps train the scanner. <b>${"Nothing is added anywhere until you Review & save."}</b></div>
+      ${qaNoteHidden ? null : html`<div class="scanner-qa-note">Point at a card — when the name is <b>✓ confirmed</b>, the shutter logs it instantly. Not confirmed yet? It still captures and identifies in the background, so you can move straight to the next card. Wrong match? Tap <b>✎</b> on its row to fix it — every fix helps train the scanner. <b>${"Nothing is added anywhere until you Review & save."}</b>
+        <button type="button" class="scanner-link scanner-qa-note-hide" onClick=${hideQaNote}>Got it</button></div>`}
       <div class="scanner-session">
         <div class="scanner-session-head">
           <span class="scanner-session-count">${qaResults.length} scanned</span>
@@ -19544,7 +19641,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       <div class="scanner-amb-bar">
         <div class="scanner-amb-now">
           ${pv ? html`<span class="scanner-amb-now-name">${lbl(pv.disp)}${pv.textOk ? html` <span class="scanner-amb-ok">✓ name</span>` : null}</span><span class="scanner-amb-now-price">${money(pv.mkt ?? pv.low)}</span>`
-               : html`<span class="scanner-amb-now-empty">${detected ? "Identifying…" : (workerReady ? "Hover over a card" : "Loading detector…")}</span>`}
+               : html`<span class="scanner-amb-now-empty">${detected ? "Identifying…" : (workerReady ? "Hover over a card" : (workerFailed ? "Live detection unavailable — tap to snap" : "Loading detector…"))}</span>`}
         </div>
         ${user ? html`<div class="scanner-amb-mid">
                  ${torchAvail ? html`<button class=${"scanner-torch" + (torchOn ? " on" : "")} onClick=${toggleTorch} aria-label="Toggle flashlight" title="Flashlight">${uiIcon("torch", 18)}</button>` : null}
@@ -19593,7 +19690,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     below = html`<div class="scanner-scanbar">
       <div class=${"scanner-hint" + (ready ? " ready" : "")}>${busy ? "Reading card…" : (ready ? "✓ Locked on — tap to scan" : (detected ? "Hold steady…" : status))}</div>
       <button class=${"scanner-shutter" + (ready ? " ready" : "")} onClick=${() => captureRef.current && captureRef.current()} disabled=${busy} aria-label="Scan card"></button>
-      <div class="scanner-subhint">${workerReady ? "Best results: ONE card, flat, plain background, good light" : "Loading card detector…"}</div>
+      <div class="scanner-subhint">${workerReady ? "Best results: ONE card, flat, plain background, good light" : (workerFailed ? "Live detection unavailable — the shutter still identifies" : "Loading card detector…")}</div>
     </div>`;
   }
 
@@ -19679,7 +19776,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   </div>`;
   const gated = !consentOk;
 
-  return html`<div class="scanner-overlay" role="dialog" aria-label="Card scanner">
+  return html`<div class="scanner-overlay" role="dialog" aria-modal="true" aria-label="Card scanner" ref=${scanRootRef}>
     <div class="scanner-head">
       <span class="scanner-title">${SCANNER_QA_ONLY ? "Scan a card · Beta · " + SCANNER_BUILD : "Scan a card"}</span>
       ${phase === "scanning" && !SCANNER_QA_ONLY ? html`<div class="scanner-mode-seg" role="tablist">
@@ -19694,7 +19791,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       <video ref=${videoRef} class="scanner-video" playsInline muted autoplay></video>
       <canvas ref=${overlayRef} class="scanner-overlay-cv"></canvas>
       ${!result && !detected ? html`<div class="scanner-softframe" aria-hidden="true"></div>` : null}
-      ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? (SCANNER_QA_ONLY ? "Tap to snap" : (mode === "ambient" ? "tap to stage" : "card detected")) : (workerReady ? "point at a card" : "loading detector…")}</div>` : null}
+      ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? (SCANNER_QA_ONLY ? "Tap to snap" : (mode === "ambient" ? "tap to stage" : "card detected")) : (workerReady ? "point at a card" : (workerFailed ? "tap to snap" : "loading detector…"))}</div>` : null}
       ${!result && mode === "ambient" && frameHint ? html`<div class="scanner-coach">${frameHint}</div>` : null}
       ${flash ? html`<div class="scanner-flash" aria-hidden="true"></div>` : null}
       ${busy ? html`<div class="scanner-busy">Reading card…</div>` : null}
@@ -57387,6 +57484,42 @@ function App(){
     } catch { return null; }
   });
   const [scanOpen, setScanOpen] = useState(false);
+  // The scanner is a full-screen takeover, so on a phone Back is how people
+  // leave it. With no history entry of its own, Back went to the previous PAGE
+  // behind it while the scanner — camera on — stayed open. Opening pushes one
+  // entry; Back pops it and closes; closing with × pops it too.
+  const scanPushedRef = useRef(false);
+  const openScan = useCallback(() => {
+    try {
+      window.history.pushState({...(window.history.state || {}), scanner: true}, "", window.location.href);
+      scanPushedRef.current = true;
+    } catch {}
+    setScanOpen(true);
+  }, []);
+  // navigatingAway: the caller pushes a page of its own next (a deck, a card),
+  // and stepping Back first would race that push — so the scanner's entry just
+  // loses its marker instead.
+  const closeScan = useCallback((navigatingAway) => {
+    setScanOpen(false);
+    if(!scanPushedRef.current) return;
+    scanPushedRef.current = false;
+    const st = window.history.state;
+    if(!st || !st.scanner) return;
+    try {
+      if(navigatingAway){ const {scanner, ...rest} = st; window.history.replaceState(rest, "", window.location.href); }
+      else window.history.back();
+    } catch {}
+  }, []);
+  useEffect(() => {
+    if(!scanOpen) return;
+    const onPop = () => {
+      if(window.history.state && window.history.state.scanner) return;
+      scanPushedRef.current = false;
+      setScanOpen(false);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [scanOpen]);
   const [scanReviewOpen, setScanReviewOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackAdminOpen, setFeedbackAdminOpen] = useState(false);
@@ -60197,7 +60330,7 @@ function App(){
     // modifier-click, so it's an honest <button> instead of an <a href>.
     if(v === "scan") return html`<button key=${v}
       class=${"nav-tab nav-tab--scan"+(scanOpen?" active":"")} type="button"
-      onClick=${()=>setScanOpen(true)}
+      onClick=${openScan}
       title="Scan a card with your camera (beta)" aria-label="Scan a card (beta)">
       <span class="nav-tab-icon">${NAV_ICONS.scan}<span class="nav-tab-beta" aria-hidden="true">BETA</span></span>
       <span class="nav-tab-label">${l}</span>
@@ -60495,10 +60628,10 @@ function App(){
     ${scanOpen && canScan && html`<${CardScannerModal}
       raw=${raw} collection=${collection} updateQty=${updateQty} addManyToCollection=${addManyToCollection}
       user=${user} onSignIn=${signIn}
-      onClose=${()=>setScanOpen(false)}
-      onOpenReview=${isGradedAdmin ? ()=>{ setScanOpen(false); setScanReviewOpen(true); } : null}
-      onOpenDeck=${(id)=>{ setScanOpen(false); openDeckById(id); }}
-      onOpenDetail=${(g)=>{ setScanOpen(false); openCardsWithSearch("", g.card_id); }}/>`}
+      onClose=${()=>closeScan(false)}
+      onOpenReview=${isGradedAdmin ? ()=>{ closeScan(true); setScanReviewOpen(true); } : null}
+      onOpenDeck=${(id)=>{ closeScan(true); openDeckById(id); }}
+      onOpenDetail=${(g)=>{ closeScan(true); openCardsWithSearch("", g.card_id); }}/>`}
     ${scanReviewOpen && isGradedAdmin && html`<${ScanReviewModal}
       raw=${raw} onClose=${()=>setScanReviewOpen(false)}/>`}
     ${loading && html`<div class="loading-status">

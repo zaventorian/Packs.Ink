@@ -162,6 +162,11 @@ it failed silently: an empty list reads exactly like a card that isn't in the ca
 - **⚠ A bare `154` / `154/204` is still a COLLECTOR-NUMBER lookup and must stay ahead of the
   parser**, which would read a lone number as name text. The tester is holding the card and
   that line is the fastest thing to read off it.
+- **It returns EVERY printing with that number, oldest set first** (2026-09-25), capped at 40
+  rather than the name search's 12. Fourteen printings share #154, and stopping at 12 in
+  catalog order left two of them unreachable by number. `/204` narrows only on a row whose
+  `Number` carries its own total; most catalog rows carry a bare number, and dropping those
+  would empty the list, so they stay in. Each row shows its `#N`, and Enter picks the top one.
 
 Guarded by `node scripts/test_scanner_edit_search.mjs`, which rewrites only the memo's hook
 wrapper and replays the real body over the shipped index.
@@ -186,9 +191,31 @@ just as silently.
 
 - **`scanner_consents(user_id pk, version, accepted_at, uploads_enabled, updated_at)`** — owner-only RLS on select/insert/update, no admin read branch. One row per user, updated in place: we need the CURRENT preference on every scan, not an audit trail.
 - **`SCAN_BETA_VERSION`** (next to `SCANNER_BUILD`) is the accepted-notice version. **Bump ONLY when the substance changes** — what's uploaded, why, retention, who sees it. It re-prompts everyone; re-prompting for typo fixes trains users to click through the one screen that has to be read.
-- **The gate blocks the camera, not just the view.** The `// mount: index + camera + worker` effect early-returns on `!consentOk` and its deps are `[consentOk]`, so `getUserMedia` cannot fire before acceptance. Verified: no `<video>` in the DOM pre-accept. Don't "simplify" this into a render-only overlay.
+- **The gate blocks the camera, not just the view.** The `// mount: index + camera + worker` effect early-returns on `!consentOk`, so `getUserMedia` cannot fire before acceptance. Verified: no `<video>` in the DOM pre-accept. Don't "simplify" this into a render-only overlay. Its deps are `[consentOk, camAttempt]` since 2026-09-25: `camAttempt` is bumped by the error screen's **Try again**, which re-runs the whole mount. The early return still comes first, so a retry can never reach the camera before consent either.
 - **The opt-out reads `uploadsOnRef`, never the state.** `uploadSample`, `labelSample`, and the end-of-session telemetry insert all run from queue tails and deferred looks holding pre-toggle closures. All three bail when off — including the photoless session row, deliberately: "I turned that off" has to mean all of it.
 - Reachable twice: the first-run notice, and a checkbox in the review screen (`.scanner-qa-privacy`).
+
+### The overlay is a DIALOG, and Back closes it (2026-09-25)
+
+A full-screen takeover with the camera on has to leave the way people expect. Before this,
+Esc did nothing, Tab walked the page hidden behind it, and on a phone Back went to the page
+UNDER the scanner while the scanner stayed open with the camera still running.
+
+- **Every render branch's root is `role="dialog" aria-modal="true"` on one `scanRootRef`**,
+  and `useModalFocus` keeps focus inside. Once consent is given, focus lands on the close
+  button.
+- **Esc steps out ONE layer: the card editor, then the review screen, then the scanner.** A
+  search box with text in it gets the first Esc to itself (it clears the text); the next one
+  leaves. It reads a ref, so the listener is added once and never sees stale state.
+- **Opening pushes a history entry** (`openScan` in App); Back pops it and closes, which also
+  stops the camera. **`closeScan(navigatingAway)`** is the one close path. With × it calls
+  `history.back()` to take its own entry off. When the caller is about to push a page of its
+  own (open a deck, a card, the admin review), it only strips the marker with `replaceState`,
+  because a `back()` would race that push.
+- **The camera error screen has Try again** (see the consent gate above). "Camera in use"
+  (`NotReadableError`) now says so: close the video call or camera app, then retry.
+- **A detector worker that fails says so** rather than reading "Loading detector…" forever:
+  live detection is off, the shutter still identifies.
 
 ### Retention — a promise with a cron behind it
 
