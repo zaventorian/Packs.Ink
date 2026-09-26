@@ -27419,18 +27419,14 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                     // Resolve a slot's current graded $ for the cost-basis
                     // return chip — mirrors the slot-pill lookup (preferred
                     // printing → Normal/Holo/Cold fallback).
+                    // THE ladder (gradedHit), not a local copy: this one walked a
+                    // Foil slot onto the Non-Foil tier of a split card — the
+                    // Posters view priced Top Prize slabs at Prize Wall prices
+                    // while the grid beside it had it right.
                     const resolveSlotPx = (s) => {
                       if(isCustomVariant) return null;
-                      const sp = s.printing || tilePrinting;
-                      let p = priceByKey.get(card.tcgplayer_product_id + "|" + sp + "|" + s.grader + "|" + s.grade);
-                      if(!p){
-                        for(const pr of ["Normal","Holofoil","Cold Foil"]){
-                          if(pr === sp) continue;
-                          p = priceByKey.get(card.tcgplayer_product_id + "|" + pr + "|" + s.grader + "|" + s.grade);
-                          if(p) break;
-                        }
-                      }
-                      return gradedRowValue(p, valueBasis);
+                      return gradedRowValue(gradedHit(card.tcgplayer_product_id, card.card_id,
+                        s.grader, s.grade, s.printing || tilePrinting).row, valueBasis);
                     };
                     // POSTER mode: full card image like the My Cards tiles, with
                     // grade badge(s) + value overlaid. Cards you don't own render
@@ -27441,8 +27437,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                       if(ownedSlots.length){
                         posterVal = ownedSlots.reduce((sum,s)=> sum + (resolveSlotPx(s)||0)*(s.qty||1), 0) || null;
                       } else if(!isCustomVariant){
-                        let refP = priceByKey.get(card.tcgplayer_product_id + "|" + tilePrinting + "|psa|10");
-                        if(!refP) for(const pr of ["Normal","Holofoil","Cold Foil"]){ if(pr===tilePrinting) continue; refP = priceByKey.get(card.tcgplayer_product_id+"|"+pr+"|psa|10"); if(refP) break; }
+                        const refP = gradedHit(card.tcgplayer_product_id, card.card_id, "psa", "10", tilePrinting).row;
                         posterVal = gradedRowValue(refP, valueBasis);
                       }
                       const pImg = card.img_normal || card.img_small;
