@@ -6005,7 +6005,7 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
         return html`<div key=${lbl + "|" + h.series.color} class="chart-tooltip-row">
           <span class="legend-swatch" style=${{background: dashBg || h.series.color}}/>
           <span class="chart-tooltip-label">${lbl}</span>
-          <span class="chart-tooltip-value">${maskValues ? "$•••" : (valueFmt ? valueFmt(h.point.y) : fmtUSD(h.point.y))}</span>
+          <span class="chart-tooltip-value">${maskValues ? "$•••" : (h.series.fmt ? h.series.fmt(h.point.y) : valueFmt ? valueFmt(h.point.y) : fmtUSD(h.point.y))}</span>
           ${pct != null && html`<span class=${"chart-tooltip-pct "+(pct>=0?"up":"down")}>${pct>=0?"+":""}${pct.toFixed(1)}%</span>`}
         </div>`;
       })}
@@ -6200,8 +6200,12 @@ const _truncate = (s, n) => { const str = String(s||""); return str.length <= n 
 // `tableSeries` is the dollar-valued copy of `series`, used for the table's
 // Start / End / Change columns. They differ when the chart is indexed to 100:
 // the plot shows index points, the table stays in prices.
-function buildCompareReportSvg({title, subtitle, items, series, tableSeries, colors, footerNote}){
+const compareKindLabel = (c) => c.kind === "sealed" ? "Sealed"
+  : c.kind === "index" ? (c.watchlistId ? "Custom index" : "Index")
+  : c.kind === "set" ? "Set EV" : c.kind === "graded" ? "Graded" : "Card";
+function buildCompareReportSvg({title, subtitle, items, series, tableSeries, colors, footerNote, valueFmt}){
   const tblSeries = tableSeries || series;
+  const fmtY = valueFmt || fmtTickPrice;
   const W = 1100;
   const headerH = 80;
   const chartH = 340;
@@ -6255,7 +6259,7 @@ function buildCompareReportSvg({title, subtitle, items, series, tableSeries, col
     for(const t of yTicks){
       const y = yScale(t);
       parts.push(`<line x1="${innerLeft}" x2="${innerRight}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#eef0f2" stroke-dasharray="3,3"/>`);
-      parts.push(`<text x="${innerLeft-6}" y="${(y+4).toFixed(1)}" text-anchor="end" font-size="10" fill="#7a8088">${_xmlEscape(fmtTickPrice(t))}</text>`);
+      parts.push(`<text x="${innerLeft-6}" y="${(y+4).toFixed(1)}" text-anchor="end" font-size="10" fill="#7a8088">${_xmlEscape(fmtY(t))}</text>`);
     }
     xTicks.forEach((t, i) => {
       const x = xScale(t);
@@ -6311,15 +6315,17 @@ function buildCompareReportSvg({title, subtitle, items, series, tableSeries, col
     }
     parts.push(`<text x="${cols[0].x}" y="${rowY}" font-size="11" fill="#5a6068" text-anchor="start">${i+1}</text>`);
     parts.push(`<text x="${cols[1].x}" y="${rowY}" font-size="12" fill="#16181c" font-weight="600">${_xmlEscape(_truncate(it.name, 60))}</text>`);
-    const kindBadge = it.kind === "sealed" ? "Sealed" : "Card";
+    const kindBadge = compareKindLabel(it);
     const typeStr = (it.sub ? it.sub + " · " : "") + kindBadge;
     parts.push(`<text x="${cols[2].x}" y="${rowY}" font-size="11" fill="#5a6068">${_xmlEscape(_truncate(typeStr, 44))}</text>`);
     const sData = tblSeries[i] && tblSeries[i].data ? tblSeries[i].data.filter(p => Number.isFinite(p.y)) : [];
     if(sData.length){
       const start = sData[0].y, end = sData[sData.length-1].y;
       const pct = start !== 0 ? ((end - start)/start*100) : null;
-      parts.push(`<text x="${cols[3].x}" y="${rowY}" font-size="11" fill="#16181c" text-anchor="end">$${start.toFixed(2)}</text>`);
-      parts.push(`<text x="${cols[4].x}" y="${rowY}" font-size="11" fill="#16181c" text-anchor="end">$${end.toFixed(2)}</text>`);
+      // An index has no dollar value — its row prints points, as on screen.
+      const cell = (v) => it.kind === "index" ? v.toFixed(1) : "$" + v.toFixed(2);
+      parts.push(`<text x="${cols[3].x}" y="${rowY}" font-size="11" fill="#16181c" text-anchor="end">${cell(start)}</text>`);
+      parts.push(`<text x="${cols[4].x}" y="${rowY}" font-size="11" fill="#16181c" text-anchor="end">${cell(end)}</text>`);
       const pctText = pct == null ? "—" : (pct >= 0 ? "+" : "") + pct.toFixed(1) + "%";
       const pctColor = pct == null ? "#5a6068" : (pct >= 0 ? "#1d8d4a" : "#c64c5a");
       parts.push(`<text x="${cols[5].x}" y="${rowY}" font-size="11" fill="${pctColor}" font-weight="600" text-anchor="end">${_xmlEscape(pctText)}</text>`);
@@ -21627,8 +21633,16 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
   }, [compareCards, raw]);
 
   const [setSearch, setSetSearch] = useState("");
-  const [rangeKey, setRangeKey] = useState(() => readUrlEnum("hr", RANGE_OPTIONS.map(o => o[0])) || "all");
-  const [customStart, setCustomStart] = useState(""); // YYYY-MM-DD when rangeKey="custom"
+  // A custom range travels as ?hr=custom~YYYY-MM-DD. Written as a bare
+  // "custom", a shared link opened on the custom range with no start date —
+  // the whole history, under a label promising something narrower.
+  const urlCustomStart = useMemo(() => {
+    const m = /^custom~(\d{4}-\d{2}-\d{2})$/.exec(readUrlParam("hr") || "");
+    return m ? m[1] : "";
+  }, []);
+  const [rangeKey, setRangeKey] = useState(() => urlCustomStart ? "custom"
+    : (readUrlEnum("hr", RANGE_OPTIONS.map(o => o[0])) || "all"));
+  const [customStart, setCustomStart] = useState(urlCustomStart); // YYYY-MM-DD when rangeKey="custom"
   const [hidePreorders, setHidePreorders] = useState(() => {
     try { return localStorage.getItem("packsink:history:hidePreorders") !== "0"; }
     catch { return true; }
@@ -22181,11 +22195,11 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
       const set = (k, v, dflt) => { if(v && v !== dflt) url.searchParams.set(k, v); else url.searchParams.delete(k); };
       set("g", enc, "");
       set("hm", mode, "card");
-      set("hr", rangeKey, "all");
+      set("hr", (rangeKey === "custom" && customStart) ? "custom~" + customStart : rangeKey, "all");
       set("hs", chartScale, "abs");
       if(url.toString() !== window.location.href) window.history.replaceState(window.history.state, "", url.toString());
     } catch {/* no-op */}
-  }, [compareCards, mode, rangeKey, chartScale, urlGraph]);
+  }, [compareCards, mode, rangeKey, customStart, chartScale, urlGraph]);
 
   // Inline picker used inside Compare mode so users can add cards / sealed
   // without leaving the report. Top 8 card hits and top 4 sealed hits.
@@ -22245,10 +22259,10 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
         value=${customStart}
         max=${new Date().toISOString().slice(0,10)}
         onChange=${e=>setCustomStart(e.target.value)}/>`}
-      <label class="checkbox-group" title="Pre-release prices are wildly inflated (often 10-20× the real post-release floor). Default ON hides those days for every card individually using its set's release date. Uncheck to include them anyway.">
+      ${(mode === "card" || compareCards.some(c => c.kind === "card")) && html`<label class="checkbox-group" title="Pre-release prices are wildly inflated (often 10-20× the real post-release floor). Default ON hides those days for every card individually using its set's release date. Uncheck to include them anyway.">
         <input type="checkbox" checked=${hidePreorders} onChange=${e=>setHidePreorders(e.target.checked)}/>
         Hide prerelease
-      </label>
+      </label>`}
       ${mode === "set" && html`<label class="checkbox-group" title="Cards worth less than $1 count as $0 in the EV calculation.">
         <input type="checkbox" checked=${noPenny} onChange=${e=>setNoPenny(e.target.checked)}/>
         ${"<"}$1 → $0
@@ -22267,6 +22281,9 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
         ? (showLow ? "Sale price" : "Avg of last 5")
         : (showLow ? "Low" : "NM Market");
       const paletteColors = compareColorsFor(theme);
+      // An index is POINTS, never dollars. Outside Indexed mode its line keeps
+      // its own unit in the tooltip rather than borrowing the chart's "$".
+      const fmtIdxPts = (v) => v.toFixed(1) + " pts";
       const builtSeries = compareCards.map((c, i) => {
         let data = [];
         if(c.kind === "set"){
@@ -22289,7 +22306,9 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
           if(floorMs != null) data = data.filter(p => p.x >= floorMs);
         }
         const st = compareSeriesStyle(i, paletteColors);
-        return {name: c.name, color: st.color, dash: st.dash, data};
+        const points = c.kind === "index";
+        return {name: c.name, color: st.color, dash: st.dash, data, points,
+          fmt: (points && chartScale !== "indexed") ? fmtIdxPts : undefined};
       });
       const startMs = computeChartStartMs(rangeKey, customStart, hidePreorders, null);
       // Actual dollars, range-clipped. The stats table, the CSV and the export
@@ -22311,6 +22330,13 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
       const rangeLabel = (RANGE_OPTIONS.find(([k]) => k === rangeKey) || [,"All"])[1];
       const scaleLabel = indexed ? "Indexed to 100" : chartScale === "log" ? "Log scale" : null;
       const fmtIndexTick = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
+      // Every line on the chart is an index: the axis is in points whatever the
+      // scale, or a graph of two indices reads "$100" / "$120".
+      const drawn = clipped.filter(s => s.data && s.data.length);
+      const pointsOnly = drawn.length > 0 && drawn.every(s => s.points);
+      // Points and dollars on one axis are two different measures pretending
+      // to be one; only the Indexed scale puts them on common ground.
+      const mixedIndex = !indexed && compareCards.some(c => c.kind === "index") && compareCards.some(c => c.kind !== "index");
       const reportArgs = {
         title: "Price Comparison Report",
         subtitle: `${compareCards.length} product${compareCards.length===1?"":"s"} · ${priceLabel}${scaleLabel?" · "+scaleLabel:""} · Range: ${rangeLabel}`,
@@ -22318,6 +22344,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
         series: clipped,
         tableSeries: priceClipped,
         colors: paletteColors,
+        valueFmt: (indexed || pointsOnly) ? fmtIndexTick : null,
         footerNote: "packs.ink · Unofficial fan site, not affiliated with Disney or Ravensburger",
       };
       const doExportPng = () => exportCompareReportPng(reportArgs);
@@ -22333,7 +22360,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
           const end   = data.length ? data[data.length-1].y : "";
           const pct   = (data.length && start) ? ((end-start)/start*100).toFixed(2) : "";
           lines.push([i+1, c.name, c.sub||"",
-            c.kind==="sealed" ? "Sealed" : c.kind==="index" ? (c.watchlistId?"Custom index":"Index") : c.kind==="set" ? "Set EV" : "Card",
+            compareKindLabel(c),
             start===""?"":start.toFixed(2), end===""?"":end.toFixed(2), pct].map(esc).join(","));
         });
         const blob = new Blob([lines.join("\n")], {type:"text/csv"});
@@ -22453,6 +22480,9 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
           setCompareCards(prev => prev.filter(p => p.card_id !== item.card_id));
         } else if(!isFull){
           setCompareCards(prev => [...prev, item]);
+          // Points beside dollars on one axis reads as a flat line at the foot
+          // of a price chart — the same call the benchmark picker makes.
+          if(chartScale !== "indexed" && compareCards.some(c => c.kind !== "index")) setChartScale("indexed");
         }
       };
       // The user's own baskets come FIRST — a custom index is the one thing on
@@ -22575,7 +22605,6 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
             <div class="history-picker-searchrow">
               <input type="search" placeholder="Search sealed product..."
                 value=${sealedSearch} onInput=${e=>setSealedSearch(e.target.value)}/>
-              ${filtersButton}
             </div>
             <div class="history-picker-hint">Click any product to add or remove it from the graph. Up to ${COMPARE_MAX}.</div>
             <div class="history-picker-list">
@@ -22685,7 +22714,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                   : indexPickerGroups.length === 0
                     ? html`<div class="history-picker-empty">${(indexCatalog||[]).length
                         ? `No index matches "${indexSearch}"`
-                        : "No indices have been computed yet — run select public.refresh_market_index();"}</div>`
+                        : "No market indices are available yet."}</div>`
                     : indexPickerGroups.map(g => html`<div key=${g.label} class="history-picker-group">
                         <div class="history-picker-group-head">${g.label}</div>
                         ${g.rows.map(row => {
@@ -22860,7 +22889,12 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                     ? html`<div class="chart-empty large">No price history yet for the selected product${compareCards.length>1?"s":""}.</div>`
                     : html`<${LineChart} series=${renderSeries} width=920 height=320
                         logScale=${chartScale === "log"}
-                        valueFmt=${indexed ? fmtIndexTick : null}/>`}
+                        valueFmt=${(indexed || pointsOnly) ? fmtIndexTick : null}/>`}
+                ${mixedIndex && renderSeries.length > 0 && html`<div class="muted compare-mixed-note">
+                  Indices are measured in points, not dollars, so they only line up with prices once
+                  everything is indexed to 100.${" "}
+                  <button class="cal-linkish" onClick=${() => setChartScale("indexed")}>Switch to Indexed</button>
+                </div>`}
                 <table class="compare-stats-table">
                   <thead><tr>
                     <th></th><th>#</th><th>Product</th><th>Type / Set</th>
@@ -35467,11 +35501,17 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     // Graded rows carry grader/grade/sale metadata the raw columns can't show;
     // without them an export of a sold-date-filtered view loses the very field
     // it was filtered on.
+    // Both change bases, each named. The export used to write the Low
+    // changes under bare "1D Δ%" headers whichever basis was on screen, so an
+    // NM Market view exported numbers that matched nothing it had shown.
+    const WINS = ["1D", "1W", "1M", "3M", "6M", "1Y"];
+    const PCT_KEYS = ["pct_1d", "pct_7d", "pct_30d", "pct_90d", "pct_180d", "pct_365d"];
     const headers = ["Name", "Set", "Rarity", "Ink", "Printing", "Collector #",
       ...(premiumGraded ? ["Grader", "Grade", "Last Sold Date", "Sales"] : []),
       premiumGraded ? "Last Sold" : "Low",
       premiumGraded ? "Avg Last 5" : "NM Market",
-      "1D Δ%", "1W Δ%", "1M Δ%", "3M Δ%", "6M Δ%", "1Y Δ%",
+      ...(premiumGraded ? WINS.map(w => w + " Δ%")
+        : [...WINS.map(w => w + " Δ% (Low)"), ...WINS.map(w => w + " Δ% (NM Market)")]),
       "TCGPlayer URL"];
     const esc = (v) => {
       const s = v == null ? "" : String(v);
@@ -35487,7 +35527,8 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         ...(premiumGraded ? [r.grader || "", r.grade || "", r.last_sold_date || "",
           r.sale_count != null ? r.sale_count : ""] : []),
         r.low_today, r.market_today,
-        r.pct_1d, r.pct_7d, r.pct_30d, r.pct_90d, r.pct_180d, r.pct_365d,
+        ...PCT_KEYS.map(k => r[k]),
+        ...(premiumGraded ? [] : PCT_KEYS.map(k => r["mkt_" + k])),
         tcgUrl(r.tcgplayer_product_id, r.printing) || "",
       ].map(esc).join(","));
     }
@@ -35603,8 +35644,12 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     // window, so the column answers whichever timeframe the user is looking at
     // rather than a fixed one. Default-hidden: it's a power-user column, and it
     // is absent entirely where migration 128 hasn't run.
-    const vsMktWin = (moverWin || "pct_30d");
-    const vsMktLbl = ({"pct_1d":"1D","pct_7d":"1W","pct_30d":"1M","pct_90d":"3M","pct_180d":"6M","pct_365d":"1Y"})[vsMktWin] || "";
+    // The card side follows the price basis the window columns are showing —
+    // in NM Market mode the column beside it is mkt_pct_*, and measuring the
+    // Low change against the index there compared two different numbers.
+    const vsMktBase = (moverWin || "pct_30d");
+    const vsMktWin = (priceMode === "market" && !premiumGraded) ? "mkt_" + vsMktBase : vsMktBase;
+    const vsMktLbl = ({"pct_1d":"1D","pct_7d":"1W","pct_30d":"1M","pct_90d":"3M","pct_180d":"6M","pct_365d":"1Y"})[vsMktBase] || "";
     const vsBasis = VS_MKT_BASES.find(b => b[0] === vsMktBasis) || VS_MKT_BASES[0];
     const vsMktCol = {key:"vsmkt", label:"vs Market", defaultHidden:true,
       th:()=>html`<th key="vsmkt" class="th-num"
