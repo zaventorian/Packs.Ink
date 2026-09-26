@@ -12809,7 +12809,7 @@ const InstallHelpModal = ({installEvent, clearInstallEvent, isIOS, isAndroid, on
     onClose();
   };
   const step = (n, txt) => html`<div style=${{display:"flex",gap:10,alignItems:"flex-start",margin:"8px 0"}}>
-    <div style=${{flexShrink:0,width:22,height:22,borderRadius:"50%",background:"var(--accent)",color:"#fff",
+    <div style=${{flexShrink:0,width:22,height:22,borderRadius:"50%",background:"var(--accent)",color:"var(--on-accent)",
       display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700}}>${n}</div>
     <div style=${{fontSize:13,lineHeight:1.45,paddingTop:1}}>${txt}</div>
   </div>`;
@@ -44933,7 +44933,7 @@ const CalendarFilterChips = ({kinds, onToggle, counts, compact}) => html`<div cl
     const last = on && kinds.length === 1;
     return html`<button key=${k.key} type="button"
       class=${"cal-chip-filter" + (on ? " on" : "") + (compact ? " compact" : "")}
-      style=${on ? {borderColor: k.hue, color: k.hue} : null}
+      style=${on ? {borderColor: k.hue, "--chip-hue": k.hue} : null}
       aria-pressed=${on ? "true" : "false"}
       title=${last ? "At least one type has to stay on" : CALENDAR_KIND_LONG[k.key]}
       onClick=${() => { if(!last) onToggle(k.key); }}>
@@ -56053,7 +56053,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
 
   return html`<div>
     ${((readOnly && !isOwnDeck) || tournamentContext) && html`<div class="deck-readonly-banner">
-      ${tournamentContext ? html`<span class="deck-readonly-avatar deck-readonly-avatar-fallback" style=${{background:"var(--accent)",color:"#fff"}}>${uiIcon("trophy", 15)}</span>`
+      ${tournamentContext ? html`<span class="deck-readonly-avatar deck-readonly-avatar-fallback" style=${{background:"var(--accent)",color:"var(--on-accent)"}}>${uiIcon("trophy", 15)}</span>`
         : (creator && (creator.avatar_url
           ? html`<img class="deck-readonly-avatar" src=${creator.avatar_url} alt=""/>`
           : html`<span class="deck-readonly-avatar deck-readonly-avatar-fallback">${(creator?.display_name||"?")[0].toUpperCase()}</span>`))}
@@ -56954,6 +56954,18 @@ function parseViewFromPath(pathname){
   if(p === "/Index.html" || p === "/index.html") p = "/";
   return PATH_TO_VIEW[p] || null;
 }
+// A landing path the app doesn't know — a typo, a retired page, an old link —
+// falls through the SPA fallback to the home page, and the view-sync rewrites
+// the address to "/". With nothing said, that reads as the link being broken or
+// as the page having been taken away without notice. Captured at load, before
+// the rewrite; App says so once.
+const LANDED_ON_UNKNOWN_PATH = (() => {
+  try {
+    const p = window.location.pathname.replace(/\/$/, "") || "/";
+    if(p === "/" || p === "/Index.html" || p === "/index.html") return false;
+    return !parseViewFromPath(p);
+  } catch { return false; }
+})();
 
 // Click-handler helpers for in-app navigation that still respect every
 // browser-level link affordance — Ctrl/Cmd/Shift/Alt + click, middle-click,
@@ -57544,6 +57556,9 @@ function App(){
     catch { return "home"; }
   });
   viewRef.current = view;
+  useEffect(() => {
+    if(LANDED_ON_UNKNOWN_PATH) flashToast("That page doesn't exist — here's the home page instead.", 5000);
+  }, []);
   // Analytics sub-tab, mirrored into the URL (?a=<sub>) so a refresh keeps you
   // on the tab and Back/Forward step between tabs you visited. A trade share
   // link forces the Trade Compare tab.

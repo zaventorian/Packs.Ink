@@ -1016,6 +1016,35 @@ The `resolvedTheme` (aliased `theme` for back-compat) is what gets written to `<
 
 **`showTopBarTheme`** pref (`packsink:showTopBarTheme`): toggle to hide the quick theme bubble in the top-nav right cluster. Default ON.
 
+### Text on an accent fill is `--on-accent`, and muted text is sized to 4.5:1 (2026-09-26)
+
+Measured across all seven themes with a pixel-sampling harness (the session's scratch
+`agent_themes/`), two systemic readability gaps, both fixed at the TOKEN so every
+instance moved together:
+
+- **`--on-accent`** — the text colour on the site's one active-chip / primary-button
+  treatment, `background:var(--accent)`. It was a literal `#fff` in ~75 rules, which reads
+  on the light themes' dark gold (#8a6d1b, ~5:1) and FAILS on the dark themes' bright gold
+  (#c8a846 2.3:1, aurora's #e8c850 1.6:1 — "Sign in" among them). `:root` sets `#fff`;
+  aurora / velvet / black override it with dark ink `#1a1022`. **New accent-filled UI takes
+  `color:var(--on-accent)`, never `#fff`** — and never a new token for the same job.
+- **`--text-muted` / `--text-dim` alphas were raised** so muted clears 4.5:1 on each theme's
+  own backgrounds (parchment measured 2.8:1 — nav labels, table headers, chart axes, sub-
+  lines). Parchment/light 0.40→0.55 (dim 0.58→0.68), sunrise/watercolor/daydream
+  0.55→0.66 (dim 0.7→0.8), velvet 0.40→0.50 (dim 0.55→0.65), aurora 0.50→0.56 (dim
+  0.65→0.7), black 0.45→0.50. Muted stays lighter than dim. **Stacking `opacity` on muted
+  text undoes this** (the footer disclosure sat at 2.3:1 that way) — fade the element, not
+  the text, or don't.
+- Also from the same pass: placeholders follow the theme (`input::placeholder` →
+  `--text-muted`, opacity 1 — the browser default #757575 measured 2.6–3.5:1); calendar
+  kind chips keep the pure hue on the BORDER and darken the label toward black on light
+  themes (`--chip-hue` + `color-mix`); the bright Elo top-rank gold becomes `--accent` on
+  light themes; out-of-month / dense-calendar day numbers stay recessive but readable.
+- **The harness has two known artifacts** worth recognising before "fixing" them: text over a
+  modal that hadn't finished loading (backgrounds of #010101), and positions sampled from a
+  different scroll offset than the screenshot (footer text "on" map tiles). Confirm a
+  low reading with `getComputedStyle` before touching CSS.
+
 ### ⚠ `color-scheme` is declared at the DOCUMENT level — don't scope it off again (2026-09-13)
 
 `<meta name="color-scheme" content="dark light">` in the head, plus
