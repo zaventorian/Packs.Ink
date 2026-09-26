@@ -4608,6 +4608,29 @@ const calcEV = (avgs,set,nc,excludes,priceMode) => {
 // pre-filtered to that variant (Cold Foil for regular foils, Holofoil for
 // Enchanted/Iconic/Epic chase cards).
 const TCG_AFFILIATE_BASE = "https://partner.tcgplayer.com/c/7285926/1780961/21018";
+// TCGplayer mass entry takes the whole list in the URL, and its server refuses
+// anything past ~8 KB: measured 2026-09-25, a 7,843-char URL loads and 8,291
+// answers 414 — and through the affiliate hop a full Reign of Jafar list (230
+// cards, ~10.6 KB after the redirect) got a raw "Server Error" page instead.
+// So a big list is split into several carts, each well under the limit (the
+// affiliate redirect appends its own tracking, hence the margin). Every part
+// adds to the SAME TCGplayer cart. Lines are "<qty> <name>".
+const TCG_MASSENTRY_MAX = 6000;
+const tcgMassEntryDest = (lines) =>
+  `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=${encodeURIComponent(lines.join("||"))}`;
+const tcgMassEntryParts = (lines) => {
+  const parts = [];
+  let cur = [];
+  for(const line of lines || []){
+    if(cur.length && tcgMassEntryDest([...cur, line]).length > TCG_MASSENTRY_MAX){ parts.push(cur); cur = []; }
+    cur.push(line);
+  }
+  if(cur.length) parts.push(cur);
+  return parts.map(ls => ({
+    url: TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(tcgMassEntryDest(ls)),
+    copies: ls.reduce((n, l) => n + (parseInt(l, 10) || 0), 0),
+  }));
+};
 const tcgUrl = (productId, printing) => {
   if(!productId) return null;
   let dest = `https://www.tcgplayer.com/product/${productId}/?Language=English`;
@@ -19968,9 +19991,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       if(short > 0) byName.set(nm, (byName.get(nm) || 0) + short);
     }
     if(!byName.size) return null;
-    const lines = [...byName].map(([nm, n]) => `${n} ${nm}`);
-    const dest = `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=${encodeURIComponent(lines.join("||"))}`;
-    return TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(dest);
+    return tcgMassEntryParts([...byName].map(([nm, n]) => `${n} ${nm}`));
   }, [visibleGroups, collection, foilMode, goal, goalN, goalF, slotCover]);
 
   // Filter-aware "owned value" summary — total $ for cards in the visible
@@ -20110,10 +20131,14 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     </div>
 
     ${!allMode && visibleMissing.count > 0 && html`<a class="setdet-buy-missing"
-      href=${missingMassEntryUrl || tcgSetSearchUrl(setName)} target="_blank" rel="noopener nofollow sponsored">
+      href=${(missingMassEntryUrl && missingMassEntryUrl[0]?.url) || tcgSetSearchUrl(setName)} target="_blank" rel="noopener nofollow sponsored">
       <span class="setdet-buy-missing-text">Shop ${visibleMissing.count} missing card${visibleMissing.count===1?'':'s'}${searchOrFilterLabel(inkFilter,rarityFilter,search,foilMode,statusFilter,priceBand)}</span>
-      <span class="setdet-buy-missing-price">${fmt(visibleMissing.value)}<span class="setdet-buy-missing-cta">Buy bulk on TCGplayer</span><span class="setdet-buy-missing-arrow">↗</span></span>
+      <span class="setdet-buy-missing-price">${fmt(visibleMissing.value)}<span class="setdet-buy-missing-cta">${missingMassEntryUrl && missingMassEntryUrl.length > 1 ? "Buy bulk — part 1 of " + missingMassEntryUrl.length : "Buy bulk on TCGplayer"}</span><span class="setdet-buy-missing-arrow">↗</span></span>
     </a>`}
+    ${!allMode && missingMassEntryUrl && missingMassEntryUrl.length > 1 && html`<div class="setdet-buy-parts">
+      <span class="muted">Too many for one TCGplayer cart link — add each part (they all go into the same cart):</span>
+      ${missingMassEntryUrl.map((p, i) => html`<a key=${i} class="setdet-buy-part" href=${p.url} target="_blank" rel="noopener nofollow sponsored">Part ${i + 1} · ${p.copies} ${p.copies === 1 ? "copy" : "copies"} ↗</a>`)}
+    </div>`}
 
     ${(() => {
       // For Extras & Oddities, sub-group by the card's origin set so the
@@ -34701,8 +34726,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const buildBatchBuyUrl = (rows) => {
     if(!rows.length) return null;
     const lines = rows.map(r => `1 ${(r.name || "") + (r.version ? " - " + r.version : "")}`.trim()).filter(Boolean);
-    const dest = `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=${encodeURIComponent(lines.join("||"))}`;
-    return TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(dest);
+    return tcgMassEntryParts(lines);
   };
 
   const toggleSelect = (k) => {
@@ -35469,12 +35493,17 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         ${batchOpen && html`<div class="price-db-batchmenu">
           ${(() => {
             const selRows = filtered.filter(r => selected.has(r.card_id + ":" + r.printing));
-            const buyUrl = buildBatchBuyUrl(selRows);
-            return html`<a class="price-db-batchitem" href=${buyUrl || "#"} target="_blank"
-              rel="noopener nofollow sponsored"
-              onClick=${(e) => { if(!buyUrl) e.preventDefault(); setBatchOpen(false); }}>
-              ${uiIcon("cart")} Buy on TCGplayer (affiliate cart)
-            </a>
+            const buyParts = buildBatchBuyUrl(selRows) || [];
+            return html`${buyParts.length <= 1
+              ? html`<a class="price-db-batchitem" href=${buyParts[0]?.url || "#"} target="_blank"
+                  rel="noopener nofollow sponsored"
+                  onClick=${(e) => { if(!buyParts.length) e.preventDefault(); setBatchOpen(false); }}>
+                  ${uiIcon("cart")} Buy on TCGplayer (affiliate cart)
+                </a>`
+              : buyParts.map((p, i) => html`<a key=${"buy" + i} class="price-db-batchitem" href=${p.url} target="_blank"
+                  rel="noopener nofollow sponsored" onClick=${() => setBatchOpen(false)}>
+                  ${uiIcon("cart")} Buy on TCGplayer — part ${i + 1} of ${buyParts.length} (${p.copies})
+                </a>`)}
             ${user && !watchlistsUnavailable && html`<button class="price-db-batchitem"
               onClick=${async () => {
                 setBatchOpen(false);
@@ -54071,9 +54100,9 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       }
     }
     if(!byName.size) return null;
-    const lines = Array.from(byName, ([name, qty]) => `${qty} ${name}`);
-    const dest = `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=${encodeURIComponent(lines.join("||"))}`;
-    return TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(dest);
+    // A deck is at most 60 cards, which is always one part.
+    const parts = tcgMassEntryParts(Array.from(byName, ([name, qty]) => `${qty} ${name}`));
+    return parts[0]?.url || null;
   }, [deck.cards, cardById, ownedShortByKey]);
 
   return html`<div>
