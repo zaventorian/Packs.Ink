@@ -5180,7 +5180,7 @@ async function fetchGradedSalesFor(slots, sinceDate){
     card_id: "in.(" + b.join(",") + ")",
     sold_date: "gte." + sinceDate,
     excluded: "is.false",
-    order: "card_id.asc,sold_date.asc",
+    order: "card_id.asc,sold_date.asc,item_id.asc",
   })));
   return results.flat();
 }
@@ -5199,7 +5199,7 @@ async function fetchGradedRollupFor(slots){
   const results = await Promise.all(batches.map(b => sbFetchAll("graded_sales_rollup", {
     select: "card_id,grader,grade,printing,last_sold_price,avg_last_5,last_sold_date",
     card_id: "in.(" + b.join(",") + ")",
-    order: "card_id.asc",
+    order: "card_id.asc,grader.asc,grade.asc,printing.asc",
   })));
   return results.flat();
 }
@@ -5997,9 +5997,14 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
         const firstY = h.first?.y;
         const showPct = firstY != null && firstY !== 0 && h.point.x !== h.first.x;
         const pct = showPct ? ((h.point.y - firstY) / firstY * 100) : null;
-        return html`<div key=${h.series.label} class="chart-tooltip-row">
-          <span class="legend-swatch" style=${{background:h.series.color}}/>
-          <span class="chart-tooltip-label">${h.series.label}</span>
+        // Price Graphing's series carry `name`, not `label` — the rows were
+        // nameless (and keyed on undefined), so past eight series nothing on
+        // the tooltip said which line was which. The swatch carries the dash.
+        const lbl = h.series.label || h.series.name || "";
+        const dashBg = h.series.dash ? "repeating-linear-gradient(90deg," + h.series.color + " 0 4px,transparent 4px 7px)" : null;
+        return html`<div key=${lbl + "|" + h.series.color} class="chart-tooltip-row">
+          <span class="legend-swatch" style=${{background: dashBg || h.series.color}}/>
+          <span class="chart-tooltip-label">${lbl}</span>
           <span class="chart-tooltip-value">${maskValues ? "$•••" : (valueFmt ? valueFmt(h.point.y) : "$"+h.point.y.toFixed(2))}</span>
           ${pct != null && html`<span class=${"chart-tooltip-pct "+(pct>=0?"up":"down")}>${pct>=0?"+":""}${pct.toFixed(1)}%</span>`}
         </div>`;
@@ -21090,7 +21095,7 @@ const clipSeriesFrom = (series, startMs) => {
 };
 
 const HISTORY_MODES = ["card","sealed","graded","set","index"];
-const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, incomingCompareCards, onConsumedIncomingCompareCards, watchlists}) => {
+const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, sealedPrices, setsMeta, incomingCompareCards, onConsumedIncomingCompareCards, watchlists}) => {
   const tips = useContext(TipsContext);
   // Deep-link state, read once. The compare list itself needs the catalog to
   // rehydrate (names / art / set) so it's applied in an effect further down
@@ -21098,6 +21103,11 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
   const urlGraph = useMemo(() => readUrlParam("g") || "", []);
   const [mode, setMode] = useState(() => readUrlEnum("hm", HISTORY_MODES) || "card");
   useEffect(() => { if(mode === "graded") signalGradedSurface(); }, [mode]);
+  // Graded prices are licensed data: until the terms are accepted this view
+  // shows the gate, like every other graded surface — By Graded (and a ?g= link
+  // carrying a graded tier) used to show rollup prices and sale series anyway,
+  // behind nothing but the prompt's "Maybe later".
+  const gradedPremium = useContext(GradedPremiumContext);
   // Sealed mode state — parallel to selectedGroup/cardQuery for cards.
   const [sealedSearch, setSealedSearch] = useState("");
   const [selectedSealedPid, setSelectedSealedPid] = useState(null);
@@ -21126,8 +21136,12 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
   const [compareLoading, setCompareLoading] = useState(false);
   // Consume cross-view nav payload from App. Bumped nonce ensures re-arriving
   // at the same set still re-applies (e.g. user clicks the same EV row twice).
+  // ⚠ Consumed ONCE, then cleared in App, like incomingCompareCards below: left
+  // standing, every later visit to Price Graphing switched to By Set EV and
+  // re-added that set, however long ago the EV row was clicked.
   useEffect(()=>{
     if(historyTarget && historyTarget.setName){
+      if(!raw || !raw.length) return;   // the set_id needs the catalog
       setMode("set");
       setSetNameLocal(historyTarget.setName);
       const sample = raw.find(r => r.Set === historyTarget.setName);
@@ -21146,7 +21160,9 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
         };
         setCompareCards(prev => prev.some(p => p.card_id === item.card_id) ? prev : [...prev, item]);
       }
+      onConsumedHistoryTarget && onConsumedHistoryTarget();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [historyTarget, raw]);
   // Consume the Screener -> Price Graphing handoff. Switch to compare mode,
   // load the card list, and clear the App-level state so navigating back
@@ -21196,7 +21212,8 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
   // goes to fetchCardHistory.
   useEffect(()=>{
     if(!compareCards.length) return;
-    const missing = compareCards.filter(c => c.kind !== "set" && !compareSeries[c.card_id]);
+    const missing = compareCards.filter(c => c.kind !== "set" && !compareSeries[c.card_id]
+      && !(c.kind === "graded" && !gradedPremium));
     if(!missing.length) return;
     let cancelled = false;
     setCompareLoading(true);
@@ -21307,7 +21324,9 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
       setCompareLoading(false);
     });
     return () => { cancelled = true; };
-  }, [compareCards]);
+  // gradedPremium: accepting the graded terms fetches the tiers it held back.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compareCards, gradedPremium]);
 
   // Fetch graded picker options lazily — only when the user first opens
   // the By Graded tab. Keeps the Price Graphing initial load fast for
@@ -21323,7 +21342,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
     let cancelled = false;
     sbFetchAll("graded_sales_rollup", {
       select: "card_id,printing,grader,grade,last_sold_price,avg_last_5,sale_count,last_sold_date",
-      order: "last_sold_price.desc.nullslast",
+      order: "last_sold_price.desc.nullslast,card_id.asc,grader.asc,grade.asc,printing.asc",
     }).then(rows => {
       if(cancelled) return;
       // card_id -> catalog row for metadata. Split-printing sets emit one raw
@@ -21955,6 +21974,22 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
       return next;
     });
   }, [raw]);
+  // The (pid, printing) the picker graphs for each card — its non-foil when it
+  // has one, else its only printing. A foil-only card (Enchanted, Epic, Iconic)
+  // arrives from a ?g= link or the Screener as "card_id::Holofoil", so an id
+  // comparison showed it UNCHECKED in the picker and a click added the same
+  // line twice. Selection matches on what the chart is actually keyed by.
+  const cardDefaultPick = useMemo(() => {
+    const m = new Map();
+    for(const r of raw || []){
+      if(!r || r.card_id == null || r.tcgplayer_product_id == null) continue;
+      const pr = r.tcg_printing || "Normal";
+      const isNormal = pr === "Normal" || pr === "Non-Foil";
+      const cur = m.get(r.card_id);
+      if(!cur || (isNormal && !cur.normal)) m.set(r.card_id, {pid: r.tcgplayer_product_id, printing: pr, normal: isNormal});
+    }
+    return m;
+  }, [raw]);
   const buildCardCompareItem = useCallback((c) => {
     if(!c || !c.card_id) return null;
     const allRows = raw.filter(r => r.card_id === c.card_id);
@@ -22035,12 +22070,28 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
   // — hydrating early would silently drop those. Graded items don't need the
   // rollup: their tier is in the URL and their card metadata is in `raw`.
   const urlGraphApplied = useRef(false);
+  // How long a link waits for the sealed catalog / the owner's watchlists
+  // before graphing without them — they may simply never come (a failed
+  // fetch, a signed-out visitor), and the rest of the graph should not wait
+  // forever on them.
+  const [urlGraphWaitDone, setUrlGraphWaitDone] = useState(false);
+  useEffect(() => {
+    if(!urlGraph) return;
+    const t = setTimeout(() => setUrlGraphWaitDone(true), 8000);
+    return () => clearTimeout(t);
+  }, [urlGraph]);
   useEffect(() => {
     if(urlGraphApplied.current || !urlGraph) return;
     if(!raw || !raw.length) return;
     const wanted = decodeCompareItems(urlGraph);
     if(!wanted.length){ urlGraphApplied.current = true; return; }
-    if(wanted.some(w => w.kind === "sealed") && !sealedPrices) return;
+    // ⚠ App's sealedPrices starts as [] (not null), so "has it loaded" is its
+    // LENGTH — the old null test passed at once and dropped every sealed item
+    // from a shared graph. Same for the owner's basket index: watchlists is
+    // null until its fetch settles, and a refresh lost the basket.
+    const needSealed = wanted.some(w => w.kind === "sealed") && !(sealedPrices && sealedPrices.length);
+    const needLists = wanted.some(w => w.kind === "index" && w.watchlistId) && watchlists == null;
+    if((needSealed || needLists) && !urlGraphWaitDone) return;
     urlGraphApplied.current = true;
     const byCardId = new Map();
     const byPidPrinting = new Map();
@@ -22100,7 +22151,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
       }
     }
     if(built.length) setCompareCards(built.filter(Boolean).slice(0, COMPARE_MAX));
-  }, [urlGraph, raw, sealedPrices, watchlists, buildSealedCompareItem, buildSetCompareItem, buildGradedCompareItem, buildIndexCompareItem, buildWatchlistIndexItem]);
+  }, [urlGraph, raw, sealedPrices, watchlists, urlGraphWaitDone, buildSealedCompareItem, buildSetCompareItem, buildGradedCompareItem, buildIndexCompareItem, buildWatchlistIndexItem]);
 
   // Mirror the graph back into the URL. replaceState — the compare list is a
   // filter on one page, not a stack of pages, so Back should leave Price
@@ -22309,10 +22360,16 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
         : null;
       const renderSeries = benchClipped ? [benchClipped, ...plotted] : plotted;
       const isFull = compareCards.length >= COMPARE_MAX;
-      const isCardInCompare = (cid) => compareCards.some(p => p.card_id === cid);
+      const cardItemMatches = (p, cid) => {
+        if(p.card_id === cid) return true;
+        if(p.kind !== "card") return false;
+        const d = cardDefaultPick.get(cid);
+        return !!d && p.productId === d.pid && p.printing === d.printing;
+      };
+      const isCardInCompare = (cid) => compareCards.some(p => cardItemMatches(p, cid));
       const toggleCard = (c) => {
         if(isCardInCompare(c.card_id)){
-          setCompareCards(prev => prev.filter(p => p.card_id !== c.card_id));
+          setCompareCards(prev => prev.filter(p => !cardItemMatches(p, c.card_id)));
         } else if(!isFull){
           const item = buildCardCompareItem(c);
           if(item) setCompareCards(prev => [...prev, item]);
@@ -22531,6 +22588,8 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                   </div>`)}
             </div>
           </div>`
+        : mode === "graded" && !gradedPremium
+        ? html`<div class="history-picker"><${GradedTosGate}/></div>`
         : mode === "graded"
         ? html`<div class="history-picker">
             <div class="history-picker-searchrow">
@@ -22715,11 +22774,13 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                     const nPts = (clipped[i] && clipped[i].data ? clipped[i].data.filter(p => Number.isFinite(p.y)) : []).length;
                     return html`<span key=${c.card_id} class="compare-chip"
                     style=${{borderColor: st.color}}>
-                    <span class="compare-swatch" style=${{background: st.color,
+                    <span class="compare-swatch" style=${{
                       // Past slot 8 the hue repeats and the stroke pattern is
                       // what separates the lines — the swatch has to say so or
-                      // two chips claim the same identity.
-                      backgroundImage: st.dash ? "repeating-linear-gradient(90deg,"+st.color+" 0 4px,transparent 4px 7px)" : "none"}}></span>
+                      // two chips claim the same identity. ⚠ The dash is the
+                      // WHOLE background: a solid background-color under the
+                      // stripes filled their gaps, and every swatch read solid.
+                      background: st.dash ? "repeating-linear-gradient(90deg,"+st.color+" 0 4px,transparent 4px 7px)" : st.color}}></span>
                     <span class="compare-name">${c.name}</span>
                     ${c.kind === "sealed" ? html`<span class="compare-kind-tag">sealed</span>` : c.kind === "set" ? html`<span class="compare-kind-tag">set EV</span>` : null}
                     ${nPts === 1 && html`<span class="compare-kind-tag" title="Only one price point in this range — drawn as a dot, not a line.">1 pt</span>`}
@@ -22773,7 +22834,10 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                   benchKey && Array.isArray(benchRows) && benchRows.length === 0 && html`<div class="muted" style=${{fontSize:11,marginBottom:6}}>
                   No index for that group — it has too few cards priced to make one. Try a wider benchmark.
                 </div>`}
-                ${compareLoading
+                ${/* Derived, not a flag: removing an item while its fetch ran left
+                      the shared flag stuck on "Loading history…" for good. */""}
+                ${compareCards.some(c => c.kind === "set" ? !setEvCache[c.setId]
+                    : (c.kind === "graded" && !gradedPremium) ? false : !compareSeries[c.card_id])
                   ? html`<div class="chart-empty large">Loading history…</div>`
                   : renderSeries.length === 0
                     ? html`<div class="chart-empty large">No price history yet for the selected product${compareCards.length>1?"s":""}.</div>`
@@ -22795,8 +22859,8 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                       const pct   = (data.length && start) ? ((end-start)/start*100) : null;
                       const st = compareSeriesStyle(i, paletteColors);
                       return html`<tr key=${c.card_id}>
-                        <td><span class="legend-swatch" style=${{background: st.color, display:"inline-block", width:14, height:5, borderRadius:2,
-                          backgroundImage: st.dash ? "repeating-linear-gradient(90deg,"+st.color+" 0 4px,transparent 4px 7px)" : "none"}}/></td>
+                        <td><span class="legend-swatch" style=${{display:"inline-block", width:14, height:5, borderRadius:2,
+                          background: st.dash ? "repeating-linear-gradient(90deg,"+st.color+" 0 4px,transparent 4px 7px)" : st.color}}/></td>
                         <td>${i+1}</td>
                         ${/* No "index" tag on an index — the name already ends
                               in it, and "Whole market index index" is what that
@@ -26445,7 +26509,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     let cancelled = false;
     sbFetchAll("graded_sales_rollup", {
       select: "card_id,grader,grade,printing,sale_count,last_sold_date,last_sold_price,avg_last_5,pct_1d,pct_7d,pct_30d",
-      order: "card_id.asc",
+      order: "card_id.asc,grader.asc,grade.asc,printing.asc",
     }).then(rows => { if(!cancelled) setRollup(rows || []); }).catch(()=>{ if(!cancelled) setRollup([]); });
     return () => { cancelled = true; };
   }, [gradedPremium]);
@@ -33637,16 +33701,19 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const [editSale, setEditSale] = useState(null);
   // Lazy rollup fetch — only when a premium account first flips Graded on.
   const [gradedRollup, setGradedRollup] = useState(null);
+  // A failed read is an error to retry, not an empty market: [] made the table
+  // say "No cards match the current filters" with no hint anything went wrong.
+  const [gradedRollupErr, setGradedRollupErr] = useState(false);
   useEffect(() => {
-    if(!showGraded || !gradedPremium || gradedRollup != null) return;
+    if(!showGraded || !gradedPremium || gradedRollup != null || gradedRollupErr) return;
     let cancelled = false;
     sbFetchAll("graded_sales_rollup", {
       select: "card_id,grader,grade,printing,sale_count,last_sold_date,last_sold_price,avg_last_5,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,pct_1095d,pct_rel",
-      order: "card_id.asc",
+      order: "card_id.asc,grader.asc,grade.asc,printing.asc",
     }).then(rows => { if(!cancelled) setGradedRollup(rows || []); })
-      .catch(e => { if(!cancelled){ console.warn("graded rollup fetch:", e?.message || e); setGradedRollup([]); } });
+      .catch(e => { if(!cancelled){ console.warn("graded rollup fetch:", e?.message || e); setGradedRollupErr(true); } });
     return () => { cancelled = true; };
-  }, [showGraded, gradedPremium, gradedRollup]);
+  }, [showGraded, gradedPremium, gradedRollup, gradedRollupErr]);
   // PSA population, for the pop columns. Same lazy, once-per-session cache the
   // card modal and the poster use, so opening the Screener after a card page
   // costs nothing. Resolves empty (never throws) before migration 165 lands, in
@@ -34160,10 +34227,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     // low_last_changed ships in migration 124 — fetch it schema-tolerantly
     // (42703 → retry without) so this code deploys safely pre-migration.
     // Rows without the field just never show the staleness hint.
-    sbFetchAll("price_movers", {select: MOVERS_COLS + ",low_last_changed", order: "card_id.asc"})
+    sbFetchAll("price_movers", {select: MOVERS_COLS + ",low_last_changed", order: "card_id.asc,printing.asc"})
       .catch(e => {
         if(!/42703|low_last_changed/i.test(String(e?.message || e))) throw e;
-        return sbFetchAll("price_movers", {select: MOVERS_COLS, order: "card_id.asc"});
+        return sbFetchAll("price_movers", {select: MOVERS_COLS, order: "card_id.asc,printing.asc"});
       })
       // MUST paginate. PostgREST caps a response at 1000 rows no matter what
       // .limit() says, so a bare .limit(N) silently truncates — invisible while
@@ -34206,9 +34273,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // is small (~200 SKUs × 365 days, batched at 80 IDs/call) so it lands
   // in well under the 10s statement timeout.
   const [sealedHistory, setSealedHistory] = useState(null);
+  const [sealedHistoryErr, setSealedHistoryErr] = useState(false);
   useEffect(() => {
-    if(!showSealed || sealedHistory != null) return;
-    if(!sealedPrices || !sealedPrices.length){ setSealedHistory([]); return; }
+    if(!showSealed || sealedHistory != null || sealedHistoryErr) return;
+    // ⚠ Wait for the sealed catalog rather than latching [] — App's
+    // sealedPrices starts empty, so landing on ?m=sealed stored "no history"
+    // and every sealed Δ% stayed "—" for the rest of the session.
+    if(!sealedPrices || !sealedPrices.length) return;
     const pids = Array.from(new Set(
       sealedPrices.filter(p => p.printing === "Normal" && p.product_type !== "Promo Single")
         .map(p => p.tcgplayer_product_id)
@@ -34221,9 +34292,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     // without it this mode rendered a dash in every Market cell.
     fetchCollectionPriceHistory(pids, since, {market: true})
       .then(rows => { if(!cancelled) setSealedHistory(rows || []); })
-      .catch(e => { if(!cancelled){ console.warn("sealed history fetch:", e?.message || e); setSealedHistory([]); } });
+      .catch(e => { if(!cancelled){ console.warn("sealed history fetch:", e?.message || e); setSealedHistoryErr(true); } });
     return () => { cancelled = true; };
-  }, [showSealed, sealedHistory, sealedPrices]);
+  }, [showSealed, sealedHistory, sealedPrices, sealedHistoryErr]);
 
   // Synthesize sealed Screener rows: one per sealed pid (Normal printing
   // only — sealed has no foil duality). Each row carries name, set_id,
@@ -36141,7 +36212,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         ? `${filtered.length.toLocaleString()} of ${total.toLocaleString()}`
         : `${filtered.length.toLocaleString()}`;
     })()} ${showSealed ? "products" : "cards"}${selected.size>0 ? ` · ${selected.size} selected` : ""}</div>
-    ${filtered.length === 0 && raw && raw.length > 0 && html`<div class="empty-state" style=${{textAlign:"center",padding:"26px 12px",color:"var(--text-muted)",fontSize:13}}>
+    ${filtered.length === 0 && raw && raw.length > 0 && ((showSealed && sealedHistory == null) || (premiumGraded && gradedRollup == null))
+      ? html`<div class="empty-state" style=${{textAlign:"center",padding:"26px 12px",color:"var(--text-muted)",fontSize:13}}>
+          ${(showSealed ? sealedHistoryErr : gradedRollupErr)
+            ? html`<div>Couldn't load ${showSealed ? "sealed" : "graded"} prices.${" "}
+                <button class="price-db-advbtn" onClick=${() => { if(showSealed) setSealedHistoryErr(false); else setGradedRollupErr(false); }}>Try again</button></div>`
+            : html`<div>Loading ${showSealed ? "sealed" : "graded"} prices…</div>`}
+        </div>`
+      : filtered.length === 0 && raw && raw.length > 0 && html`<div class="empty-state" style=${{textAlign:"center",padding:"26px 12px",color:"var(--text-muted)",fontSize:13}}>
       <div>No cards match the current filters — try clearing a chip or two, or switch the preset back to "All".</div>
       ${hiddenFilterChips.length > 0 && html`<div style=${{marginTop:10}}>
         The Filter panel is also narrowing this view: <b>${hiddenFilterChips.map(c=>c.label).join(" · ")}</b>.
@@ -46524,7 +46602,7 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
     rollupRequested.current = true;
     let cancelled = false;
     sbFetchAll("graded_sales_rollup", {
-      select: "card_id,grader,grade,printing,last_sold_price,pct_1d,pct_7d,pct_30d,pct_90d", order: "card_id.asc",
+      select: "card_id,grader,grade,printing,last_sold_price,pct_1d,pct_7d,pct_30d,pct_90d", order: "card_id.asc,grader.asc,grade.asc,printing.asc",
     }).then(rows => { if(!cancelled) setRollup(rows || []); }).catch(() => { if(!cancelled) setRollup([]); });
     return () => { cancelled = true; };
   }, [tab]);
@@ -47486,7 +47564,7 @@ const GradedOwnedMoversHomePanel = ({raw, user, onCard, onTitleClick}) => {
     Promise.all(batches.map(b => sbFetchAll("graded_sales_rollup", {
       select: "card_id,grader,grade,printing,last_sold_price,pct_1d,pct_7d,pct_30d",
       card_id: "in.(" + b.join(",") + ")",
-      order: "card_id.asc",
+      order: "card_id.asc,grader.asc,grade.asc,printing.asc",
     }))).then(rs => { if(!cancelled) setRollup(rs.flat()); })
       .catch(() => { if(!cancelled) setRollup([]); });
     return () => { cancelled = true; };
@@ -58243,7 +58321,7 @@ function App(){
         const pages = await Promise.all(chunks.map(c => sbFetchAll("price_movers", {
           select: "card_id,printing,low_today,market_today,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d",
           card_id: "in.(" + c.join(",") + ")",
-          order: "card_id.asc",
+          order: "card_id.asc,printing.asc",
         })));
         if(cancelled) return;
         const rowByKey = new Map();
@@ -59484,6 +59562,7 @@ function App(){
     ${viewsReady&&view==="history"&&html`<${HistoryView} raw=${raw} sets=${sets} theme=${theme}
       sealedPrices=${sealedPrices} setsMeta=${setsMeta}
       historyTarget=${historyTarget}
+      onConsumedHistoryTarget=${() => setHistoryTarget(null)}
       incomingCompareCards=${incomingCompareCards}
       watchlists=${watchlists}
       onConsumedIncomingCompareCards=${() => setIncomingCompareCards(null)}/>`}
