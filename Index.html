@@ -22667,8 +22667,11 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                 ? html`<div class="history-picker-empty">Loading indices…</div>`
                 : indexCatalog === null
                   ? html`<div class="history-picker-empty">
-                      Market indices aren't switched on for this site yet — ask an admin to run${" "}
-                      <code>supabase/130_market_index_scopes.sql</code>, then <code>select public.refresh_market_index();</code>.
+                      ${/* Shown to everyone — and on an ordinary network failure,
+                            not only a missing table — so it speaks to a reader,
+                            not an admin; the SQL hint lives in the console. */""}
+                      Market indices couldn't be loaded right now.${" "}
+                      <button class="cal-linkish" onClick=${() => setIndexCatalog(undefined)}>Try again</button>
                     </div>`
                   : indexPickerGroups.length === 0
                     ? html`<div class="history-picker-empty">${(indexCatalog||[]).length
@@ -22831,7 +22834,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                   </label>`}
                 </div>
                 ${benchKey && benchRows === null && html`<div class="muted" style=${{fontSize:11,marginBottom:6}}>
-                  Market indices aren't switched on for this site yet — ask an admin to run <code>supabase/130_market_index_scopes.sql</code>, then <code>select public.refresh_market_index();</code>.
+                  That benchmark couldn't be loaded right now — pick it again to retry.
                 </div>`}
                 ${/* A scope with too few cards to index returns an empty array
                       rather than null. Say which, instead of silently drawing
@@ -33478,8 +33481,7 @@ const AlertsModal = ({alerts, alertEvents, alertOps, watchlists, cardNameFor, un
       <h3 class="title-font" style=${{margin:"0 0 10px",fontSize:18}}>Price alerts</h3>
       ${unavailable
         ? html`<p class="muted" style=${{fontSize:13}}>
-            Alerts aren't switched on for this site yet — ask an admin to run${" "}
-            <code>supabase/129_price_alerts.sql</code>.
+            Price alerts aren't available right now. Your watchlists still work.
           </p>`
         : html`<${React.Fragment}>
         <div class="seg-toggle" style=${{marginBottom:12}}>
