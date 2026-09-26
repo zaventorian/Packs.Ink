@@ -6005,7 +6005,7 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
         return html`<div key=${lbl + "|" + h.series.color} class="chart-tooltip-row">
           <span class="legend-swatch" style=${{background: dashBg || h.series.color}}/>
           <span class="chart-tooltip-label">${lbl}</span>
-          <span class="chart-tooltip-value">${maskValues ? "$•••" : (valueFmt ? valueFmt(h.point.y) : "$"+h.point.y.toFixed(2))}</span>
+          <span class="chart-tooltip-value">${maskValues ? "$•••" : (valueFmt ? valueFmt(h.point.y) : fmtUSD(h.point.y))}</span>
           ${pct != null && html`<span class=${"chart-tooltip-pct "+(pct>=0?"up":"down")}>${pct>=0?"+":""}${pct.toFixed(1)}%</span>`}
         </div>`;
       })}
@@ -7935,7 +7935,7 @@ const PriceBadge = ({row, label, klass}) => {
   const url = tcgUrl(row.tcgplayer_product_id, row.tcg_printing);
   return html`<a class=${"price-badge "+(klass||"")} href=${url} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>
     ${label && html`<span class="label">${label}</span>`}
-    <span class="low">${low!=null?"$"+low.toFixed(2):"—"}<span class="ext">↗</span></span>
+    <span class="low">${low!=null?fmtUSD(low):"—"}<span class="ext">↗</span></span>
     ${market!=null && html`<span class="market">Mkt $${market.toFixed(2)}</span>`}
   </a>`;
 };
@@ -8320,7 +8320,7 @@ const PrintingBlock = ({row, title, subtitle, qty, onQtyChange}) => {
       </div>
       ${subtitle && html`<div class="printing-subtitle">${subtitle}</div>`}
       <div class="printing-prices">
-        <div class="price-line"><${Tip} text=${TIP_LOW} class="lbl">Low<//><span class="val main">${low!=null?"$"+low.toFixed(2):"—"}</span></div>
+        <div class="price-line"><${Tip} text=${TIP_LOW} class="lbl">Low<//><span class="val main">${low!=null?fmtUSD(low):"—"}</span></div>
         ${market!=null && html`<div class="price-line"><${Tip} text=${TIP_MARKET} class="lbl">NM Market<//><span class="val">$${market.toFixed(2)}</span></div>`}
       </div>
     </a>
@@ -17127,8 +17127,8 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
     const mid = (minX + maxX) / 2;
     const name = label.name || "";
-    const price = label.mkt != null ? "$" + Number(label.mkt).toFixed(2)
-                : (label.low != null ? "$" + Number(label.low).toFixed(2) : "—");
+    const price = label.mkt != null ? fmtUSD(Number(label.mkt))
+                : (label.low != null ? fmtUSD(Number(label.low)) : "—");
     const fs = Math.max(15, Math.round(bw * 0.028));
     const pfs = Math.max(18, Math.round(bw * 0.036));
     ctx.font = "700 " + fs + "px system-ui, sans-serif";
@@ -19124,7 +19124,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
 
   // ── QA rows: shared renderer + aggregates (live list AND the review-&-save
   //    screen render the same row, so fixes made in either place stick) ──────
-  const qmoney = (x) => x != null ? "$" + Number(x).toFixed(2) : "—";
+  const qmoney = (x) => x != null ? fmtUSD(Number(x)) : "—";
   const qaConfChip = (cf, ver) => cf === "user"
     ? html`<span class="scanner-qa-conf user" title="Set by you">✓</span>`
     : cf === "unread"
@@ -19179,7 +19179,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
         </span>` : null}
       </div>
       <div class="scanner-qa-side">
-        <span class="scanner-session-price">${x.price != null ? "$" + Number(x.price).toFixed(2) : ""}</span>
+        <span class="scanner-session-price">${x.price != null ? fmtUSD(Number(x.price)) : ""}</span>
         ${x.saved ? html`<span class="scanner-qa-savedchip">✓ saved</span>` : null}
         <span class="scanner-qa-actions">
           <button class="scanner-qa-editbtn" title="Wrong card? Fix or confirm it" aria-label="Edit this scan" onClick=${() => qaOpenEdit(x.id)}>${uiIcon("edit", 13)}</button>
@@ -19289,7 +19289,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       </div>
     </div>`;
   } else if(mode === "ambient"){
-    const money = (x) => x != null ? "$" + Number(x).toFixed(2) : "—";
+    const money = (x) => x != null ? fmtUSD(Number(x)) : "—";
     const sessTotal = session.reduce((s, x) => s + (Number(x.mkt ?? x.low ?? 0) * x.qty), 0);
     const sessCount = session.reduce((s, x) => s + x.qty, 0);
     const pv = preview;
@@ -22872,8 +22872,8 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                               base of 100. Printing "$100.00" would invite the
                               reader to compare it against a card's price, which
                               is a category error. */ null}
-                        <td class="num">${start==null?"—":(c.kind==="index"?start.toFixed(1):"$"+start.toFixed(2))}</td>
-                        <td class="num">${end==null?"—":(c.kind==="index"?end.toFixed(1):"$"+end.toFixed(2))}</td>
+                        <td class="num">${start==null?"—":(c.kind==="index"?start.toFixed(1):fmtUSD(start))}</td>
+                        <td class="num">${end==null?"—":(c.kind==="index"?end.toFixed(1):fmtUSD(end))}</td>
                         <td class=${"num "+(pct==null?"":(pct>=0?"up":"down"))}>${pct==null?"—":(pct>=0?"+":"")+pct.toFixed(1)+"%"}</td>
                       </tr>`;
                     })}
@@ -23643,7 +23643,7 @@ const SealedValueChart = ({sealedCollection, sealedPrices, rangeKey, setRangeKey
       <div class="gvc-value">
         <span class="gvc-now">$${currentValue.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
         ${rangeDelta != null && html`<span class="gvc-delta" style=${{color:deltaColor}}>
-          ${rangeDelta >= 0 ? "+" : ""}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})}
+          ${rangeDelta >= 0 ? "+" : "−"}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})}
           <span style=${{opacity:0.8}}>(${rangeDeltaPct >= 0 ? "+" : ""}${rangeDeltaPct.toFixed(1)}%)</span>
           <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>past ${rangeLabel}</span>
         </span>`}
@@ -25448,7 +25448,7 @@ const GradedValueChart = ({items, cardById, priceByKey, knownBuckets, splitTiers
       <div class="gvc-value">
         <span class="gvc-now">$${currentValue.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
         ${rangeDelta != null && html`<span class="gvc-delta" style=${{color:deltaColor}}>
-          ${rangeDelta >= 0 ? "+" : ""}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})}
+          ${rangeDelta >= 0 ? "+" : "−"}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})}
           <span style=${{opacity:0.8}}>(${rangeDeltaPct >= 0 ? "+" : ""}${rangeDeltaPct.toFixed(1)}%)</span>
           <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>past ${rangeLabel}</span>
         </span>`}
@@ -28536,8 +28536,15 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   }, []);
   // Re-clicking the Collection tab while inside a set drops back to the
   // top-level set grid. tabClickNonce increments on every tab click.
+  // ⚠ Only a CHANGE counts. The nonce is already non-zero when this view
+  // mounts after any earlier tab click, so testing "> 0" also fired on mount —
+  // and mounting is what the browser's Back into /collection?set=… does, so
+  // Back into a set page landed on the grid instead.
+  const seenTabNonce = useRef(tabClickNonce);
   useEffect(() => {
-    if(tabClickNonce > 0) setSelectedSet(null);
+    if(tabClickNonce === seenTabNonce.current) return;
+    seenTabNonce.current = tabClickNonce;
+    setSelectedSet(null);
   }, [tabClickNonce]);
   // Completion goal {n: non-foil, f: foil} comes from App (props) so it's one
   // source of truth and syncs to user_metadata across devices. Master Set =
@@ -33489,7 +33496,7 @@ const AlertsModal = ({alerts, alertEvents, alertOps, watchlists, cardNameFor, un
                   </div>
                   <div class="alert-event-meta">
                     ${e.observed != null && html`<b>${a && (a.kind==="above"||a.kind==="below")
-                      ? "$" + Number(e.observed).toFixed(2)
+                      ? fmtUSD(Number(e.observed))
                       : (Number(e.observed) > 0 ? "+" : "") + Number(e.observed).toFixed(1) + "%"}</b>`}
                     <span class="muted">${e.price_date}</span>
                     ${!e.read_at && html`<button class="alert-event-read"
@@ -37785,6 +37792,8 @@ const fmtPct = (p) => {
   if(a >= 1000) return (p > 0 ? "+" : "") + Math.round(p/100) + "x"; // 1500% → "+15x"
   // Trim decimals as the number grows so big movers stay inside their cell.
   const fixed = a >= 10 ? 0 : 1;
+  // -0.04 rounds to "-0.0%", a loss of nothing; say 0.
+  if(Number(p.toFixed(fixed)) === 0) return (0).toFixed(fixed) + "%";
   return (p > 0 ? "+" : "") + p.toFixed(fixed) + "%";
 };
 const pctColor = (p) => {
@@ -38781,6 +38790,16 @@ function paintGradedTile(ctx, x, y, w, h, c, art, gridWins, P){
   ctx.fillText((c.grader||"").toUpperCase()+" "+c.grade + (c.prBadge?" · "+c.prBadge:""), x+12, cy);
   ctx.textAlign = "right"; ctx.fillStyle = P.text; ctx.font = "800 12px 'Nunito Sans', sans-serif";
   ctx.fillText(c.price != null ? fmtUSD(c.price, 0) : "—", x+w-12, cy); cy += 17;
+  // A SALE has a date, not a set of Δ% windows — the Top Sales export printed a
+  // header of windows over "— — —" on every tile.
+  if(!gridWins.length){
+    if(c.sold_date){
+      ctx.textAlign = "left"; ctx.fillStyle = P.muted; ctx.font = "700 10px 'Nunito Sans', sans-serif";
+      const d = new Date(String(c.sold_date).slice(0, 10) + "T00:00:00");
+      ctx.fillText("Sold " + (isNaN(d) ? c.sold_date : d.toLocaleDateString(undefined, {month:"short", day:"numeric", year:"numeric"})), x+12, cy);
+    }
+    return;
+  }
   const cellW = (w-24)/gridWins.length;
   ctx.textAlign = "center";
   gridWins.forEach(([l], i) => { ctx.fillStyle = P.muted; ctx.font = "700 8.5px 'Nunito Sans', sans-serif"; ctx.fillText(l, x+12+cellW*(i+0.5), cy); });
@@ -38792,7 +38811,7 @@ async function buildGradedBannerBlob(cards, gridWins, title, rangeLabel){
   const SCALE=2, PAD=22, COLS=5, TW=200, GAP=12;
   const list = (cards||[]).slice(0,10);
   if(!list.length) throw new Error("no cards");
-  const artW = TW-24, artH = Math.round(artW*7/5), tileH = 12 + artH + 76;
+  const artW = TW-24, artH = Math.round(artW*7/5), tileH = 12 + artH + ((gridWins && gridWins.length) ? 76 : 50);
   const rows = Math.ceil(list.length/COLS), HEAD_H=54;
   const W = PAD + COLS*TW + (COLS-1)*GAP + PAD;
   const H = PAD + HEAD_H + 14 + rows*tileH + (rows-1)*GAP + PAD;
@@ -40185,7 +40204,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     <div class="panel-value">
       <div class="panel-value-now">${hideValue ? "-----" : "$"+combinedCurrentValue.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
       ${!hideValue && rangeDelta != null && html`<div class="panel-value-delta" style=${{color:deltaColor}}>
-        ${rangeDelta >= 0 ? "+" : ""}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
+        ${rangeDelta >= 0 ? "+" : "−"}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
         <span style=${{opacity:0.8}}>(${rangeDeltaPct >= 0 ? "+" : ""}${rangeDeltaPct.toFixed(2)}%)</span>
         <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>past ${rangeLabel}</span>
       </div>`}
@@ -40210,7 +40229,12 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
       <label title="Show Graded card value on the chart">
         <input type="checkbox" checked=${showGraded} onChange=${e=>setShowGraded(e.target.checked)}/>
         <span class="panel-toggle-swatch" style=${{background:"#c8a846"}}/>
-        <span>Graded <em>${hideValue ? "-----" : fmt(gradedLatestValue)}</em></span>
+        ${/* "$0.00" beside slabs you own read as "worth nothing": the series is
+              only fetched while the line is on (and the terms accepted), so
+              until then there is no number to show — say so. */""}
+        <span>Graded <em>${hideValue ? "-----"
+          : (gradedValueSeries && gradedValueSeries.length) ? fmt(gradedLatestValue)
+          : gradedSlots.length ? "—" : fmt(0)}</em></span>
       </label>
       <label title="Sum every enabled section into a single line (default). Uncheck to see Cards / Sealed / Graded as their own colored lines."
         style=${{marginLeft:"auto"}}>
@@ -46688,7 +46712,7 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
       ${cards && cards.length > 0 && html`<span class="movers-banner-cams" style=${{marginLeft:"auto",display:"inline-flex",gap:6,alignItems:"center"}}>
         ${[{lo:0,hi:10,lbl:"1–10"}, ...(cards.length>10 ? [{lo:10,hi:20,lbl:"11–20"}] : [])].map(seg => html`<button key=${seg.lbl}
           class="movers-banner-cam" title=${`Copy cards ${seg.lbl} as an image`} aria-label=${`Copy cards ${seg.lbl} as an image`}
-          onClick=${()=>copyGradedBannerImage(cards.slice(seg.lo, seg.hi), gridWins, "Graded Market", (tab==="sales"?"Top Sales · ":"")+(GRADED_HOME_WINS.find(w=>w[0]===win)||[])[1], seg.lbl)}>
+          onClick=${()=>copyGradedBannerImage(cards.slice(seg.lo, seg.hi), tab === "sales" ? [] : gridWins, "Graded Market", (tab==="sales"?"Top Sales · ":"")+(GRADED_HOME_WINS.find(w=>w[0]===win)||[])[1], seg.lbl)}>
           <svg viewBox="0 0 24 24" aria-hidden="true" width="12" height="12" style=${{display:"block",stroke:"currentColor",fill:"none",strokeWidth:2,strokeLinecap:"round",strokeLinejoin:"round"}}>
             <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>
           </svg>
@@ -50691,9 +50715,15 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     setEditMode(mode === "edit");
     try {
       const u = new URL(window.location.href);
+      // Already ON this deck's URL — a deep link, or Back onto it — is not a new
+      // page. Pushing stacked a second identical entry, so the next Back did
+      // nothing. The entry keeps its own state, which is what tells the in-app
+      // Back whether it can step back (it was pushed) or should just close.
+      const already = u.searchParams.get("deck") === id;
       u.searchParams.set("deck", id);
       u.searchParams.delete("tourney");
-      window.history.pushState({deck: id}, "", u.toString());
+      if(already) window.history.replaceState(window.history.state, "", u.toString());
+      else window.history.pushState({deck: id}, "", u.toString());
     } catch {}
   }, []);
   // Decks owned by someone else — fetched on demand from incomingDeckId or
@@ -51076,12 +51106,15 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // (Your Decks / Favorites / Following / Discover) the user was on.
   // deckSection is preserved in state so just clearing the deeper views
   // restores the list naturally.
+  // ⚠ Only a CHANGE counts — see CollectionView: the nonce is non-zero on any
+  // mount after an earlier tab click, which includes Back into ?deck=….
+  const seenTabNonce = useRef(tabClickNonce);
   useEffect(() => {
-    if(tabClickNonce > 0){
-      setSelectedDeckId(null);
-      setExternalDeck(null);
-      setCreatorProfile(null);
-    }
+    if(tabClickNonce === seenTabNonce.current) return;
+    seenTabNonce.current = tabClickNonce;
+    setSelectedDeckId(null);
+    setExternalDeck(null);
+    setCreatorProfile(null);
   }, [tabClickNonce]);
 
   // Index raw rows by card_id so deck rendering can look up name/image/price.
@@ -55679,7 +55712,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           </span>
           ${price!=null && aff
             ? html`<a class="deck-row-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" title="Shop on TCGplayer (affiliate)">$${price.toFixed(2)}</a>`
-            : html`<span class="deck-row-price" style=${{background:"transparent",border:"none",padding:0}}>${price!=null?"$"+price.toFixed(2):"—"}</span>`}
+            : html`<span class="deck-row-price" style=${{background:"transparent",border:"none",padding:0}}>${price!=null?fmtUSD(price):"—"}</span>`}
           ${makeCounter(item, cardMax, "deck-row-counter")}
         </div>`;
       };
@@ -56290,6 +56323,9 @@ function App(){
     } catch { return {deck: null, token: null, user: null, collection: null, tourney: null, trade: null, tradeToken: null, a: null}; }
   }, []);
   const [incomingDeckId, setIncomingDeckId] = useState(initialUrlParams.deck);
+  const viewRef = useRef(null);
+  // Params a nav-tab click wants gone from the page it is navigating TO.
+  const tabStripRef = useRef(null);
   // Multi-card compare on the Price Graphing tab. Screener's "Add to Price
   // Graphing" batch action sets this array of {card_id, productId, printing,
   // name} objects and switches to the history view; HistoryView consumes
@@ -56579,6 +56615,7 @@ function App(){
     try { return parseViewFromPath(window.location.pathname) || "home"; }
     catch { return "home"; }
   });
+  viewRef.current = view;
   // Analytics sub-tab, mirrored into the URL (?a=<sub>) so a refresh keeps you
   // on the tab and Back/Forward step between tabs you visited. A trade share
   // link forces the Trade Compare tab.
@@ -56716,6 +56753,10 @@ function App(){
                              "cmap","cmr","cms","cmk","ce"]),
       };
       const owned = VIEW_OWNED[view] || new Set();
+      if(tabStripRef.current){
+        for(const k of tabStripRef.current) url.searchParams.delete(k);
+        tabStripRef.current = null;
+      }
       const stripList = dirtyParams.filter(p => !owned.has(p));
       const hadStaleParam = stripList.some(p => url.searchParams.has(p));
       if(current === normalizedTarget && !hadStaleParam) return;
@@ -56787,6 +56828,17 @@ function App(){
           // specific deck from a tournament-detail URL).
           const t = params.get("tourney");
           if(t && !params.get("deck")) setIncomingTournamentId(t);
+          // Back onto a deck (or a creator) from ANOTHER view mounts DecksView
+          // fresh, and its own popstate listener wasn't there to hear this —
+          // so it opened the list and stripped ?deck= off the URL. Hand the
+          // page over the same way a deep link does. (Within Decks, DecksView
+          // handles its own history and must not be sent it twice.)
+          if(viewRef.current !== "decks"){
+            if(params.get("deck")){
+              setIncomingDeckId(params.get("deck"));
+              if(params.get("token")) setIncomingShareToken(params.get("token"));
+            } else if(params.get("user")) setIncomingUserId(params.get("user"));
+          }
           setView("decks");
           return;
         }
@@ -56826,19 +56878,25 @@ function App(){
     // theirs — under a /collection URL that, reloaded, showed yours.
     setViewedCollectionId(null);
     setViewedCollectionToken(null);
+    const sameView = v === viewRef.current;
     setView(v);
     setTabClickNonce(n => n + 1);
     // Strip view-specific deep-link params so a hard refresh doesn't drop the
     // user back into a sub-page they navigated away from: deck/token/user when
     // leaving Decks, plus ?set= + every Cards filter param (CARD_URL_KEYS) so a
     // Collection set-detail or filtered Cards URL doesn't leak between tabs.
+    const strip = [...(v !== "decks" ? ["deck","token","user"] : []), "collection", ...CARD_URL_KEYS];
+    if(!sameView){
+      // ⚠ Strip them from the NEW page's URL (the view-sync push builds it from
+      // this one), never by rewriting the entry being LEFT: that erased the
+      // exact page the browser's Back returns to, so Back from Cards landed on
+      // the deck list instead of the deck.
+      tabStripRef.current = strip;
+      return;
+    }
     try {
       const url = new URL(window.location.href);
-      if(v !== "decks"){
-        for(const k of ["deck","token","user"]) url.searchParams.delete(k);
-      }
-      url.searchParams.delete("collection");
-      for(const k of CARD_URL_KEYS) url.searchParams.delete(k);
+      for(const k of strip) url.searchParams.delete(k);
       window.history.replaceState({}, "", url);
     } catch {}
   }, []);
