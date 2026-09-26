@@ -30103,9 +30103,16 @@ function EloEventDetail({eventId, onBack, onPlayerClick, canViewStore, onStoreCl
         if(cancelled) return;
         setStandings(st || []);
 
-        const {data: ms} = await sbClient.from("elo_matches")
-          .select("match_id,round_number,table_number,player1_id,player2_id,winner_id,games_won_p1,games_won_p2,is_bye,source")
+        // is_intentional_draw (migration 135) so an agreed draw reads "ID" here
+        // as it does on the player page; retried without it where the column
+        // isn't there, like the profile does.
+        const MATCH_COLS = "match_id,round_number,table_number,player1_id,player2_id,winner_id,games_won_p1,games_won_p2,is_bye,source";
+        const fetchMatches = (cols) => sbClient.from("elo_matches").select(cols)
           .eq("event_id", eventId).order("round_number").order("table_number");
+        let {data: ms, error: msErr} = await fetchMatches(MATCH_COLS + ",is_intentional_draw");
+        if(msErr && /42703|is_intentional_draw/i.test(String(msErr.message || msErr))){
+          ({data: ms} = await fetchMatches(MATCH_COLS));
+        }
         if(cancelled) return;
         setMatches(ms || []);
         if(ms && ms.length){
@@ -30256,7 +30263,8 @@ function EloEventDetail({eventId, onBack, onPlayerClick, canViewStore, onStoreCl
               <td>${m.table_number ?? "—"}</td>
               <td class=${p1Wins?"elo-winner":""}><${EloLink} to=${{tab:"player", playerId:m.player1_id}} className="elo-name-btn"
                 onClick=${()=>onPlayerClick && onPlayerClick(m.player1_id)}>${p1?.display_name || m.player1_id}</${EloLink}></td>
-              <td><span class="elo-result ${p1Wins||p2Wins?"win":"draw"}">${p1Wins?"P1 wins":(p2Wins?"P2 wins":"Draw")}</span>${score && html` <span class="elo-score">${score}</span>`}</td>
+              <td><span class=${"elo-result " + (p1Wins||p2Wins ? "win" : (m.is_intentional_draw === true ? "draw intentional" : "draw"))}
+                title=${!p1Wins && !p2Wins && m.is_intentional_draw === true ? "Intentional draw — it moved neither rating" : ""}>${p1Wins?"P1 wins":(p2Wins?"P2 wins":(m.is_intentional_draw === true ? "ID" : "Draw"))}</span>${score && html` <span class="elo-score">${score}</span>`}</td>
               <td class=${p2Wins?"elo-winner":""}><${EloLink} to=${{tab:"player", playerId:m.player2_id}} className="elo-name-btn"
                 onClick=${()=>onPlayerClick && onPlayerClick(m.player2_id)}>${p2?.display_name || m.player2_id}</${EloLink}></td>
             </tr>`;
@@ -44840,7 +44848,19 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   const regionCounts = useMemo(() => {
     const c = {};
     for(const r of CALENDAR_REGIONS) c[r.key] = 0;
-    for(const e of calendarUpcoming(all.filter(e => kinds.includes(e.kind) && calMatchesQuery(e, dQuery)), today, 0)){
+    // The SAME view-aware pool the kind chips count (see `counts`): upcoming
+    // only, the chips read 0 and dimmed on a past month that plainly had
+    // events in it.
+    const base = all.filter(e => kinds.includes(e.kind) && calMatchesQuery(e, dQuery));
+    let pool;
+    if(mode === "month" || mode === "timeline"){
+      const lo = month, hi = mode === "month" ? month : calShiftMonth(month, span - 1);
+      pool = base.filter(e => {
+        const a = calMonthOf(e.starts_on), b = calMonthOf(calEndOf(e));
+        return a && b && a <= hi && b >= lo && !(mode === "timeline" && calTimelineSkip(e));
+      });
+    } else pool = showPast ? base : calendarUpcoming(base, today, 0);
+    for(const e of pool){
       // ⚠ A worldwide release is in every region, so it belongs in no COUNT. The
       // chip has to say how many events that region actually holds; adding the
       // releases to all nine would make every chip nine bigger and none of them
@@ -44849,7 +44869,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
       c[calRegionOf(e.country)]++;
     }
     return c;
-  }, [all, kinds, today, dQuery]);
+  }, [all, kinds, today, dQuery, mode, month, span, showPast]);
   const shown = useMemo(() => all.filter(e =>
     kinds.includes(e.kind) && calMatchesRegion(e, region) && calMatchesQuery(e, dQuery)),
     [all, kinds, region, dQuery]);
@@ -45027,7 +45047,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
               button on the row with a label long enough to force a wrap. */""}
         <button type="button" class="cal-act cal-act--export" onClick=${exportAll}
           disabled=${!exportRows.length}
-          aria-label="Export .ics" title=${`Download the ${exportRows.length} event${exportRows.length === 1 ? "" : "s"} shown as an .ics file`}>
+          aria-label="Export .ics" title=${`Download the ${exportRows.length} ${showPast ? "" : "upcoming "}event${exportRows.length === 1 ? "" : "s"} matching your filters as an .ics file`}>
           ${uiIcon("save", 14)}<span>Export .ics</span></button>
         ${isAdmin && html`<button type="button" class="cal-act cal-act--admin"
           onClick=${() => setEditing({})}>${uiIcon("edit", 14)} Add event</button>`}
