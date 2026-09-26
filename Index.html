@@ -16213,15 +16213,27 @@ const amazonStockUnavailable = (err) => {
   return code === "42P01" || code === "PGRST205" || code === "42501" || code === "42703"
     || /amazon_stock_checks/i.test(String((err && err.message) || ""));
 };
+// The live table predates msrp/price_over (the in-place extension of 137 never
+// ran there). Remembered for the session so every page load doesn't 400 first.
+let _amazonStockLegacy = false;
+const AMAZON_STOCK_COLS = "listing_key,out_of_stock,price_over,msrp,checked_at";
+const AMAZON_STOCK_COLS_LEGACY = "listing_key,out_of_stock,checked_at";
 async function fetchAmazonStock(force){
   if(!force && _amazonStock && Date.now() - _amazonStock.at < AMAZON_STOCK_TTL_MS) return _amazonStock;
   let out;
   try {
-    const {data, error} = await sbClient.from("amazon_stock_checks")
-      .select("listing_key,out_of_stock,price_over,msrp,checked_at").limit(1000);
-    out = error
-      ? {rows: [], at: Date.now(), unavailable: amazonStockUnavailable(error)}
-      : {rows: data || [], at: Date.now(), unavailable: false};
+    let res = await sbClient.from("amazon_stock_checks")
+      .select(_amazonStockLegacy ? AMAZON_STOCK_COLS_LEGACY : AMAZON_STOCK_COLS).limit(1000);
+    // A 42703 used to discard the whole table, so every "out of stock" ruling
+    // an admin had made stopped hiding its listing. Keep the columns that
+    // exist; only the price ceiling waits for the migration.
+    if(res.error && res.error.code === "42703" && !_amazonStockLegacy){
+      _amazonStockLegacy = true;
+      res = await sbClient.from("amazon_stock_checks").select(AMAZON_STOCK_COLS_LEGACY).limit(1000);
+    }
+    out = res.error
+      ? {rows: [], at: Date.now(), unavailable: amazonStockUnavailable(res.error)}
+      : {rows: res.data || [], at: Date.now(), unavailable: _amazonStockLegacy, legacy: _amazonStockLegacy};
   } catch {
     out = {rows: [], at: Date.now(), unavailable: false};
   }
@@ -16237,7 +16249,7 @@ function useAmazonStock(){
   const hidden = useMemo(() => new Set(state.rows
     .filter(amazonListingHidden).map(r => r.listing_key)), [state.rows]);
   const byKey = useMemo(() => new Map(state.rows.map(r => [r.listing_key, r])), [state.rows]);
-  return {hidden, byKey, unavailable: state.unavailable, reload};
+  return {hidden, byKey, unavailable: state.unavailable, legacy: !!state.legacy, reload};
 }
 // ⚠ Every row in one upsert carries the SAME keys — `patch` is applied whole to
 // each listing. PostgREST rejects a bulk body whose objects have different key
@@ -16298,7 +16310,9 @@ const AmazonStockCheck = ({pool, stock}) => {
         <span class="amz-check-admin">admin</span>
       </button>
       <span class="amz-check-sum muted">${off
-        ? "Not switched on yet — apply migration 137"
+        ? (stock.legacy
+            ? "The price check needs migration 137 re-run (msrp / price_over are missing) — Out marks still hide listings"
+            : "Not switched on yet — apply migration 137")
         : `Checked today ${doneCount} of ${rows.length} · ${outCount} sold out · ${overCount} overpriced`
           + (noMsrp ? ` · ${noMsrp} with no MSRP` : "")}</span>
       ${open && !off && html`<button class="amz-check-bulk" disabled=${busy || doneCount === rows.length}
