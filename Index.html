@@ -33309,6 +33309,13 @@ const MARKET_SUB_ALIASES = { heatmap: "avg", montecarlo: "sim", sealed: "ev" };
 // Low/Market, Δ% across 1D/1W/1M/3M/6M/1Y, signal chips. Sortable on every
 // column. Preset chips jump to common questions (biggest movers, possible
 // buyouts, discounts vs market, etc.).
+// The price a card was at when the mover window BEGAN — what the home movers
+// banners floor on ("started above $5"), so a crash from $20 to $3 is still a
+// mover there. price_movers carries it per window: low_prev / low_7d / … and
+// market_prev / market_7d / ….
+const SCREENER_PRIOR_SUFFIX = {pct_1d: "prev", pct_7d: "7d", pct_30d: "30d", pct_90d: "90d", pct_180d: "180d", pct_365d: "365d"};
+const screenerPriorPx = (r, moverWin, priceMode) =>
+  r[(priceMode === "market" ? "market_" : "low_") + (SCREENER_PRIOR_SUFFIX[moverWin] || "prev")] ?? null;
 const PRICE_DB_WIN = [
   ["pct_1d",   "mkt_pct_1d",   "1D"],
   ["pct_7d",   "mkt_pct_7d",   "1W"],
@@ -33488,6 +33495,7 @@ const SCREENER_STATE_FIELDS = [
   // filtered one and the address bar was never clean.
   ["minPrice","p0","str","5"],
   ["maxPrice","p1","str",""],
+  ["floorAtStart","fs","bool",false],
   ["minPct","c0","str",""],
   ["maxPct","c1","str",""],
   ["filterLegality","lg","str",""],
@@ -34241,6 +34249,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     setSigFilter(new Set(v.sigFilter || []));
     setMinPrice(v.minPrice ?? "");
     setMaxPrice(v.maxPrice ?? "");
+    setFloorAtStart(!!v.floorAtStart);
     setMinPct(v.minPct ?? "");
     setMaxPct(v.maxPct ?? "");
     setPctWin(v.pctWin || "pct_30d");
@@ -34361,6 +34370,11 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const [advOpen, setAdvOpen] = useState(false);
   const [minPrice, setMinPrice] = useState("5");
   const [maxPrice, setMaxPrice] = useState("");
+  // Price bounds read the price at the START of the mover window instead of
+  // today's. Off by default; the home movers banners' title jump turns it on,
+  // because that is the rule those banners select by — without it the
+  // Screener they open dropped every crash that ended under $5.
+  const [floorAtStart, setFloorAtStart] = useState(false);
   const [minPct, setMinPct] = useState("");
   const [maxPct, setMaxPct] = useState("");
   const [pctWin, setPctWin] = useState("pct_30d"); // which window the % range applies to
@@ -34403,7 +34417,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     preset, moverWin, priceMode, filterSet: Array.from(filterSet), search,
     filterRarities: Array.from(filterRarities), filterInks: Array.from(filterInks),
     collFilter, sigFilter: Array.from(sigFilter),
-    minPrice, maxPrice, minPct, maxPct, pctWin,
+    minPrice, maxPrice, floorAtStart, minPct, maxPct, pctWin,
     showAllWins, density, showGraded, showSealed,
     sortKey, sortDesc, sortKey2, sortDesc2, soldFilter,
     showFoil, showNonFoil,
@@ -34420,7 +34434,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     filterGraders: Array.from(filterGraders),
     filterGrades: Array.from(filterGrades),
   }), [preset, moverWin, priceMode, filterSet, search, filterRarities, filterInks,
-    collFilter, sigFilter, minPrice, maxPrice, minPct, maxPct, pctWin, showAllWins,
+    collFilter, sigFilter, minPrice, maxPrice, floorAtStart, minPct, maxPct, pctWin, showAllWins,
     density, showGraded, showSealed, sortKey, sortDesc, sortKey2, sortDesc2, soldFilter,
     showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers,
     filterLores, filterInkable, filterLegality, filterDualInk, filterKeywords,
@@ -35088,8 +35102,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         for(const k of sigFilter) if(sigKeys.has(k)){ any = true; break; }
         if(!any) return false;
       }
-      // Advanced numeric filters. priceMode decides which price they apply to.
-      const px = priceMode === "market" ? r.market_today : r.low_today;
+      // Advanced numeric filters. priceMode decides which price they apply to;
+      // floorAtStart, whether it is today's or the one the window began at.
+      const px = (floorAtStart && !showGraded) ? screenerPriorPx(r, moverWin, priceMode)
+        : (priceMode === "market" ? r.market_today : r.low_today);
       if(minPrice !== "" && (px == null || px < +minPrice)) return false;
       if(maxPrice !== "" && (px == null || px > +maxPrice)) return false;
       if(minPct !== "" || maxPct !== ""){
@@ -35216,7 +35232,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return 0;
     });
     return out;
-  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes, gradedPop,
+  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, floorAtStart, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes, gradedPop,
     watchOnly, watchedKeys, watchedCardIds]);
 
   // Plain click sets the primary sort; shift-click sets the tiebreaker applied
@@ -35377,6 +35393,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       // left in place the filter most likely to be emptying their table.
       setMinPrice("");
       setMaxPrice("");
+      setFloorAtStart(false);
     }
   }, [showGraded, preset]);
 
@@ -35401,8 +35418,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         : "$" + v;
     };
     const priceLbl = priceMode === "market" ? "NM Market" : "Low";
-    if(minPrice !== "") push("minPrice", `${priceLbl} ≥ ${money(minPrice)}`, () => setMinPrice(""));
-    if(maxPrice !== "") push("maxPrice", `${priceLbl} ≤ ${money(maxPrice)}`, () => setMaxPrice(""));
+    const atStart = (floorAtStart && !showSealed && !showGraded)
+      ? " at start of " + ((PRICE_DB_WIN.find(w => w[0] === moverWin) || [,,""])[2] || "window") : "";
+    if(minPrice !== "") push("minPrice", `${priceLbl} ≥ ${money(minPrice)}${atStart}`, () => setMinPrice(""));
+    if(maxPrice !== "") push("maxPrice", `${priceLbl} ≤ ${money(maxPrice)}${atStart}`, () => setMaxPrice(""));
     const winLbl = (PRICE_DB_WIN.find(w => w[0] === pctWin) || [,,pctWin])[2];
     if(minPct !== "") push("minPct", `${winLbl} Δ% ≥ ${minPct}%`, () => setMinPct(""));
     if(maxPct !== "") push("maxPct", `${winLbl} Δ% ≤ ${maxPct}%`, () => setMaxPct(""));
@@ -35431,7 +35450,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     fromSet("cls", "Classification", filterClassifications, setFilterClassifications);
     fromSet("art", "Artist",         filterIllustrators,    setFilterIllustrators);
     return out;
-  }, [showSealed, priceMode, minPrice, maxPrice, pctWin, minPct, maxPct, filterInks, filterCosts,
+  }, [showSealed, showGraded, moverWin, floorAtStart, priceMode, minPrice, maxPrice, pctWin, minPct, maxPct, filterInks, filterCosts,
       filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk,
       filterLegality, filterKeywords, filterClassifications, filterIllustrators]);
 
@@ -36283,6 +36302,11 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         <span class="muted">–</span>
         <input type="number" min="0" step="0.5" placeholder="Max $"
           value=${maxPrice} onInput=${e => setMaxPrice(e.target.value)}/>
+        ${!showSealed && !showGraded && html`<label class="checkbox-group price-db-adv-atstart"
+          title="Apply the price bounds to the price when the mover window began, not today's — the rule the home movers banners use, so a card that crashed from $20 to $3 still counts as a $5+ mover.">
+          <input type="checkbox" checked=${floorAtStart} onChange=${e => setFloorAtStart(e.target.checked)}/>
+          at start of window
+        </label>`}
       </div>
       <div class="price-db-adv-row">
         <label>Δ% over</label>
@@ -48111,6 +48135,11 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
       sortDesc: true,
       priceMode: "low",
       minPrice: "5",
+      // The banners floor on the price when the window BEGAN — prior Low ≥ $5,
+      // see `qualifies` below — so the Screener they open has to as well, or a
+      // card that crashed from $20 to $3 is in the banner and missing from the
+      // list its title opens.
+      floorAtStart: true,
       // Every card banner lands in RAW mode, said explicitly: applyView only
       // touches the Sealed flag when the payload names it, so a Screener last
       // left in Sealed mode opened a card banner's filters on top of the
