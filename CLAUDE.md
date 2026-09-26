@@ -1040,6 +1040,10 @@ instance moved together:
   kind chips keep the pure hue on the BORDER and darken the label toward black on light
   themes (`--chip-hue` + `color-mix`); the bright Elo top-rank gold becomes `--accent` on
   light themes; out-of-month / dense-calendar day numbers stay recessive but readable.
+- **Guarded by `node scripts/test_theme_contrast.mjs`**, which parses the theme blocks out of
+  styles.css and does the WCAG arithmetic: muted ≥ 4.5:1 on every theme's `--bg-solid`, dim
+  at least as strong as muted, `--on-accent` ≥ 4.5:1 on `--accent`, and no rule pairing
+  `background:var(--accent)` with a literal white. It fails 16 checks on the pre-fix sheet.
 - **The harness has two known artifacts** worth recognising before "fixing" them: text over a
   modal that hadn't finished loading (backgrounds of #010101), and positions sampled from a
   different scroll offset than the screenshot (footer text "on" map tiles). Confirm a
