@@ -49393,8 +49393,11 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
 };
 
 const TournamentDetailView = ({tournament, results, onBack, onOpenDeck, isAdmin, onEdit, onDelete, onAddDeck, onEditDeck, onDeleteDeck,
-                               theme, onCopyDecklist, onCopyDeckImage, onCopyDeckLink, onViewDeckImage, onInkClick}) => {
-  if(!tournament) return html`<div class="muted">Tournament not found. <button onClick=${onBack}>Back</button></div>`;
+                               theme, onCopyDecklist, onCopyDeckImage, onCopyDeckLink, onViewDeckImage, onInkClick, loading}) => {
+  // A /decks?tourney= link lands here before the tournament list has
+  // arrived; saying "not found" then was a false claim about a real event.
+  if(!tournament && loading) return html`<div class="muted deck-feed-state">Loading tournament…</div>`;
+  if(!tournament) return html`<div class="muted deck-feed-state">That tournament isn't here any more — it may have been removed. <button class="settings-action link" onClick=${onBack}>Back to tournaments</button></div>`;
   const sorted = (results || []).slice().sort((a,b) => {
     const ar = a.place_rank == null ? 9999 : a.place_rank;
     const br = b.place_rank == null ? 9999 : b.place_rank;
@@ -50153,6 +50156,12 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // Tournament listings — fetched once on mount. One row per tournament,
   // with per-tournament deck count joined in via a separate aggregate.
   const [tournaments, setTournaments] = useState([]);
+  // "Has the first fetch settled" + its failure, per feed. Every list below
+  // used to start as [] and render its EMPTY message straight away, so a slow
+  // or failed fetch read as "No tournaments uploaded yet" / "No favorited
+  // decks yet" — a claim about the data, made before any data had arrived.
+  const [tournamentsLoaded, setTournamentsLoaded] = useState(false);
+  const [tournamentsErr, setTournamentsErr] = useState(null);
   const [tournamentResults, setTournamentResults] = useState({});  // {tournament_id: [results...]}
   const [selectedTournamentId, setSelectedTournamentId] = useState(null);
   // Tournaments sub-view: "events" (the per-event grid, default) vs "alldecks"
@@ -50247,12 +50256,14 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, [openDeckById]);
-  const refreshTournaments = useCallback(async () => {
+  const refreshTournaments = useCallback(async (bustHomeCache = true) => {
     try {
       // Drop the home Tournament Results banner cache so deleted / edited
       // tournaments stop showing up there on next mount. The home banner has
-      // a 2h TTL and is keyed independently of this view's state.
-      try { localStorage.removeItem("packsink:home:tourneys:v1"); } catch {}
+      // a 2h TTL and is keyed independently of this view's state. Only after
+      // an admin EDIT — the plain mount fetch used to do it too, which threw
+      // that 2h cache away every time anyone opened the Decks tab.
+      if(bustHomeCache){ try { localStorage.removeItem("packsink:home:tourneys:v1"); } catch {} }
       const {data: ts, error} = await sbClient.from("tournaments")
         .select("id,name,event_date,format,num_players,inserted_at")
         .order("event_date", {ascending: false, nullsFirst: false})
@@ -50269,9 +50280,15 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         (grouped[r.tournament_id] = grouped[r.tournament_id] || []).push(r);
       }
       setTournamentResults(grouped);
-    } catch(e) { console.warn("tournaments fetch:", e?.message || e); }
+      setTournamentsErr(null);
+    } catch(e) {
+      console.warn("tournaments fetch:", e?.message || e);
+      setTournamentsErr(e?.message || String(e));
+    } finally {
+      setTournamentsLoaded(true);
+    }
   }, []);
-  useEffect(() => { refreshTournaments(); }, [refreshTournaments]);
+  useEffect(() => { refreshTournaments(false); }, [refreshTournaments]);
   // Deep-link from the home Tournament Results banner: jump straight to a
   // tournament's detail page (switch sub-section + select id).
   useEffect(() => {
@@ -50329,6 +50346,10 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   const [userFollows, setUserFollows] = useState(new Set());
   // Following feed: recent public decks from creators the user follows.
   const [followingFeed, setFollowingFeed] = useState([]);
+  const [favLoaded, setFavLoaded] = useState(false);
+  const [favErr, setFavErr] = useState(null);
+  const [followLoaded, setFollowLoaded] = useState(false);
+  const [followErr, setFollowErr] = useState(null);
   // Discover feed: recent public decks from anyone (excluding the current
   // user's own). Paginated — we initially load DISCOVER_PAGE entries and
   // grow via the "Load more" button.
@@ -50374,7 +50395,10 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // window rather than presenting an abandoned-looking feed.
   const [discoverCutoff, setDiscoverCutoff] = useState(null);
   const [discoverHasMore, setDiscoverHasMore] = useState(false);
-  const [discoverLoading, setDiscoverLoading] = useState(false);
+  // Starts TRUE: the fetch fires from an effect, i.e. after the first paint,
+  // and a false start painted "No public decks to discover yet" for a frame.
+  const [discoverLoading, setDiscoverLoading] = useState(true);
+  const [discoverErr, setDiscoverErr] = useState(null);
   // Creator profile state — when set, the Decks tab renders that creator's
   // public-deck list (their "profile page") instead of the section tabs.
   // {creator, decks: [{deck, creator}]} or {error}.
@@ -50633,7 +50657,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // Refresh the user's deck-level bookmarks (deck_favorites). Returns hydrated
   // entries sorted newest-favorited first.
   const refreshFavorites = useCallback(async () => {
-    if(!user){ setFavorites(new Set()); setFavoritedDecks([]); return; }
+    if(!user){ setFavorites(new Set()); setFavoritedDecks([]); setFavLoaded(true); setFavErr(null); return; }
     try {
       const {data: favRows, error: fErr} = await sbClient.from("deck_favorites")
         .select("deck_id,followed_at,share_token")
@@ -50641,7 +50665,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       if(fErr) throw fErr;
       const ids = (favRows||[]).map(r => r.deck_id);
       setFavorites(new Set(ids));
-      if(!ids.length){ setFavoritedDecks([]); return; }
+      if(!ids.length){ setFavoritedDecks([]); setFavErr(null); return; }
       const tokenById = Object.fromEntries((favRows||[]).map(r => [r.deck_id, r.share_token || null]));
       // Two-pass hydration: public + own decks via direct read (existing
       // helper); unlisted decks via token-gated RPC. RLS denies direct
@@ -50649,37 +50673,43 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       // route those through get_shared_deck / get_shared_deck_cards.
       const directIds = ids.filter(id => !tokenById[id]);
       const tokenIds  = ids.filter(id =>  tokenById[id]);
-      const directEntries = directIds.length ? await hydrateDecksByIds(directIds) : [];
-      const tokenEntries = [];
-      for(const id of tokenIds){
-        const token = tokenById[id];
-        const [deckRes, cardsRes] = await Promise.all([
-          sbClient.rpc("get_shared_deck",       {p_deck_id: id, p_token: token}),
-          sbClient.rpc("get_shared_deck_cards", {p_deck_id: id, p_token: token}),
-        ]);
-        const d = deckRes.data && deckRes.data[0];
-        if(!d) continue; // token rotated or deck went private — silently drop
-        await decDeckMeta(d);
-        const dCards = await decDeckCards(cardsRes.data || []);
-        const {data: profile} = await sbClient.from("profiles")
-          .select("display_name,avatar_url").eq("user_id", d.user_id).maybeSingle();
-        tokenEntries.push({
-          deck: {...d, cards: dCards},
-          creator: profile || null,
-          shareToken: token,
-        });
-      }
+      // The unlisted favorites load in PARALLEL: three round trips each,
+      // one favorite after another, was seconds of blank list for anyone who
+      // had saved a handful of shared links.
+      const [directEntries, tokenEntriesRaw] = await Promise.all([
+        directIds.length ? hydrateDecksByIds(directIds) : Promise.resolve([]),
+        Promise.all(tokenIds.map(async (id) => {
+          const token = tokenById[id];
+          const [deckRes, cardsRes] = await Promise.all([
+            sbClient.rpc("get_shared_deck",       {p_deck_id: id, p_token: token}),
+            sbClient.rpc("get_shared_deck_cards", {p_deck_id: id, p_token: token}),
+          ]);
+          const d = deckRes.data && deckRes.data[0];
+          if(!d) return null; // token rotated or deck went private — silently drop
+          await decDeckMeta(d);
+          const dCards = await decDeckCards(cardsRes.data || []);
+          const {data: profile} = await sbClient.from("profiles")
+            .select("display_name,avatar_url").eq("user_id", d.user_id).maybeSingle();
+          return {deck: {...d, cards: dCards}, creator: profile || null, shareToken: token};
+        })),
+      ]);
+      const tokenEntries = tokenEntriesRaw.filter(Boolean);
       const entries = [...directEntries, ...tokenEntries];
       // Preserve favorite order (newest-favorited first).
       const idOrder = ids.reduce((m, id, i) => (m[id] = i, m), {});
       entries.sort((a, b) => (idOrder[a.deck.id] ?? 999) - (idOrder[b.deck.id] ?? 999));
       setFavoritedDecks(entries);
+      setFavErr(null);
       mergeFavoriteCounts(ids);
       mergeViewCounts(ids);
     } catch(e){
+      // Keep whatever was already known: wiping `favorites` on a transient
+      // failure turned every ★ on screen back into an empty star, and the
+      // next tap on one tried to favorite a deck that already was.
       console.warn("favorites fetch failed (run supabase/19_*.sql?):", e?.message || e);
-      setFavorites(new Set());
-      setFavoritedDecks([]);
+      setFavErr(e?.message || String(e));
+    } finally {
+      setFavLoaded(true);
     }
   }, [user, hydrateDecksByIds, mergeFavoriteCounts]);
   useEffect(()=>{ refreshFavorites(); }, [refreshFavorites, tabClickNonce]);
@@ -50687,7 +50717,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // Refresh the set of creators the current user follows + their recent
   // public decks feed (newest updated_at first, capped to keep the page lean).
   const refreshFollowing = useCallback(async () => {
-    if(!user){ setUserFollows(new Set()); setFollowingFeed([]); return; }
+    if(!user){ setUserFollows(new Set()); setFollowingFeed([]); setFollowLoaded(true); setFollowErr(null); return; }
     try {
       const {data: followRows, error: ufErr} = await sbClient.from("user_follows")
         .select("followed_id")
@@ -50695,7 +50725,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       if(ufErr) throw ufErr;
       const followedIds = (followRows||[]).map(r => r.followed_id);
       setUserFollows(new Set(followedIds));
-      if(!followedIds.length){ setFollowingFeed([]); return; }
+      if(!followedIds.length){ setFollowingFeed([]); setFollowErr(null); return; }
       const {data: deckRows, error: dErr} = await sbClient.from("decks")
         .select("id,user_id,name,description,youtube_url,inks,tags,visibility,coconut_card,updated_at")
         .in("user_id", followedIds)
@@ -50704,17 +50734,21 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         .limit(50);
       if(dErr) throw dErr;
       const ids = (deckRows||[]).map(d => d.id);
-      if(!ids.length){ setFollowingFeed([]); return; }
+      if(!ids.length){ setFollowingFeed([]); setFollowErr(null); return; }
       const entries = await hydrateDecksByIds(ids);
       // hydrateDecksByIds doesn't preserve order — re-sort newest first.
       entries.sort((a, b) => new Date(b.deck.updated_at) - new Date(a.deck.updated_at));
       setFollowingFeed(entries);
+      setFollowErr(null);
       mergeFavoriteCounts(ids);
       mergeViewCounts(ids);
     } catch(e){
+      // Same as favorites: keep the follows we knew about, or every Unfollow
+      // button reads Follow and a tap re-inserts a follow that exists.
       console.warn("following fetch failed (run supabase/19_*.sql?):", e?.message || e);
-      setUserFollows(new Set());
-      setFollowingFeed([]);
+      setFollowErr(e?.message || String(e));
+    } finally {
+      setFollowLoaded(true);
     }
   }, [user, hydrateDecksByIds, mergeFavoriteCounts]);
   useEffect(()=>{ refreshFollowing(); }, [refreshFollowing, tabClickNonce]);
@@ -50905,7 +50939,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         deckRows = deckRows.concat(starterRows.filter(d => !seen.has(d.id)));
       }
       if(!deckRows.length){
-        setDiscoverEntries([]); setDiscoverHasMore(false); return;
+        setDiscoverEntries([]); setDiscoverHasMore(false); setDiscoverErr(null); return;
       }
       const ids = deckRows.map(d => d.id);
       const entries = await hydrateDecksByIds(ids);
@@ -50939,10 +50973,11 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       });
       setDiscoverEntries(entries);
       setDiscoverHasMore(false);
+      setDiscoverErr(null);
       mergeViewCounts(ids);
     } catch(e){
       console.warn("discover fetch failed:", e?.message || e);
-      setDiscoverEntries([]);
+      setDiscoverErr(e?.message || String(e));
       setDiscoverHasMore(false);
     } finally {
       setDiscoverLoading(false);
@@ -51805,6 +51840,61 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     }
   }, [user, decks]);
 
+  // Replace a deck's whole list: ONE upsert for every row that is new or
+  // changed, THEN the deletes. The import used to delete each card and then
+  // insert each card, one write at a time, every one of them rolling back to
+  // the list as it stood before the import began — so a failure mid-way left
+  // the SERVER half-wiped while the SCREEN showed the old deck intact, and the
+  // user had no idea anything was lost. Upserting first means a failure at any
+  // point leaves the server holding a superset of the old or the new list,
+  // never less than either; the screen is then re-read from the server rather
+  // than rolled back to a guess.
+  const replaceDeckCards = useCallback(async (deckId, entries) => {
+    if(!user) return false;
+    const deck = (decks || []).find(d => d.id === deckId);
+    if(!deck) return false;
+    const target = new Map();
+    for(const e of entries || []){
+      if(!e || !e.card_id || !(e.quantity > 0)) continue;
+      const printing = e.printing || "Normal";
+      const k = e.card_id + "|" + printing;
+      const had = target.get(k);
+      target.set(k, {card_id: e.card_id, printing, quantity: Math.min(99, (had ? had.quantity : 0) + e.quantity)});
+    }
+    const current = new Map((deck.cards || []).map(c => [c.card_id + "|" + (c.printing || "Normal"), c]));
+    const upserts = [];
+    for(const [k, t] of target) if((current.get(k)?.quantity || 0) !== t.quantity) upserts.push({deck_id: deckId, ...t});
+    const deletes = [];
+    for(const [k, c] of current) if(!target.has(k)) deletes.push(c);
+    const nextCards = [];
+    for(const c of deck.cards || []){
+      const t = target.get(c.card_id + "|" + (c.printing || "Normal"));
+      if(t) nextCards.push({...c, quantity: t.quantity});
+    }
+    for(const [k, t] of target) if(!current.has(k)) nextCards.push({deck_id: deckId, ...t});
+    setDecks(ds => (ds||[]).map(d => d.id === deckId ? {...d, cards: nextCards} : d));
+    setPending(p => p + 1);
+    try {
+      if(upserts.length){
+        const {error} = await sbClient.from("deck_cards")
+          .upsert(await encDeckCardRows(upserts), {onConflict:"deck_id,card_id,printing"});
+        if(error) throw error;
+      }
+      const results = await Promise.all(deletes.map(async c => sbClient.from("deck_cards").delete()
+        .eq("deck_id", deckId).eq("card_id", await encDeckDet(c.card_id)).eq("printing", c.printing || "Normal")));
+      const bad = results.find(r => r && r.error);
+      if(bad) throw bad.error;
+      return true;
+    } catch(e){
+      console.error("deck replace failed:", e);
+      flashToast("Couldn't finish replacing the deck (" + (e.message || e) + ") — showing what was saved.");
+      await refreshDecks();
+      return false;
+    } finally {
+      setPending(p => Math.max(0, p - 1));
+    }
+  }, [user, decks, refreshDecks]);
+
   // Swap all copies of a deck card with a different version (same Product Name,
   // different card_id — different set reprint / promo / chase rarity). Sums
   // quantities across all printings of the old card_id, deletes those rows,
@@ -51999,7 +52089,12 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // visibility-change trigger rotates) stay in sync locally.
   const updateDeckMeta = useCallback(async (deckId, patch) => {
     if(!user || !patch) return;
-    const prev = decks;
+    // Roll back only the fields THIS save touched: restoring the whole list
+    // captured at call time reverted every other edit made while it was in
+    // flight.
+    const before = (decks || []).find(d => d.id === deckId);
+    const revert = {};
+    if(before) for(const k of Object.keys(patch)) revert[k] = before[k];
     setDecks(ds => (ds||[]).map(d => d.id === deckId ? {...d, ...patch} : d));
     setPending(p => p + 1);
     try {
@@ -52013,7 +52108,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       }
     } catch(e){
       console.error("deck meta update failed:", e);
-      setDecks(prev);
+      setDecks(ds => (ds||[]).map(d => d.id === deckId ? {...d, ...revert} : d));
       flashToast("Couldn't save: " + e.message);
     } finally {
       setPending(p => Math.max(0, p - 1));
@@ -52174,6 +52269,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         onDelete=${()=>deleteDeck(deck.id)}
         onDuplicate=${()=>duplicateDeck(deck.id)}
         onUpdateCard=${(cardId, printing, qty)=>updateDeckCard(deck.id, cardId, printing, qty)}
+        onReplaceCards=${(entries)=>replaceDeckCards(deck.id, entries)}
         onSwapVariant=${(oldCardId, newCardId)=>swapDeckCardVariant(deck.id, oldCardId, newCardId)}
         onUpdateMeta=${(patch)=>updateDeckMeta(deck.id, patch)}
         editSnapshot=${editSnapshot && editSnapshot.deckId === deck.id ? editSnapshot : null}
@@ -52245,6 +52341,14 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             </p>
             <button class="active" onClick=${onSignIn} style=${{padding:"9px 18px",fontSize:13}}>Sign in with Google</button>
           </div>`
+        : decks === null
+          ? html`<div class="muted deck-feed-state">Loading your decks…</div>`
+        : (err && !decks.length)
+          ? html`<div class="load-fail">
+              <div>Couldn't load your decks.</div>
+              <div class="load-fail-detail muted">Nothing has been deleted — this is a connection problem.</div>
+              <button type="button" class="load-fail-retry" onClick=${refreshDecks}>Try again</button>
+            </div>`
         : (decks?.length || 0) === 0
           ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
               You haven't created any decks yet. Click <strong>+ New Deck</strong> to start.
@@ -52269,6 +52373,11 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       const explainer = html`<div class="deck-section-explainer">
         Decks you've bookmarked from other creators. Click <strong>☆</strong> on any shared deck to save it here — works for both public and unlisted decks.
       </div>`;
+      if(!favLoaded) return html`<div>${explainer}<div class="muted deck-feed-state">Loading your favorites…</div></div>`;
+      if(favErr && favoritedDecks.length === 0) return html`<div>${explainer}<div class="load-fail">
+        <div>Couldn't load your favorites.</div>
+        <button type="button" class="load-fail-retry" onClick=${refreshFavorites}>Try again</button>
+      </div></div>`;
       if(favoritedDecks.length === 0) return html`<div>${explainer}<div class="muted" style=${{fontSize:13,padding:"12px 0"}}>
         No favorited decks yet. When you find a shared deck you like, click <strong>☆ Favorite</strong> to save it here.
       </div></div>`;
@@ -52290,6 +52399,11 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       const explainer = html`<div class="deck-section-explainer">
         A feed of recent decks from creators you follow. Click <strong>+ Follow</strong> on any creator's name (from a shared deck banner or their profile) to add them here.
       </div>`;
+      if(!followLoaded) return html`<div>${explainer}<div class="muted deck-feed-state">Loading your feed…</div></div>`;
+      if(followErr && followingFeed.length === 0) return html`<div>${explainer}<div class="load-fail">
+        <div>Couldn't load the decks from creators you follow.</div>
+        <button type="button" class="load-fail-retry" onClick=${refreshFollowing}>Try again</button>
+      </div></div>`;
       if(userFollows.size === 0) return html`<div>${explainer}<div class="muted" style=${{fontSize:13,padding:"12px 0"}}>
         You aren't following any creators yet. When you view a shared deck, click <strong>+ Follow</strong> next to the creator's name to see their public decks here.
       </div></div>`;
@@ -52320,7 +52434,14 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
           Sorted by ★ favorites — only decks edited or made since the prerelease of the newest set${discoverCutoff?` (${discoverCutoff})`:""}.
         </span>
       </div>
-      ${discoverEntries.length === 0 && !discoverLoading
+      ${discoverEntries.length === 0 && discoverErr && !discoverLoading
+        ? html`<div class="load-fail">
+            <div>Couldn't load public decks.</div>
+            <button type="button" class="load-fail-retry" onClick=${refreshDiscover}>Try again</button>
+          </div>`
+        : discoverEntries.length === 0 && discoverLoading
+        ? null
+        : discoverEntries.length === 0
         ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
             No public decks to discover yet. Once someone sets a deck's visibility to Public from its Share menu, it'll show up here.
           </div>`
@@ -52361,6 +52482,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       </div>`}
       ${selectedTournamentId
         ? html`<${TournamentDetailView}
+            loading=${!tournamentsLoaded}
             tournament=${tournaments.find(t => t.id === selectedTournamentId)}
             results=${tournamentResults[selectedTournamentId] || []}
             onBack=${()=>setSelectedTournamentId(null)}
@@ -52445,6 +52567,13 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                       onViewDeckImage=${viewDeckImageFromResult}
                       onInkClick=${toggleInkFilter}/>`)}
                   </div>`}
+            </div>`
+        : !tournamentsLoaded
+          ? html`<div class="muted deck-feed-state">Loading tournaments…</div>`
+        : (tournamentsErr && tournaments.length === 0)
+          ? html`<div class="load-fail">
+              <div>Couldn't load tournaments.</div>
+              <button type="button" class="load-fail-retry" onClick=${()=>refreshTournaments(false)}>Try again</button>
             </div>`
         : tournaments.length === 0
           ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0",textAlign:"center"}}>
@@ -53666,7 +53795,7 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard, defaultInk
 const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, raw, theme, pending,
                      user, onSignIn,
                      onBack, onRename, onDelete, onDuplicate,
-                     onUpdateCard, onSwapVariant, onUpdateMeta, onToggleEditMode,
+                     onUpdateCard, onReplaceCards, onSwapVariant, onUpdateMeta, onToggleEditMode,
                      editSnapshot, onUndoChanges,
                      readOnly, creator, creatorId, isOwnDeck, canAct,
                      isFavorited, onToggleFavorite,
@@ -53868,21 +53997,39 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
   const [videoDraft, setVideoDraft] = useState(deck.youtube_url || "");
   useEffect(() => { setNotesDraft(deck.description || ""); }, [deck.description, deck.id]);
   useEffect(() => { setVideoDraft(deck.youtube_url || ""); }, [deck.youtube_url, deck.id]);
+  // The drafts are read through refs so the commit below sees the latest
+  // keystroke whichever way the popover goes away.
+  const notesDraftRef = useRef(notesDraft); notesDraftRef.current = notesDraft;
+  const videoDraftRef = useRef(videoDraft); videoDraftRef.current = videoDraft;
+  // The save lives in the effect's CLEANUP, so every way the popover can go
+  // away commits: an outside tap, Esc, leaving the deck, the editor
+  // unmounting — and its own Notes button, which sits INSIDE notesRef, so the
+  // outside-tap test never fired for it and the commonest way to close the
+  // popover threw the text away. The baseline and the save function are the
+  // ones captured when it opened, so switching decks with it open still files
+  // the draft under the deck it was written for.
   useEffect(()=>{
     if(!notesOpen) return;
+    const baseNotes = deck.description || "", baseVideo = deck.youtube_url || "";
+    const save = onUpdateMeta;
     const onDoc = (e) => {
-      if(notesRef.current && !notesRef.current.contains(e.target)){
-        // Commit on outside-click close.
-        const patch = {};
-        if((notesDraft || "") !== (deck.description || "")) patch.description = notesDraft || null;
-        if((videoDraft || "") !== (deck.youtube_url || "")) patch.youtube_url = videoDraft || null;
-        if(Object.keys(patch).length && onUpdateMeta) onUpdateMeta(patch);
-        setNotesOpen(false);
-      }
+      if(notesRef.current && !notesRef.current.contains(e.target)) setNotesOpen(false);
     };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [notesOpen, notesDraft, videoDraft, deck.description, deck.youtube_url, onUpdateMeta]);
+    const onKey = (e) => { if(e.key === "Escape") setNotesOpen(false); };
+    // pointerdown, not mousedown: iOS does not fire mouse events for a tap on
+    // a non-clickable part of the page, so the popover never closed there.
+    document.addEventListener("pointerdown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDoc);
+      document.removeEventListener("keydown", onKey);
+      const nd = notesDraftRef.current || "", vd = videoDraftRef.current || "";
+      const patch = {};
+      if(nd !== baseNotes) patch.description = nd || null;
+      if(vd !== baseVideo) patch.youtube_url = vd || null;
+      if(Object.keys(patch).length && save) save(patch);
+    };
+  }, [notesOpen, deck.id]);
   // View-mode preferences (layout, sort, highlight-missing). Persist to
   // localStorage so the user's choice survives reloads.
   const [viewLayout, setViewLayout] = useState(() => {
@@ -54114,16 +54261,17 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                   + (result.unmatched.length ? `\nUnmatched (${result.unmatched.length}):\n  ${result.unmatched.slice(0,10).join("\n  ")}` : "");
     if(!confirm(summary + "\n\nReplace the current deck contents?")) return;
     setDeckTextModal(null);
-    // Wipe the deck, then add each parsed entry. Sequential to keep error
-    // handling simple; bulk-upsert would be faster on huge decks but a
-    // Lorcana deck is at most 60 rows so this is fine.
+    if(onReplaceCards){
+      await onReplaceCards(result.entries.map(e => ({card_id: e.card_id, printing: "Normal", quantity: e.quantity})));
+      return;
+    }
     for(const c of (deck.cards||[])){
       await onUpdateCard(c.card_id, c.printing, 0);
     }
     for(const e of result.entries){
       await onUpdateCard(e.card_id, "Normal", e.quantity);
     }
-  }, [raw, deck.cards, onUpdateCard, deckTextValue]);
+  }, [raw, deck.cards, onUpdateCard, onReplaceCards, deckTextValue]);
 
   const handleCopyDeckText = useCallback(() => {
     if(navigator.clipboard && navigator.clipboard.writeText){
@@ -58519,6 +58667,7 @@ function App(){
       <p class="muted">${loadProgress.current || "Fetching the latest prices"} — the first visit
         takes a few seconds; after that it's instant.</p>
     </div>`}
+    <${ErrorBoundary} key=${"view:" + view} scope="view" onHome=${view === "home" ? null : ()=>onTabClick("home")}>
     ${viewsReady&&view==="home"&&html`<${HomeView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
       user=${user} collection=${collection} collectionLoading=${collectionLoading}
       sealedPrices=${sealedPrices} sealedCollection=${sealedCollection} sealedMeta=${sealedMeta} setsMeta=${setsMeta}
@@ -58634,9 +58783,10 @@ function App(){
     ${view==="news"&&html`<${NewsView}/>`}
     ${view==="calendar"&&html`<${CalendarView} user=${user} onSignIn=${signIn}
       onFindEvents=${openEventFinder} sealedPrices=${sealedPrices}/>`}
+    ${viewsReady&&view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user} onSignIn=${signIn}/>`}
+    <//>
     ${eventFinderOpen&&html`<${UpcomingSCsBox} overlay=${true} user=${user}
       onClose=${closeEventFinder}/>`}
-    ${viewsReady&&view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user} onSignIn=${signIn}/>`}
     <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}
       user=${user} onFeedback=${()=>setFeedbackOpen(true)}
       onViewFeedback=${isGradedAdmin ? ()=>setFeedbackAdminOpen(true) : null}
@@ -58801,15 +58951,53 @@ function SeasonReviewView({ meta }){
   </div>`;
 }
 
+// Two mounts: the ROOT one around the whole app, and a VIEW one App wraps
+// around whichever page is open (keyed on the view, so leaving the page is
+// what clears it). The view one is what keeps the nav alive — with only the
+// root boundary, one bad row on one page took the whole site, nav included,
+// to a stack trace. "Try again" re-renders the same tree and re-crashes on a
+// deterministic bug, so each fallback also offers a way OUT.
 class ErrorBoundary extends React.Component {
   constructor(p){super(p);this.state={error:null};}
   static getDerivedStateFromError(e){return {error:e};}
+  // A render error a boundary catches never reaches window.onerror in a
+  // production React build, so without this every crash the boundary exists
+  // to contain was also invisible to Sentry.
+  componentDidCatch(error, info){
+    try {
+      const S = window.Sentry;
+      if(S && typeof S.captureException === "function")
+        S.captureException(error, {
+          tags: {boundary: this.props.scope || "root"},
+          contexts: {react: {componentStack: (info && info.componentStack) || ""}},
+        });
+    } catch {}
+  }
   render(){
-    if(this.state.error) return React.createElement('div',{style:{padding:'2rem',maxWidth:600,margin:'2rem auto',color:'var(--text)'}},
+    const err = this.state.error;
+    if(!err) return this.props.children;
+    const detail = String((err && err.message) || err);
+    if(this.props.scope === "view"){
+      const onHome = this.props.onHome;
+      return html`<div class="load-fail view-crash" role="alert">
+        <div class="view-crash-title title-font">This page hit a snag</div>
+        <div class="load-fail-detail muted">Something on it broke while it loaded. The rest of the site still works${onHome ? "" : " — use the tabs above"}.</div>
+        <div class="view-crash-actions">
+          <button type="button" class="load-fail-retry" onClick=${()=>this.setState({error:null})}>Try again</button>
+          <button type="button" class="load-fail-retry" onClick=${()=>{ try { window.location.reload(); } catch {} }}>Reload</button>
+          ${onHome && html`<button type="button" class="load-fail-retry" onClick=${onHome}>Go to home</button>`}
+        </div>
+        <details class="view-crash-detail"><summary>Technical details</summary><pre>${detail}</pre></details>
+      </div>`;
+    }
+    return React.createElement('div',{role:'alert',style:{padding:'2rem',maxWidth:600,margin:'2rem auto',color:'var(--text)'}},
       React.createElement('h2',{style:{color:'var(--red)',fontSize:16,fontFamily:'Cinzel,serif'}},'Something went wrong'),
-      React.createElement('pre',{style:{fontSize:12,color:'var(--text-muted)',whiteSpace:'pre-wrap',marginTop:8}},this.state.error.toString()),
-      React.createElement('button',{onClick:()=>this.setState({error:null}),style:{marginTop:12,padding:'8px 16px',cursor:'pointer',background:'transparent',border:'1px solid var(--btn-border)',color:'var(--text)',borderRadius:6}},'Retry'));
-    return this.props.children;
+      React.createElement('p',{style:{fontSize:13,color:'var(--text-muted)',marginTop:6}},'Reloading usually fixes this — it fetches the newest version of the site.'),
+      React.createElement('pre',{style:{fontSize:12,color:'var(--text-muted)',whiteSpace:'pre-wrap',marginTop:8}},detail),
+      React.createElement('div',{style:{display:'flex',gap:8,flexWrap:'wrap',marginTop:12}},
+        React.createElement('button',{onClick:()=>{ try { window.location.reload(); } catch {} },style:{padding:'8px 16px',cursor:'pointer',background:'transparent',border:'1px solid var(--accent)',color:'var(--accent)',borderRadius:6,fontWeight:700}},'Reload'),
+        React.createElement('button',{onClick:()=>this.setState({error:null}),style:{padding:'8px 16px',cursor:'pointer',background:'transparent',border:'1px solid var(--btn-border)',color:'var(--text)',borderRadius:6}},'Try again'),
+        React.createElement('button',{onClick:()=>{ try { window.location.href = '/'; } catch {} },style:{padding:'8px 16px',cursor:'pointer',background:'transparent',border:'1px solid var(--btn-border)',color:'var(--text)',borderRadius:6}},'Go to home')));
   }
 }
 (function(){
