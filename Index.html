@@ -3849,6 +3849,21 @@ const backdropClose = (onClose) => ({
 });
 // "-$12.00", never "$-12.00" — and an amount that ROUNDS to zero prints
 // without a sign, so a -0.004 loss is "$0.00" rather than "$-0.00".
+// A whole-number completion that tells the truth at both ends: 199/200 is
+// "99", never a rounded "100" beside a card still missing, and 1/400 is "1",
+// not "0" beside a card you own.
+const completionPct = (have, total) => {
+  if(!total) return 0;
+  if(have >= total) return 100;
+  if(have <= 0) return 0;
+  return Math.min(99, Math.max(1, Math.round(have / total * 100)));
+};
+// Enter / Space on a clickable non-button (role="button"), ignoring keys that
+// came from a control inside it.
+const keyActivate = (fn) => (e) => {
+  if(e.target !== e.currentTarget) return;
+  if(e.key === "Enter" || e.key === " "){ e.preventDefault(); fn(e); }
+};
 const fmtUSD = (n, decimals=2) => {
   const v = Number(n);
   const body = Math.abs(v).toLocaleString(undefined, {minimumFractionDigits:decimals, maximumFractionDigits:decimals});
@@ -20284,7 +20299,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       return html`<div class="setdet-summary">
         ${buckets.length > 0 && html`<div class="setdet-sbars">
           ${buckets.map(([k,label,d]) => {
-            const pct = d.total ? Math.round(d.have/d.total*100) : 0;
+            const pct = completionPct(d.have, d.total);
             return html`<div key=${k} class="setdet-sbar">
               <div class="setdet-sbar-top"><span class="setdet-sbar-lbl">${label}</span><span class="setdet-sbar-num">${d.have.toLocaleString()}<small>/${d.total.toLocaleString()}</small> <em>${pct}%</em></span></div>
               <div class="setdet-sbar-track"><i style=${{width:pct+"%"}}></i></div>
@@ -20409,6 +20424,13 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
               subtitle=${subtitle} graded=${tileGraded(g)}
               onOpen=${()=>setSelectedGroup(g)}/>`;
           })}</div>`;
+      // An empty page used to be an empty page: no message, nothing to say
+      // whether the set has no cards or the filters hid all of them.
+      if(visibleGroups.length === 0) return groups.length === 0
+        ? html`<div class="muted deck-feed-state">No cards for this set are in the catalog yet.</div>`
+        : html`<div class="muted deck-feed-state">No cards match these filters.
+            <button type="button" class="settings-action link" style=${{marginLeft:6}}
+              onClick=${()=>{ setSearch(""); setInkFilter(new Set()); setRarityFilter(new Set()); setStatusFilter("all"); setPriceBand(""); if(allMode) setDrawerFilter(emptyFilter()); }}>Clear filters</button></div>`;
       return groupsByOrigin.map(bucket => html`<div key=${bucket.key} class="setdet-origin-bucket">
         ${bucket.label && html`<div class="setdet-origin-header">${bucket.label}</div>`}
         ${renderItems(bucket.items, bucket.printingMode || null)}
@@ -27501,7 +27523,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                   isSplitGoal ? (it.card_id + "|" + (it.printing || "Normal")) : it.card_id));
                 const ownedCount = [...inGoalIds].filter(k => ownedSet.has(k)).length;
                 const total = inGoalIds.size;
-                const pct = total ? Math.round((ownedCount/total)*100) : 0;
+                const pct = completionPct(ownedCount, total);
                 const targetName = g.extras_bucket
                   ? (EXTRAS_SET_NAME + " — " + g.extras_bucket)
                   : (setNameById.get(g.set_id) || g.set_id);
@@ -28681,7 +28703,10 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     const result = await bulkUpdateCollection(updates);
     if(!result || !result.ok){
       const msg = (result && result.error) || "unknown error";
-      flashToast(`Import failed (${result?.written ?? 0} rows) — collection rolled back. ${msg}`, 6000);
+      const w = result?.written ?? 0;
+      flashToast(w > 0
+        ? `Import stopped part-way: the first ${w.toLocaleString()}${result?.total ? " of " + result.total.toLocaleString() : ""} rows were saved before it failed, and your collection now shows exactly what was saved. ${msg}`
+        : `Import failed — nothing was changed. ${msg}`, 8000);
       setImportState(s => ({...s, busy:false}));
       return;
     }
@@ -28982,11 +29007,12 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           const total = own.normal.size + own.foil.size + own.enchanted.size + own.iconic.size + own.epic.size;
           const denom = tot.normal + tot.foil + tot.enchanted + tot.iconic + tot.epic;
           const pct = denom ? (total/denom*100) : 0;
-          return html`<div key=${setName} class="set-progress-card" onClick=${()=>setSelectedSet(setName)}>
+          return html`<div key=${setName} class="set-progress-card" onClick=${()=>setSelectedSet(setName)}
+            role="button" tabIndex="0" onKeyDown=${keyActivate(()=>setSelectedSet(setName))}>
             <${SetHeading} set=${setName} klass="set-progress-name"/>
             <div class="set-progress-row">
               <div class="set-progress-row-counts" style=${{gridColumn:"1 / -1",textAlign:"right"}}>
-                ${total} / ${denom} <span class="set-progress-pct">${pct.toFixed(0)}%</span>
+                ${total} / ${denom} <span class="set-progress-pct">${completionPct(total, denom)}%</span>
               </div>
               <div class="progress-bar" style=${{gridColumn:"1 / -1"}}>
                 <div class="progress-fill" style=${{width:pct+"%"}}/>
@@ -29002,11 +29028,12 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           const total = own.normal.size + own.foil.size + own.enchanted.size + own.iconic.size + own.epic.size;
           const denom = tot.normal + tot.foil + tot.enchanted + tot.iconic + tot.epic;
           const pct = denom ? (total/denom*100) : 0;
-          return html`<div key=${setName} class="set-progress-card" onClick=${()=>setSelectedSet(setName)}>
+          return html`<div key=${setName} class="set-progress-card" onClick=${()=>setSelectedSet(setName)}
+            role="button" tabIndex="0" onKeyDown=${keyActivate(()=>setSelectedSet(setName))}>
             <${SetHeading} set=${setName} klass="set-progress-name"/>
             <div class="set-progress-row">
               <div class="set-progress-row-label">Promos</div>
-              <div class="set-progress-row-counts">${total} / ${denom} <span class="set-progress-pct">${pct.toFixed(0)}%</span></div>
+              <div class="set-progress-row-counts">${total} / ${denom} <span class="set-progress-pct">${completionPct(total, denom)}%</span></div>
               <div class="progress-bar"><div class="progress-fill foil" style=${{width:pct+"%"}}/></div>
             </div>
           </div>`;
@@ -29018,19 +29045,20 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         // "Set 9" beside the logo: plenty of players think in set numbers, not
         // names (2026-09-25, Zaven). Booster sets only — a promo set has no number.
         const setNo = MAINLINE_SETS.indexOf(setName);
-        return html`<div key=${setName} class="set-progress-card" onClick=${()=>setSelectedSet(setName)}>
+        return html`<div key=${setName} class="set-progress-card" onClick=${()=>setSelectedSet(setName)}
+          role="button" tabIndex="0" onKeyDown=${keyActivate(()=>setSelectedSet(setName))}>
           <div class="set-progress-head">
             <${SetHeading} set=${setName} klass="set-progress-name"/>
             ${setNo >= 0 && html`<span class="set-progress-num">Set ${setNo + 1}</span>`}
           </div>
           <div class="set-progress-row">
             <div class="set-progress-row-label">Non-Foil</div>
-            <div class="set-progress-row-counts">${nOwn} / ${tot.normal} <span class="set-progress-pct">${nPct.toFixed(0)}%</span></div>
+            <div class="set-progress-row-counts">${nOwn} / ${tot.normal} <span class="set-progress-pct">${completionPct(nOwn, tot.normal)}%</span></div>
             <div class="progress-bar"><div class="progress-fill" style=${{width:nPct+"%"}}/></div>
           </div>
           ${tot.foil>0 && html`<div class="set-progress-row">
             <div class="set-progress-row-label">Foil</div>
-            <div class="set-progress-row-counts">${fOwn} / ${tot.foil} <span class="set-progress-pct">${fPct.toFixed(0)}%</span></div>
+            <div class="set-progress-row-counts">${fOwn} / ${tot.foil} <span class="set-progress-pct">${completionPct(fOwn, tot.foil)}%</span></div>
             <div class="progress-bar"><div class="progress-fill foil" style=${{width:fPct+"%"}}/></div>
           </div>`}
           ${CHASE_KEYS.some(k => tot[k] > 0) && html`<div class="set-chase-row">
@@ -51563,7 +51591,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         <div class="deck-card-name">${d.name || "Untitled deck"}</div>
         ${visibilityPill(d.visibility)}
       </div>
-      <div class="deck-card-meta">${s.total} / 60 cards · $${s.value.toFixed(2)} · ${ownedPct.toFixed(0)}% owned${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>
+      <div class="deck-card-meta">${s.total} / 60 cards · $${s.value.toFixed(2)} · ${completionPct(s.owned, s.total)}% owned${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>
       ${renderDeckChips(s)}
       ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>Updated ${relativeTime(d.updated_at)}</div>`}
       ${/* Two clusters: three things you COPY, then the ones that CHANGE the
@@ -51604,7 +51632,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     // deck-detail Owned stat show, surfaced on Discover / Favorites /
     // tournament tiles for signed-in users (anon has no collection to
     // compare against, so they see the original byline).
-    const extOwnedPct = user && s.total ? ` · ${(s.owned/s.total*100).toFixed(0)}% owned` : "";
+    const extOwnedPct = user && s.total ? ` · ${completionPct(s.owned, s.total)}% owned` : "";
     // Ownerless house decks would otherwise read "by anonymous", which makes
     // the launch-day Coconut feed look abandoned rather than curated.
     const creatorName = entry.creator?.display_name
@@ -54864,7 +54892,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         </div>
         <div class="deck-stat">
           <div class="deck-stat-lbl">Owned</div>
-          <div class="deck-stat-val">${ownedPct.toFixed(0)}%</div>
+          <div class="deck-stat-val">${completionPct(ownedCount, totalCount)}%</div>
           <div class="deck-stat-sub">${ownedCount} / ${totalCount}</div>
         </div>
         ${massEntryUrl
@@ -57433,6 +57461,7 @@ function App(){
   // exceeds that (Normal + Foil per card across multiple sets). We page
   // through with .range() until we've seen everything — without this the
   // App silently truncates and rows beyond row 1000 "disappear on refresh".
+  const [collectionReload, setCollectionReload] = useState(0);
   useEffect(()=>{
     if(!user){ setCollection({}); setCollectionLoading(false); return; }
     let cancelled = false;
@@ -57473,7 +57502,7 @@ function App(){
       offlineMirrorWrite("collection:"+user.id, map);
     })();
     return ()=>{ cancelled = true; };
-  },[user]);
+  },[user, collectionReload]);
 
   // Sealed-product collection fetch — same paginated pattern as cards.
   // No printing dimension (sealed is always "Normal" effectively), so the
@@ -58051,14 +58080,17 @@ function App(){
         .select("card_id");
       if(error){
         console.error("bulk collection update failed:", error);
-        setCollection(prevCollection);
-        return {ok:false, written, error:error.message || String(error)};
+        // Nothing written yet: the old state IS the server's. Otherwise the
+        // earlier chunks are saved, so re-read rather than roll back to a
+        // collection that no longer exists anywhere.
+        if(written > 0) setCollectionReload(n => n + 1); else setCollection(prevCollection);
+        return {ok:false, written, total: toUpsert.length, error:error.message || String(error)};
       }
       const got = (data||[]).length;
       if(got !== chunk.length){
         console.error(`bulk upsert wrote ${got}/${chunk.length} rows — likely RLS or trigger filter`, {sample:chunk[0]});
-        setCollection(prevCollection);
-        return {ok:false, written:written+got,
+        if(written + got > 0) setCollectionReload(n => n + 1); else setCollection(prevCollection);
+        return {ok:false, written:written+got, total: toUpsert.length,
           error:`Supabase only persisted ${got} of ${chunk.length} rows in a chunk — your RLS policy on collection_items is rejecting some rows silently. Check that the INSERT/UPDATE policies allow user_id = auth.uid().`};
       }
       written += got;
@@ -58088,7 +58120,8 @@ function App(){
           .in("card_id", chunk);
         if(error){
           console.error("bulk collection delete failed:", error);
-          setCollection(prevCollection);
+          // The upserts above already landed, so re-read the server's state.
+          if(written > 0) setCollectionReload(n => n + 1); else setCollection(prevCollection);
           return {ok:false, written, error:error.message || String(error)};
         }
       }
