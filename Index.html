@@ -6487,7 +6487,7 @@ const resolveRarityPrefix = (token) => {
   return hits.length === 1 ? hits[0] : null;
 };
 const SET_NICKNAMES = {
-  "tfc":"The First Chapter", "first chapter":"The First Chapter", "chapter 1":"The First Chapter",
+  "tfc":"The First Chapter", "first chapter":"The First Chapter", "the first chapter":"The First Chapter", "chapter 1":"The First Chapter",
   "rotf":"Rise of the Floodborn", "rise":"Rise of the Floodborn", "floodborn set":"Rise of the Floodborn", "rise of the floodborn":"Rise of the Floodborn",
   "iti":"Into the Inklands", "inklands":"Into the Inklands", "into the inklands":"Into the Inklands", "into inklands":"Into the Inklands",
   "ursulas":"Ursula's Return", "ursulas return":"Ursula's Return", "ursula return":"Ursula's Return",
@@ -6558,12 +6558,18 @@ const STAT_KEYWORDS = {
 const COLON_DROP_LABELS = new Set(["ink","color","colour","rarity","type","types","keyword","ability","classification","characteristic","class","legality","format","contains","name","text"]);
 const COLON_STAT_LABELS = new Set(["cost","costs","strength","str","willpower","wil","will","wp","lore"]);
 
-// Light depluralization — "epics" → "epic", "legendaries" → "legendary", "stitches" → "stitch"
+// Light depluralization — "epics" → "epic", "legendaries" → "legendary",
+// "stitches" → "stitch". "-es" is only a plural
+// ending after s/x/z/ch/sh (princesses, boxes, witches) and o (heroes); the
+// old any-"-es" rule cut "detectives" to "detectiv" (so the Detective
+// classification never resolved) and "hades" to "had". A word already ending
+// in "ss" is singular: boss, glass, princess.
 const depluralize = (w) => {
   if(!w || w.length < 4) return w;
   if(w.endsWith("ies")) return w.slice(0,-3)+"y";
-  if(w.endsWith("es") && w.length > 4) return w.slice(0,-2);
-  if(w.endsWith("s")) return w.slice(0,-1);
+  if(/(ss|x|z|ch|sh)es$/.test(w)) return w.slice(0,-2);
+  if(w.endsWith("oes") && w.length > 4) return w.slice(0,-2);
+  if(w.endsWith("s") && !w.endsWith("ss")) return w.slice(0,-1);
   return w;
 };
 
@@ -6600,6 +6606,17 @@ const levenshtein = (a, b) => {
 const searchNorm = (s) => (s||"")
   .normalize("NFD").replace(/[̀-ͯ]/g, "")
   .replace(/['‘’`´]/g, "");
+const _wholeWordRes = new Map();
+const _wholeWordIn = (hay, word) => {
+  if(!word) return false;
+  let re = _wholeWordRes.get(word);
+  if(!re){
+    re = new RegExp("(^|[^a-z0-9])" + word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "($|[^a-z0-9])");
+    if(_wholeWordRes.size > 500) _wholeWordRes.clear();
+    _wholeWordRes.set(word, re);
+  }
+  return re.test(hay);
+};
 const nameMatches = (query, name) => {
   if(!query) return true;
   const q = searchNorm(query.toLowerCase().trim());
@@ -6809,6 +6826,22 @@ const parseSearchQuery = (input) => {
     .replace(/"([^"]*)"/g, "$1")
     .replace(/\s+/g, " ").trim();
 
+  // Comparator WORDS on a number: "under 5", "cost under 5", "strength over 3",
+  // "at least 4", "3 or less", "5+". Without this, "items under 5" parsed as
+  // cost = 5 and left "under" behind as a NAME word no card has, so an
+  // ordinary sentence returned nothing. A "$" amount was already taken as a
+  // price by _extractPrice, so what reaches here is a stat, and a bare one is
+  // a cost (that function's own reading of an under/over with no "$"). Only a
+  // number is rewritten, so "Under the Sea" and "Head Above Water" are safe.
+  raw = raw
+    .replace(/(^|\s)(?:under|below|less than|fewer than)\s+(\d+)(?=\s|$)/g, "$1<$2")
+    .replace(/(^|\s)(?:over|above|more than|greater than)\s+(\d+)(?=\s|$)/g, "$1>$2")
+    .replace(/(^|\s)(?:at most|no more than)\s+(\d+)(?=\s|$)/g, "$1<=$2")
+    .replace(/(^|\s)at least\s+(\d+)(?=\s|$)/g, "$1>=$2")
+    .replace(/(^|\s)(\d+)\s+or\s+(?:less|fewer|lower|under|below)(?=\s|$)/g, "$1<=$2")
+    .replace(/(^|\s)(\d+)\s+or\s+(?:more|higher|greater|over|above)(?=\s|$)/g, "$1>=$2")
+    .replace(/(^|\s)(\d+)\+(?=\s|$)/g, "$1>=$2");
+
   const tokens = raw.split(/\s+/).filter(Boolean);
   const used = new Set();
 
@@ -6824,8 +6857,12 @@ const parseSearchQuery = (input) => {
       }
       if(indices.length !== len) continue;
       const phrase = indices.map(i => tokens[i]).join(" ");
-      if(SET_NICKNAMES[phrase]){
-        out.filters.set = SET_NICKNAMES[phrase];
+      // The real names carry punctuation the nickname keys don't: typing
+      // "attack of the vine!" or "ursula's return" exactly as printed found
+      // no set and searched card names for the words instead.
+      const hit = SET_NICKNAMES[phrase] || SET_NICKNAMES[phrase.replace(/['’!.,]/g, "")];
+      if(hit){
+        out.filters.set = hit;
         indices.forEach(i => used.add(i));
         found = true;
         break;
@@ -6944,14 +6981,17 @@ const parseSearchQuery = (input) => {
   // Standalone digit → cost (if not already set). Only treat as a cost
   // filter when the number falls in Lorcana's actual cost range (≤12) —
   // otherwise it's part of a card name (e.g. "99 Puppies", "101 Dalmatians")
-  // and should pass through to the name search.
+  // and should pass through to the name search. It may carry an operator
+  // from the comparator-word rewrite above ("under 5" → "<5").
   if(out.filters.cost == null){
     for(let i=0; i<tokens.length; i++){
       if(used.has(i)) continue;
-      if(/^\d+$/.test(tokens[i])){
-        const n = parseInt(tokens[i],10);
+      const m = tokens[i].match(/^(>=|<=|>|<|=)?(\d+)$/);
+      if(m){
+        const n = parseInt(m[2],10);
         if(n <= 12){
           out.filters.cost = n;
+          if(m[1]) out.filters.costOp = m[1];
           used.add(i);
           break;
         }
@@ -7042,9 +7082,14 @@ const parseSearchQuery = (input) => {
     else if(d.kind==="type" && !out.filters.card_type){ out.filters.card_type = d.value; used.add(i); }
   }
 
-  // Remaining tokens → name query (with depluralization)
+  // Remaining tokens → name query (with depluralization). nameRaw keeps the
+  // words as typed: depluralizing a NAME cuts it to a stub that matches far
+  // more than was asked for — "hans" became "han" (Shan Yu, Chang, handy…),
+  // "hades" became "had". The matcher tries the typed word first and falls
+  // back to the singular only as a whole word.
   const nameTokens = tokens.filter((_,i) => !used.has(i));
   out.name = nameTokens.map(depluralize).join(" ").trim();
+  out.nameRaw = nameTokens.join(" ").trim();
 
   return out;
 };
@@ -7533,9 +7578,13 @@ const matchesCardFilter = (row, f, parsed) => {
       // full searchable haystack so "dwarf" surfaces every Seven Dwarfs
       // character (classification match), "action" surfaces every action
       // (card_type match), etc. — mirrors how Dreamborn searches.
-      if(!nameMatches(parsed.name, row["Product Name"])){
-        const q = searchNorm(parsed.name.toLowerCase());
-        const tokens = q.split(/\s+/).filter(Boolean);
+      // nameRaw only while it still describes `name`: a caller that rewrites
+      // name (the graded picker strips "#N" tokens) leaves nameRaw stale.
+      const rawQ = (parsed.nameRaw && parsed.nameRaw.split(/\s+/).map(depluralize).join(" ") === parsed.name)
+        ? parsed.nameRaw : parsed.name;
+      if(!nameMatches(rawQ, row["Product Name"])){
+        const tokens = searchNorm(rawQ.toLowerCase()).split(/\s+/).filter(Boolean);
+        const singles = searchNorm(parsed.name.toLowerCase()).split(/\s+/).filter(Boolean);
         const cls = (row.classifications || []).map(c => (c||"").toLowerCase());
         const haystack = [
           (row["Product Name"]||"").toLowerCase(),
@@ -7552,7 +7601,11 @@ const matchesCardFilter = (row, f, parsed) => {
         // keep their old matchMode behavior.
         const all = (parsed.nameMatchMode || parsed.matchMode || "all") === "all";
         const hayN = searchNorm(haystack);  // so stripped tokens match body text with apostrophes
-        const ok = all ? tokens.every(t => hayN.includes(t)) : tokens.some(t => hayN.includes(t));
+        // The typed word as a substring, else its singular as a WHOLE word
+        // ("dragons" still finds "Dragon Fire"; "hans" no longer finds "Shan").
+        const tokOk = (t, i) => hayN.includes(t)
+          || (singles.length === tokens.length && singles[i] !== t && _wholeWordIn(hayN, singles[i]));
+        const ok = all ? tokens.every(tokOk) : tokens.some(tokOk);
         if(!ok) return false;
       }
     }
@@ -9538,7 +9591,10 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   const img = group.img_normal || group.img_small;
   const classifications = (extras && Array.isArray(extras.classifications) && extras.classifications)
     || (meta && Array.isArray(meta.classifications) ? meta.classifications : []);
-  const rulesText = extras?.text;
+  // The catalog rows already carry the rules text (it is cached whole since the
+  // IndexedDB move), so the card reads offline — and for a synthetic row the
+  // cards-table fetch cannot find — instead of rendering with no text at all.
+  const rulesText = extras?.text || meta?.text || group.text || null;
   const flavor = extras?.flavor_text;
   const cost = meta?.cost;
   const inkable = meta?.inkable;
@@ -13257,6 +13313,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     // worked on this tab while the Screener honoured all five.
     const p = {
       name: parsedFromInput.name,
+      nameRaw: parsedFromInput.nameRaw,
       filters: {...parsedFromInput.filters},
       excludeRarities: new Set(parsedFromInput.excludeRarities),
       excludeInks: new Set(parsedFromInput.excludeInks),
@@ -14018,6 +14075,13 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       const cur = url.searchParams.get("card");
       const want = selectedGroup ? (selectedGroup.card_id || null) : null;
       if(cur === want) return;
+      // Closing a modal WE opened pops the entry we pushed. Replacing it in
+      // place left a duplicate /cards entry behind, so the next Back did
+      // nothing visible at all.
+      if(!want && cur && window.history.state && window.history.state.cardModal){
+        window.history.back();
+        return;
+      }
       if(want) url.searchParams.set("card", want);
       else url.searchParams.delete("card");
       if(want && !cur) window.history.pushState({cardModal: true}, "", url.toString());
