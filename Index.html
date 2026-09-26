@@ -52490,11 +52490,18 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
 
   // Optimistic add/remove for the editor — updates local state immediately,
   // upserts/deletes the row in Supabase in the background. Errors revert.
+  // ⚠ Serialized per card and coalesced to the latest value, like the
+  // collection's updateQty: fast +/- fired overlapping upserts of absolute
+  // quantities that could land out of order. A failure now rolls back only
+  // THIS card, to what the server holds — restoring the whole deck list as it
+  // was at the first tap reverted every other edit made meanwhile.
   const updateDeckCard = useCallback(async (deckId, cardId, printing, newQty) => {
     if(!user) return;
-    const prev = decks;
-    setDecks(ds => (ds||[]).map(d => {
+    const beforeQty = (((decks || []).find(d => d.id === deckId) || {}).cards || [])
+      .find(c => c.card_id === cardId && c.printing === printing)?.quantity || 0;
+    const applyLocal = (qtyNow) => setDecks(ds => (ds||[]).map(d => {
       if(d.id !== deckId) return d;
+      const newQty = qtyNow;
       // Preserve position: update in place if the card is already in the deck,
       // remove if newQty<=0, push to end only when it's a genuinely new entry.
       // Filter+push (the previous approach) was bumping the touched card to
@@ -52517,26 +52524,42 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       }
       return {...d, cards};
     }));
+    applyLocal(newQty);
+    const key = deckId + "|" + cardId + "|" + printing;
+    const running = deckWriteRef.current.get(key);
+    if(running){ running.want = newQty; return; }
+    const st = {want: newQty};
+    deckWriteRef.current.set(key, st);
     setPending(p => p + 1);
+    let written, err = null;
     try {
-      if(newQty <= 0){
-        const {error} = await sbClient.from("deck_cards").delete()
-          .eq("deck_id", deckId).eq("card_id", await encDeckDet(cardId)).eq("printing", printing);
-        if(error) throw error;
-      } else {
-        const {error} = await sbClient.from("deck_cards")
-          .upsert(await encDeckCardRow({deck_id:deckId, card_id:cardId, printing, quantity:newQty}),
-                  {onConflict:"deck_id,card_id,printing"});
-        if(error) throw error;
+      while(st.want !== written){
+        const target = st.want;
+        try {
+          if(target <= 0){
+            const {error} = await sbClient.from("deck_cards").delete()
+              .eq("deck_id", deckId).eq("card_id", await encDeckDet(cardId)).eq("printing", printing);
+            if(error) throw error;
+          } else {
+            const {error} = await sbClient.from("deck_cards")
+              .upsert(await encDeckCardRow({deck_id:deckId, card_id:cardId, printing, quantity:target}),
+                      {onConflict:"deck_id,card_id,printing"});
+            if(error) throw error;
+          }
+        } catch(e){ err = e; break; }
+        written = target;
       }
-    } catch(e){
-      console.error("deck card update failed:", e);
-      setDecks(prev); // rollback
-      flashToast("Couldn't save card change: " + e.message);
     } finally {
+      deckWriteRef.current.delete(key);
       setPending(p => Math.max(0, p - 1));
     }
+    if(err){
+      console.error("deck card update failed:", err);
+      applyLocal(written !== undefined ? written : beforeQty);
+      flashToast("Couldn't save card change: " + (err.message || err));
+    }
   }, [user, decks]);
+  const deckWriteRef = useRef(new Map());
 
   // Replace a deck's whole list: ONE upsert for every row that is new or
   // changed, THEN the deletes. The import used to delete each card and then
@@ -58657,6 +58680,11 @@ function App(){
 
   // Optimistically bump local state, then persist to Supabase. Calling with
   // newQty<=0 deletes the row; otherwise upserts.
+  // ⚠ Writes are SERIALIZED per card+printing and coalesced to the latest
+  // value. Tapping + three times fired three overlapping upserts of absolute
+  // quantities; nothing ordered them, so an older one landing last left the
+  // server on 2 while the screen said 4 — and the next reload "lost" a copy.
+  const qtyWriteRef = useRef(new Map());
   const updateQty = useCallback(async (cardId, printing, newQty)=>{
     if(!user || !cardId || !printing) return;
     const key = cardId+":"+printing;
@@ -58668,27 +58696,46 @@ function App(){
       else next[key] = newQty;
       return next;
     });
+    const running = qtyWriteRef.current.get(key);
+    // A writer for this card is already out: it picks the newest value up
+    // when its request comes back, so this call has nothing more to do.
+    if(running){ running.want = newQty; return; }
+    const st = {want: newQty};
+    qtyWriteRef.current.set(key, st);
     // supabase-js resolves with {error} on RLS/constraint/auth failure rather
-    // than throwing, so the try/catch alone wouldn't catch it. Check error and
-    // roll the optimistic update back so the UI never shows a phantom quantity.
-    let err;
+    // than throwing, so the try/catch alone wouldn't catch it.
+    const writeOnce = async (qty) => {
+      try {
+        const {error} = qty <= 0
+          ? await sbClient.from("collection_items").delete()
+              .eq("user_id", user.id).eq("card_id", cardId)
+              .eq("printing", printing).eq("condition","NM")
+          : await sbClient.from("collection_items").upsert({
+              user_id:user.id, card_id:cardId, printing:printing, condition:"NM", quantity:qty,
+            }, {onConflict:"user_id,card_id,printing,condition"});
+        return error || null;
+      } catch(e){ return e; }
+    };
+    let written, err = null;
     try {
-      if(newQty<=0){
-        ({error: err} = await sbClient.from("collection_items").delete()
-          .eq("user_id", user.id).eq("card_id", cardId)
-          .eq("printing", printing).eq("condition","NM"));
-      } else {
-        ({error: err} = await sbClient.from("collection_items").upsert({
-          user_id:user.id, card_id:cardId, printing:printing, condition:"NM", quantity:newQty,
-        }, {onConflict:"user_id,card_id,printing,condition"}));
+      while(st.want !== written){
+        const target = st.want;
+        err = await writeOnce(target);
+        if(err) break;
+        written = target;
       }
-    } catch(e){ err = e; }
+    } finally {
+      qtyWriteRef.current.delete(key);
+    }
     if(err){
       console.error("collection update failed:", err.message || err);
+      // Roll back to what the server actually holds: the last write that
+      // landed, or the value before this run of taps.
+      const serverQty = written !== undefined ? written : prevQty;
       setCollection(c=>{
         const next = {...c};
-        if(prevQty == null) delete next[key];
-        else next[key] = prevQty;
+        if(serverQty == null || serverQty <= 0) delete next[key];
+        else next[key] = serverQty;
         return next;
       });
       flashToast(navigator.onLine === false
