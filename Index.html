@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=483">
+<link rel="stylesheet" href="styles.css?v=484">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2422,6 +2422,7 @@ const LORCANA_SET_ART = {
   "Winterspell":           {src: "sets/winterspell.webp"},
   "Wilds Unknown":         {src: "sets/wilds-unknown.webp"},
   "Attack of the Vine!":   {src: "sets/attack-of-the-vine.webp"},
+  "Hyperia City":          {src: "sets/hyperia-city.webp"},
 };
 // Returns {src, mono} or null. Null for every promo set, Extras, and any set
 // released after the last bundle drop — which is the normal steady state for a
@@ -2761,6 +2762,8 @@ const UI_ICON_PATHS = {
   moon:      _icoSvg(html`<path d="M20.5 14.8A8.8 8.8 0 0 1 9.2 3.5a8.8 8.8 0 1 0 11.3 11.3z"/>`),
   reprint:   _icoSvg(html`<path d="M4 10.2a6.4 6.4 0 0 1 10.8-3.5l2.7 2.5"/><path d="M17.9 4.6v4.6h-4.6"/><path d="M20 13.8a6.4 6.4 0 0 1-10.8 3.5l-2.7-2.5"/><path d="M6.1 19.4v-4.6h4.6"/>`),
   pennant:   _icoSvg(html`<path d="M6 21V3.4"/><path d="M6 4.4h11.6l-2.4 3.9 2.4 3.9H6"/>`),
+  pause:     _icoSvg(html`<path d="M9 5v14"/><path d="M15 5v14"/>`, 2.4),
+  play:      _icoSvg(html`<path d="M8 5.5v13l10.5-6.5z"/>`),
   die:       _icoSvg(html`<rect x="3.4" y="3.4" width="17.2" height="17.2" rx="3.6"/><path d="M8.2 8.2h.01"/><path d="M15.8 8.2h.01"/><path d="M12 12h.01"/><path d="M8.2 15.8h.01"/><path d="M15.8 15.8h.01"/>`, 2.4),
   // Product glyphs for Amazon tiles with no TCGplayer photo — drawn under the
   // <img>, so they only ever show when there is nothing to cover them.
@@ -4605,6 +4608,69 @@ const calcEV = (avgs,set,nc,excludes,priceMode) => {
 // pre-filtered to that variant (Cold Foil for regular foils, Holofoil for
 // Enchanted/Iconic/Epic chase cards).
 const TCG_AFFILIATE_BASE = "https://partner.tcgplayer.com/c/7285926/1780961/21018";
+// TCGplayer mass entry takes the whole list in the URL, and its server refuses
+// anything past ~8 KB: measured 2026-09-25, a 7,843-char URL loads and 8,291
+// answers 414 — and through the affiliate hop a full Reign of Jafar list (230
+// cards, ~10.6 KB after the redirect) got a raw "Server Error" page instead.
+// So a big list is split into several carts, each well under the limit (the
+// affiliate redirect appends its own tracking, hence the margin). Every part
+// adds to the SAME TCGplayer cart. Lines are "<qty> <name>".
+const TCG_MASSENTRY_MAX = 6000;
+const tcgMassEntryDest = (lines) =>
+  `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=${encodeURIComponent(lines.join("||"))}`;
+const tcgMassEntryParts = (lines) => {
+  const parts = [];
+  let cur = [];
+  for(const line of lines || []){
+    if(cur.length && tcgMassEntryDest([...cur, line]).length > TCG_MASSENTRY_MAX){ parts.push(cur); cur = []; }
+    cur.push(line);
+  }
+  if(cur.length) parts.push(cur);
+  return parts.map(ls => ({
+    url: TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(tcgMassEntryDest(ls)),
+    copies: ls.reduce((n, l) => n + (parseInt(l, 10) || 0), 0),
+  }));
+};
+// TCGplayer's OWN spelling of a single, by product id (migration 169, filled
+// daily by scripts/sync_tcgplayer_names.py). Mass entry matches exact names, and
+// 470 of 3,229 linked cards are spelled differently there — 21 fail outright
+// ("Chief Bogo- Commanding Officer", "The Sword of Shan Yu", "Walk the Plank",
+// straight apostrophes, "Te Ka") and ~450 carry a rarity suffix ("... (Enchanted)")
+// without which mass entry quietly puts the BASE printing in the cart. Only
+// differing names are stored, so this is a few hundred rows, fetched once and
+// cached a day. A missing table (pre-169) just means our own names are sent.
+const TCG_NAMES_KEY = "packsink:tcgNames:v1";
+let _tcgNames = null, _tcgNamesP = null;
+const loadTcgNames = () => {
+  if(_tcgNamesP) return _tcgNamesP;
+  const hit = readJsonCache(TCG_NAMES_KEY, 24*3600*1000);
+  if(hit && !hit.stale && Array.isArray(hit.data)){
+    _tcgNames = new Map(hit.data);
+    return (_tcgNamesP = Promise.resolve(_tcgNames));
+  }
+  _tcgNamesP = sbFetchAll("tcgplayer_names", {select: "product_id,name", order: "product_id.asc"})
+    .then(rows => {
+      const pairs = (rows || []).map(r => [Number(r.product_id), r.name]);
+      writeJsonCache(TCG_NAMES_KEY, pairs);
+      return (_tcgNames = new Map(pairs));
+    })
+    .catch(() => (_tcgNames = new Map(hit && Array.isArray(hit.data) ? hit.data : [])));
+  return _tcgNamesP;
+};
+const useTcgNames = () => {
+  const [m, setM] = React.useState(_tcgNames);
+  React.useEffect(() => {
+    if(_tcgNames) return;
+    let alive = true;
+    loadTcgNames().then(x => { if(alive) setM(x); });
+    return () => { alive = false; };
+  }, []);
+  return m;
+};
+// The name mass entry should get for this product: TCGplayer's when it differs,
+// ours otherwise.
+const tcgMassName = (names, pid, fallback) =>
+  (pid != null && names && names.get(Number(pid))) || fallback;
 const tcgUrl = (productId, printing) => {
   if(!productId) return null;
   let dest = `https://www.tcgplayer.com/product/${productId}/?Language=English`;
@@ -14501,11 +14567,8 @@ const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback
         · <a href="/privacy">Privacy & Terms</a>
       </div>
       <div class="footer-disclosure">
-        Packs.Ink is a TCGplayer affiliate and an Amazon Associate — purchases made through links on this site may earn us a commission at no extra cost to you. As an Amazon Associate I earn from qualifying purchases.
-      </div>
-      <div class="footer-disclosure">
-        Unofficial fan site — not affiliated with, endorsed by, or sponsored by Disney or Ravensburger. Disney Lorcana is a trademark of Disney.
-        Card data & art via Lorcast; prices via TCGCSV / TCGplayer.
+        Unofficial fan site, not affiliated with, endorsed by, or sponsored by Disney or Ravensburger. Disney Lorcana is a trademark of Disney.
+        Data via Lorcast and TCGCSV. Links may earn a TCGplayer affiliate commission at no cost to you. As an Amazon Associate I earn from qualifying purchases.
       </div>
       ${(onFeedback || onViewFeedback) && html`<div class="footer-feedback-row" style=${{marginTop:8,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
         ${onFeedback && html`<button class="footer-feedback-btn" onClick=${onFeedback}
@@ -16287,8 +16350,31 @@ const scanVariantsFor = (rows) => {
 // to the editor's list, which shows each version's ART and set and therefore
 // cannot lie. That covers the 205 of 623 families (reprints, multi-promo runs)
 // where a one-word label would be a coin flip dressed as a choice.
-const scanVariantChipsOk = (vars) => vars.length >= 2 && vars.length <= SCAN_VARIANT_MAX
-  && new Set(vars.map(v => v.label)).size === vars.length;
+// Short set name for a chip: "Set 4" for a booster set (its release position —
+// what's printed in the card's bottom corner), the printed suffix for a promo
+// set (P1, C1, D23), else the set's initials.
+const scanSetShort = (set) => {
+  const i = MAINLINE_SETS.indexOf(set);
+  if(i >= 0) return "Set " + (i + 1);
+  for(const [k, v] of Object.entries(DREAMBORN_CN_SUFFIX_SETS)) if(v === set) return k.toUpperCase();
+  return String(set || "").split(/\s+/).filter(w => /^[A-Za-z0-9]/.test(w)).map(w => w[0]).join("").toUpperCase().slice(0, 4) || "?";
+};
+// Chip labels for a family. Rarity is the default axis, but a REPRINT usually
+// keeps its rarity (Daisy Duck - Musketeer Spy is Common in Ursula's Return and
+// in Fabled), and two chips both saying "Common" answer nothing. So a chip
+// whose rarity collides is labelled by its SET instead — that is the one
+// thing the scanner cannot read and the tester can: it's printed on the card
+// (2026-09-25, Zaven: "it scanned my cards as set 4 when they were 9"). Returns
+// [] when even the set labels collide (Dalmatian 4a/4e: same set, same rarity),
+// which is left to the editor's art list, as before.
+const scanVariantChips = (vars) => {
+  if(vars.length < 2 || vars.length > SCAN_VARIANT_MAX) return [];
+  const count = new Map();
+  for(const v of vars) count.set(v.label, (count.get(v.label) || 0) + 1);
+  const out = vars.map(v => count.get(v.label) > 1 ? {...v, short: scanSetShort(v.set), bySet: true} : v);
+  return new Set(out.map(v => v.short)).size === out.length ? out : [];
+};
+const scanVariantChipsOk = (vars) => scanVariantChips(vars).length > 0;
 const scanVariantTitle = (v) => v.label + (v.set ? " · " + v.set : "")
   + (v.number ? " #" + v.number : "");
 // ⚠ Case-folded, because Lorcast's own spelling is not stable across sets:
@@ -18796,7 +18882,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     const editing = qaEditOpen === x.id;
     const others = (x.cands || []).filter(c => c.id !== x.guessId).slice(0, 4);
     const vars = (x.status !== "identifying" && x.guessId && qaVariantIndex.get(x.guessId)) || [];
-    const varChips = scanVariantChipsOk(vars) ? vars : [];
+    const varChips = scanVariantChips(vars);
+    // For a card printed in more than one set, name the set the scan landed on
+    // right on the row — checking it shouldn't need the editor.
+    const guessVar = vars.length && new Set(vars.map(v => v.set)).size > 1 ? vars.find(v => v.id === x.guessId) : null;
     // A lone chase print has no Non-Foil side to offer, so its printing is
     // stated rather than chosen. Nothing to state and nothing to choose means
     // no segment row at all — an empty one still costs the row a gap.
@@ -18808,7 +18897,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       <div class="scanner-qa-rowinfo">
         ${x.status === "identifying"
           ? html`<span class="scanner-session-name scanner-qa-identifying">Identifying…</span>`
-          : html`<span class="scanner-session-name">${qaConfChip(x.conf, x.ver)} ${x.conf === "unread" ? html`<span class="scanner-qa-unread">${x.foreign ? "Non-English card — not supported yet" : "Couldn't read — tap edit to pick"}</span>` : (x.guess || "(no match)")}</span>`}
+          : html`<span class="scanner-session-name">${qaConfChip(x.conf, x.ver)} ${x.conf === "unread" ? html`<span class="scanner-qa-unread">${x.foreign ? "Non-English card — not supported yet" : "Couldn't read — tap edit to pick"}</span>` : (x.guess || "(no match)")}${guessVar ? html` <span class="scanner-qa-setname" title=${guessVar.set + (guessVar.number ? " #" + guessVar.number : "")}>${scanSetShort(guessVar.set)}${guessVar.number ? " #" + guessVar.number : ""}</span>` : null}</span>`}
         ${x.alts && x.status !== "identifying" ? html`<span class="scanner-qa-alts">maybe: ${x.alts}</span>` : null}
         ${(x.hasFoilPair || prOnly || varChips.length) ? html`<span class="scanner-qa-segs">
           ${x.hasFoilPair ? html`<span class="scanner-qa-foilseg" title="Which printing is the physical card?">
@@ -19929,23 +20018,26 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   // all. Mirrors the deck-editor massEntryUrl builder. Shorts are aggregated by
   // card name (a card short in both printings becomes one line) since mass-entry
   // matches on name + set and the buyer picks foil/non-foil in the cart.
+  const tcgNames = useTcgNames();
   const missingMassEntryUrl = useMemo(() => {
     const byName = new Map();
+    const add = (name, n) => { if(name && n > 0) byName.set(name, (byName.get(name) || 0) + n); };
     for(const g of visibleGroups){
       const nm = g["Product Name"] || g.name || g.normal?.["Product Name"] || g.foil?.["Product Name"] || "";
       if(!nm) continue;
-      let short = 0;
+      // Each side is named by ITS product: a regular card's two finishes share
+      // one TCGplayer product (same name, one line), while a connecting foil is
+      // a separate "(Foil)" product and must be its own line.
       if(nInScope(g))
-        short += Math.max(0, targetForSide(g, "normal") - ((collection[g.card_id+":"+g.normal.tcg_printing] || 0) + slotCover(g.card_id, g.normal.tcg_printing)));
+        add(tcgMassName(tcgNames, g.normal.tcgplayer_product_id, nm),
+          Math.max(0, targetForSide(g, "normal") - ((collection[g.card_id+":"+g.normal.tcg_printing] || 0) + slotCover(g.card_id, g.normal.tcg_printing))));
       if(fInScope(g))
-        short += Math.max(0, targetForSide(g, "foil") - ((collection[g.card_id+":"+g.foil.tcg_printing] || 0) + slotCover(g.card_id, g.foil.tcg_printing)));
-      if(short > 0) byName.set(nm, (byName.get(nm) || 0) + short);
+        add(tcgMassName(tcgNames, g.foil.tcgplayer_product_id, nm),
+          Math.max(0, targetForSide(g, "foil") - ((collection[g.card_id+":"+g.foil.tcg_printing] || 0) + slotCover(g.card_id, g.foil.tcg_printing))));
     }
     if(!byName.size) return null;
-    const lines = [...byName].map(([nm, n]) => `${n} ${nm}`);
-    const dest = `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=${encodeURIComponent(lines.join("||"))}`;
-    return TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(dest);
-  }, [visibleGroups, collection, foilMode, goal, goalN, goalF, slotCover]);
+    return tcgMassEntryParts([...byName].map(([nm, n]) => `${n} ${nm}`));
+  }, [visibleGroups, collection, foilMode, goal, goalN, goalF, slotCover, tcgNames]);
 
   // Filter-aware "owned value" summary — total $ for cards in the visible
   // view that the user actually owns. Sums every owned copy at current Low
@@ -20042,52 +20134,45 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     </div>
 
     ${(() => {
-      // Owned-completion breakdown by printing bucket (non-foil / foil / chase),
-      // respecting the current filter + goal: "you have X of the N cards" per
-      // bucket. Only shows buckets that are in scope + part of the goal.
+      // ONE summary panel (2026-09-25, Zaven: "why does each small thing need a
+      // full box?"). It was five boxes: three "X owned" counters and two value
+      // cards, each with a label, a big number and a lot of air. Now the owned
+      // counts are three compact bars side by side, and owned/missing value
+      // share one line under them. Same numbers, same filters, ~40% of the height.
       const ob = ownedBreakdown;
       const buckets = [["nonfoil","Non-foil",ob.nonfoil],["foil","Foil",ob.foil],["chase","Chase",ob.chase]].filter(([,,d])=>d.total>0);
-      if(!buckets.length) return null;
-      return html`<div class="setdet-completion" style=${{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
-        ${buckets.map(([k,label,d]) => {
-          const pct = d.total ? Math.round(d.have/d.total*100) : 0;
-          return html`<div key=${k} style=${{flex:"1 1 130px",minWidth:118,background:"var(--bg-surface)",border:"1px solid var(--border)",borderRadius:8,padding:"8px 12px"}}>
-            <div style=${{fontSize:10,textTransform:"uppercase",letterSpacing:0.6,color:"var(--text-muted)",fontWeight:700}}>${label} owned</div>
-            <div style=${{fontSize:18,fontWeight:700,fontVariantNumeric:"tabular-nums",marginTop:2}}>${d.have.toLocaleString()} <span style=${{color:"var(--text-muted)",fontSize:13,fontWeight:400}}>/ ${d.total.toLocaleString()}</span> <span style=${{color:"var(--text-muted)",fontSize:12,marginLeft:2}}>${pct}%</span></div>
-            <div style=${{height:5,background:"var(--border)",borderRadius:3,marginTop:5,overflow:"hidden"}}><div style=${{width:pct+"%",height:"100%",background:"var(--accent)"}}></div></div>
-          </div>`;
-        })}
+      const mb = visibleMissing.byBucket;
+      const parts = [["nonfoil","Non-foil"],["foil","Foil"],["chase","Chase"]].filter(([k])=>mb[k].count>0);
+      const money = (v) => "$" + v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+      return html`<div class="setdet-summary">
+        ${buckets.length > 0 && html`<div class="setdet-sbars">
+          ${buckets.map(([k,label,d]) => {
+            const pct = d.total ? Math.round(d.have/d.total*100) : 0;
+            return html`<div key=${k} class="setdet-sbar">
+              <div class="setdet-sbar-top"><span class="setdet-sbar-lbl">${label}</span><span class="setdet-sbar-num">${d.have.toLocaleString()}<small>/${d.total.toLocaleString()}</small> <em>${pct}%</em></span></div>
+              <div class="setdet-sbar-track"><i style=${{width:pct+"%"}}></i></div>
+            </div>`;
+          })}
+        </div>`}
+        <div class="setdet-svals">
+          <div class="setdet-sval"><span class="setdet-sval-lbl">Owned</span><b class="green">${money(visibleOwned.value)}</b><small>${visibleOwned.count.toLocaleString()} card${visibleOwned.count===1?'':'s'}</small></div>
+          <div class="setdet-sval"><span class="setdet-sval-lbl">Missing</span><b class="red">${money(visibleMissing.value)}</b><small>${visibleMissing.count.toLocaleString()} to complete ${goalLabel(goal)} ${allMode ? "(all sets)" : "set"}</small></div>
+        </div>
+        ${parts.length >= 2 && html`<div class="setdet-sbreak">
+          ${parts.map(([k,label]) => html`<span key=${k}>${label} ${fmt(mb[k].value)} <span class="muted">(${mb[k].count})</span></span>`)}
+        </div>`}
       </div>`;
     })()}
 
-    <div class="setdet-value-stats">
-      <div class="setdet-stat">
-        <div class="setdet-stat-lbl">Owned value</div>
-        <div class="setdet-stat-val green">$${visibleOwned.value.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-        <div class="setdet-stat-sub">${visibleOwned.count.toLocaleString()} card${visibleOwned.count===1?'':'s'}</div>
-      </div>
-      <div class="setdet-stat">
-        <div class="setdet-stat-lbl">Missing value</div>
-        <div class="setdet-stat-val red">$${visibleMissing.value.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-        <div class="setdet-stat-sub">${visibleMissing.count.toLocaleString()} to complete ${goalLabel(goal)} ${allMode ? "(all sets)" : "set"}</div>
-        ${(() => {
-          // Split the missing value across non-foil / foil / chase — only when
-          // more than one bucket is short (otherwise it just echoes the total).
-          const mb = visibleMissing.byBucket;
-          const parts = [["nonfoil","Non-foil"],["foil","Foil"],["chase","Chase"]].filter(([k])=>mb[k].count>0);
-          if(parts.length < 2) return null;
-          return html`<div class="setdet-stat-sub" style=${{marginTop:3,display:"flex",gap:"2px 10px",flexWrap:"wrap"}}>
-            ${parts.map(([k,label]) => html`<span key=${k}>${label} ${fmt(mb[k].value)} <span style=${{opacity:0.65}}>(${mb[k].count})</span></span>`)}
-          </div>`;
-        })()}
-      </div>
-    </div>
-
     ${!allMode && visibleMissing.count > 0 && html`<a class="setdet-buy-missing"
-      href=${missingMassEntryUrl || tcgSetSearchUrl(setName)} target="_blank" rel="noopener nofollow sponsored">
+      href=${(missingMassEntryUrl && missingMassEntryUrl[0]?.url) || tcgSetSearchUrl(setName)} target="_blank" rel="noopener nofollow sponsored">
       <span class="setdet-buy-missing-text">Shop ${visibleMissing.count} missing card${visibleMissing.count===1?'':'s'}${searchOrFilterLabel(inkFilter,rarityFilter,search,foilMode,statusFilter,priceBand)}</span>
-      <span class="setdet-buy-missing-price">${fmt(visibleMissing.value)}<span class="setdet-buy-missing-cta">Buy bulk on TCGplayer</span><span class="setdet-buy-missing-arrow">↗</span></span>
+      <span class="setdet-buy-missing-price">${fmt(visibleMissing.value)}<span class="setdet-buy-missing-cta">${missingMassEntryUrl && missingMassEntryUrl.length > 1 ? "Buy bulk — part 1 of " + missingMassEntryUrl.length : "Buy bulk on TCGplayer"}</span><span class="setdet-buy-missing-arrow">↗</span></span>
     </a>`}
+    ${!allMode && missingMassEntryUrl && missingMassEntryUrl.length > 1 && html`<div class="setdet-buy-parts">
+      <span class="muted">Too many for one TCGplayer cart link — add each part (they all go into the same cart):</span>
+      ${missingMassEntryUrl.map((p, i) => html`<a key=${i} class="setdet-buy-part" href=${p.url} target="_blank" rel="noopener nofollow sponsored">Part ${i + 1} · ${p.copies} ${p.copies === 1 ? "copy" : "copies"} ↗</a>`)}
+    </div>`}
 
     ${(() => {
       // For Extras & Oddities, sub-group by the card's origin set so the
@@ -22942,14 +23027,19 @@ function parseDreambornCsv(text, rowsByName, raw){
       else w.f += qty;
     }
   } else {
-    const idx = {normal:col("normal"), foil:col("foil"), name:col("name"), number:col("card number")};
+    // Our own export carries a Set column (the catalog's display name). Read
+    // it: a reprint can share BOTH name and collector number with its
+    // original (Dewey - Showy Nephew is #139 in Into the Inklands AND Fabled),
+    // and without the set the import had to guess between the two.
+    const idx = {normal:col("normal"), foil:col("foil"), name:col("name"), number:col("card number"), set:col("set")};
     for(let i=1; i<rows.length; i++){
       const cols = rows[i];
       const n = parseInt((cols[idx.normal]||"").trim(), 10) || 0;
       const f = parseInt((cols[idx.foil]||"").trim(), 10) || 0;
       const name = (cols[idx.name]||"").trim();
       if((n<=0 && f<=0) || !name) continue;
-      wants.push({name, cn: idx.number>=0 ? (cols[idx.number]||"").trim() : "", setNum:0, n, f});
+      wants.push({name, cn: idx.number>=0 ? (cols[idx.number]||"").trim() : "", setNum:0,
+        setName: idx.set>=0 ? (cols[idx.set]||"").trim() : "", n, f});
     }
   }
 
@@ -23033,10 +23123,25 @@ function parseDreambornCsv(text, rowsByName, raw){
       unmatched.push({name, normal:w.n, foil:w.f});
       continue;
     }
+    // A known set narrows the name pool before the number does — the set is
+    // what separates an original from a reprint that kept its number.
+    const wantSet = w.setName ? w.setName.toLowerCase() : (setNum ? (MAINLINE_SETS[setNum-1] || "").toLowerCase() : "");
+    if(wantSet){
+      const inSet = candidates.filter(r => (r.Set || "").toLowerCase() === wantSet);
+      if(inSet.length) candidates = inSet;
+    }
     if(cn){
       const wantCn = cnKey(cn);
       const byNum = candidates.filter(r => cnKey(r.Number) === wantCn);
       if(byNum.length) candidates = byNum;
+      // Same name AND same number in two sets, with nothing to pick between
+      // them: taking the first row is how an Into the Inklands playset ended
+      // up on the Fabled reprint. Say so instead of guessing.
+      if(byNum.length && new Set(byNum.map(r => r.Set)).size > 1){
+        unmatched.push({name, normal:w.n, foil:w.f,
+          reason:"#"+cn+" exists in "+[...new Set(byNum.map(r => r.Set))].join(" and ")+" — add a Set column to choose"});
+        continue;
+      }
     }
     const byPrint = {};
     for(const r of candidates){ if(!byPrint[r.tcg_printing]) byPrint[r.tcg_printing] = r; }
@@ -28572,8 +28677,8 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           ${importState.report.unmatched.length > 0 && html`<div class="import-unmatched">
             <strong>${importState.report.unmatched.length.toLocaleString()}</strong> rows couldn't be matched
             ${importState.report.unmatched.length <= 8
-              ? html`<ul>${importState.report.unmatched.map((u,i)=>html`<li key=${i}>${u.name}</li>`)}</ul>`
-              : html`<ul>${importState.report.unmatched.slice(0,6).map((u,i)=>html`<li key=${i}>${u.name}</li>`)}
+              ? html`<ul>${importState.report.unmatched.map((u,i)=>html`<li key=${i}>${u.name}${u.reason ? html` <span class="muted">— ${u.reason}</span>` : ""}</li>`)}</ul>`
+              : html`<ul>${importState.report.unmatched.slice(0,6).map((u,i)=>html`<li key=${i}>${u.name}${u.reason ? html` <span class="muted">— ${u.reason}</span>` : ""}</li>`)}
                   <li>…and ${(importState.report.unmatched.length-6).toLocaleString()} more</li></ul>`}
           </div>`}
         </div>
@@ -28679,8 +28784,14 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         const nPct = tot.normal ? (nOwn/tot.normal*100) : 0;
         const fPct = tot.foil   ? (fOwn/tot.foil*100)   : 0;
         const mis = setMissing[setName];
+        // "Set 9" beside the logo: plenty of players think in set numbers, not
+        // names (2026-09-25, Zaven). Booster sets only — a promo set has no number.
+        const setNo = MAINLINE_SETS.indexOf(setName);
         return html`<div key=${setName} class="set-progress-card" onClick=${()=>setSelectedSet(setName)}>
-          <${SetHeading} set=${setName} klass="set-progress-name"/>
+          <div class="set-progress-head">
+            <${SetHeading} set=${setName} klass="set-progress-name"/>
+            ${setNo >= 0 && html`<span class="set-progress-num">Set ${setNo + 1}</span>`}
+          </div>
           <div class="set-progress-row">
             <div class="set-progress-row-label">Non-Foil</div>
             <div class="set-progress-row-counts">${nOwn} / ${tot.normal} <span class="set-progress-pct">${nPct.toFixed(0)}%</span></div>
@@ -28693,7 +28804,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           </div>`}
           ${CHASE_KEYS.some(k => tot[k] > 0) && html`<div class="set-chase-row">
             ${CHASE_KEYS.filter(k => tot[k] > 0).map(k => html`<div key=${k} class="chase-pill">
-              <span class="chase-pill-lbl">${k[0].toUpperCase()+k.slice(1)}</span>
+              <span class="chase-pill-lbl" title=${k[0].toUpperCase()+k.slice(1)}><span class="chase-pill-full">${k[0].toUpperCase()+k.slice(1)}</span><span class="chase-pill-short">${k === "enchanted" ? "Ench" : k[0].toUpperCase()+k.slice(1)}</span></span>
               <span class="chase-pill-val">${own[k].size} / ${tot[k]}</span>
             </div>`)}
           </div>`}
@@ -33400,6 +33511,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const [selected, setSelected] = useState(() => new Set());
   const [batchToast, setBatchToast] = useState(null);
   const [batchOpen, setBatchOpen] = useState(false);
+  const tcgNames = useTcgNames(); // TCGplayer spellings for "Buy on TCGplayer"
   const batchRef = useRef(null);
   useEffect(() => {
     if(!batchOpen) return;
@@ -34648,9 +34760,8 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // wrapper so the click gets attributed.
   const buildBatchBuyUrl = (rows) => {
     if(!rows.length) return null;
-    const lines = rows.map(r => `1 ${(r.name || "") + (r.version ? " - " + r.version : "")}`.trim()).filter(Boolean);
-    const dest = `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=${encodeURIComponent(lines.join("||"))}`;
-    return TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(dest);
+    const lines = rows.map(r => `1 ${tcgMassName(tcgNames, r.tcgplayer_product_id, (r.name || "") + (r.version ? " - " + r.version : ""))}`.trim()).filter(Boolean);
+    return tcgMassEntryParts(lines);
   };
 
   const toggleSelect = (k) => {
@@ -35417,12 +35528,17 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         ${batchOpen && html`<div class="price-db-batchmenu">
           ${(() => {
             const selRows = filtered.filter(r => selected.has(r.card_id + ":" + r.printing));
-            const buyUrl = buildBatchBuyUrl(selRows);
-            return html`<a class="price-db-batchitem" href=${buyUrl || "#"} target="_blank"
-              rel="noopener nofollow sponsored"
-              onClick=${(e) => { if(!buyUrl) e.preventDefault(); setBatchOpen(false); }}>
-              ${uiIcon("cart")} Buy on TCGplayer (affiliate cart)
-            </a>
+            const buyParts = buildBatchBuyUrl(selRows) || [];
+            return html`${buyParts.length <= 1
+              ? html`<a class="price-db-batchitem" href=${buyParts[0]?.url || "#"} target="_blank"
+                  rel="noopener nofollow sponsored"
+                  onClick=${(e) => { if(!buyParts.length) e.preventDefault(); setBatchOpen(false); }}>
+                  ${uiIcon("cart")} Buy on TCGplayer (affiliate cart)
+                </a>`
+              : buyParts.map((p, i) => html`<a key=${"buy" + i} class="price-db-batchitem" href=${p.url} target="_blank"
+                  rel="noopener nofollow sponsored" onClick=${() => setBatchOpen(false)}>
+                  ${uiIcon("cart")} Buy on TCGplayer — part ${i + 1} of ${buyParts.length} (${p.copies})
+                </a>`)}
             ${user && !watchlistsUnavailable && html`<button class="price-db-batchitem"
               onClick=${async () => {
                 setBatchOpen(false);
@@ -38382,7 +38498,9 @@ const MOVERS_PICK_ALL = "all";
 // leads, for the same reason it leads the stack: they are YOUR slabs.
 // A key missing here falls to the end in stack order, so a new banner works
 // without being listed.
-const MOVERS_PICK_ORDER = ["gowned","chase","rareLeg","promo","valuable","sealed","amazon","graded"];
+// Graded market sits right after Rare–Legendary (2026-09-25, Zaven: "move
+// graded higher, maybe after rare") — it was stranded behind the shopping rows.
+const MOVERS_PICK_ORDER = ["gowned","chase","rareLeg","graded","promo","valuable","sealed","amazon"];
 const moversPickOrder = (keys) => keys.slice().sort((a, b) => {
   const ia = MOVERS_PICK_ORDER.indexOf(a), ib = MOVERS_PICK_ORDER.indexOf(b);
   return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
@@ -47807,12 +47925,9 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
               ▼ Droppers
             </label>
           </div>
-          <button onClick=${()=>setPaused(p=>!p)}
-            title=${paused?"Resume scrolling":"Pause scrolling"}
-            style=${{fontSize:12,padding:"5px 11px",border:"1px solid var(--border)",
-              background:paused?"var(--accent)":"var(--stat-bg)",
-              color:paused?"#fff":"var(--text)",borderRadius:6,cursor:"pointer"}}>
-            ${paused?"▶ Resume":"⏸ Pause"}
+          <button class=${"dir-pause" + (paused ? " on" : "")} onClick=${()=>setPaused(p=>!p)}
+            title=${paused?"Resume scrolling":"Pause scrolling"} aria-pressed=${paused}>
+            ${uiIcon(paused ? "play" : "pause", 12)} ${paused?"Resume":"Pause"}
           </button>
         </div>
         ${state.loading
@@ -54003,6 +54118,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
   const reprintNotes = useMemo(() => deckReprintNotes(raw, deck.cards, cardById),
     [raw, deck.cards, cardById]);
 
+  const tcgNames = useTcgNames();
   // TCGPlayer mass-entry affiliate URL pre-filled with missing cards.
   // Format: ?productline=Lorcana TCG&c=4 Card Name||4 Card Name|...
   const massEntryUrl = useMemo(() => {
@@ -54011,19 +54127,20 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
     // short in both printings becomes one line instead of two duplicates.
     const byName = new Map();
     for(const c of deck.cards||[]){
-      const meta = (cardById[c.card_id]||[])[0];
+      const rows = cardById[c.card_id]||[];
+      const meta = rows.find(r => r.tcg_printing === c.printing) || rows[0];
       const k = c.card_id+":"+c.printing;
       const short = ownedShortByKey[k]?.short || 0;
       if(short > 0 && meta){
-        const name = meta["Product Name"] || meta.name || "";
+        const name = tcgMassName(tcgNames, meta.tcgplayer_product_id, meta["Product Name"] || meta.name || "");
         if(name) byName.set(name, (byName.get(name)||0) + short);
       }
     }
     if(!byName.size) return null;
-    const lines = Array.from(byName, ([name, qty]) => `${qty} ${name}`);
-    const dest = `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=${encodeURIComponent(lines.join("||"))}`;
-    return TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(dest);
-  }, [deck.cards, cardById, ownedShortByKey]);
+    // A deck is at most 60 cards, which is always one part.
+    const parts = tcgMassEntryParts(Array.from(byName, ([name, qty]) => `${qty} ${name}`));
+    return parts[0]?.url || null;
+  }, [deck.cards, cardById, ownedShortByKey, tcgNames]);
 
   return html`<div>
     ${((readOnly && !isOwnDeck) || tournamentContext) && html`<div class="deck-readonly-banner">
