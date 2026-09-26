@@ -32978,10 +32978,35 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
     (side==="a"?setSideA:setSideB)(prev => prev.map(e =>
       e.key === key ? {...e, [field]: Math.max(0, (e[field]||0) + delta)} : e));
   };
-  const removeCard = (side, key) =>
+  // Every removal here is one tap — and × sits directly under ⇄ — so each
+  // one offers an Undo rather than a confirm.
+  const removeCard = (side, key) => {
+    const arr = side==="a" ? sideA : sideB;
+    const idx = arr.findIndex(e => e.key === key);
+    const entry = arr[idx];
     (side==="a"?setSideA:setSideB)(prev => prev.filter(e => e.key !== key));
-  const clearSide = (side) => (side==="a"?setSideA:setSideB)([]);
-  const clearAll = () => { setSideA([]); setSideB([]); };
+    if(!entry) return;
+    const g = groupByKey.get(key);
+    flashToast("Removed " + ((g && g["Product Name"]) || "card"), 6000, {label: "Undo", run: () =>
+      (side==="a"?setSideA:setSideB)(prev => prev.some(e => e.key === key) ? prev
+        : [...prev.slice(0, idx), entry, ...prev.slice(idx)])});
+  };
+  const clearSide = (side) => {
+    const was = side==="a" ? sideA : sideB;
+    if(!was.length) return;
+    (side==="a"?setSideA:setSideB)([]);
+    flashToast("Cleared " + (side==="a" ? (nameA || "Side A") : (nameB || "Side B")), 6000, {label: "Undo", run: () =>
+      (side==="a"?setSideA:setSideB)(cur => cur.length ? cur : was)});
+  };
+  const clearAll = () => {
+    const a = sideA, b = sideB;
+    if(!a.length && !b.length) return;
+    setSideA([]); setSideB([]);
+    flashToast("Cleared the trade", 6000, {label: "Undo", run: () => {
+      setSideA(cur => cur.length ? cur : a);
+      setSideB(cur => cur.length ? cur : b);
+    }});
+  };
   // Move a single card (with its quantities) to the opposite side. Merges
   // quantities if the same card already sits on the destination side.
   const moveCard = (fromSide, key) => {
@@ -38052,7 +38077,7 @@ const sanePct = (p) => (p == null || Math.abs(p) >= GRADED_PCT_SANE_CAP) ? null 
 
 // Transient bottom-center toast for actions fired deep in the tree (the
 // mover-tile image export) where a component-level showToast isn't in scope.
-const flashToast = (msg, ms = 2200) => {
+const flashToast = (msg, ms = 2200, action) => {
   let el = document.getElementById("packsink-flash-toast");
   if(!el){
     el = document.createElement("div");
@@ -38065,6 +38090,22 @@ const flashToast = (msg, ms = 2200) => {
     document.body.appendChild(el);
   }
   el.textContent = msg;
+  // An optional action ({label, run}) — an Undo for a one-tap removal. Only a
+  // toast carrying one takes pointer events; every other toast still lets
+  // taps fall through to whatever it is covering.
+  el.classList.toggle("has-action", !!action);
+  if(action){
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "packsink-flash-toast-act";
+    b.textContent = action.label || "Undo";
+    b.onclick = () => {
+      el.classList.remove("show");
+      clearTimeout(el.__hideTimer);
+      try { action.run(); } catch(e){ console.error("[toast] action failed", e); }
+    };
+    el.appendChild(b);
+  }
   el.classList.add("show");
   clearTimeout(el.__hideTimer);
   el.__hideTimer = setTimeout(() => el.classList.remove("show"), ms);
