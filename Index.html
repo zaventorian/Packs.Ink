@@ -5857,7 +5857,7 @@ const logTicks = (min, max, n=5) => {
   if(thinned[thinned.length - 1] !== out[out.length - 1]) thinned.push(out[out.length - 1]);
   return thinned;
 };
-const fmtTickPrice = (v) => v >= 100 ? "$"+v.toFixed(0) : v >= 10 ? "$"+v.toFixed(1) : "$"+v.toFixed(2);
+const fmtTickPrice = (v) => v >= 1000 ? "$"+Math.round(v).toLocaleString() : v >= 100 ? "$"+v.toFixed(0) : v >= 10 ? "$"+v.toFixed(1) : "$"+v.toFixed(2);
 // Format an axis tick based on how wide the visible date range is.
 // Short ranges → "Month DD", medium → "Month DD 'YY", long → "Month 'YY".
 const fmtTickDate = (ts, rangeMs) => {
@@ -6374,7 +6374,7 @@ function buildCompareReportSvg({title, subtitle, items, series, tableSeries, col
       const start = sData[0].y, end = sData[sData.length-1].y;
       const pct = start !== 0 ? ((end - start)/start*100) : null;
       // An index has no dollar value — its row prints points, as on screen.
-      const cell = (v) => it.kind === "index" ? v.toFixed(1) : "$" + v.toFixed(2);
+      const cell = (v) => it.kind === "index" ? v.toFixed(1) : fmtUSD(v);
       parts.push(`<text x="${cols[3].x}" y="${rowY}" font-size="11" fill="#16181c" text-anchor="end">${cell(start)}</text>`);
       parts.push(`<text x="${cols[4].x}" y="${rowY}" font-size="11" fill="#16181c" text-anchor="end">${cell(end)}</text>`);
       const pctText = pct == null ? "—" : (pct >= 0 ? "+" : "") + pct.toFixed(1) + "%";
@@ -8009,7 +8009,7 @@ const PriceBadge = ({row, label, klass}) => {
   return html`<a class=${"price-badge "+(klass||"")} href=${url} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>
     ${label && html`<span class="label">${label}</span>`}
     <span class="low">${low!=null?fmtUSD(low):"—"}<span class="ext">↗</span></span>
-    ${market!=null && html`<span class="market">Mkt $${market.toFixed(2)}</span>`}
+    ${market!=null && html`<span class="market">Mkt ${fmtUSD(market)}</span>`}
   </a>`;
 };
 
@@ -8137,10 +8137,10 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
       <div class="card-row-prices">
         ${nLow != null && html`<a class="card-row-price normal" target="_blank" rel="noopener nofollow sponsored"
           href=${tcgUrl(group.normal.tcgplayer_product_id, "Normal")}
-          onClick=${e=>e.stopPropagation()}>$${nLow.toFixed(2)}</a>`}
+          onClick=${e=>e.stopPropagation()}>${fmtUSD(nLow)}</a>`}
         ${fLow != null && html`<a class="card-row-price foil" target="_blank" rel="noopener nofollow sponsored"
           href=${tcgUrl(group.foil.tcgplayer_product_id, group.foil.tcg_printing)}
-          onClick=${e=>e.stopPropagation()}>$${fLow.toFixed(2)}</a>`}
+          onClick=${e=>e.stopPropagation()}>${fmtUSD(fLow)}</a>`}
       </div>
       ${ownedAny && showOwnedCounter && html`<div class="card-row-owned">
         ${nQty>0 && html`<span class="owned-n" title="Normal owned">${nQty}×</span>`}
@@ -8384,19 +8384,24 @@ const PrintingBlock = ({row, title, subtitle, qty, onQtyChange}) => {
   const low = row["Low Price"];
   const market = row["TCGPlayer Market"];
   const url = tcgUrl(row.tcgplayer_product_id, row.tcg_printing);
-  return html`<div class="printing-wrap">
-    ${onQtyChange && html`<${CollectionCounter} qty=${qty||0} onChange=${onQtyChange}/>`}
-    <a class="printing-block" href=${url} target="_blank" rel="noopener nofollow sponsored">
+  const body = html`
       <div class="printing-block-head">
         <span class="printing-title">${title}</span>
-        <span class="printing-ext">↗</span>
+        ${url && html`<span class="printing-ext">↗</span>`}
       </div>
       ${subtitle && html`<div class="printing-subtitle">${subtitle}</div>`}
       <div class="printing-prices">
         <div class="price-line"><${Tip} text=${TIP_LOW} class="lbl">Low<//><span class="val main">${low!=null?fmtUSD(low):"—"}</span></div>
-        ${market!=null && html`<div class="price-line"><${Tip} text=${TIP_MARKET} class="lbl">NM Market<//><span class="val">$${market.toFixed(2)}</span></div>`}
-      </div>
-    </a>
+        ${market!=null && html`<div class="price-line"><${Tip} text=${TIP_MARKET} class="lbl">NM Market<//><span class="val">${fmtUSD(market)}</span></div>`}
+      </div>`;
+  // A printing with no TCGplayer listing (a Format Coconut leader, a regional
+  // exclusive) rendered as an <a> with no href and a ↗ — it looked like a link
+  // and did nothing. It is plain text now.
+  return html`<div class="printing-wrap">
+    ${onQtyChange && html`<${CollectionCounter} qty=${qty||0} onChange=${onQtyChange}/>`}
+    ${url
+      ? html`<a class="printing-block" href=${url} target="_blank" rel="noopener nofollow sponsored">${body}</a>`
+      : html`<div class="printing-block printing-block--nolink" title="Not listed on TCGplayer">${body}</div>`}
   </div>`;
 };
 
@@ -19435,7 +19440,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       <div class="scanner-session">
         <div class="scanner-session-head">
           <span class="scanner-session-count">${sessCount} staged</span>
-          <span class="scanner-session-total">$${sessTotal.toFixed(2)}</span>
+          <span class="scanner-session-total">${fmtUSD(sessTotal)}</span>
           ${session.length ? html`<button class="scanner-link" onClick=${undoLast}>Undo</button>` : null}
           ${session.length && user ? html`<button class="scanner-save-btn" onClick=${saveSessionToCollection}>Save ${sessCount} →</button>` : null}
         </div>
@@ -19967,8 +19972,8 @@ const SetDetailListRow = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, 
       ${subtitle && html`<span class="sd-row-subtitle">${subtitle}</span>`}
     </div>
     <div class="sd-row-prices">
-      ${showN && html`<a class="sd-row-price normal" href=${tcgUrl(group.normal.tcgplayer_product_id,"Normal")} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${nLow.toFixed(2)}</a>`}
-      ${showF && html`<a class="sd-row-price foil" href=${tcgUrl(group.foil.tcgplayer_product_id, group.foil.tcg_printing)} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${fLow.toFixed(2)}</a>`}
+      ${showN && html`<a class="sd-row-price normal" href=${tcgUrl(group.normal.tcgplayer_product_id,"Normal")} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>${fmtUSD(nLow)}</a>`}
+      ${showF && html`<a class="sd-row-price foil" href=${tcgUrl(group.foil.tcgplayer_product_id, group.foil.tcg_printing)} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>${fmtUSD(fLow)}</a>`}
       ${!showN && !showF && html`<span class="sd-row-price muted">—</span>`}
     </div>
     ${hoverPos && previewImg ? ReactDOM.createPortal(
@@ -19999,7 +20004,7 @@ const SetDetailCardTile = ({group, normalQty, foilQty, onNormal, onFoil, onOpen,
         <span class="sd-tile-name" title=${group["Product Name"]}>${group["Product Name"]}</span>
         ${subtitle && html`<span class="sd-tile-subtitle">${subtitle}</span>`}
       </div>
-      ${price!=null && html`<span class="sd-tile-price">$${price.toFixed(2)}</span>`}
+      ${price!=null && html`<span class="sd-tile-price">${fmtUSD(price)}</span>`}
     </div>
     <div class="sd-tile-counters">
       ${onlyFoil
@@ -52682,7 +52687,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         <div class="deck-card-name">${d.name || "Untitled deck"}</div>
         ${visibilityPill(d.visibility)}
       </div>
-      <div class="deck-card-meta">${s.total} / 60 cards · $${s.value.toFixed(2)} · ${completionPct(s.owned, s.total)}% owned${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>
+      <div class="deck-card-meta">${s.total} / 60 cards · ${fmtUSD(s.value)} · ${completionPct(s.owned, s.total)}% owned${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>
       ${renderDeckChips(s)}
       ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>Updated ${relativeTime(d.updated_at)}</div>`}
       ${/* Two clusters: three things you COPY, then the ones that CHANGE the
@@ -52768,8 +52773,8 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             ${tctx.place && html`<span class="dct-place">${tctx.place}</span>`}
             ${tctx.num_players ? html`<span class="muted">· ${tctx.num_players}p</span>` : null}
           </div>
-          <div class="deck-card-meta">by ${tctx.player_name || "Unknown player"} · ${s.total} / 60 cards · $${s.value.toFixed(2)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>`
-        : html`<div class="deck-card-meta">by ${creatorName} · ${s.total} / 60 cards · $${s.value.toFixed(2)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>`}
+          <div class="deck-card-meta">by ${tctx.player_name || "Unknown player"} · ${s.total} / 60 cards · ${fmtUSD(s.value)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>`
+        : html`<div class="deck-card-meta">by ${creatorName} · ${s.total} / 60 cards · ${fmtUSD(s.value)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>`}
       ${renderDeckChips(s)}
       ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>Updated ${relativeTime(d.updated_at)}</div>`}
       <button class="deck-card-preview"
@@ -56036,7 +56041,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       const statsBlock = html`<div class="deck-stat-row">
         <div class="deck-stat">
           <div class="deck-stat-lbl">Total value</div>
-          <div class="deck-stat-val green">$${totalValue.toFixed(2)}</div>
+          <div class="deck-stat-val green">${fmtUSD(totalValue)}</div>
           <div class="deck-stat-sub">full deck</div>
         </div>
         <div class="deck-stat">
@@ -56048,12 +56053,12 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           ? html`<a class="deck-stat shop-cta" href=${massEntryUrl} target="_blank" rel="noopener nofollow sponsored"
               title="Open all missing cards on TCGplayer in one mass-entry cart (affiliate link)">
               <div class="deck-stat-lbl">Missing</div>
-              <div class="deck-stat-val">$${missingValue.toFixed(2)}</div>
+              <div class="deck-stat-val">${fmtUSD(missingValue)}</div>
               <div class="deck-stat-sub">Shop on TCGplayer ↗</div>
             </a>`
           : html`<div class="deck-stat">
               <div class="deck-stat-lbl">Missing</div>
-              <div class="deck-stat-val red">$${missingValue.toFixed(2)}</div>
+              <div class="deck-stat-val red">${fmtUSD(missingValue)}</div>
               <div class="deck-stat-sub">to complete</div>
             </div>`}
       </div>
@@ -56213,7 +56218,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
               </span>`}
             ${buildVariantChevron(item, meta, "deck-variant-btn--tile")}
             ${ownedFracBadge}
-            ${price!=null && aff && html`<a class="deck-grid-tile-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${price.toFixed(2)}</a>`}
+            ${price!=null && aff && html`<a class="deck-grid-tile-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>${fmtUSD(price)}</a>`}
             ${makeCounter(item, cardMax, "deck-grid-tile-counter")}
           </div>`;
         }
@@ -56233,7 +56238,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                     ? landscapeArt(html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy"/>`)
                     : html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy"/>`)
                 : html`<div style=${{aspectRatio:"5/7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"var(--text-muted)",padding:8,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
-              ${price!=null && aff && html`<a class="deck-stack-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${price.toFixed(2)}</a>`}
+              ${price!=null && aff && html`<a class="deck-stack-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>${fmtUSD(price)}</a>`}
               ${makeCounter(item, cardMax, "deck-stack-counter")}
             </div>
           </div>`;
@@ -56288,7 +56293,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
             ${buildVariantChevron(item, meta, "deck-variant-btn--row")}
           </span>
           ${price!=null && aff
-            ? html`<a class="deck-row-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" title="Shop on TCGplayer (affiliate)">$${price.toFixed(2)}</a>`
+            ? html`<a class="deck-row-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" title="Shop on TCGplayer (affiliate)">${fmtUSD(price)}</a>`
             : html`<span class="deck-row-price" style=${{background:"transparent",border:"none",padding:0}}>${price!=null?fmtUSD(price):"—"}</span>`}
           ${makeCounter(item, cardMax, "deck-row-counter")}
         </div>`;
