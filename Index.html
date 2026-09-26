@@ -51887,11 +51887,20 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   useEffect(()=>{ refreshDiscover(); }, [refreshDiscover, tabClickNonce]);
 
   // Open a creator's profile page (their public decks). Fetched on demand.
+  // Only the profile still being waited for may land. Backing out of a
+  // profile before it loaded, or opening a second one, left the first
+  // request free to finish and put that page back over wherever you were.
+  const creatorSeq = useRef(0);
   const openCreatorProfile = useCallback(async (creatorId) => {
     if(!creatorId) return;
+    const my = ++creatorSeq.current;
+    const stale = () => my !== creatorSeq.current
+      || (creatorProfileRef.current && creatorProfileRef.current.creatorId !== creatorId)
+      || creatorProfileRef.current === null;
     setExternalDeck(null);
     setSelectedDeckId(null);
     setCreatorProfile({loading: true, creatorId});
+    creatorProfileRef.current = {loading: true, creatorId};
     try {
       const [profileRes, decksRes] = await Promise.all([
         sbClient.from("profiles").select("user_id,display_name,avatar_url").eq("user_id", creatorId).maybeSingle(),
@@ -51908,8 +51917,9 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         entries = await hydrateDecksByIds(ids);
         entries.sort((a, b) => new Date(b.deck.updated_at) - new Date(a.deck.updated_at));
         mergeFavoriteCounts(ids);
-      mergeViewCounts(ids);
+        mergeViewCounts(ids);
       }
+      if(stale()) return;
       setCreatorProfile({
         creator: profileRes.data || {user_id: creatorId},
         creatorId,
@@ -51917,10 +51927,11 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       });
     } catch(e){
       console.error("creator profile fetch failed:", e);
+      if(stale()) return;
       setCreatorProfile({error: e.message || String(e), creatorId});
     }
-  }, [hydrateDecksByIds, mergeFavoriteCounts]);
-  const closeCreatorProfile = useCallback(() => setCreatorProfile(null), []);
+  }, [hydrateDecksByIds, mergeFavoriteCounts, mergeViewCounts]);
+  const closeCreatorProfile = useCallback(() => { creatorSeq.current++; setCreatorProfile(null); }, []);
   useEffect(() => { creatorProfileRef.current = creatorProfile; }, [creatorProfile]);
   useEffect(() => { openCreatorProfileRef.current = openCreatorProfile; }, [openCreatorProfile]);
 
@@ -55038,7 +55049,9 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
   }, [shareOpen]);
   const shareUrl = useMemo(()=>{
     try {
-      const url = new URL(window.location.href);
+      // In the native app window.location is capacitor://localhost — a link
+      // nobody else can open. Same rule as buildShareUrlFor and the Copy link.
+      const url = new URL(IS_NATIVE_APP ? (SITE_ORIGIN + "/") : window.location.href);
       // Strip any pre-existing path-level junk; start from origin + path.
       url.search = "";
       url.hash = "";
