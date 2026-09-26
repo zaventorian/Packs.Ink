@@ -1325,6 +1325,24 @@ function writeSealedCache(rows){
 }
 
 const {useState,useEffect,useMemo,useCallback,useRef,useContext,useLayoutEffect} = React;
+// A dropdown anchored to its chip can hang off either edge of a phone: the
+// Screener's right-anchored Sort menu opened 44px off the LEFT edge at 375px,
+// its left-anchored menus off the right. Nudge the open menu back inside the
+// viewport before it paints. `wrapRef` is the chip's wrapper; the menu is the
+// first element inside it matching `sel`.
+const useKeepMenuInViewport = (wrapRef, open, sel) => {
+  useLayoutEffect(() => {
+    const el = open && wrapRef.current && wrapRef.current.querySelector(sel || ".price-db-multimenu");
+    if(!el) return;
+    el.style.transform = "";
+    const r = el.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth || window.innerWidth;
+    let dx = 0;
+    if(r.right > vw - 8) dx = (vw - 8) - r.right;
+    if(r.left + dx < 8) dx = 8 - r.left;
+    if(dx) el.style.transform = "translateX(" + Math.round(dx) + "px)";
+  }, [open]);
+};
 const html = htm.bind(React.createElement);
 
 // Shared modal-dismiss behavior: close on Escape, and restore focus to whatever
@@ -34028,6 +34046,12 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [graderOpen, gradeOpen, soldMenuOpen, sortMenuOpen]);
+  useKeepMenuInViewport(graderRef, graderOpen);
+  useKeepMenuInViewport(gradeRef, gradeOpen);
+  useKeepMenuInViewport(soldRef, soldMenuOpen);
+  useKeepMenuInViewport(sortRef, sortMenuOpen);
+  useKeepMenuInViewport(inkRef, inkOpen);
+  useKeepMenuInViewport(setSelRef, setSelOpen);
   // Graded preset → choose a sane default sort each time you switch presets.
   // Climbers / Droppers / Movers ride the moverWin window picker so the user
   // can pick 1W / 1M / 3M / 6M / 1Y — same UX pattern as raw's Gainers/Losers.
