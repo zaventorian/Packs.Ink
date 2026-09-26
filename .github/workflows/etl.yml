@@ -199,6 +199,17 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/link_preorder_pids.py --commit
+      # TCGplayer's own spelling of every single whose name differs from ours
+      # (migration 169). "Buy bulk on TCGplayer" sends it, because mass entry
+      # matches exact names. After the pid linking above so newly linked cards
+      # are covered. Optional: a stale name costs one mass-entry line, not a
+      # price, and it fails harmlessly until 169 is applied.
+      - name: Sync TCGplayer names (optional)
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/sync_tcgplayer_names.py --commit
 
   # There is NO graded job. The TCGPriceLookup feed was discontinued 2026-06-30
   # and the whole legacy path was deleted 2026-07-29: graded_prices_daily /

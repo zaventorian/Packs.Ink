@@ -4631,6 +4631,46 @@ const tcgMassEntryParts = (lines) => {
     copies: ls.reduce((n, l) => n + (parseInt(l, 10) || 0), 0),
   }));
 };
+// TCGplayer's OWN spelling of a single, by product id (migration 169, filled
+// daily by scripts/sync_tcgplayer_names.py). Mass entry matches exact names, and
+// 470 of 3,229 linked cards are spelled differently there — 21 fail outright
+// ("Chief Bogo- Commanding Officer", "The Sword of Shan Yu", "Walk the Plank",
+// straight apostrophes, "Te Ka") and ~450 carry a rarity suffix ("... (Enchanted)")
+// without which mass entry quietly puts the BASE printing in the cart. Only
+// differing names are stored, so this is a few hundred rows, fetched once and
+// cached a day. A missing table (pre-169) just means our own names are sent.
+const TCG_NAMES_KEY = "packsink:tcgNames:v1";
+let _tcgNames = null, _tcgNamesP = null;
+const loadTcgNames = () => {
+  if(_tcgNamesP) return _tcgNamesP;
+  const hit = readJsonCache(TCG_NAMES_KEY, 24*3600*1000);
+  if(hit && !hit.stale && Array.isArray(hit.data)){
+    _tcgNames = new Map(hit.data);
+    return (_tcgNamesP = Promise.resolve(_tcgNames));
+  }
+  _tcgNamesP = sbFetchAll("tcgplayer_names", {select: "product_id,name", order: "product_id.asc"})
+    .then(rows => {
+      const pairs = (rows || []).map(r => [Number(r.product_id), r.name]);
+      writeJsonCache(TCG_NAMES_KEY, pairs);
+      return (_tcgNames = new Map(pairs));
+    })
+    .catch(() => (_tcgNames = new Map(hit && Array.isArray(hit.data) ? hit.data : [])));
+  return _tcgNamesP;
+};
+const useTcgNames = () => {
+  const [m, setM] = React.useState(_tcgNames);
+  React.useEffect(() => {
+    if(_tcgNames) return;
+    let alive = true;
+    loadTcgNames().then(x => { if(alive) setM(x); });
+    return () => { alive = false; };
+  }, []);
+  return m;
+};
+// The name mass entry should get for this product: TCGplayer's when it differs,
+// ours otherwise.
+const tcgMassName = (names, pid, fallback) =>
+  (pid != null && names && names.get(Number(pid))) || fallback;
 const tcgUrl = (productId, printing) => {
   if(!productId) return null;
   let dest = `https://www.tcgplayer.com/product/${productId}/?Language=English`;
@@ -19978,21 +20018,26 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   // all. Mirrors the deck-editor massEntryUrl builder. Shorts are aggregated by
   // card name (a card short in both printings becomes one line) since mass-entry
   // matches on name + set and the buyer picks foil/non-foil in the cart.
+  const tcgNames = useTcgNames();
   const missingMassEntryUrl = useMemo(() => {
     const byName = new Map();
+    const add = (name, n) => { if(name && n > 0) byName.set(name, (byName.get(name) || 0) + n); };
     for(const g of visibleGroups){
       const nm = g["Product Name"] || g.name || g.normal?.["Product Name"] || g.foil?.["Product Name"] || "";
       if(!nm) continue;
-      let short = 0;
+      // Each side is named by ITS product: a regular card's two finishes share
+      // one TCGplayer product (same name, one line), while a connecting foil is
+      // a separate "(Foil)" product and must be its own line.
       if(nInScope(g))
-        short += Math.max(0, targetForSide(g, "normal") - ((collection[g.card_id+":"+g.normal.tcg_printing] || 0) + slotCover(g.card_id, g.normal.tcg_printing)));
+        add(tcgMassName(tcgNames, g.normal.tcgplayer_product_id, nm),
+          Math.max(0, targetForSide(g, "normal") - ((collection[g.card_id+":"+g.normal.tcg_printing] || 0) + slotCover(g.card_id, g.normal.tcg_printing))));
       if(fInScope(g))
-        short += Math.max(0, targetForSide(g, "foil") - ((collection[g.card_id+":"+g.foil.tcg_printing] || 0) + slotCover(g.card_id, g.foil.tcg_printing)));
-      if(short > 0) byName.set(nm, (byName.get(nm) || 0) + short);
+        add(tcgMassName(tcgNames, g.foil.tcgplayer_product_id, nm),
+          Math.max(0, targetForSide(g, "foil") - ((collection[g.card_id+":"+g.foil.tcg_printing] || 0) + slotCover(g.card_id, g.foil.tcg_printing))));
     }
     if(!byName.size) return null;
     return tcgMassEntryParts([...byName].map(([nm, n]) => `${n} ${nm}`));
-  }, [visibleGroups, collection, foilMode, goal, goalN, goalF, slotCover]);
+  }, [visibleGroups, collection, foilMode, goal, goalN, goalF, slotCover, tcgNames]);
 
   // Filter-aware "owned value" summary — total $ for cards in the visible
   // view that the user actually owns. Sums every owned copy at current Low
@@ -33477,6 +33522,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const [selected, setSelected] = useState(() => new Set());
   const [batchToast, setBatchToast] = useState(null);
   const [batchOpen, setBatchOpen] = useState(false);
+  const tcgNames = useTcgNames(); // TCGplayer spellings for "Buy on TCGplayer"
   const batchRef = useRef(null);
   useEffect(() => {
     if(!batchOpen) return;
@@ -34725,7 +34771,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // wrapper so the click gets attributed.
   const buildBatchBuyUrl = (rows) => {
     if(!rows.length) return null;
-    const lines = rows.map(r => `1 ${(r.name || "") + (r.version ? " - " + r.version : "")}`.trim()).filter(Boolean);
+    const lines = rows.map(r => `1 ${tcgMassName(tcgNames, r.tcgplayer_product_id, (r.name || "") + (r.version ? " - " + r.version : ""))}`.trim()).filter(Boolean);
     return tcgMassEntryParts(lines);
   };
 
@@ -54083,6 +54129,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
   const reprintNotes = useMemo(() => deckReprintNotes(raw, deck.cards, cardById),
     [raw, deck.cards, cardById]);
 
+  const tcgNames = useTcgNames();
   // TCGPlayer mass-entry affiliate URL pre-filled with missing cards.
   // Format: ?productline=Lorcana TCG&c=4 Card Name||4 Card Name|...
   const massEntryUrl = useMemo(() => {
@@ -54091,11 +54138,12 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
     // short in both printings becomes one line instead of two duplicates.
     const byName = new Map();
     for(const c of deck.cards||[]){
-      const meta = (cardById[c.card_id]||[])[0];
+      const rows = cardById[c.card_id]||[];
+      const meta = rows.find(r => r.tcg_printing === c.printing) || rows[0];
       const k = c.card_id+":"+c.printing;
       const short = ownedShortByKey[k]?.short || 0;
       if(short > 0 && meta){
-        const name = meta["Product Name"] || meta.name || "";
+        const name = tcgMassName(tcgNames, meta.tcgplayer_product_id, meta["Product Name"] || meta.name || "");
         if(name) byName.set(name, (byName.get(name)||0) + short);
       }
     }
@@ -54103,7 +54151,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
     // A deck is at most 60 cards, which is always one part.
     const parts = tcgMassEntryParts(Array.from(byName, ([name, qty]) => `${qty} ${name}`));
     return parts[0]?.url || null;
-  }, [deck.cards, cardById, ownedShortByKey]);
+  }, [deck.cards, cardById, ownedShortByKey, tcgNames]);
 
   return html`<div>
     ${((readOnly && !isOwnDeck) || tournamentContext) && html`<div class="deck-readonly-banner">
