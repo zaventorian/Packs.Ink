@@ -38920,7 +38920,10 @@ const MoversBanner =({title, subtitle, controls, cards, onTileClick, activeWindo
       window.removeEventListener("mouseup", onMouseUp);
       el.removeEventListener("click", onClickCapture, true);
     };
-  }, []);
+    // Keyed on whether the strip EXISTS: it only renders once there are
+    // cards, so a banner that mounted while loading (Sealed, Your Graded
+    // Movers) ran this with no element and never got drag-to-pan at all.
+  }, [cards.length > 0]);
 
   return html`<section style=${{margin:"0 0 6px"}}>
     ${(title || subtitle || controls || cards.length) ? html`<div class="movers-banner-head">
@@ -39790,77 +39793,6 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   </aside>`;
 };
 
-// (CollectionMoversSection removed — covered by the in-panel Your Top Movers
-//  table on the Home page right column.)
-const _CollectionMoversSection_unused = ({user, raw, collection, moversByKey, paused, onTileClick}) => {
-  const [windowKey, setWindowKey] = useState("1w");
-  const [showUp, setShowUp] = useState(true);
-  const [showDown, setShowDown] = useState(true);
-  const win = MOVER_WIN_BY_KEY[windowKey] || MOVER_WIN_BY_KEY["1d"];
-  const visibleWindows = useMemo(() => pickVisibleWindows(windowKey), [windowKey]);
-  const cards = useMemo(() => {
-    if(!user || !raw.length) return [];
-    const byKey = {};
-    for(const r of raw){
-      if(r.card_id && r.tcg_printing) byKey[r.card_id+":"+r.tcg_printing] = r;
-    }
-    const out = [];
-    for(const [k, qty] of Object.entries(collection)){
-      if(qty <= 0) continue;
-      const r = byKey[k];
-      if(!r) continue;
-      const m = moversByKey[k];
-      if(!m) continue;
-      const pct = m[win.pctLow];
-      if(pct == null || pct === 0) continue;
-      if(pct > 0 && !showUp) continue;
-      if(pct < 0 && !showDown) continue;
-      out.push(m);
-    }
-    const cmpAbs  = (a,b) => Math.abs(b[win.pctLow]) - Math.abs(a[win.pctLow]);
-    const cmpDesc = (a,b) => b[win.pctLow] - a[win.pctLow];
-    const cmpAsc  = (a,b) => a[win.pctLow] - b[win.pctLow];
-    out.sort((showUp && showDown) ? cmpAbs : showUp ? cmpDesc : showDown ? cmpAsc : cmpAbs);
-    return out.slice(0, 20);
-  }, [user, raw, collection, moversByKey, win.pctLow, showUp, showDown]);
-  if(!user) return null;
-  const dirLabel = (showUp && showDown) ? "|Δ%|" : showUp ? "Δ% (gains)" : showDown ? "Δ% (drops)" : "Δ%";
-  return html`<section style=${{marginTop:18}}>
-    <div class="home-toolbar" style=${{marginBottom:8}}>
-      <h2 class="title-font" style=${{fontSize:13,fontWeight:600,margin:"0 8px 0 0",color:"var(--accent)",letterSpacing:0.3}}>Your Top Movers</h2>
-      <div class="seg-grp" role="group" aria-label="Time window">
-        ${MOVER_WINDOWS.map(w => html`<button key=${w.key}
-          class=${windowKey===w.key?"active":""}
-          onClick=${()=>setWindowKey(w.key)}>${w.label}</button>`)}
-      </div>
-      <div class="dir-toggle">
-        <label class=${showUp?"on-up":""}>
-          <input type="checkbox" checked=${showUp} onChange=${e=>setShowUp(e.target.checked)}/>
-          ▲ Gainers
-        </label>
-        <label class=${showDown?"on-down":""}>
-          <input type="checkbox" checked=${showDown} onChange=${e=>setShowDown(e.target.checked)}/>
-          ▼ Droppers
-        </label>
-      </div>
-      <span class="muted" style=${{fontSize:11}}>
-        ${cards.length ? `Top ${cards.length} cards from your collection · ${win.label} ${dirLabel}` : "—"}
-      </span>
-    </div>
-    ${cards.length === 0
-      ? html`<div class="muted" style=${{padding:"24px 0",textAlign:"center",fontSize:12}}>
-          No cards in your collection have ${win.label} movement matching the current filters.</div>`
-      : html`<${MoversBanner}
-          title=""
-          subtitle=""
-          cards=${cards}
-          activeWindow=${windowKey}
-          visibleWindows=${visibleWindows}
-          paused=${paused}
-          onTileClick=${onTileClick}/>`}
-  </section>`;
-};
-
 // Compact EV strip on Home: last 4 mainline sets, EV/box & EV/pack at
 // current pricing, plus the TCGPlayer Booster Box price (linked through
 // the affiliate wrapper when available). Tiny inline toggles let the
@@ -40024,10 +39956,16 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, panelNa
     }
     (async () => {
       try {
-        const [{data: followRows}, {data: favRows}] = await Promise.all([
+        // Supabase reports a failure in `error`, it does not throw — and an
+        // unchecked failure here read as "follows nobody", was cached as an
+        // empty feed for 30 minutes, and said "No activity yet".
+        const [followRes, favRes] = await Promise.all([
           sbClient.from("user_follows").select("followed_id").eq("follower_id", user.id),
           sbClient.from("deck_favorites").select("deck_id,share_token").eq("user_id", user.id),
         ]);
+        if(followRes.error) throw followRes.error;
+        if(favRes.error) throw favRes.error;
+        const followRows = followRes.data, favRows = favRes.data;
         const followedIds = (followRows || []).map(r => r.followed_id);
         const directFavIds = (favRows || []).filter(r => !r.share_token).map(r => r.deck_id);
         const tokenFavs    = (favRows || []).filter(r =>  r.share_token);
@@ -40061,6 +39999,9 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, panelNa
         ]);
         if(cancelled) return;
 
+        const failed = directResults.filter(r => r.error);
+        if(failed.length && failed.length === directResults.length) throw failed[0].error;
+        const partial = failed.length > 0;
         const combined = new Map();
         for(const r of directResults){
           if(r.error) continue;
@@ -40074,7 +40015,7 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, panelNa
         const decks = Array.from(combined.values())
           .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
           .slice(0, 15);
-        if(!decks.length){ setEntries([]); writeJsonCache(CACHE_KEY, []); return; }
+        if(!decks.length){ setErr(null); setEntries([]); if(!partial) writeJsonCache(CACHE_KEY, []); return; }
         await Promise.all(decks.map(decDeckMeta)); // decode obfuscated deck names for tile display
 
         // Index the catalog two ways:
@@ -40174,21 +40115,26 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, panelNa
           const inks = (d.inks && d.inks.length)
             ? d.inks
             : (computedInks[d.id] ? Array.from(computedInks[d.id]) : []);
-          const fmtKey = formatByDeck[d.id] || "infinity";
+          // A Coconut deck plays three inks by design, so the 2-ink test above
+          // called every one of them invalid and it went untagged.
+          const fmtKey = d.coconut_card ? "coconut" : (formatByDeck[d.id] || "infinity");
           return {
             deck: {...d, inks},
             creator: profileById[d.user_id] || null,
             isPublish: Math.abs(new Date(d.updated_at) - new Date(d.created_at)) < 3*60*1000,
             shareToken: tokenByDeck[d.id] || null,
             formatKey: fmtKey,
-            formatLabel: fmtKey === "core" ? "Core" : (fmtKey === "infinity" ? "Inf" : null),
+            formatLabel: fmtKey === "core" ? "Core" : fmtKey === "infinity" ? "Inf" : fmtKey === "coconut" ? "Coconut" : null,
           };
         });
+        setErr(null);
         setEntries(computedEntries);
         // Only cache once the catalog was available to enrich ink/format —
         // otherwise we'd persist tag-less entries and the stale-cache early
         // return would replay them for 30 min even after the catalog loads.
-        if(catalogReady) writeJsonCache(CACHE_KEY, computedEntries);
+        // Nor a partial result: a feed missing one of its two queries would
+        // be replayed as the whole truth for 30 minutes.
+        if(catalogReady && !partial) writeJsonCache(CACHE_KEY, computedEntries);
       } catch(e){
         if(!cancelled) setErr(String(e?.message || e).slice(0, 200));
       }
@@ -40211,9 +40157,11 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, panelNa
       </div>
     </aside>`;
   }
-  if(err) return html`<aside class="home-feed">
+  // A failed REFRESH keeps showing the feed it already had; only a failure
+  // with nothing to show says so.
+  if(err && !(entries && entries.length)) return html`<aside class="home-feed">
     ${titleEl}
-    <div class="home-feed-empty">Couldn't load feed: ${err}</div>
+    <div class="home-feed-empty">Couldn't load your feed right now — it'll try again next visit.</div>
   </aside>`;
   if(entries == null) return html`<aside class="home-feed">
     ${titleEl}
@@ -40256,7 +40204,7 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, panelNa
             <span class="home-feed-main">
               <span class="home-feed-deckname-line">
                 <span class="home-feed-deckname">${deck.name || "Untitled deck"}</span>
-                ${formatLabel && html`<span class=${"home-feed-fmt-tag fmt-"+formatKey} title=${formatKey==="core"?"Core Constructed":"Infinity"}>${formatLabel}</span>`}
+                ${formatLabel && html`<span class=${"home-feed-fmt-tag fmt-"+formatKey} title=${formatKey==="core"?"Core Constructed":formatKey==="coconut"?"Format Coconut":"Infinity"}>${formatLabel}</span>`}
               </span>
               <span class="home-feed-meta">
                 <span class="home-feed-creator">${creator?.display_name || "Someone"}</span>
@@ -40364,18 +40312,22 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
     }
     (async () => {
       try {
-        const {data: ts} = await sbClient.from("tournaments")
+        // `error` is checked, not assumed away: an unchecked failure was
+        // cached as "no tournaments" for the full 2h TTL.
+        const {data: ts, error: tErr} = await sbClient.from("tournaments")
           .select("id,name,event_date,format,num_players,inserted_at")
           .order("event_date", {ascending:false, nullsFirst:false})
           .order("inserted_at", {ascending:false})
           .limit(8);
+        if(tErr) throw tErr;
         const tournaments = ts || [];
         if(!tournaments.length){ if(!cancelled){ setGroups([]); writeJsonCache(CACHE_KEY, []); } return; }
         const ids = tournaments.map(t => t.id);
-        const {data: rs} = await sbClient.from("tournament_results_v")
+        const {data: rs, error: rErr} = await sbClient.from("tournament_results_v")
           .select("tournament_id,result_id,place,place_rank,player_name,deck_id,deck_name,deck_inks,deck_share_token")
           .in("tournament_id", ids)
           .order("place_rank", {ascending:true, nullsFirst:false});
+        if(rErr) throw rErr;
         const byTournament = {};
         for(const r of (rs || [])){
           (byTournament[r.tournament_id] = byTournament[r.tournament_id] || []).push(r);
@@ -40423,7 +40375,8 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
         </button>
       </div>`
     : titleEl;
-  if(err) return null;
+  // A failed refresh keeps the (stale) results it already had on screen.
+  if(err && !(groups && groups.length)) return null;
   if(groups == null) return html`<aside class=${"home-feed"+(collapsible?" home-feed--tourney":"")}>
     ${headEl}
     ${!isCollapsed && html`<div class="home-feed-empty muted">Loading…</div>`}
@@ -47931,6 +47884,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   }, []);
   const popOutPanel = useCallback((key) => {
     if(!HOME_POPOUT_KEYS.has(key)) return;
+    // The panel's own title is still a link INSIDE the modal. Clicking it
+    // there pushed a second identical entry, so × (one history.back) left
+    // the modal open and took two presses to close.
+    const st = window.history.state;
+    if(st && st.homePanel === key){ setOpenPanel(key); return; }
     try { window.history.pushState({homePanel: key}, "", homePanelHref(key)); } catch {}
     setOpenPanel(key);
   }, []);
@@ -47981,6 +47939,26 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // genuinely cramped: that is where the pop-out earns its place, so narrow
   // widths keep it. News has no section of its own and pops out at every width.
   const wideHome = !useMaxWidth(1100);
+  // The right rail is sticky, and it is now taller than a laptop screen
+  // (calendar + finder + collection). Pinned at top:8px, its lower half was
+  // unreachable until the whole movers column had been scrolled past. When it
+  // outgrows the viewport, `top` goes negative by the overflow, so the rail
+  // scrolls until its FOOT is on screen and pins there — the tall-sidebar
+  // pattern. A rail that fits keeps top:8px exactly as before.
+  const rightRailRef = useRef(null);
+  useEffect(() => {
+    const el = rightRailRef.current;
+    if(!el) return;
+    const sync = () => {
+      const top = Math.min(8, window.innerHeight - el.offsetHeight - 8);
+      el.style.setProperty("--rail-top", top + "px");
+    };
+    sync();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(sync) : null;
+    if(ro) ro.observe(el);
+    window.addEventListener("resize", sync);
+    return () => { if(ro) ro.disconnect(); window.removeEventListener("resize", sync); };
+  });
   const panelTitleNav = (key, label) => {
     const dest = (wideHome || HOME_ALWAYS_SECTION.has(key)) ? panelDest[key] : null;
     if(dest) return {href: dest.href, go: dest.go, title: dest.cta};
@@ -48191,13 +48169,17 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
               class=${windowKey===w.key?"active":""}
               onClick=${()=>setWindowKey(w.key)}>${w.label}</button>`)}
           </div>
+          ${/* The last direction on can't be switched off (the site's chip-group
+                rule): with both off, every row went blank — Most Valuable, the
+                Amazon shelf and the other rows that don't care about direction
+                included — behind a message about turning one back on. */""}
           <div class="dir-toggle">
-            <label class=${showUp?"on-up":""}>
-              <input type="checkbox" checked=${showUp} onChange=${e=>setShowUp(e.target.checked)}/>
+            <label class=${showUp?"on-up":""} title=${showUp && !showDown ? "At least one direction stays on" : null}>
+              <input type="checkbox" checked=${showUp} onChange=${e=>{ if(!e.target.checked && !showDown) return; setShowUp(e.target.checked); }}/>
               ▲ Gainers
             </label>
-            <label class=${showDown?"on-down":""}>
-              <input type="checkbox" checked=${showDown} onChange=${e=>setShowDown(e.target.checked)}/>
+            <label class=${showDown?"on-down":""} title=${showDown && !showUp ? "At least one direction stays on" : null}>
+              <input type="checkbox" checked=${showDown} onChange=${e=>{ if(!e.target.checked && !showUp) return; setShowDown(e.target.checked); }}/>
               ▼ Droppers
             </label>
           </div>
@@ -48451,7 +48433,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                 })()}
         ${mainNodes}
       </div>
-      ${rightNodes.length > 0 && html`<div class="home-grid-right">${rightNodes}</div>`}
+      ${rightNodes.length > 0 && html`<div class="home-grid-right" ref=${rightRailRef}>${rightNodes}</div>`}
     </div>
 
     ${homeEdit && !editing && html`<div class="home-edit-row home-edit-foot">
