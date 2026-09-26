@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=483">
+<link rel="stylesheet" href="styles.css?v=484">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -20134,46 +20134,35 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     </div>
 
     ${(() => {
-      // Owned-completion breakdown by printing bucket (non-foil / foil / chase),
-      // respecting the current filter + goal: "you have X of the N cards" per
-      // bucket. Only shows buckets that are in scope + part of the goal.
+      // ONE summary panel (2026-09-25, Zaven: "why does each small thing need a
+      // full box?"). It was five boxes: three "X owned" counters and two value
+      // cards, each with a label, a big number and a lot of air. Now the owned
+      // counts are three compact bars side by side, and owned/missing value
+      // share one line under them. Same numbers, same filters, ~40% of the height.
       const ob = ownedBreakdown;
       const buckets = [["nonfoil","Non-foil",ob.nonfoil],["foil","Foil",ob.foil],["chase","Chase",ob.chase]].filter(([,,d])=>d.total>0);
-      if(!buckets.length) return null;
-      return html`<div class="setdet-completion" style=${{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
-        ${buckets.map(([k,label,d]) => {
-          const pct = d.total ? Math.round(d.have/d.total*100) : 0;
-          return html`<div key=${k} style=${{flex:"1 1 130px",minWidth:118,background:"var(--bg-surface)",border:"1px solid var(--border)",borderRadius:8,padding:"8px 12px"}}>
-            <div style=${{fontSize:10,textTransform:"uppercase",letterSpacing:0.6,color:"var(--text-muted)",fontWeight:700}}>${label} owned</div>
-            <div style=${{fontSize:18,fontWeight:700,fontVariantNumeric:"tabular-nums",marginTop:2}}>${d.have.toLocaleString()} <span style=${{color:"var(--text-muted)",fontSize:13,fontWeight:400}}>/ ${d.total.toLocaleString()}</span> <span style=${{color:"var(--text-muted)",fontSize:12,marginLeft:2}}>${pct}%</span></div>
-            <div style=${{height:5,background:"var(--border)",borderRadius:3,marginTop:5,overflow:"hidden"}}><div style=${{width:pct+"%",height:"100%",background:"var(--accent)"}}></div></div>
-          </div>`;
-        })}
+      const mb = visibleMissing.byBucket;
+      const parts = [["nonfoil","Non-foil"],["foil","Foil"],["chase","Chase"]].filter(([k])=>mb[k].count>0);
+      const money = (v) => "$" + v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+      return html`<div class="setdet-summary">
+        ${buckets.length > 0 && html`<div class="setdet-sbars">
+          ${buckets.map(([k,label,d]) => {
+            const pct = d.total ? Math.round(d.have/d.total*100) : 0;
+            return html`<div key=${k} class="setdet-sbar">
+              <div class="setdet-sbar-top"><span class="setdet-sbar-lbl">${label}</span><span class="setdet-sbar-num">${d.have.toLocaleString()}<small>/${d.total.toLocaleString()}</small> <em>${pct}%</em></span></div>
+              <div class="setdet-sbar-track"><i style=${{width:pct+"%"}}></i></div>
+            </div>`;
+          })}
+        </div>`}
+        <div class="setdet-svals">
+          <div class="setdet-sval"><span class="setdet-sval-lbl">Owned</span><b class="green">${money(visibleOwned.value)}</b><small>${visibleOwned.count.toLocaleString()} card${visibleOwned.count===1?'':'s'}</small></div>
+          <div class="setdet-sval"><span class="setdet-sval-lbl">Missing</span><b class="red">${money(visibleMissing.value)}</b><small>${visibleMissing.count.toLocaleString()} to complete ${goalLabel(goal)} ${allMode ? "(all sets)" : "set"}</small></div>
+        </div>
+        ${parts.length >= 2 && html`<div class="setdet-sbreak">
+          ${parts.map(([k,label]) => html`<span key=${k}>${label} ${fmt(mb[k].value)} <span class="muted">(${mb[k].count})</span></span>`)}
+        </div>`}
       </div>`;
     })()}
-
-    <div class="setdet-value-stats">
-      <div class="setdet-stat">
-        <div class="setdet-stat-lbl">Owned value</div>
-        <div class="setdet-stat-val green">$${visibleOwned.value.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-        <div class="setdet-stat-sub">${visibleOwned.count.toLocaleString()} card${visibleOwned.count===1?'':'s'}</div>
-      </div>
-      <div class="setdet-stat">
-        <div class="setdet-stat-lbl">Missing value</div>
-        <div class="setdet-stat-val red">$${visibleMissing.value.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-        <div class="setdet-stat-sub">${visibleMissing.count.toLocaleString()} to complete ${goalLabel(goal)} ${allMode ? "(all sets)" : "set"}</div>
-        ${(() => {
-          // Split the missing value across non-foil / foil / chase — only when
-          // more than one bucket is short (otherwise it just echoes the total).
-          const mb = visibleMissing.byBucket;
-          const parts = [["nonfoil","Non-foil"],["foil","Foil"],["chase","Chase"]].filter(([k])=>mb[k].count>0);
-          if(parts.length < 2) return null;
-          return html`<div class="setdet-stat-sub" style=${{marginTop:3,display:"flex",gap:"2px 10px",flexWrap:"wrap"}}>
-            ${parts.map(([k,label]) => html`<span key=${k}>${label} ${fmt(mb[k].value)} <span style=${{opacity:0.65}}>(${mb[k].count})</span></span>`)}
-          </div>`;
-        })()}
-      </div>
-    </div>
 
     ${!allMode && visibleMissing.count > 0 && html`<a class="setdet-buy-missing"
       href=${(missingMassEntryUrl && missingMassEntryUrl[0]?.url) || tcgSetSearchUrl(setName)} target="_blank" rel="noopener nofollow sponsored">
