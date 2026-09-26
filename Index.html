@@ -56665,7 +56665,15 @@ function OfflineImagesPanel({raw, collection, user}){
 }
 
 function App(){
-  const [raw,setRaw]=useState([]);const [loading,setLoading]=useState(false);const [err,setErr]=useState(null);const [loaded,setLoaded]=useState(false);
+  // loading starts TRUE: the catalog cache is IndexedDB now, which is async, so
+  // there is always a first frame with no rows. With loading false that frame
+  // rendered every view empty ("No cards match", a blank home) for a beat on
+  // every cold open; with it true it is the branded loading card instead.
+  const [raw,setRaw]=useState([]);const [loading,setLoading]=useState(true);const [err,setErr]=useState(null);const [loaded,setLoaded]=useState(false);
+  // Identity of the catalog now on screen, so a re-read of the SAME cache (the
+  // visibility re-probe runs on every return to the tab) doesn't hand React a
+  // new 6,000-row array and recompute everything derived from it.
+  const catalogStampRef = useRef(null);
   // Sealed-product price snapshot. Joined to sealed_products server-side
   // in the sealed_prices_latest matview. Small payload (~300 rows) so we
   // skip the catalog cache layer and refetch each load.
@@ -59445,8 +59453,13 @@ function App(){
     // 1. Show cached data instantly if available (and not forced refresh).
     const cached = force ? null : await readCache();
     if(cached && cached.rows.length){
-      setPromoBaseSet(cached.rows);
-      setRaw(cached.rows);setLoaded(true);setLoading(false);
+      const stamp = (cached.latestDate || "") + ":" + cached.rows.length + ":" + (cached.cardCount ?? "");
+      if(catalogStampRef.current !== stamp){
+        catalogStampRef.current = stamp;
+        setPromoBaseSet(cached.rows);
+        setRaw(cached.rows);
+      }
+      setLoaded(true);setLoading(false);
       // `text` is stripped from cache (writeCache slim) to keep the 5MB quota
       // free for aux caches. On a cache replay, body-text smart search ("get",
       // "chosen", "banish", etc) silently degrades to name/type/classification
@@ -59618,6 +59631,9 @@ function App(){
         if(p && p.price_date && (!maxPriceDate || p.price_date > maxPriceDate)) maxPriceDate = p.price_date;
       }
       writeCache(allRows, maxPriceDate, cardsRows.length);
+      // The rows on screen ARE what was just cached — record that, or the next
+      // re-probe reads them back and swaps in an identical copy.
+      catalogStampRef.current = (maxPriceDate || "") + ":" + allRows.length + ":" + cardsRows.length;
     } catch(e){
       // If we already showed cache, just log and keep that on screen.
       if(cached && cached.rows.length) console.warn("background refresh failed:", e);
@@ -59728,8 +59744,9 @@ function App(){
   const bootFailed = !!err && (!raw || raw.length === 0);
   // Cold first visit: catalog still in flight and nothing cached — show a real
   // loading state instead of eight empty views (the old UX was a bare shell
-  // with an 11px "Loading…" line in the nav). Cache-hit sessions never see
-  // this: raw fills from localStorage synchronously on boot.
+  // with an 11px "Loading…" line in the nav). Cache-hit sessions see it only
+  // for the moment IndexedDB takes to answer — the catalog cache moved there
+  // from (synchronous) localStorage, so there is always one such moment.
   const bootLoading = !bootFailed && loading && (!raw || raw.length === 0);
   const viewsReady = !bootFailed && !bootLoading;
 
