@@ -34630,6 +34630,22 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           const notSpiking = r.pct_7d == null || r.pct_7d < 10;
           if(!(ratioOk && notSpiking)) continue;
         }
+        // Buyouts and the signal chips used to be shown here and silently do
+        // nothing — the rows even wear the BUY / CRSH badges they didn't
+        // filter on. Same rules as raw mode.
+        if(preset === "buyouts"){
+          const hasMkt = r.low_today != null && r.market_today != null && r.market_today > 0;
+          const ratioBuyout = hasMkt && (r.low_today / r.market_today) >= 1.05
+                              && r.pct_7d != null && r.pct_7d >= 25;
+          const lift = (k, x) => r.low_today != null && r[k] && r.low_today >= x * r[k];
+          if(!(ratioBuyout || lift("low_30d", 1.5) || lift("low_90d", 2) || lift("low_180d", 3))) continue;
+        }
+        if(sigFilter.size > 0){
+          const sigKeys = new Set(priceDbSignals(r).map(x => x[0]));
+          let any = false;
+          for(const k of sigFilter) if(sigKeys.has(k)){ any = true; break; }
+          if(!any) continue;
+        }
         out.push(r);
       }
       // Sort follows sortKey/sortDesc; uses the same getVal logic the raw
@@ -35109,6 +35125,11 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     setFilterKeywords(new Set());
     setFilterClassifications(new Set());
     setFilterIllustrators(new Set());
+    // These three survived "Clear filters", so it could leave the table
+    // narrowed with Dual ink still listed in the strip beside it.
+    setFilterDualInk(false);
+    setWatchOnly(false);
+    setFilterSealedTypes(new Set());
     if(showGraded){
       setFilterRarities(preset === "all" ? new Set(["Enchanted"]) : new Set());
       setFilterGraders(new Set());
@@ -36018,6 +36039,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           Clear ranges
         </button>
       </div>
+      ${/* Card dimensions only: sealed product has no cost, type, ink, stats,
+            keywords or classifications, so in Sealed mode these rows were
+            controls that silently did nothing. */""}
+      ${!showSealed && html`<${React.Fragment}>
       <div class="price-db-adv-row">
         <label>Cost</label>
         <div class="cards-chipgroup" style=${{flexWrap:"wrap",gap:4}}>
@@ -36138,6 +36163,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           Clear all card filters
         </button>
       </div>
+      </>`}
     </div>`}
     ${selected.size > 0 && html`<div class="price-db-batchbar">
       <span class="price-db-batchcount"><strong>${selected.size}</strong> selected</span>
@@ -47715,7 +47741,7 @@ const HomePanelModal = ({panelKey, label, node, cta, onClose, onNavAway}) => {
   </div>`;
 };
 
-const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, openAnalyticsTool, openEventFinder, finderOpen, onEventArtistClick, layout, homeEdit}) => {
+const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, openAnalyticsTool, openEventFinder, finderOpen, onEventArtistClick, layout, homeEdit}) => {
   const homePoll = useHomePoll(user);
   // Resolved home layout (set in App from the settings popover): which panels
   // are on, which column each sits in, and their order within that column.
@@ -47958,7 +47984,9 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     // origin quota, so the old localStorage write always failed silently.
     const CACHE_KEY = "packsink:movers:v1";
     (async () => {
-    const cached = await readJsonCacheIdb(CACHE_KEY, 12 * 60 * 60 * 1000);
+    // After a price refresh (priceEpoch > 0) the cache is by definition old,
+    // and its wipe may not have landed yet — go straight to the network.
+    const cached = priceEpoch > 0 ? null : await readJsonCacheIdb(CACHE_KEY, 12 * 60 * 60 * 1000);
     if(cancelled) return;
     const hadCache = !!(cached && Array.isArray(cached.data) && cached.data.length);
     if(hadCache){
@@ -47984,8 +48012,9 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
             friendly = "Movers data is temporarily unavailable — please try again in a moment.";
           else
             friendly = "Couldn't load Movers right now. Please try again.";
-          // Only surface error if we have no cached data to show.
-          if(!hadCache) setState({rows:null, loading:false, error:friendly});
+          // Only surface error if we have no cached data to show — nor rows
+          // already on screen (a refresh after resume keeps what it had).
+          if(!hadCache) setState(prev => (prev && prev.rows && prev.rows.length) ? prev : {rows:null, loading:false, error:friendly});
         } else {
           // Same normalization as the Screener side — cards.rarity ships
           // "Super_rare" (underscore) from Lorcast and would otherwise miss
@@ -48005,7 +48034,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       });
     })();
     return ()=>{ cancelled = true; };
-  },[]);
+  },[priceEpoch]);
 
   const {chase, rareLeg, promo} = useMemo(()=>{
     if(!state.rows) return {chase:[], rareLeg:[], promo:[]};
@@ -56373,6 +56402,7 @@ function App(){
     } catch { return {deck: null, token: null, user: null, collection: null, tourney: null, trade: null, tradeToken: null, a: null}; }
   }, []);
   const [incomingDeckId, setIncomingDeckId] = useState(initialUrlParams.deck);
+  const [priceEpoch, setPriceEpoch] = useState(0);
   const viewRef = useRef(null);
   // Params a nav-tab click wants gone from the page it is navigating TO.
   const tabStripRef = useRef(null);
@@ -59090,6 +59120,10 @@ function App(){
             // used to reset signed-out users' theme + everyone's
             // remove-from-tracking list daily.
             wipePriceDerivedAuxCaches();
+            // Surfaces that fetched once on mount (the home movers) re-read
+            // on this: an installed app resumed after the daily update kept
+            // showing yesterday's movers until it was closed and reopened.
+            setPriceEpoch(n => n + 1);
           } else {
             return; // probe failed, trust TTL and skip refresh
           }
@@ -59632,7 +59666,7 @@ function App(){
         takes a few seconds; after that it's instant.</p>
     </div>`}
     <${ErrorBoundary} key=${"view:" + view} scope="view" onHome=${view === "home" ? null : ()=>onTabClick("home")}>
-    ${viewsReady&&view==="home"&&html`<${HomeView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
+    ${viewsReady&&view==="home"&&html`<${HomeView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme} priceEpoch=${priceEpoch}
       user=${user} collection=${collection} collectionLoading=${collectionLoading}
       sealedPrices=${sealedPrices} sealedCollection=${sealedCollection} sealedMeta=${sealedMeta} setsMeta=${setsMeta}
       updateSealedQty=${updateSealedQty} updateSealedMeta=${updateSealedMeta}
