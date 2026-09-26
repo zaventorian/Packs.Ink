@@ -15103,7 +15103,7 @@ function EVView({raw, sets, avgs, nc, setNc,
         tabIndex=${openSetHistory ? 0 : null}
         onKeyDown=${openSetHistory ? (e)=>{ if(e.target===e.currentTarget && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); openSetHistory(setName);} } : null}
         title=${openSetHistory ? "Open price history for "+setName : null}>
-        <div class="ev-row-set">${setName} <span class="ev-row-set-hint">↗</span>
+        <div class="ev-row-set">${setName}${PRERELEASE_SETS.has(setName) && html` <span class="ev-presale-tag" title=${EV_PRESALE_TIP}>Pre-sale</span>`} <span class="ev-row-set-hint">↗</span>
           ${onSimulateSet && html`<button class="ev-row-simbtn"
             title=${"Simulate opening a "+setName+" box"}
             onClick=${e=>{ e.stopPropagation(); onSimulateSet(setName); }}>${uiIcon("die",12)} Sim</button>`}
@@ -40659,6 +40659,11 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
 // current pricing, plus the TCGPlayer Booster Box price (linked through
 // the affiliate wrapper when available). Tiny inline toggles let the
 // user adjust the EV semantics without leaving the page.
+// A set not released yet sits at the top of every EV list the moment it has
+// a price, and its number is not comparable with the rest: pre-sale singles
+// run far above where they settle, and a rarity with no listings yet counts
+// $0. Both lists flag it rather than presenting it as an ordinary row.
+const EV_PRESALE_TIP = "Not released yet — this EV is built from pre-sale prices, which usually run well above where cards settle after release, and any rarity with no listings yet counts $0.";
 const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav}) => {
   const [nc, setNc] = useState(false);
   const [excludeBoth, setExcludeBoth] = useState(false);
@@ -40750,7 +40755,7 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav
         const diff = ev != null && box && box.price > 0 ? (ev / box.price - 1) * 100 : null;
         const az = box && box.row ? amazonForSealed(box.row, setName) : null;
         return html`<div key=${setName} class="home-ev-strip-row">
-          <div class="home-ev-strip-set" title=${setName}>${setName}</div>
+          <div class="home-ev-strip-set" title=${PRERELEASE_SETS.has(setName) ? setName + " — " + EV_PRESALE_TIP : setName}>${setName}${PRERELEASE_SETS.has(setName) && html` <span class="ev-presale-tag">Pre-sale</span>`}</div>
           <div class="num" title=${ev ? `${fmt(ev/24)} per pack` : ""}>${fmt(ev)}</div>
           <div class="num home-ev-strip-box">
             ${box
