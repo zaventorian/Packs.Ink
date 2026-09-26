@@ -29534,8 +29534,11 @@ function EloSortTh({label, col, sortCol, sortDir, setSort, className, numeric, r
   const active = sortCol === col;
   const arrow = !active ? "" : (sortDir === "asc" ? "▲" : "▼");
   const next = active ? (sortDir === "asc" ? "desc" : "asc") : (numeric ? "desc" : "asc");
+  // Focusable and announced, or the leaderboard could only be sorted with a
+  // mouse. aria-sort is the state a screen reader reads back.
   return html`<th class="${className||""} elo-th-sortable ${active?"active":""}" rowspan=${rowspan}
-    onClick=${() => setSort(col, next)}>
+    tabIndex=${0} aria-sort=${active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
+    onClick=${() => setSort(col, next)} onKeyDown=${keyActivate(() => setSort(col, next))}>
     <span class="elo-th-label">${label}</span>
     <span class="elo-th-arrow">${arrow}</span>
   </th>`;
