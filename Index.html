@@ -3833,6 +3833,20 @@ const parseP = s => { if(s==null||s===undefined) return null; if(typeof s==="num
 // Canonical USD formatter \u2014 thousands separators + fixed decimals. All the
 // money formatters delegate here so a $1,000+ value renders the same ($12,500.00)
 // everywhere instead of $12500.00 on some surfaces and $12,500.00 on others.
+// A backdrop closes its dialog only when the press STARTED on it as well.
+// A text selection dragged out of a textarea and released over the dimmed
+// area fires its click on the backdrop (the common ancestor of the two
+// targets), which closed the Feedback box and the deck importer with the
+// draft still in them. Kept on the element, not in a closure, so a render
+// between press and release cannot lose it.
+const backdropClose = (onClose) => ({
+  onPointerDown: (e) => { e.currentTarget.__pressOnSelf = e.target === e.currentTarget; },
+  onClick: (e) => {
+    const onSelf = e.target === e.currentTarget && e.currentTarget.__pressOnSelf !== false;
+    e.currentTarget.__pressOnSelf = undefined;
+    if(onSelf && typeof onClose === "function") onClose(e);
+  },
+});
 // "-$12.00", never "$-12.00" — and an amount that ROUNDS to zero prints
 // without a sign, so a -0.004 loss is "$0.00" rather than "$-0.00".
 const fmtUSD = (n, decimals=2) => {
@@ -8000,7 +8014,14 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
     : null;
   return html`<div class=${"card-tile"+(isSelected?" is-selected":"")+(checkboxEl?" card-tile--selectable":"")} onClick=${onClick}
     role="button" tabIndex="0"
-    onKeyDown=${e=>{ if(e.key === "Enter" || e.key === " "){ e.preventDefault(); onClick && onClick(e); } }}
+    onKeyDown=${e=>{
+      // Only a key pressed ON the tile opens it. Enter on a button inside it
+      // (the deck counter's "−", the magnifier) bubbled up here, had its own
+      // click cancelled, and fired the tile instead — which in the deck
+      // builder ADDS a copy.
+      if(e.target !== e.currentTarget) return;
+      if(e.key === "Enter" || e.key === " "){ e.preventDefault(); onClick && onClick(e); }
+    }}
     aria-label=${productName}>
     <div class="card-tile-img-wrap">
       ${img
@@ -8735,7 +8756,7 @@ const GradedReportModal = ({sale, onClose}) => {
     flashToast("Thanks — flagged for review");
     onClose();
   };
-  return html`<div class="card-detail-overlay" onClick=${onClose}>
+  return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
     <div class="gs-modal" onClick=${e=>e.stopPropagation()}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <h3 class="gs-modal-title">Report this sale</h3>
@@ -8810,7 +8831,7 @@ const GradedSaleEditModal = ({sale, onClose, onChanged}) => {
     afterWrite();
     flashToast("Sale deleted"); onClose();
   };
-  return html`<div class="card-detail-overlay" onClick=${onClose}>
+  return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
     <div class="gs-modal" onClick=${e=>e.stopPropagation()}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <h3 class="gs-modal-title">Edit graded sale <span class="gs-modal-admin-tag">admin</span></h3>
@@ -8861,7 +8882,7 @@ const GradedReviewModal = ({onClose, onEditSale}) => {
   const resolve = async (id, st) => { await sbClient.rpc("admin_resolve_report",{p_report_id:id,p_status:st}); load(); };
   const delSale = async (item_id) => { await sbClient.rpc("admin_delete_graded_sale",{p_item_id:item_id}); await sbClient.rpc("admin_refresh_graded_rollup").then(()=>{}, ()=>{}); load(); };
   const dstr = (d)=> d ? fmtTooltipDate(Date.parse(d+"T00:00:00Z")) : "—";
-  return html`<div class="card-detail-overlay" onClick=${onClose}>
+  return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
     <div class="gs-modal gs-review-modal" onClick=${e=>e.stopPropagation()}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <h3 class="gs-modal-title">Graded sale reports <span class="gs-modal-admin-tag">admin</span></h3>
@@ -8917,7 +8938,7 @@ const GradedPrivateSaleModal = ({cardId, cardName, onClose, onAdded}) => {
     if(error){ flashToast("Add failed: " + (error.message||error)); return; }
     flashToast("Private sale added"); onAdded && onAdded(); onClose();
   };
-  return html`<div class="card-detail-overlay" onClick=${onClose}>
+  return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
     <div class="gs-modal" onClick=${e=>e.stopPropagation()}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <h3 class="gs-modal-title">Add private sale <span class="gs-modal-admin-tag">admin</span></h3>
@@ -9395,9 +9416,22 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
     };
   }, [onNavigate, group]);
 
+  const cdOverlayRef = useRef(null);
   useEffect(()=>{
     const onKey = (e)=>{
-      if(e.key === "Escape"){ onClose(); return; }
+      if(e.key === "Escape"){
+        // Esc belongs to the innermost layer. The enlarged card, a report or
+        // edit form, a grade dialog — each opens above this modal, and one
+        // keypress used to close them AND the card underneath.
+        if(document.querySelector(".enlarged-card-overlay")) return; // it closes itself
+        const layers = document.querySelectorAll(".card-detail-overlay, .modal-backdrop, .scout-history-modal, .import-modal-backdrop");
+        if(layers.length && cdOverlayRef.current && layers[layers.length - 1] !== cdOverlayRef.current) return;
+        // In a text field the first Esc just leaves the field: closing the
+        // modal from there unmounted a half-typed price before it committed.
+        const t = e.target;
+        if(t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)){ t.blur(); return; }
+        onClose(); return;
+      }
       // Left/right → previous/next card in the browse list. Skip when the
       // enlarged overlay is on top (it handles arrows) or a text field is focused.
       if(onNavigate && (e.key === "ArrowLeft" || e.key === "ArrowRight")){
@@ -9680,7 +9714,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
     };
   })();
 
-  return html`<${React.Fragment}><div class="card-detail-overlay" onClick=${onClose}>
+  return html`<${React.Fragment}><div class="card-detail-overlay" ref=${cdOverlayRef} ...${backdropClose(onClose)}>
     <div ref=${cardDetailRef} class=${"card-detail"+(effPriceFirst?" card-detail--price-first":"")} onClick=${e=>e.stopPropagation()}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       ${group.card_id && html`<button class="card-detail-close card-detail-share"
@@ -11537,7 +11571,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     </div>`;
   }
 
-  return html`<div class="modal-backdrop" onClick=${onClose}>
+  return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal modal-poster" onClick=${e=>e.stopPropagation()}>
       <div class="modal-header">
         <h2 class="title-font" style=${{margin:0,fontSize:18}}>
@@ -12085,7 +12119,7 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
     title=${title || null}
     onClick=${() => { set(val); setResult(null); }}>${label}</button>`;
 
-  return html`<div class="modal-backdrop" onClick=${onClose}>
+  return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal proxy-modal" onClick=${e => e.stopPropagation()}>
       <div class="modal-header">
         <h2 class="title-font" style=${{margin: 0, fontSize: 18}}>${uiIcon("print", 16)} Print proxies</h2>
@@ -12267,7 +12301,7 @@ const WELCOME_FEATURES = [
 ];
 const WelcomeTourModal = ({onClose, onGo, onStartWalk}) => {
   useEscToClose(onClose);
-  return html`<div class="card-detail-overlay" onClick=${onClose}>
+  return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
     <div class="welcome-tour" onClick=${e=>e.stopPropagation()} role="dialog" aria-label="Welcome">
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <div class="welcome-tour-emoji" aria-hidden="true">${uiIcon("sparkle", 34)}</div>
@@ -12463,7 +12497,7 @@ const KbdShortcutsModal = ({onClose}) => {
     ["Esc", "Close an open dialog, drawer, or menu"],
     ["Enter", "In search — open the top suggestion"],
   ];
-  return html`<div class="card-detail-overlay" onClick=${onClose}>
+  return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
     <div class="kbd-shortcuts-modal" onClick=${e=>e.stopPropagation()} role="dialog" aria-label="Keyboard shortcuts">
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <h3 class="title-font" style=${{margin:"0 0 14px",fontSize:18}}>Keyboard shortcuts</h3>
@@ -12498,7 +12532,7 @@ const InstallHelpModal = ({installEvent, clearInstallEvent, isIOS, isAndroid, on
       display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700}}>${n}</div>
     <div style=${{fontSize:13,lineHeight:1.45,paddingTop:1}}>${txt}</div>
   </div>`;
-  return html`<div class="modal-backdrop" onClick=${onClose}>
+  return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:460}}>
       <div class="modal-header">
         <h2 class="title-font" style=${{margin:0,fontSize:18}}>${uiIcon("install", 16)} Packs.Ink is an app</h2>
@@ -12630,7 +12664,7 @@ const MulliganSimulator = ({deck, cardById, onClose}) => {
     </button>`;
   };
 
-  return html`<div class="modal-backdrop" onClick=${onClose}>
+  return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal mulligan-modal" onClick=${e=>e.stopPropagation()}>
       <div class="modal-header">
         <h2 class="title-font" style=${{margin:0,fontSize:18}}>
@@ -12976,7 +13010,7 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
     w.document.close();
   }, [picked, cardsForArtist]);
 
-  return html`<div class="modal-backdrop" onClick=${onClose}>
+  return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal artist-alley-modal" onClick=${e=>e.stopPropagation()}>
       <div class="modal-header">
         <h2 class="title-font" style=${{margin:0,fontSize:18}}>Artist Alley</h2>
@@ -13707,8 +13741,8 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
       <button onClick=${()=>setArtistAlleyOpen(true)} title="Generate a poster of every card by a chosen artist">
         ✦ Artist Alley
       </button>
-      ${activeCount > 0 && html`<button class="clear-filters-btn"
-        onClick=${()=>setFilter(emptyFilter())}
+      ${(activeCount > 0 || smartChips.length > 0) && html`<button class="clear-filters-btn"
+        onClick=${()=>{ setFilter(emptyFilter()); setSmartChips([]); }}
         title="Clear all active filters">✕ Clear</button>`}
       <div class="card-view-toggle" role="group" aria-label="View mode">
         <button class=${viewMode==="grid"?"active":""} onClick=${()=>setViewMode("grid")} title="Image grid">▦</button>
@@ -13859,8 +13893,11 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
         : html`<div style=${{fontSize:15,marginBottom:12}}>${sealedMatches.length
             ? "No cards match your search — but it matches sealed product, below."
             : "No cards match your search."}</div>
-      ${(activeCount > 0 || (filter.search||"").trim()) && html`<button class="clear-filters-btn"
-        onClick=${()=>setFilter(emptyFilter())} title="Clear all active filters and search">✕ Clear filters & search</button>`}`}
+      ${/* The committed search chips count too: a search handed over from the
+            home page arrives AS chips, and a zero-result one of those used to
+            offer no way back but removing each chip by hand. */""}
+      ${(activeCount > 0 || smartChips.length > 0 || (filter.search||"").trim()) && html`<button class="clear-filters-btn"
+        onClick=${()=>{ setFilter(emptyFilter()); setSmartChips([]); }} title="Clear all active filters and search">✕ Clear filters & search</button>`}`}
     </div>`}
     ${sealedMatches.length > 0 && html`<div class="cards-sealed">
       <div class="cards-sealed-head">
@@ -14491,7 +14528,7 @@ const FeedbackModal = ({user, onClose, onSeen})=>{
         </div>`}
   </div>`;
 
-  return html`<div class="modal-backdrop" onClick=${onClose}>
+  return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal" role="dialog" aria-label="Feedback" onClick=${e=>e.stopPropagation()} style=${{maxWidth:500}}>
       <div class="modal-header">
         <h2 class="title-font" style=${{margin:0,fontSize:18}}>${done ? "Thanks!" : openThread ? "Your feedback" : hasThreads ? "Feedback" : "Send feedback"}</h2>
@@ -14570,7 +14607,7 @@ const FeedbackAdminModal = ({onClose, onSeen})=>{
   const shown = (rows||[]).filter(r => filter==="all" || !r.resolved);
   const openCount = (rows||[]).filter(r => !r.resolved).length;
   const newCount = (rows||[]).filter(r => r.is_new).length;
-  return html`<div class="modal-backdrop" onClick=${onClose}>
+  return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:640,width:"94vw"}}>
       <div class="modal-header">
         <h2 class="title-font" style=${{margin:0,fontSize:18}}>Feedback inbox${rows ? html` <span class="muted" style=${{fontSize:13,fontWeight:400}}>· ${openCount} open${newCount ? " · " + newCount + " new" : ""}</span>` : ""}</h2>
@@ -20627,7 +20664,7 @@ const BulkAddByRarityModal = ({groups, setRarities, collection, bulkUpdateCollec
     }
   }, [plan, bulkUpdateCollection, onApplied, onClose, collection]);
 
-  return html`<div class="modal-backdrop" onClick=${onClose}>
+  return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:540}}>
       <div class="modal-header">
         <h2 class="title-font" style=${{margin:0,fontSize:18}}>Bulk add by rarity</h2>
@@ -22872,7 +22909,11 @@ function GradedTosModal({onAccept, onDismiss}){
 // One-time modal shown when a signed-in user has no display name yet.
 // Blocking by intent — closing isn't allowed without picking a name, so
 // new users don't accidentally publish a deck without an identity.
-function NamePromptModal({onSave}){
+// It had no way out: someone who signed in with the wrong Google account, or
+// just wanted to look around first, was stuck behind a full-screen box with
+// one button. "Not now" defers it to the next visit; "Sign out" is the
+// wrong-account escape.
+function NamePromptModal({onSave, onSkip, onSignOut}){
   const [value, setValue] = useState("");
   const [err, setErr] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -22895,7 +22936,11 @@ function NamePromptModal({onSave}){
         onInput=${e => setValue(e.target.value)}
         onKeyDown=${e => { if(e.key==="Enter") submit(); }}
         autoFocus/>
-      <div style=${{display:"flex",gap:8,marginTop:14,justifyContent:"flex-end"}}>
+      <div style=${{display:"flex",gap:8,marginTop:14,justifyContent:"flex-end",alignItems:"center",flexWrap:"wrap"}}>
+        ${onSignOut && html`<button type="button" class="settings-action link" onClick=${onSignOut}
+          style=${{marginRight:"auto",fontSize:12}}>Wrong account? Sign out</button>`}
+        ${onSkip && html`<button type="button" onClick=${onSkip} disabled=${saving}
+          style=${{padding:"8px 14px",fontSize:13}}>Not now</button>`}
         <button class="active" onClick=${submit} disabled=${saving || !value.trim()}
           style=${{padding:"8px 18px",fontSize:13}}>
           ${saving ? "Saving…" : "Save"}
@@ -23542,7 +23587,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
     const qc = sealedCollection?.[pc] || 0;
     const bumpC = (delta) => { const next = Math.max(0, Math.min(99, qc + delta)); if(next !== qc) updateSealedQty(pc, next); };
     const kind = product.product_type === "Pin" ? "Pin" : "Lore counter";
-    return html`<div class="card-detail-overlay" onClick=${onClose}>
+    return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
       <div class="card-detail card-detail--price-first sealed-detail" onClick=${e=>e.stopPropagation()}>
         <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
         <div class="sealed-detail-head">
@@ -23588,7 +23633,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
     const px = product.tcgplayer_product_id;
     const qx = sealedCollection?.[px] || 0;
     const bumpX = (delta) => { const next = Math.max(0, Math.min(99, qx + delta)); if(next !== qx) updateSealedQty(px, next); };
-    return html`<div class="card-detail-overlay" onClick=${onClose}>
+    return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
       <div class="card-detail card-detail--price-first sealed-detail" onClick=${e=>e.stopPropagation()}>
         <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
         <div class="sealed-detail-head">
@@ -23630,7 +23675,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
     const pz = product.tcgplayer_product_id;
     const qz = sealedCollection?.[pz] || 0;
     const bumpZ = (delta) => { const next = Math.max(0, Math.min(99, qz + delta)); if(next !== qz) updateSealedQty(pz, next); };
-    return html`<div class="card-detail-overlay" onClick=${onClose}>
+    return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
       <div class="card-detail card-detail--price-first sealed-detail" onClick=${e=>e.stopPropagation()}>
         <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
         <div class="sealed-detail-head">
@@ -23680,7 +23725,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
   const lowToday    = product.low_price != null ? Number(product.low_price) : null;
   const marketToday = product.market_price != null ? Number(product.market_price) : null;
   const WINS = [["pct_1d","1D"],["pct_7d","1W"],["pct_30d","1M"],["pct_90d","3M"],["pct_180d","6M"],["pct_365d","1Y"]];
-  return html`<div class="card-detail-overlay" onClick=${onClose}>
+  return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
     <div class="card-detail card-detail--price-first sealed-detail" onClick=${e=>e.stopPropagation()}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <div class="sealed-detail-head">
@@ -25037,7 +25082,7 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
                 return html`<div key=${r.tcgplayer_product_id} class=${"cb-row" + (qty > 0 ? "" : " is-missing")}
                   role="button" tabIndex=${0} title="Where it came from, and your copies"
                   onClick=${() => setDetail(r)}
-                  onKeyDown=${e => { if(e.key === "Enter"){ e.preventDefault(); setDetail(r); } }}>
+                  onKeyDown=${e => { if(e.target === e.currentTarget && e.key === "Enter"){ e.preventDefault(); setDetail(r); } }}>
                   <div class="cb-row-thumb">${r.image_url ? html`<img src=${r.image_url} alt="" loading="lazy"/>` : collectiblePh(r)}</div>
                   <div class="cb-row-meta">
                     <div class="cb-row-name">${r.name}</div>
@@ -27471,7 +27516,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                   role="button" tabIndex="0"
                   title=${"View " + (targetName || "set") + " in the collection"}
                   onClick=${onGoalActivate}
-                  onKeyDown=${(e)=>{ if(e.key === "Enter" || e.key === " "){ e.preventDefault(); onGoalActivate(); } }}>
+                  onKeyDown=${(e)=>{ if(e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")){ e.preventDefault(); onGoalActivate(); } }}>
                   <div class="gc-goal-name">${g.display_name || targetName || "Goal"}</div>
                   <div class="gc-goal-sub muted">${targetName}${g.rarities?.length ? " · " + g.rarities.join(" · ") : " · All rarities"}${g.printings?.length ? " · " + g.printings.join("/") : ""}</div>
                   <div class="gc-goal-progress">
@@ -27663,7 +27708,7 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, splitTiers, presel
     ? (gradedVariantLabel(gradedSlotBucket(p), picked.Set) || p)
     : (PRINTING_VARIANT_LABEL[p] || p);
 
-  return html`<div class="modal-backdrop" onClick=${onClose}>
+  return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:560}}>
       <div class="modal-header">
         <h2 class="title-font" style=${{margin:0,fontSize:18}}>${queueMode ? "Send a card for grading" : "Add a graded card"}</h2>
@@ -27941,7 +27986,7 @@ const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClo
     setAddedCount(n);
   };
 
-  return html`<div class="modal-backdrop" onClick=${onClose}>
+  return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:780}}>
       <div class="modal-header">
         <h2 class="title-font" style=${{margin:0,fontSize:18}}>${sendMode ? "Bulk send for grading" : "Bulk add graded cards"}</h2>
@@ -28113,7 +28158,7 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptio
     && (isExtras || rarities.size > 0)
     && (!hasBaseRarity || printings.size > 0);
 
-  return html`<div class="modal-backdrop" onClick=${onClose}>
+  return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:480}}>
       <div class="modal-header">
         <h2 class="title-font" style=${{margin:0,fontSize:18}}>Add tracking goal</h2>
@@ -28853,7 +28898,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         onChange=${e=>{ const f=e.target.files && e.target.files[0]; e.target.value=""; handleImportFile(f); }}/>`}
     </div>
 
-    ${importState && html`<div class="import-modal-backdrop" onClick=${()=>!importState.busy && setImportState(null)}>
+    ${importState && html`<div class="import-modal-backdrop" ...${backdropClose(()=>!importState.busy && setImportState(null))}>
       <div class="import-modal" onClick=${e=>e.stopPropagation()}>
         <h3 class="title-font" style=${{margin:"0 0 10px",fontSize:18}}>Import Collection CSV</h3>
         <div class="import-summary">
@@ -33114,7 +33159,7 @@ const AlertsModal = ({alerts, alertEvents, alertOps, watchlists, cardNameFor, un
   const canSave = (watchlists || []).length > 0 && draft.watchlist_id
     && Number.isFinite(Number(draft.threshold)) && Number(draft.threshold) !== 0;
 
-  return html`<div class="card-detail-overlay" onClick=${onClose}>
+  return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
     <div class="alerts-modal" onClick=${e=>e.stopPropagation()}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <h3 class="title-font" style=${{margin:"0 0 10px",fontSize:18}}>Price alerts</h3>
@@ -38354,7 +38399,7 @@ const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
   return html`<div class="mover-tile"
     role="button" tabIndex=${0}
     onClick=${onClick}
-    onKeyDown=${e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); onClick && onClick(); } }}>
+    onKeyDown=${e=>{ if(e.target === e.currentTarget && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); onClick && onClick(); } }}>
     <div class="mt-img-wrap">
       ${img
         ? html`<img src=${img} alt=${name} loading="lazy"/>`
@@ -38537,7 +38582,7 @@ const SealedMoverTile = ({row, activeWindow, visibleWindows, onClick}) => {
   return html`<div class="mover-tile mover-tile--sealed"
     role="button" tabIndex=${0}
     onClick=${onClick}
-    onKeyDown=${e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); onClick && onClick(); } }}>
+    onKeyDown=${e=>{ if(e.target === e.currentTarget && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); onClick && onClick(); } }}>
     <div class="mt-img-wrap">
       <${ProductPhoto} src=${row.image} glyph="box" size=${30}/>
       ${url && html`<a class="mt-tcg-link" href=${url} target="_blank" rel="noopener nofollow sponsored"
@@ -38754,6 +38799,14 @@ const MoversPicker = ({keys, pick, onPick, setLogo}) => {
 // identical, which is the point: a movers row should look like a movers row.
 const MoversBanner =({title, subtitle, controls, cards, onTileClick, activeWindow, visibleWindows, paused, onTitleClick, renderTile, tileKey, titleHint, emptyText}) => {
   const wrapRef = useRef(null);
+  // Keep the marquee's duplicate pass out of the tab order (see .movers-dup).
+  // Every render: a tile re-created by React comes back focusable.
+  useEffect(() => {
+    const root = wrapRef.current;
+    if(!root) return;
+    root.querySelectorAll(".movers-dup a[href], .movers-dup button, .movers-dup [tabindex], .movers-dup input, .movers-dup select")
+      .forEach(el => { if(el.tabIndex !== -1) el.tabIndex = -1; });
+  });
   // Track manual interaction so the rAF loop yields briefly after the user
   // scrolls / wheels — otherwise the auto-advance immediately yanks the
   // scrollLeft back. After 1.5 s of no interaction we resume drifting.
@@ -38921,11 +38974,19 @@ const MoversBanner =({title, subtitle, controls, cards, onTileClick, activeWindo
                   put a full raw MoverTile beside each graded one, which is what
                   stretched the graded tiles to the raw tile's height and left
                   80px of dead space under every slab. */""}
+            ${/* The duplicate is decoration: aria-hidden, and its controls are
+                  taken out of the tab order by the effect above, so Tab does not
+                  walk every tile twice and a screen reader does not read the row
+                  twice. NOT inert — half the tiles on screen are duplicates at
+                  any moment, and they must still take a click. display:contents
+                  keeps them in the track's flex row, exactly where they were. */""}
+            <div class="movers-dup" aria-hidden="true" style=${{display:"contents"}}>
             ${renderTile
               ? cards.map(c => renderTile(c, "dup:" + (tileKey ? tileKey(c) : (c.card_id+":"+c.printing))))
               : cards.map(c => html`<${MoverTile} key=${"dup:"+c.card_id+":"+c.printing} card=${c}
               activeWindow=${activeWindow} visibleWindows=${visibleWindows}
               onClick=${()=>onTileClick && onTileClick(c)}/>`)}
+            </div>
           </div>
         </div>`}
   </section>`;
@@ -42008,7 +42069,7 @@ const CalendarRow = ({ev, today, subs, onOpen, art}) => {
   return html`<li class="cal-row">
     <div class="cal-row-main" role="button" tabIndex="0"
       onClick=${() => onOpen && onOpen(ev)}
-      onKeyDown=${(e) => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); onOpen && onOpen(ev); } }}>
+      onKeyDown=${(e) => { if(e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")){ e.preventDefault(); onOpen && onOpen(ev); } }}>
       <div class="cal-row-when">
         <span class="cal-row-date">${calDayLabel(ev.starts_on)}</span>
         <span class="cal-row-count">${calCountdown(ev, today)}</span>
@@ -49569,7 +49630,7 @@ const TournamentBulkUploadModal = ({raw, user, onClose, onUploaded}) => {
     }
   };
 
-  return html`<div class="modal-backdrop" onClick=${onClose}>
+  return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:980}}>
       <div class="modal-header">
         <h2 class="title-font" style=${{margin:0,fontSize:18}}>Bulk upload tournament</h2>
@@ -49754,7 +49815,7 @@ const TournamentDeckEditModal = ({tournament, result, raw, onClose, onSaved}) =>
     } catch(e) { setBusy(false); setError("Save failed: " + (e?.message || e)); }
   };
 
-  return html`<div class="modal-backdrop" onClick=${onClose}>
+  return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:640}}>
       <div class="modal-header">
         <h2 class="title-font" style=${{margin:0,fontSize:18}}>
@@ -50012,7 +50073,7 @@ const TournamentBulkEditModal = ({tournament, results, raw, onClose, onSaved}) =
   };
 
   if(!tournament) return null;
-  return html`<div class="modal-backdrop" onClick=${onClose}>
+  return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:980}}>
       <div class="modal-header">
         <h2 class="title-font" style=${{margin:0,fontSize:18}}>Edit tournament</h2>
@@ -53453,7 +53514,7 @@ const CoconutLeaderPicker = ({current, onPick, onClose}) => {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  return html`<div class="card-detail-overlay" onClick=${onClose}>
+  return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
     <div class="coconut-picker" onClick=${e=>e.stopPropagation()}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">✕</button>
       <h3 class="title-font">Choose a Coconut leader</h3>
@@ -53606,7 +53667,7 @@ const DeckHistoryModal = ({deck, cardById, isOwner, shareToken, refreshNonce, on
     ${c.printing && c.printing !== "Normal" && html`<span class="dv-print">${c.printing}</span>`}
   </li>`;
 
-  return html`<div class="modal-backdrop" onClick=${onClose}>
+  return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal deck-history-modal" onClick=${e=>e.stopPropagation()}>
       <div class="modal-header">
         <h2 class="title-font" style=${{margin:0,fontSize:18}}>\ud83d\udd52 Version history</h2>
@@ -54293,8 +54354,13 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
     } catch { showIt(); }
   }, [deck, cardById]);
 
+  // A pasted list that has not been applied survives closing the dialog: a
+  // stray tap outside it (or Esc) used to throw away a 60-line paste, and
+  // reopening Import started blank.
+  const importDraftRef = useRef("");
+  useEffect(() => { if(deckTextModal === "import") importDraftRef.current = deckTextValue; }, [deckTextModal, deckTextValue]);
   const handleImport = useCallback(() => {
-    setDeckTextValue("");
+    setDeckTextValue(importDraftRef.current || "");
     setDeckTextModal("import");
   }, []);
 
@@ -54311,6 +54377,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
     const summary = `Match: ${result.entries.length} unique cards (${result.entries.reduce((s,e)=>s+e.quantity,0)} total)`
                   + (result.unmatched.length ? `\nUnmatched (${result.unmatched.length}):\n  ${result.unmatched.slice(0,10).join("\n  ")}` : "");
     if(!confirm(summary + "\n\nReplace the current deck contents?")) return;
+    importDraftRef.current = "";
     setDeckTextModal(null);
     if(onReplaceCards){
       await onReplaceCards(result.entries.map(e => ({card_id: e.card_id, printing: "Normal", quantity: e.quantity})));
@@ -55225,7 +55292,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}
       user=${user} collection=${collection} updateQty=${updateQty || null} onSignIn=${onSignIn || (()=>{})}/>`}
-    ${deckTextModal && html`<div class="modal-backdrop" onClick=${()=>setDeckTextModal(null)}>
+    ${deckTextModal && html`<div class="modal-backdrop" ...${backdropClose(()=>setDeckTextModal(null))}>
       <div class="modal deck-text-modal" onClick=${e=>e.stopPropagation()}>
         <div class="modal-header">
           <h2 class="title-font" style=${{margin:0,fontSize:18}}>
@@ -56196,6 +56263,11 @@ function App(){
   // Collection tab while inside a set drops you back to the main grid.
   const [tabClickNonce, setTabClickNonce] = useState(0);
   const onTabClick = useCallback((v) => {
+    // A nav tab is YOUR page. Someone else's collection (opened from a shared
+    // link) used to survive the tab click, so tapping Collection kept showing
+    // theirs — under a /collection URL that, reloaded, showed yours.
+    setViewedCollectionId(null);
+    setViewedCollectionToken(null);
     setView(v);
     setTabClickNonce(n => n + 1);
     // Strip view-specific deep-link params so a hard refresh doesn't drop the
@@ -56207,6 +56279,7 @@ function App(){
       if(v !== "decks"){
         for(const k of ["deck","token","user"]) url.searchParams.delete(k);
       }
+      url.searchParams.delete("collection");
       for(const k of CARD_URL_KEYS) url.searchParams.delete(k);
       window.history.replaceState({}, "", url);
     } catch {}
@@ -57139,7 +57212,11 @@ function App(){
       }
     })();
     return ()=>{ cancelled = true; };
-  }, [user]);
+    // Keyed on the ACCOUNT, not the user object: every auth event (the hourly
+    // token refresh, and each prefs save through updateUser) hands back a new
+    // object, which re-ran three requests and re-opened the name prompt right
+    // after "Not now".
+  }, [user?.id]); // eslint-disable-line
 
   // Update one collection-section's visibility (raw / sealed / graded).
   // The DB trigger handles token rotation if this flips all three to private.
@@ -57297,7 +57374,16 @@ function App(){
       if(typeof meta.eloPinned === "boolean") setEloPinned(meta.eloPinned);
       if(typeof meta.eloAutopinned === "boolean") setEloAutopinned(meta.eloAutopinned);
     }
+    // The avatar pick lives in localStorage between sessions, so on a shared
+    // device the NEXT account to sign in inherited the previous one's card —
+    // and the mirror below then published it on the new account's profile.
+    // packsink:avatarOwner says whose pick it is; a different account whose
+    // own metadata names none starts with none.
+    let owner = null;
+    try { owner = localStorage.getItem("packsink:avatarOwner"); } catch {}
     if(typeof meta.avatarCardId === "string" || meta.avatarCardId === null) setAvatarCardId(meta.avatarCardId);
+    else if(owner && owner !== user.id) setAvatarCardId(null);
+    try { localStorage.setItem("packsink:avatarOwner", user.id); } catch {}
     if(meta.collectionGoal && typeof meta.collectionGoal === "object") setCollectionGoal(normalizeGoal(meta.collectionGoal));
   }, [user]);
 
@@ -57323,20 +57409,42 @@ function App(){
   // Mirror the chosen avatar card's image URL into public.profiles so other
   // users see it on shared decks / creator profiles. Google avatar URLs are
   // intentionally NOT used — only card images you've explicitly picked.
+  //
+  // Only what can be RESOLVED is published. This used to run with the
+  // catalog still empty (it loads after sign-in), find no card, and write
+  // avatar_url = null — wiping the public avatar on every page load until the
+  // catalog landed and it wrote the URL back. It also re-sent the same PATCH
+  // on every catalog refresh and every auth token refresh.
+  const lastAvatarWrite = useRef(null);
+  const uidForAvatar = user?.id || null;
   useEffect(() => {
-    if(!user || !prefsHydrated.current) return;
+    if(!uidForAvatar || !prefsHydrated.current) return;
     let avatarImageUrl = null;
-    if(avatarCardId && raw && raw.length){
+    if(avatarCardId){
+      if(!raw || !raw.length) return;                   // catalog not loaded yet
       const card = raw.find(r => r.card_id === avatarCardId);
       avatarImageUrl = (card && (card.img_small || card.img_normal)) || null;
+      if(!avatarImageUrl) return;                       // unknown card: keep what's published
     }
-    sbClient.from("profiles").update({avatar_url: avatarImageUrl})
-      .eq("user_id", user.id)
-      .then(({error}) => { if(error) console.warn("profile avatar sync failed:", error.message); });
-    // Reflect locally so the avatar shows up in the settings popover
-    // (avatarSrc reads from profile when card_id isn't loaded yet).
-    setProfile(p => p ? {...p, avatar_url: avatarImageUrl} : p);
-  }, [user, avatarCardId, raw]);
+    const key = uidForAvatar + "|" + (avatarImageUrl || "");
+    if(lastAvatarWrite.current === key) return;
+    // Settle first: on sign-in this effect runs in the SAME commit as the
+    // prefs hydration above, i.e. still holding the previous pick, and only
+    // the next render carries the account's own. The timer is cleared by that
+    // re-run, so only the settled value is ever published.
+    const t = setTimeout(() => {
+      lastAvatarWrite.current = key;
+      sbClient.from("profiles").update({avatar_url: avatarImageUrl})
+        .eq("user_id", uidForAvatar)
+        .then(({error}) => {
+          if(error){ lastAvatarWrite.current = null; console.warn("profile avatar sync failed:", error.message); }
+        });
+      // Reflect locally so the avatar shows up in the settings popover
+      // (avatarSrc reads from profile when card_id isn't loaded yet).
+      setProfile(p => p ? {...p, avatar_url: avatarImageUrl} : p);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [uidForAvatar, avatarCardId, raw]);
 
   // Fetch the user's collection whenever they sign in/out. PostgREST caps
   // responses at ~1000 rows by default; a CSV-imported collection routinely
@@ -57608,12 +57716,22 @@ function App(){
   // Deliberately NOT on every render or every visibility change: prices update
   // once a day, so re-evaluating more often can only ever re-derive the same
   // answer, and each run costs a query.
+  //
+  // ⚠ "Done" is recorded only when a run FINISHES. It used to be set before
+  // the async work began, and any dependency landing mid-run (the price date,
+  // a token refresh re-creating refreshAlerts) cancelled that run — after
+  // which the flag stopped every retry, so on most sessions no rule was ever
+  // judged at all.
   const alertsEvaluated = useRef(false);
   useEffect(() => {
     if(alertsEvaluated.current) return;
     if(!user || alertsUnavailable) return;
     if(!alerts || !alerts.length || !watchlists) return;
-    alertsEvaluated.current = true;
+    // Wait for the real snapshot date: a firing is keyed on it, so judging
+    // against a guessed one (the UTC day, which is tomorrow every evening in
+    // the Americas) filed it under a day no other device would ever match.
+    const priceDate = lastRawPriceDate || lastEtlDate;
+    if(!priceDate) return;
     let cancelled = false;
     (async () => {
       try {
@@ -57628,7 +57746,7 @@ function App(){
               if(it.card_id) wanted.add(it.card_id);
           } else if(a.card_id) wanted.add(a.card_id);
         }
-        if(!wanted.size) return;
+        if(!wanted.size){ alertsEvaluated.current = true; return; }
         const ids = Array.from(wanted);
         const BATCH = 60;
         const chunks = [];
@@ -57641,11 +57759,10 @@ function App(){
         if(cancelled) return;
         const rowByKey = new Map();
         for(const r of pages.flat()) rowByKey.set(r.card_id + "|" + (r.printing || "Normal"), r);
-        if(!rowByKey.size) return;
-        // The price date the rules are judged against. price_movers carries no
-        // date column, so we take the catalog's latest snapshot — the same date
-        // the footer's staleness pill reports.
-        const priceDate = lastRawPriceDate || new Date().toISOString().slice(0, 10);
+        if(!rowByKey.size){ alertsEvaluated.current = true; return; }
+        // The price date the rules are judged against (resolved above):
+        // price_movers carries no date column, so it is the catalog's latest
+        // snapshot.
         const lastFiredByKey = new Map();
         for(const e of alertEvents){
           const k = e.alert_id + "|" + e.card_id + "|" + (e.printing || "Normal");
@@ -57655,7 +57772,9 @@ function App(){
         const firings = evaluateAlerts({
           alerts, watchlists, rowByKey, priceDate, lastFiredByKey, nowMs: Date.now(),
         });
-        if(!firings.length || cancelled) return;
+        if(cancelled) return;
+        alertsEvaluated.current = true;
+        if(!firings.length) return;
         // ignoreDuplicates leans on alert_events_unique, so re-evaluating the
         // same snapshot on a second device is a no-op rather than a second
         // copy of every alert in the inbox.
@@ -57669,7 +57788,7 @@ function App(){
       }
     })();
     return () => { cancelled = true; };
-  }, [user, alerts, watchlists, alertsUnavailable, alertEvents, lastRawPriceDate, refreshAlerts]);
+  }, [user, alerts, watchlists, alertsUnavailable, alertEvents, lastRawPriceDate, lastEtlDate, refreshAlerts]);
 
   const unreadAlerts = useMemo(
     () => (alertEvents || []).filter(e => !e.read_at).length, [alertEvents]);
@@ -58678,7 +58797,9 @@ function App(){
         if(welcomeAfterOnboarding.current){ welcomeAfterOnboarding.current = false; maybeOpenWelcome(); } }}
       onClose=${()=>{ setAvatarPickerOpen(false);
         if(welcomeAfterOnboarding.current){ welcomeAfterOnboarding.current = false; maybeOpenWelcome(); } }}/>`}
-    ${showNamePrompt && user && html`<${NamePromptModal} onSave=${saveDisplayName}/>`}
+    ${showNamePrompt && user && html`<${NamePromptModal} onSave=${saveDisplayName}
+      onSkip=${()=>setShowNamePrompt(false)}
+      onSignOut=${()=>{ setShowNamePrompt(false); signOut(); }}/>`}
     ${gradedTosPromptOpen && !gradedTosOk && html`<${GradedTosModal}
       onAccept=${acceptGradedTos}
       onDismiss=${()=>{ setGradedTosPromptOpen(false);
