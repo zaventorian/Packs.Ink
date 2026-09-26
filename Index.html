@@ -6680,9 +6680,12 @@ const _fuzzyDim = (token) => {
 // Greedy: each token can only contribute to one filter; remaining tokens
 // become the name query.
 const parseSearchQuery = (input) => {
+  // dimTok: the word the user actually typed for a rarity / ink filter. The
+  // matcher uses it to rescue a card whose OWN name holds that word ("Ariel -
+  // On Human Legs" when "legs" parsed as Legendary).
   const out = {name:"", filters:{}, excludeRarities:new Set(),
     excludeInks:new Set(), excludeKeywords:new Set(),
-    excludeClassifications:new Set(), excludeTypes:new Set()};
+    excludeClassifications:new Set(), excludeTypes:new Set(), dimTok:{}};
   if(!input || !input.trim()) return out;
 
   // Price intent ("$5-10", "under $5", "cheap", "expensive"…) — parsed before
@@ -6818,6 +6821,7 @@ const parseSearchQuery = (input) => {
     const two = tokens[i]+" "+tokens[i+1];
     if(RARITY_ALIASES[two]){
       out.filters.rarity = RARITY_ALIASES[two];
+      out.dimTok.rarity = two;
       used.add(i); used.add(i+1);
       break;
     }
@@ -6832,7 +6836,7 @@ const parseSearchQuery = (input) => {
       const t = tokens[i];
       const dt = depluralize(t);
       const r = resolveRarityPrefix(t) || resolveRarityPrefix(dt);
-      if(r){ out.filters.rarity = r; used.add(i); break; }
+      if(r){ out.filters.rarity = r; out.dimTok.rarity = t; used.add(i); break; }
     }
   }
 
@@ -6841,6 +6845,7 @@ const parseSearchQuery = (input) => {
     if(used.has(i)) continue;
     if(INK_ALIASES[tokens[i]]){
       out.filters.ink = INK_ALIASES[tokens[i]];
+      out.dimTok.ink = tokens[i];
       used.add(i);
       break;
     }
@@ -6995,8 +7000,8 @@ const parseSearchQuery = (input) => {
     if(used.has(i) || tokens[i].length < 6) continue;
     const d = _fuzzyDim(tokens[i]);
     if(!d) continue;
-    if(d.kind==="rarity" && !out.filters.rarity){ out.filters.rarity = d.value; used.add(i); }
-    else if(d.kind==="ink" && !out.filters.ink){ out.filters.ink = d.value; used.add(i); }
+    if(d.kind==="rarity" && !out.filters.rarity){ out.filters.rarity = d.value; out.dimTok.rarity = tokens[i]; used.add(i); }
+    else if(d.kind==="ink" && !out.filters.ink){ out.filters.ink = d.value; out.dimTok.ink = tokens[i]; used.add(i); }
     else if(d.kind==="keyword" && !out.filters.ability_keyword){ out.filters.ability_keyword = d.value; used.add(i); }
     else if(d.kind==="classification" && !out.filters.classification){ out.filters.classification = d.value; used.add(i); }
     else if(d.kind==="type" && !out.filters.card_type){ out.filters.card_type = d.value; used.add(i); }
@@ -7044,8 +7049,25 @@ const _SPLIT_CHIPPABLE = [
 // is just its display word, so "elsa dual" splits into `ink: dual` + a name.
 const _SPLIT_CHIP_VALUE = {dualInk: "dual"};
 const _UNCHIPPABLE_FILTERS = ["strength","willpower","lore"];
-const smartSplitSuggestion = (raw) => {
+// True when every typed word IS a word of ONE real card name: the query IS
+// that card's name ("ariel on human legs", "painting the roses red", "cruella
+// style icon"), so splitting one of its words off as a rarity / ink chip would
+// hide the very card being searched for. Word lists are cached per name array.
+const _cardNameWordsCache = new WeakMap();
+const queryNamesACard = (raw, cardNames) => {
+  if(!raw || !Array.isArray(cardNames) || !cardNames.length) return false;
+  const toks = searchNorm(String(raw).toLowerCase()).split(/[^a-z0-9]+/).filter(Boolean);
+  if(toks.length < 2) return false;
+  let words = _cardNameWordsCache.get(cardNames);
+  if(!words){
+    words = cardNames.map(n => searchNorm(String(n || "").toLowerCase()).split(/[^a-z0-9]+/).filter(Boolean));
+    _cardNameWordsCache.set(cardNames, words);
+  }
+  return words.some(ws => toks.every(t => ws.includes(t)));
+};
+const smartSplitSuggestion = (raw, cardNames) => {
   if(!raw || !raw.includes(" ")) return null;
+  if(queryNamesACard(raw, cardNames)) return null;
   const p = parseSearchQuery(raw);
   const f = p.filters || {};
   // Price is a trigger dimension in its own right: "elsa under $5" is a name
@@ -7069,6 +7091,17 @@ const smartSplitSuggestion = (raw) => {
   return {kind:"split", value:raw, label:[p.name, ...dims].filter(Boolean).join("  ·  "),
     chips, name:p.name, replace:raw};
 };
+// True when the parse pulled ANY structure out of the text: a dimension, a
+// stat, a price or an exclusion. A query like that already drives the live grid
+// correctly as free text. The Enter/handoff fallback for a pure NAME — commit it
+// as a `contains:` phrase chip — searches for the literal words instead, so
+// "amber legendary", "cost<=2", "stitch 7" and "non promo" (the search box's
+// own placeholder examples among them) all landed on zero cards the moment
+// Enter was pressed. `false` counts: "uninkable" parses to inkable:false.
+const parsedHasStructure = (p) => !!p && (
+  Object.values(p.filters || {}).some(v => v != null && v !== "") ||
+  ["excludeRarities","excludeInks","excludeKeywords","excludeClassifications","excludeTypes"]
+    .some(k => p[k] && p[k].size > 0));
 
 const buildSearchSuggestions = (input, allIllustrators, cardNames) => {
   const out = [];
@@ -7184,7 +7217,7 @@ const buildSearchSuggestions = (input, allIllustrators, cardNames) => {
   const capped = out.slice(0, 7);
   // Whole-input name+dimension split goes FIRST — it's the reading most people
   // intend when they type two words, and it's what Enter defaults to.
-  const split = smartSplitSuggestion(raw);
+  const split = smartSplitSuggestion(raw, cardNames);
   if(split) capped.unshift(split);
   capped.push({kind:"contains", value:raw, label:`contains: ${raw}`, replace:raw, isFallback:true});
   return capped;
@@ -7323,6 +7356,21 @@ const cardVersionTerms = (row) => {
   }
   return terms.length ? terms.join("  ").toLowerCase() : "";
 };
+// Whole-word regex for the token that produced a parsed rarity/ink filter, or
+// null when there is nothing to rescue with (no name query, no token). Cached on
+// the parsed object: the matcher runs once per catalog row per keystroke.
+// ⚠ WHOLE word, never a prefix: "li shang promo" must not rescue "Li Shang -
+// Newly Promoted" into a Promo filter.
+const _dimTokRe = (parsed, kind) => {
+  const tok = parsed && parsed.name && parsed.dimTok && parsed.dimTok[kind];
+  if(!tok) return null;
+  const cache = parsed._dimTokRe || (parsed._dimTokRe = {});
+  if(!(kind in cache)){
+    const t = searchNorm(String(tok).toLowerCase()).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    cache[kind] = t ? new RegExp("(^|[^a-z0-9])" + t + "($|[^a-z0-9])") : null;
+  }
+  return cache[kind];
+};
 const matchesCardFilter = (row, f, parsed) => {
   // A card's full ink list. Dual-ink cards carry two colors (e.g.
   // ["Amber","Sapphire"]); mono cards carry one. Fall back to the single
@@ -7341,9 +7389,21 @@ const matchesCardFilter = (row, f, parsed) => {
   // Parsed (smart search) filters — applied first, take precedence for single
   // values when both chip-state and parsed produce the same dimension.
   if(parsed){
-    if(parsed.filters.ink && !cardInks.includes(parsed.filters.ink)) return false;
+    // A rarity or ink word can be part of a card's OWN name: "Ariel - On Human
+    // Legs" (legs -> Legendary), "Cruella De Vil - Style Icon" (icon -> Iconic),
+    // "Painting the Roses Red" (red -> Ruby). Searching one of those by name hid
+    // the very card being searched for. With a name query alongside, the word is
+    // also satisfied when it starts a word of the card's name, the same rescue
+    // classifications and keywords get below — as a WHOLE word. With NO name
+    // the check stays strict, so a bare "legendary" or "red" still means the
+    // dimension.
+    const _nameHasDimTok = (kind) => {
+      const re = _dimTokRe(parsed, kind);
+      return !!re && re.test(searchNorm((row["Product Name"]||"").toLowerCase()));
+    };
+    if(parsed.filters.ink && !cardInks.includes(parsed.filters.ink) && !_nameHasDimTok("ink")) return false;
     if(parsed.filters.dualInk && cardInks.length < 2) return false;
-    if(parsed.filters.rarity && row.Rarity !== parsed.filters.rarity) return false;
+    if(parsed.filters.rarity && row.Rarity !== parsed.filters.rarity && !_nameHasDimTok("rarity")) return false;
     if(parsed.filters.card_type && !cardTypeParts.includes(parsed.filters.card_type)) return false;
     if(parsed.filters.set){ const pp = cardParentSetForFilter(row); if(!(row.Set === parsed.filters.set || pp === parsed.filters.set)) return false; }
     const _cmpStat = (rowVal, want, op) => {
@@ -7413,7 +7473,10 @@ const matchesCardFilter = (row, f, parsed) => {
       const inks = (row.inks && row.inks.length) ? row.inks : (row.ink ? [row.ink] : []);
       if(inks.some(i => parsed.excludeInks.has(i))) return false;
     }
-    if(parsed.excludeTypes && parsed.excludeTypes.size && parsed.excludeTypes.has(row.card_type)) return false;
+    // Against the split type line, like the inclusion check: a Song's line is
+    // "Action - Song", so an exact match never excluded one ("no songs" did
+    // nothing) — and excluding Action takes songs with it, as including it does.
+    if(parsed.excludeTypes && parsed.excludeTypes.size && cardTypeParts.some(t => parsed.excludeTypes.has(t))) return false;
     if(parsed.excludeKeywords && parsed.excludeKeywords.size){
       if((row.keywords||[]).some(k => parsed.excludeKeywords.has((k||"").toLowerCase()))) return false;
     }
@@ -13048,12 +13111,12 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     // natural way to use the home search box was the one that broke. Run the
     // same splitter the Cards box's own Enter key uses, and apply it the same
     // way (see applySuggestion's "split" branch).
-    const split = q && !q.includes(":") ? smartSplitSuggestion(q) : null;
+    const split = q && !q.includes(":") ? smartSplitSuggestion(q, cardNameIndex) : null;
     if(split){
       for(const c of split.chips) addSmartChip(c);
       if(split.name) addSmartChip({kind:"contains", value:split.name});
       setFilter(f => ({...f, search: ""}));
-    } else if(q && !q.includes(":")){
+    } else if(q && !q.includes(":") && !parsedHasStructure(parseSearchQuery(q))){
       // No dimension in it, so it is a pure NAME — commit it as a PHRASE
       // `contains` chip so it matches "Go Go Tomago" rather than every card
       // whose text holds the lone token "go" (free-text is token-ANY in
@@ -13131,10 +13194,19 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   // Merge chip filters onto the parsed object. Chips win over input for the
   // same dimension since they were explicitly locked in.
   const parsed = useMemo(() => {
+    // Every exclusion set rides along, not just rarities: "non amber",
+    // "without rush" and "no songs" are all documented syntax, and the other
+    // four sets were silently dropped here, so only a rarity exclusion ever
+    // worked on this tab while the Screener honoured all five.
     const p = {
       name: parsedFromInput.name,
       filters: {...parsedFromInput.filters},
       excludeRarities: new Set(parsedFromInput.excludeRarities),
+      excludeInks: new Set(parsedFromInput.excludeInks),
+      excludeKeywords: new Set(parsedFromInput.excludeKeywords),
+      excludeClassifications: new Set(parsedFromInput.excludeClassifications),
+      excludeTypes: new Set(parsedFromInput.excludeTypes),
+      dimTok: {...(parsedFromInput.dimTok || {})},
       matchMode: filter.matchMode || "any",
     };
     const containsTokens = [];
@@ -13146,8 +13218,10 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     const classifications = [];
     const keywords = [];
     for(const chip of smartChips){
-      if(chip.kind === "ink")            p.filters.ink = chip.value;
-      else if(chip.kind === "rarity")    p.filters.rarity = chip.value;
+      // A chip that sets ink / rarity replaces the typed word that produced
+      // it, so that word must stop rescuing cards by name.
+      if(chip.kind === "ink")            { p.filters.ink = chip.value; delete p.dimTok.ink; }
+      else if(chip.kind === "rarity")    { p.filters.rarity = chip.value; delete p.dimTok.rarity; }
       else if(chip.kind === "set")       p.filters.set = chip.value;
       else if(chip.kind === "card_type") p.filters.card_type = chip.value;
       else if(chip.kind === "classification") classifications.push(chip.value);
@@ -13224,10 +13298,15 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     let result;
     if(sortKey === "relevance"){
       // Best match: score by name relevance when there's a query, else fall back
-      // to set-new (so plain browsing keeps the newest-first order).
-      if(parsed.name && parsed.name.trim()){
+      // to set-new (so plain browsing keeps the newest-first order). A name
+      // committed as a `contains:` chip (Enter, or the home-search handoff) is
+      // still the query: without it Enter re-sorted "stitch" newest-set-first
+      // and mixed in every card that merely mentions Stitch.
+      const relQ = (parsed.name && parsed.name.trim()) ? parsed.name
+        : (parsed.contains && parsed.contains.length ? parsed.contains.join(" ") : "");
+      if(relQ.trim()){
         const sc = new Map();
-        for(const g of groups) sc.set(g, _relevanceScore(g, parsed.name));
+        for(const g of groups) sc.set(g, _relevanceScore(g, relQ));
         result = groups.slice().sort((a,b)=> (sc.get(b)-sc.get(a)) || SORT_COMPARATORS["set-new"](a,b));
       } else {
         result = groups.slice().sort(SORT_COMPARATORS["set-new"]);
@@ -13266,7 +13345,10 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
       if(promo.length && own.length) result = own.concat(promo);
     }
     return result;
-  },[allGroups, deferredFilter, parsed, sortKey, collection]);
+  // `collection` is a dep ONLY while the Owned filter is on. Otherwise every
+  // quick-add produced a new array, which reset the 150-tile window below and
+  // threw the user back up the grid from card #160 mid-stepper.
+  },[allGroups, deferredFilter, parsed, sortKey, deferredFilter.onlyOwned ? collection : null]);
   // Keep the module-level browse list in sync with the displayed order so the
   // detail modal + enlarged view can arrow/swipe to the prev/next card.
   useEffect(() => { setBrowseList(grouped); return () => setBrowseList([]); }, [grouped]);
@@ -13527,8 +13609,15 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
               // haystack can't see ("rapunzel promo"), commit that split rather
               // than a `contains:` phrase that provably matches nothing.
               const split = suggestions.find(s => s.kind === "split");
+              // A query the parser found structure in ("amber legendary",
+              // "cost<=2", "non promo") already drives the grid as free text;
+              // committing it as a `contains:` phrase would match nothing. So
+              // with no split for it, Enter just closes the dropdown and keeps
+              // the text. Only a pure name falls through to the phrase chip.
+              const structured = !exactDim && !split && parsedHasStructure(parseSearchQuery(filter.search || ""));
               const pick = suggestIdx >= 0 ? suggestions[suggestIdx]
-                : (exactDim || split || suggestions.find(s => s.kind === "contains") || suggestions[0]);
+                : (exactDim || split || (structured ? null
+                    : (suggestions.find(s => s.kind === "contains") || suggestions[0])));
               if(pick) applySuggestion(pick);
               else { setSuggestOpen(false); e.target.blur(); }
             }
