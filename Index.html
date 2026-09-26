@@ -3833,7 +3833,13 @@ const parseP = s => { if(s==null||s===undefined) return null; if(typeof s==="num
 // Canonical USD formatter \u2014 thousands separators + fixed decimals. All the
 // money formatters delegate here so a $1,000+ value renders the same ($12,500.00)
 // everywhere instead of $12500.00 on some surfaces and $12,500.00 on others.
-const fmtUSD = (n, decimals=2) => "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits:decimals, maximumFractionDigits:decimals});
+// "-$12.00", never "$-12.00" — and an amount that ROUNDS to zero prints
+// without a sign, so a -0.004 loss is "$0.00" rather than "$-0.00".
+const fmtUSD = (n, decimals=2) => {
+  const v = Number(n);
+  const body = Math.abs(v).toLocaleString(undefined, {minimumFractionDigits:decimals, maximumFractionDigits:decimals});
+  return (v < 0 && /[1-9]/.test(body) ? "-" : "") + "$" + body;
+};
 const fmt = n => n==null?"\u2014":fmtUSD(n);
 const pick = a => a?.length?a[Math.floor(Math.random()*a.length)]:null;
 const wPick = opts => {
@@ -7969,10 +7975,10 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
         </div>
       </div>
       <div class="card-row-prices">
-        ${nLow != null && html`<a class="card-row-price normal" target="_blank" rel="noopener nofollow"
+        ${nLow != null && html`<a class="card-row-price normal" target="_blank" rel="noopener nofollow sponsored"
           href=${tcgUrl(group.normal.tcgplayer_product_id, "Normal")}
           onClick=${e=>e.stopPropagation()}>$${nLow.toFixed(2)}</a>`}
-        ${fLow != null && html`<a class="card-row-price foil" target="_blank" rel="noopener nofollow"
+        ${fLow != null && html`<a class="card-row-price foil" target="_blank" rel="noopener nofollow sponsored"
           href=${tcgUrl(group.foil.tcgplayer_product_id, group.foil.tcg_printing)}
           onClick=${e=>e.stopPropagation()}>$${fLow.toFixed(2)}</a>`}
       </div>
@@ -9649,7 +9655,9 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   const tileMeta = (group.Rarity || "") + (tileRow && tileRow.key === "__foil" && group.normal && group.foil ? " · Foil" : "");
   // Raw market price for this card — shown as a "~Raw $X" placeholder value in the
   // graded panel when the card has no graded sales yet (matches collection valuation).
-  const gradedRawRef = tileRow ? (tileRow.low ?? tileRow.market ?? null) : null;
+  // tileRow.low / .market are {now, byWin} objects, never numbers — reading
+  // them as prices printed "~Raw $NaN".
+  const gradedRawRef = tileRow ? (tileRow.low?.now ?? tileRow.market?.now ?? null) : null;
   const hasNoGradedSales = gradedPremium && (gradedSales.rows||[]).length === 0;
   // Graded mode: the copyable card tile shows the focused combo's Last Sold /
   // Avg-of-5 + 1W/1M/3M change + a "<GRADER> <grade>" note instead of raw Low/Mkt.
@@ -9814,8 +9822,8 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
             No graded sales yet — using <strong>~Raw $${Number(gradedRawRef).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</strong> as a placeholder value.
           </div>`}
           ${(gradedOwned||[]).length > 0 && typeof onGradedMetaUpdate === "function" && html`<div class="card-detail-graded-owned-help muted">
-            For each copy you own: <strong>Paid</strong> = what it cost you (used by the value chart's acquired-date gating),
-            <strong>Acquired</strong> = date you got it (chart credits value only from that date forward),
+            For each copy you own: <strong>Paid</strong> = what it cost you (used by the value chart's acquired-date gating),${" "}
+            <strong>Acquired</strong> = date you got it (chart credits value only from that date forward),${" "}
             <strong>Value</strong> = override price per copy — leave blank to use the eBay average, fill in for cards with no graded market data or to lock in your own number.
           </div>`}
           ${(gradedOwned||[]).length > 0
@@ -10200,7 +10208,7 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
         <div class="drawer-section-head">Artist</div>
         ${(!allIllustrators || allIllustrators.length === 0)
           ? html`<div class="muted" style=${{fontSize:11,lineHeight:1.5}}>
-              Artist data isn't loaded yet. Run the Lorcast loader after applying
+              Artist data isn't loaded yet. Run the Lorcast loader after applying${" "}
               <code>supabase/31_card_illustrators.sql</code> to populate this filter.
             </div>`
           : html`<div>
@@ -12645,7 +12653,7 @@ const MulliganSimulator = ({deck, cardById, onClose}) => {
                 <span class="muted" style=${{fontSize:11}}>
                   ${phase === "initial"
                     ? "Click cards to mark for mulligan. Marked cards go to the bottom; replacements come off the top."
-                    : `${remaining.length} cards left in deck.`}
+                    : `${remaining.length} ${remaining.length === 1 ? "card" : "cards"} left in deck.`}
                 </span>
               </div>
               <div class="mulligan-hand">
@@ -13723,7 +13731,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
           : "Build a [Format Coconut] deck — pick a leader, then build around it"}>
         ${uiIcon("coconut")} ${coconutCard ? coconutDisplayName(getCoconutCard(coconutCard)) : "Coconut deck"}
       </button>`}
-      <div class="cards-count" style=${{marginLeft:"auto"}}>${grouped.length.toLocaleString()} cards</div>
+      <div class="cards-count" style=${{marginLeft:"auto"}}>${grouped.length.toLocaleString()} ${grouped.length === 1 ? "card" : "cards"}</div>
     </div>
     ${parsedSummary.length > 0 && html`<div class="parsed-hint">
       <span class="parsed-hint-lbl">Filtering:</span>
@@ -14651,9 +14659,12 @@ const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback
   return html`<div class="footer">
     <div class="footer-text">
       <div class="footer-social">
-        follow <a href="https://x.com/packs_ink" target="_blank" rel="noopener">@packs_ink</a>
-        · <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener">@HighScoreZAP</a>
-        · <a href="/privacy">Privacy & Terms</a>
+        ${/* The separators are interpolated strings: htm drops whitespace
+              that contains a newline, so a "·" starting its own line rendered
+              jammed against the link before it ("@packs_ink· @HighScoreZAP·"). */""}
+        follow <a href="https://x.com/packs_ink" target="_blank" rel="noopener">@packs_ink</a>${" · "}
+        <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener">@HighScoreZAP</a>${" · "}
+        <a href="/privacy">Privacy & Terms</a>
       </div>
       <div class="footer-disclosure">
         Unofficial fan site, not affiliated with, endorsed by, or sponsored by Disney or Ravensburger. Disney Lorcana is a trademark of Disney.
@@ -20245,7 +20256,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
         </div>`}
         <div class="setdet-svals">
           <div class="setdet-sval"><span class="setdet-sval-lbl">Owned</span><b class="green">${money(visibleOwned.value)}</b><small>${visibleOwned.count.toLocaleString()} card${visibleOwned.count===1?'':'s'}</small></div>
-          <div class="setdet-sval"><span class="setdet-sval-lbl">Missing</span><b class="red">${money(visibleMissing.value)}</b><small>${visibleMissing.count.toLocaleString()} to complete ${goalLabel(goal)} ${allMode ? "(all sets)" : "set"}</small></div>
+          <div class="setdet-sval"><span class="setdet-sval-lbl">Missing</span><b class="red">${money(visibleMissing.value)}</b><small>${visibleMissing.count.toLocaleString()} ${goalLabel(goal) === "custom goal" ? "to reach your goal" : "to complete the " + goalLabel(goal)}${allMode ? " (all sets)" : ""}</small></div>
         </div>
         ${parts.length >= 2 && html`<div class="setdet-sbreak">
           ${parts.map(([k,label]) => html`<span key=${k}>${label} ${fmt(mb[k].value)} <span class="muted">(${mb[k].count})</span></span>`)}
@@ -22418,7 +22429,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                 ? html`<div class="history-picker-empty">Loading indices…</div>`
                 : indexCatalog === null
                   ? html`<div class="history-picker-empty">
-                      Market indices aren't switched on for this site yet — ask an admin to run
+                      Market indices aren't switched on for this site yet — ask an admin to run${" "}
                       <code>supabase/130_market_index_scopes.sql</code>, then <code>select public.refresh_market_index();</code>.
                     </div>`
                   : indexPickerGroups.length === 0
@@ -26973,7 +26984,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                     <div class="gmover-name">${c.name}</div>
                     <div class="gmover-meta">
                       <span class="gmover-grade">${(c.grader||"").toUpperCase()} ${c.grade}</span>
-                      <span class="gmover-price">$${Math.round(c.price)}</span>
+                      <span class="gmover-price">${c.price != null ? fmtUSD(c.price, 0) : "—"}</span>
                     </div>
                     <div class="gmover-deltas">
                       <span class="gmover-dh">1D</span>
@@ -28890,7 +28901,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       <div class="stat-card">
         <div class="stat-card-lbl">Owned Value</div>
         <div class="stat-card-val green">$${totalValue.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-        <div class="stat-card-sub">${totalCards.toLocaleString()} cards · ${totalUnique.toLocaleString()} unique</div>
+        <div class="stat-card-sub">${totalCards.toLocaleString()} ${totalCards === 1 ? "card" : "cards"} · ${totalUnique.toLocaleString()} unique</div>
       </div>
       <div class="stat-card">
         <div class="stat-card-lbl"><${Tip} text=${"Completion toward a "+goalLabel(goal)+" — how many of the copies you're targeting you already own (graded/pending copies count). Change the target with the Master / Play / Custom control above."}>${goalTitle(goal)} <span class="tip-info-glyph" aria-hidden="true">ⓘ</span><//></div>
@@ -31876,8 +31887,8 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
 
     <h2>The tabs at a glance</h2>
     <p><strong>Home</strong> — your dashboard. Top movers, your collection value, decks from people you follow, and the latest tournament finishes.</p>
-    <p><strong>You arrange the home page yourself.</strong> Hit <em>Edit layout</em> under the search box (or the same entry in the profile menu) to show, hide, reorder and re-column every section, including the mover banners. It saves per browser, so your phone and your desktop can be laid out differently. <em>Reset</em> puts everything back.</p>
-    <p><strong>Click a section's heading</strong> — News, Following, Tournament Results, Toolbox, Recent set EV, Your Collection — and it opens on its own over the page, with a <em>Copy link to this section</em> button. That link goes straight back to the same view, so you can send someone the tournament box rather than "scroll down on the home page". The heading is an ordinary link, so ctrl/⌘-click opens it in a new tab and right-click offers <em>Copy link address</em> without opening anything.</p>
+    <p><strong>You arrange the home page yourself.</strong> Hit <em>Edit layout</em> at the very bottom of the home page (or the same entry in the profile menu) to show, hide, reorder and re-column every section, including the mover banners. It saves per browser, so your phone and your desktop can be laid out differently. <em>Reset</em> puts everything back.</p>
+    <p><strong>Click a section's heading</strong> — News, Following, Tournament Results, Toolbox, Recent set EV, Your Collection — to go deeper. On a wide screen it takes you to that section's own page (Tournament Results opens the Tournaments tab, Recent set EV opens Expected Value). On a phone or a narrow window it opens the box on its own over the page instead, with a <em>Copy link to this section</em> button, so you can send someone the tournament box rather than "scroll down on the home page". The heading is an ordinary link either way, so ctrl/⌘-click opens it in a new tab and right-click offers <em>Copy link address</em> without opening anything.</p>
     <p><strong>Screener</strong> — every tracked card as a sortable financial-database-style table. Filter by set, rarity, ink, price band, and movement window (1D / 1W / 1M / 3M / 6M / 1Y).</p>
     <p><strong>Price Graphing</strong> — per-card history charts. Multi-select on the Screener to open a Compare view that overlays several cards on one chart.</p>
     <p><strong>Analytics</strong> — calculator-y tools: Expected Value (EV) per box, a Trade Compare tool that values both sides of a trade, a Set Breakdown of average card prices and where box value lives, Playset Cost, a pack/box Simulator with bulk odds, Swiss Odds (Monte Carlo cut-line odds for tournament Swiss rounds), and a Dice Tray for rolling turn order at the table. Its <em>Overview</em> tab lists every tool and what it answers. Sealed pricing lives in the Screener's Sealed mode.</p>
@@ -33109,7 +33120,7 @@ const AlertsModal = ({alerts, alertEvents, alertOps, watchlists, cardNameFor, un
       <h3 class="title-font" style=${{margin:"0 0 10px",fontSize:18}}>Price alerts</h3>
       ${unavailable
         ? html`<p class="muted" style=${{fontSize:13}}>
-            Alerts aren't switched on for this site yet — ask an admin to run
+            Alerts aren't switched on for this site yet — ask an admin to run${" "}
             <code>supabase/129_price_alerts.sql</code>.
           </p>`
         : html`<${React.Fragment}>
@@ -38283,7 +38294,7 @@ function paintGradedTile(ctx, x, y, w, h, c, art, gridWins, P){
   ctx.fillStyle = P.accent; ctx.font = "800 11px 'Nunito Sans', sans-serif";
   ctx.fillText((c.grader||"").toUpperCase()+" "+c.grade + (c.prBadge?" · "+c.prBadge:""), x+12, cy);
   ctx.textAlign = "right"; ctx.fillStyle = P.text; ctx.font = "800 12px 'Nunito Sans', sans-serif";
-  ctx.fillText("$"+Math.round(c.price), x+w-12, cy); cy += 17;
+  ctx.fillText(c.price != null ? fmtUSD(c.price, 0) : "—", x+w-12, cy); cy += 17;
   const cellW = (w-24)/gridWins.length;
   ctx.textAlign = "center";
   gridWins.forEach(([l], i) => { ctx.fillStyle = P.muted; ctx.font = "700 8.5px 'Nunito Sans', sans-serif"; ctx.fillText(l, x+12+cellW*(i+0.5), cy); });
@@ -38359,7 +38370,7 @@ const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
           <circle cx="12" cy="13" r="4"/>
         </svg>
       </button>
-      ${url && html`<a class="mt-tcg-link" href=${url} target="_blank" rel="noopener nofollow"
+      ${url && html`<a class="mt-tcg-link" href=${url} target="_blank" rel="noopener nofollow sponsored"
           data-h2c-ignore
           title="Open on TCGplayer" aria-label="Open on TCGplayer"
           onClick=${e=>e.stopPropagation()}>
@@ -44410,8 +44421,8 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     </header>
 
     ${unavailable && isAdmin && html`<div class="cal-warn">
-      ${uiIcon("warn", 14)} Couldn't read the curated calendar — apply
-      <code>supabase/139_calendar_events.sql</code>, then
+      ${uiIcon("warn", 14)} Couldn't read the curated calendar — apply${" "}
+      <code>supabase/139_calendar_events.sql</code>, then${" "}
       <code>142_calendar_geo_and_read_fix.sql</code>. 142 is the one that lets
       signed-out visitors read it at all. Set releases below are derived from the catalog,
       so the page still works either way.</div>`}
@@ -44552,7 +44563,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           ? html`<p class="muted cal-follow-empty">
               Nothing followed yet. <button type="button" class="cal-linkish"
                 onClick=${() => onFindEvents && onFindEvents()}>Find events near you</button> —
-              every result has a ${uiIcon("calendarPlus", 12)} button, and a
+              every result has a ${uiIcon("calendarPlus", 12)} button, and a${" "}
               <strong>Follow store</strong> option that keeps adding that shop's events as they're listed.</p>`
           : html`<ul class="cal-follow-list">
               ${followedStores.map(st => {
@@ -46159,7 +46170,7 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
               <div class="gmover-meta">
                 <span class="gmover-grade">${(c.grader||"").toUpperCase()} ${c.grade}</span>
                 ${c.prBadge && html`<span class="gmover-foil">${c.prBadge}</span>`}
-                <span class="gmover-price">$${Math.round(c.price)}</span>
+                <span class="gmover-price">${c.price != null ? fmtUSD(c.price, 0) : "—"}</span>
               </div>
               ${tab === "movers"
                 ? html`<div class="gmover-deltas">
@@ -46233,6 +46244,13 @@ const HomePollBox = ({state, user, onSignIn}) => {
   const voted = poll.my_choice != null && Array.isArray(poll.pct);
   const showPct = Array.isArray(poll.pct) && (voted || closed);
   const whole = showPct ? pollWholePct(poll.pct) : null;
+  // A poll's declared answer is not always the vote leader — a PREDICTION
+  // poll ("which card gets revealed next?") is answered by the reveal, not by
+  // the room. Calling that option "Winner" beside a 0% bar read as a counting
+  // bug, so it says "Answer" and how many people called it instead.
+  const winnerLed = !whole || whole[poll.winner] === Math.max(...whole);
+  const calledIt = closed && whole && !winnerLed
+    ? (whole[poll.winner] > 0 ? whole[poll.winner] + "% called it" : "Nobody called it") : null;
   if(closed) return html`<div class="home-poll home-poll--closed" role="group" aria-label="Poll result">
     <div class="home-poll-kicker">Poll · result</div>
     <div class="home-poll-q">${poll.question}</div>
@@ -46240,8 +46258,9 @@ const HomePollBox = ({state, user, onSignIn}) => {
       ${poll.winner_image && html`<img class="home-poll-winner-art" src=${poll.winner_image}
         alt="" loading="eager" onError=${hideBrokenImg}/>`}
       <div class="home-poll-winner-text">
-        <div class="home-poll-winner-lbl">Winner</div>
+        <div class="home-poll-winner-lbl">${winnerLed ? "Winner" : "Answer"}</div>
         <div class="home-poll-winner-name">${poll.options[poll.winner]}</div>
+        ${calledIt && html`<div class="home-poll-called muted">${calledIt}</div>`}
       </div>
     </div>
     ${whole && html`<ul class="home-poll-results">
@@ -46762,11 +46781,29 @@ function NewsArticle({a}){
 // tiles link here), otherwise lists both, newest first. No routing state of
 // its own: the browser's native #hash scroll does the "open this one" job,
 // so a shared /news#coconut-beta2-wave2 link works with no JS on arrival.
+// An in-app "Read the full story" link cannot hand its #anchor over through
+// the URL: the view-sync effect builds /news from the CURRENT address, which
+// is still the home page's, so the anchor was lost and the page opened at the
+// top of every article. The link parks the slug here instead.
+let _newsAnchor = null;
 function NewsView(){
   useEffect(() => {
-    if(window.location.hash){
-      const el = document.getElementById(window.location.hash.slice(1));
-      if(el) el.scrollIntoView({behavior:"instant", block:"start"});
+    const slug = (window.location.hash || "").slice(1) || _newsAnchor;
+    const handedOver = !window.location.hash && _newsAnchor;
+    _newsAnchor = null;
+    if(!slug) return;
+    const el = document.getElementById(slug);
+    if(el) el.scrollIntoView({behavior:"instant", block:"start"});
+    // Put the anchor in the address bar once App has written /news, so the
+    // page you are reading is the page a copied link opens.
+    if(handedOver){
+      const t = setTimeout(() => {
+        try {
+          if(window.location.pathname.replace(/\/$/, "") === "/news" && !window.location.hash)
+            window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search + "#" + slug);
+        } catch {}
+      }, 0);
+      return () => clearTimeout(t);
     }
   }, []);
   return html`<div class="faq-section news-page">
@@ -47017,16 +47054,17 @@ const GradedOwnedMoversHomePanel = ({raw, user, onCard, onTitleClick}) => {
       const img = c.img_normal || c.img_small;
       return html`<button key=${key} class="gmover-tile"
         onClick=${()=>{
-          const matching = (raw||[]).filter(r => r.card_id === c.card_id);
-          const groups = matching.length ? groupCards(matching) : [];
-          if(groups[0] && onCard) onCard(groups[0]);
+          // A slab opens on the card's GRADED tab at its own printing, the way
+          // the Graded Market tiles do; handing openCard a bare group landed on
+          // the raw price chart.
+          if(onCard) onCard({card_id: c.card_id, _initialTab: "graded", _initialPrinting: c.printing});
         }}
         title=${`${c.name} · ${(c.grader||"").toUpperCase()} ${c.grade}`}>
         ${img ? html`<img src=${img} alt="" loading="lazy"/>` : html`<div class="gmover-img-fallback"></div>`}
         <div class="gmover-name">${c.name}</div>
         <div class="gmover-meta">
           <span class="gmover-grade">${(c.grader||"").toUpperCase()} ${c.grade}</span>
-          <span class="gmover-price">$${Math.round(c.price)}</span>
+          <span class="gmover-price">${c.price != null ? fmtUSD(c.price, 0) : "—"}</span>
         </div>
         <div class="gmover-deltas">
           <span class="gmover-dh">1D</span>
@@ -47686,17 +47724,19 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     : null;
   for(const ev of activeEvents) newsTiles.push(html`<div key=${"ev-"+ev.id} class="home-news-tile">
           <div class="home-news-title">${ev.title}</div>
-          ${(ev.dateLabel || ev.eventUrl) && html`<a class="home-news-event-link"
-            href=${ev.eventUrl || "#"}
-            target=${ev.eventUrl ? "_blank" : null}
-            rel=${ev.eventUrl ? "noopener noreferrer" : null}
-            title=${ev.eventUrl ? ("Open " + ev.title + " event page (new tab)") : null}>
+          ${/* No event page means a plain date, not a link to "#" that jumped
+                the page to the top. */""}
+          ${ev.eventUrl ? html`<a class="home-news-event-link"
+            href=${ev.eventUrl} target="_blank" rel="noopener noreferrer"
+            title=${"Open " + ev.title + " event page (new tab)"}>
             <span>${ev.dateLabel}</span>
-            ${ev.eventUrl && html`<span class="home-news-event-link-arrow" aria-hidden="true">↗</span>`}
-          </a>`}
+            <span class="home-news-event-link-arrow" aria-hidden="true">↗</span>
+          </a>` : ev.dateLabel ? html`<span class="home-news-event-link">
+            <span>${ev.dateLabel}</span>
+          </span>` : null}
           ${ev.note && html`<div class="home-news-sub">${ev.note}</div>`}
           ${ev.articleSlug && html`<a class="home-news-readmore" href=${"/news#"+ev.articleSlug}
-            onClick=${navHandler(()=>openView && openView("news"))}>Read the full story →</a>`}
+            onClick=${navHandler(()=>{ _newsAnchor = ev.articleSlug; openView && openView("news"); })}>Read the full story →</a>`}
           ${ev.artists && ev.artists.length > 0 && html`<ul class="home-news-list">
             ${ev.artists.map(name => html`<li key=${name}>
               <button class="home-news-link" onClick=${()=>onEventClick(name)}
@@ -48115,7 +48155,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
               : (() => {
                   const newestBanner = NEWEST_SET && html`<${MoversBanner}
                     title=${`${NEWEST_SET.toUpperCase()} · MOST VALUABLE`}
-                    subtitle=${html`${PRERELEASE_SETS.has(NEWEST_SET) ? html`<span style=${{display:"inline-block",background:"var(--accent)",color:"#17110a",fontWeight:800,fontSize:9,letterSpacing:0.5,padding:"1px 6px",borderRadius:4,marginRight:6,verticalAlign:"middle"}}>PRE SALE</span>` : null}Top 20 ${valuableMode==="chase"?"chase":"non-chase"} by Low price${(!PRERELEASE_SETS.has(NEWEST_SET) && newestSetIsHot)?" · 🆕 release week":""}`}
+                    subtitle=${html`${PRERELEASE_SETS.has(NEWEST_SET) ? html`<span style=${{display:"inline-block",background:"var(--accent)",color:"#17110a",fontWeight:800,fontSize:9,letterSpacing:0.5,padding:"1px 6px",borderRadius:4,marginRight:6,verticalAlign:"middle"}}>PRE SALE</span>` : null}Top 20 ${valuableMode==="chase"?"chase":"non-chase"} by Low price${(!PRERELEASE_SETS.has(NEWEST_SET) && newestSetIsHot)?" · release week":""}`}
                     controls=${valuableControls}
                     cards=${valuableCards}
                     activeWindow=${""}
@@ -51207,7 +51247,9 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       total += c.quantity;
       const price = meta ? (cheapestCardPrice(cardById[c.card_id]) || 0) : 0;
       value += price * c.quantity;
-      if(meta?.ink) inks.add(meta.ink);
+      // inks[] first: a dual-ink card carries ink = its FIRST ink only, so
+      // reading .ink dropped the second one from the tile's shields.
+      for(const ik of ((meta?.inks && meta.inks.length) ? meta.inks : (meta?.ink ? [meta.ink] : []))) inks.add(ik);
       if(meta?.inkable === true)  inkable   += c.quantity;
       else if(meta?.inkable === false) uninkable += c.quantity;
       const have = (collection[c.card_id+":Normal"] || 0)
@@ -51686,14 +51728,23 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     });
   }, []);
 
+  // A ref, not just state: two taps inside one frame both see the state as
+  // false, and each made its own "New Deck".
+  const creatingDeckRef = useRef(false);
+  const [creatingDeck, setCreatingDeck] = useState(false);
   const createDeck = useCallback(async () => {
-    if(!user) return;
-    const {data, error} = await sbClient.from("decks")
-      .insert({user_id:user.id, name: await encDeckRnd("New Deck")})
-      .select("id").single();
-    if(error){ flashToast("Couldn't create deck: " + error.message); return; }
-    await refreshDecks();
-    openDeckInMode(data.id, "edit");
+    if(!user || creatingDeckRef.current) return;
+    creatingDeckRef.current = true; setCreatingDeck(true);
+    try {
+      const {data, error} = await sbClient.from("decks")
+        .insert({user_id:user.id, name: await encDeckRnd("New Deck")})
+        .select("id").single();
+      if(error){ flashToast("Couldn't create deck: " + error.message); return; }
+      await refreshDecks();
+      openDeckInMode(data.id, "edit");
+    } finally {
+      creatingDeckRef.current = false; setCreatingDeck(false);
+    }
   }, [user, refreshDecks, openDeckInMode]);
 
   // Inline rename used by the deck-editor title click. No prompt — pass
@@ -52299,8 +52350,8 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         onClick=${navHandler(()=>setDeckSection(k))}>
         ${l}${n>0?html` <span class="deck-section-tab-count">${n}</span>`:""}
       </a>`)}
-      ${deckSection==="yours" && html`<button class="active" onClick=${createDeck}
-        style=${{marginLeft:"auto",padding:"7px 14px",fontSize:13}}>+ New Deck</button>`}
+      ${deckSection==="yours" && html`<button class="active" onClick=${createDeck} disabled=${creatingDeck}
+        style=${{marginLeft:"auto",padding:"7px 14px",fontSize:13}}>${creatingDeck ? "Creating…" : "+ New Deck"}</button>`}
       ${err && html`<span style=${{color:"var(--red)",fontSize:12,marginLeft:"auto"}}>${err}</span>`}
     </div>
 
@@ -53408,7 +53459,7 @@ const CoconutLeaderPicker = ({current, onPick, onClose}) => {
       <h3 class="title-font">Choose a Coconut leader</h3>
       <p class="coconut-picker-blurb">
         Picking a leader makes this a <strong>${COCONUT_SET_NAME}</strong> deck: you get a third
-        ink (one must match the leader's), up to 4 copies of the leader's own card and
+        ink (one must match the leader's), up to 4 copies of the leader's own card and${" "}
         <strong>1 of everything else</strong>, and the game runs to ${COCONUT_LORE_GOAL} lore with 3-4 players.
         Nothing is blocked — an illegal list still saves, it just gets flagged.
       </p>
@@ -54904,7 +54955,11 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         // border), owned cards render normal. Class name updated from
         // .owned-dim to .missing-fade so the semantic matches what it does.
         const dimClass = (highlightMissing && short > 0) ? " missing-fade" : "";
-        const cardMax = getDeckLimitForUI(meta["Product Name"]);
+        // The cap is per NAME, across every printing in the deck — the card
+        // browser already enforced that, but these row +/- buttons capped each
+        // ROW at 4, so two printings of one card could reach 8.
+        const cardMax = Math.max(item.quantity, getDeckLimitForUI(meta["Product Name"])
+          - ((deckQtyByName.get(meta["Product Name"]) || 0) - item.quantity));
         const gridCocoLimit = coconutLimitFor(meta);
         const gridOverLimit = gridCocoLimit != null && item.quantity > gridCocoLimit;
         const have = ownedShortByKey[k]?.have || 0;
@@ -55936,6 +55991,19 @@ function App(){
   // The Lore Tracker's board covers the nav, so it needs a way out that does
   // not depend on the nav being reachable.
   const openHome = useCallback(() => setView("home"), []);
+  // A new PAGE starts at its top. Every view swap kept the old scroll offset,
+  // so a tab tapped from the foot of the long mobile home page landed halfway
+  // down the next page. A layout effect, so the new page never paints at the
+  // old offset first; and a #hash is left alone for the page to scroll to
+  // (/news#<article> does its own scroll in a passive effect, which runs
+  // after this one).
+  const prevViewForScroll = useRef(view);
+  useLayoutEffect(() => {
+    if(prevViewForScroll.current === view) return;
+    prevViewForScroll.current = view;
+    if(window.location.hash) return;
+    try { window.scrollTo({top: 0, behavior: "auto"}); } catch {}
+  }, [view]);
   const openScreenerSealed = useCallback(() => {
     try {
       localStorage.setItem("packsink:screener:showSealed", "1");
@@ -58019,7 +58087,10 @@ function App(){
     try { window.Capacitor?.Plugins?.CapacitorUpdater?.notifyAppReady?.(); } catch {}
   },[]);
   const signOut = useCallback(async ()=>{
-    try { await sbClient.auth.signOut(); }
+    // scope "local": the library default is "global", which revokes EVERY
+    // session the account has — signing out on a shared laptop also signed
+    // you out on your phone.
+    try { await sbClient.auth.signOut({scope: "local"}); }
     catch(e){ console.error("sign out failed:", e); }
   },[]);
 
