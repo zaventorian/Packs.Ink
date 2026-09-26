@@ -2422,6 +2422,7 @@ const LORCANA_SET_ART = {
   "Winterspell":           {src: "sets/winterspell.webp"},
   "Wilds Unknown":         {src: "sets/wilds-unknown.webp"},
   "Attack of the Vine!":   {src: "sets/attack-of-the-vine.webp"},
+  "Hyperia City":          {src: "sets/hyperia-city.webp"},
 };
 // Returns {src, mono} or null. Null for every promo set, Extras, and any set
 // released after the last bundle drop — which is the normal steady state for a
@@ -2761,6 +2762,8 @@ const UI_ICON_PATHS = {
   moon:      _icoSvg(html`<path d="M20.5 14.8A8.8 8.8 0 0 1 9.2 3.5a8.8 8.8 0 1 0 11.3 11.3z"/>`),
   reprint:   _icoSvg(html`<path d="M4 10.2a6.4 6.4 0 0 1 10.8-3.5l2.7 2.5"/><path d="M17.9 4.6v4.6h-4.6"/><path d="M20 13.8a6.4 6.4 0 0 1-10.8 3.5l-2.7-2.5"/><path d="M6.1 19.4v-4.6h4.6"/>`),
   pennant:   _icoSvg(html`<path d="M6 21V3.4"/><path d="M6 4.4h11.6l-2.4 3.9 2.4 3.9H6"/>`),
+  pause:     _icoSvg(html`<path d="M9 5v14"/><path d="M15 5v14"/>`, 2.4),
+  play:      _icoSvg(html`<path d="M8 5.5v13l10.5-6.5z"/>`),
   die:       _icoSvg(html`<rect x="3.4" y="3.4" width="17.2" height="17.2" rx="3.6"/><path d="M8.2 8.2h.01"/><path d="M15.8 8.2h.01"/><path d="M12 12h.01"/><path d="M8.2 15.8h.01"/><path d="M15.8 15.8h.01"/>`, 2.4),
   // Product glyphs for Amazon tiles with no TCGplayer photo — drawn under the
   // <img>, so they only ever show when there is nothing to cover them.
@@ -14501,11 +14504,8 @@ const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback
         · <a href="/privacy">Privacy & Terms</a>
       </div>
       <div class="footer-disclosure">
-        Packs.Ink is a TCGplayer affiliate and an Amazon Associate — purchases made through links on this site may earn us a commission at no extra cost to you. As an Amazon Associate I earn from qualifying purchases.
-      </div>
-      <div class="footer-disclosure">
-        Unofficial fan site — not affiliated with, endorsed by, or sponsored by Disney or Ravensburger. Disney Lorcana is a trademark of Disney.
-        Card data & art via Lorcast; prices via TCGCSV / TCGplayer.
+        Unofficial fan site, not affiliated with, endorsed by, or sponsored by Disney or Ravensburger. Disney Lorcana is a trademark of Disney.
+        Data via Lorcast and TCGCSV. Links may earn a TCGplayer affiliate commission at no cost to you. As an Amazon Associate I earn from qualifying purchases.
       </div>
       ${(onFeedback || onViewFeedback) && html`<div class="footer-feedback-row" style=${{marginTop:8,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
         ${onFeedback && html`<button class="footer-feedback-btn" onClick=${onFeedback}
@@ -28725,8 +28725,14 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         const nPct = tot.normal ? (nOwn/tot.normal*100) : 0;
         const fPct = tot.foil   ? (fOwn/tot.foil*100)   : 0;
         const mis = setMissing[setName];
+        // "Set 9" beside the logo: plenty of players think in set numbers, not
+        // names (2026-09-25, Zaven). Booster sets only — a promo set has no number.
+        const setNo = MAINLINE_SETS.indexOf(setName);
         return html`<div key=${setName} class="set-progress-card" onClick=${()=>setSelectedSet(setName)}>
-          <${SetHeading} set=${setName} klass="set-progress-name"/>
+          <div class="set-progress-head">
+            <${SetHeading} set=${setName} klass="set-progress-name"/>
+            ${setNo >= 0 && html`<span class="set-progress-num">Set ${setNo + 1}</span>`}
+          </div>
           <div class="set-progress-row">
             <div class="set-progress-row-label">Non-Foil</div>
             <div class="set-progress-row-counts">${nOwn} / ${tot.normal} <span class="set-progress-pct">${nPct.toFixed(0)}%</span></div>
@@ -38428,7 +38434,9 @@ const MOVERS_PICK_ALL = "all";
 // leads, for the same reason it leads the stack: they are YOUR slabs.
 // A key missing here falls to the end in stack order, so a new banner works
 // without being listed.
-const MOVERS_PICK_ORDER = ["gowned","chase","rareLeg","promo","valuable","sealed","amazon","graded"];
+// Graded market sits right after Rare–Legendary (2026-09-25, Zaven: "move
+// graded higher, maybe after rare") — it was stranded behind the shopping rows.
+const MOVERS_PICK_ORDER = ["gowned","chase","rareLeg","graded","promo","valuable","sealed","amazon"];
 const moversPickOrder = (keys) => keys.slice().sort((a, b) => {
   const ia = MOVERS_PICK_ORDER.indexOf(a), ib = MOVERS_PICK_ORDER.indexOf(b);
   return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
@@ -47853,12 +47861,9 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
               ▼ Droppers
             </label>
           </div>
-          <button onClick=${()=>setPaused(p=>!p)}
-            title=${paused?"Resume scrolling":"Pause scrolling"}
-            style=${{fontSize:12,padding:"5px 11px",border:"1px solid var(--border)",
-              background:paused?"var(--accent)":"var(--stat-bg)",
-              color:paused?"#fff":"var(--text)",borderRadius:6,cursor:"pointer"}}>
-            ${paused?"▶ Resume":"⏸ Pause"}
+          <button class=${"dir-pause" + (paused ? " on" : "")} onClick=${()=>setPaused(p=>!p)}
+            title=${paused?"Resume scrolling":"Pause scrolling"} aria-pressed=${paused}>
+            ${uiIcon(paused ? "play" : "pause", 12)} ${paused?"Resume":"Pause"}
           </button>
         </div>
         ${state.loading

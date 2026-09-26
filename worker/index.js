@@ -89,6 +89,98 @@ async function proxyImage(request, prefix, origin) {
   return new Response(res.body, { status: res.status, headers });
 }
 
+
+// ── Link previews for a shared card (2026-09-25) ────────────────────────────
+// Discord, iMessage, X and friends read the <meta> tags of the HTML they are
+// handed and never run the app, so every /cards?card=… link previewed as the
+// generic site card. For that one route the SPA shell's og:/twitter: tags are
+// rewritten with the card's own name, set, price and art before it is served.
+//
+// ⚠ Lorcast serves art as AVIF ONLY (.jpg/.png/.webp 404), and most preview
+// bots do not render AVIF. TCGplayer's product JPG is used whenever the card
+// has a TCGplayer id (~95% of the catalog); a brand-new card with none falls
+// back to the AVIF, which Discord's proxy handles and some apps will not.
+// ⚠ Every failure — bad id, timeout, Supabase down — serves the plain shell.
+// A preview is a nicety; it must never cost a real visitor the page.
+const SB_URL = "https://umwqowkiatjjltologrd.supabase.co";
+const SB_KEY = "sb_publishable_B2qq0Dsfij-7X2CZSxl2uQ_7PWc6Ob0"; // public, same key Index.html ships
+const CARD_ID_RE = /^crd_[0-9a-f]{32}$/;
+const PREVIEW_TIMEOUT_MS = 1500;
+
+async function sbGet(path) {
+  const res = await fetch(SB_URL + "/rest/v1/" + path, {
+    headers: { apikey: SB_KEY, Accept: "application/json" },
+    cf: { cacheEverything: true, cacheTtl: 3600 },
+  });
+  if (!res.ok) throw new Error("sb " + res.status);
+  return res.json();
+}
+
+const usd = (n) => n == null ? null : "$" + Number(n).toFixed(2);
+
+async function cardPreview(rawId) {
+  // Catalog ids for custom variants carry a "::variant::slug" suffix; the base
+  // card is the one with a row.
+  const id = String(rawId || "").split("::")[0];
+  if (!CARD_ID_RE.test(id)) return null;
+  const q = encodeURIComponent(id);
+  const [cards, prices] = await Promise.all([
+    sbGet(`cards?select=name,version,rarity,image_large,tcgplayer_product_id,sets(name)&id=eq.${q}&limit=1`),
+    sbGet(`card_prices_latest?select=printing,low_price,market_price&card_id=eq.${q}`).catch(() => []),
+  ]);
+  const c = cards && cards[0];
+  if (!c) return null;
+  const name = c.name + (c.version ? " - " + c.version : "");
+  const setName = c.sets && c.sets.name;
+  const bits = [];
+  const byPr = new Map((prices || []).map((p) => [p.printing, p]));
+  const pick = (p) => p ? usd(p.low_price ?? p.market_price) : null;
+  const nf = pick(byPr.get("Normal"));
+  const foil = pick(byPr.get("Cold Foil") || byPr.get("Holofoil") || byPr.get("Foil"));
+  if (nf && foil) bits.push(`${nf} non-foil · ${foil} foil`);
+  else if (nf || foil) bits.push(`${nf || foil} on TCGplayer`);
+  const desc = [[c.rarity, setName].filter(Boolean).join(" · "), bits.join("")].filter(Boolean).join(" — ")
+    + ". Price history and collection tracking on Packs.Ink.";
+  const pid = c.tcgplayer_product_id;
+  const image = pid ? `https://tcgplayer-cdn.tcgplayer.com/product/${pid}_in_1000x1000.jpg` : c.image_large;
+  return {
+    title: name + " | Packs.Ink",
+    desc,
+    image,
+    w: pid ? 1000 : 734,
+    h: pid ? 1000 : 1024,
+    url: "https://packs.ink/cards?card=" + id,
+  };
+}
+
+function withTimeout(promise, ms) {
+  return Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(null), ms))]);
+}
+
+function rewritePreview(res, p) {
+  const set = (v) => ({ element(el) { el.setAttribute("content", v); } });
+  const headers = new Headers(res.headers);
+  // The shell's validators describe the GENERIC document; answering a later
+  // If-None-Match with 304 would hand a browser the wrong page's cached copy.
+  headers.delete("ETag");
+  headers.delete("Last-Modified");
+  headers.delete("Content-Length");
+  return new HTMLRewriter()
+    .on("title", { element(el) { el.setInnerContent(p.title); } })
+    .on('meta[name="description"]', set(p.desc))
+    .on('meta[property="og:type"]', set("article"))
+    .on('meta[property="og:title"]', set(p.title))
+    .on('meta[property="og:description"]', set(p.desc))
+    .on('meta[property="og:url"]', set(p.url))
+    .on('meta[property="og:image"]', set(p.image))
+    .on('meta[property="og:image:width"]', set(String(p.w)))
+    .on('meta[property="og:image:height"]', set(String(p.h)))
+    .on('meta[name="twitter:title"]', set(p.title))
+    .on('meta[name="twitter:description"]', set(p.desc))
+    .on('meta[name="twitter:image"]', set(p.image))
+    .transform(new Response(res.body, { status: 200, headers }));
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -190,6 +282,18 @@ export default {
     // service worker would then cache that empty document as the offline
     // shell. Anything else that is not a 200 (a 5xx from the asset layer) is
     // passed through too, rather than dressed up as success.
+    const cardParam = url.pathname === "/cards" ? url.searchParams.get("card") : null;
+    if (cardParam) {
+      // No conditional headers: the rewritten page must be a full 200.
+      const plain = await env.ASSETS.fetch(new Request(new URL("/", url.origin)));
+      if (plain.ok) {
+        let preview = null;
+        try { preview = await withTimeout(cardPreview(cardParam), PREVIEW_TIMEOUT_MS); } catch { preview = null; }
+        if (preview) return rewritePreview(plain, preview);
+        return new Response(plain.body, { status: 200, headers: plain.headers });
+      }
+    }
+
     const shell = await env.ASSETS.fetch(new Request(new URL("/", url.origin), request));
     if (shell.status === 304 || !shell.ok) return shell;
     return new Response(shell.body, { status: 200, headers: shell.headers });

@@ -93,6 +93,10 @@ SET_LOGOS = [
     ("Set Logos/11. Winterspell/Winterspell_Full-Colour.png",  "winterspell"),
     ("Set Logos/12. Wilds Unknown/Wilds-Color.png",            "wilds-unknown"),
     ("Set Logos/13. Attack of the Vine/Full-Colour.png",       "attack-of-the-vine"),
+    # Hyperia City arrived as its own drop (2026-09-25), not in a bundle yet, so
+    # this path is a guess at where the next bundle will file it: --check will
+    # NAME it if it moved. Baked that day from HyperiaCity_FullColor.png.
+    ("Set Logos/14. Hyperia City/HyperiaCity_FullColor.png",   "hyperia-city"),
 ]
 
 # ⚠ The only set with no colour logo anywhere in the bundle — black line art in
