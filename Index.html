@@ -10459,7 +10459,32 @@ const emptyFilter = () => ({
 // can be shared/bookmarked. Advanced text-multi filters (classifications /
 // keywords / illustrators / stats) aren't URL-backed yet — they reset on reload.
 const CARD_URL_SETFIELDS = [["set","sets"],["ink","inks"],["rarity","rarities"],["cost","costs"],["type","cardTypes"]];
-const CARD_URL_KEYS = ["q","set","ink","rarity","cost","type","inkable","legal","owned","dual","pmin","pmax","pbasis","unpriced"];
+const CARD_URL_KEYS = ["q","set","ink","rarity","cost","type","inkable","legal","owned","dual","pmin","pmax","pbasis","unpriced","sc"];
+// Smart-search chips ride in the URL as repeated ?sc=<kind>:<value>. A search
+// handed over from the home box commits its words AS chips, and with the chips
+// missing from the URL a reload — or the link you sent someone — landed on the
+// whole catalog instead of the search.
+const SMART_CHIP_KINDS = new Set(["ink","rarity","set","card_type","classification","keyword",
+  "inkable","dualInk","cost","legality","illustrator","price","contains"]);
+const smartChipToParam = (c) => c.kind === "price"
+  ? "price:" + (c.priceMin ?? "") + "~" + (c.priceMax ?? "")
+  : c.kind + ":" + String(c.value);
+const smartChipFromParam = (str) => {
+  const s = String(str || "");
+  const i = s.indexOf(":");
+  if(i <= 0) return null;
+  const kind = s.slice(0, i), raw = s.slice(i + 1);
+  if(!SMART_CHIP_KINDS.has(kind) || !raw) return null;
+  if(kind === "price"){
+    const num = (x) => (x == null || x === "" || !Number.isFinite(+x)) ? null : +x;
+    const [a, b] = raw.split("~");
+    const min = num(a), max = num(b);
+    return (min == null && max == null) ? null : priceSmartChip(min, max);
+  }
+  if(kind === "inkable") return {kind, value: raw === "true"};
+  if(kind === "cost") return {kind, value: Number.isFinite(+raw) ? +raw : raw};
+  return {kind, value: raw};
+};
 const cardFilterToParams = (f) => {
   const p = new URLSearchParams();
   if(f.search && f.search.trim()) p.set("q", f.search.trim());
@@ -13275,7 +13300,9 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     const h = setTimeout(() => {
       try {
         const url = new URL(window.location.href);
-        for(const k of CARD_URL_KEYS) url.searchParams.delete(k);
+        // ?sc= belongs to the chips' own writer below — deleting it here would
+        // drop every chip each time a filter changed.
+        for(const k of CARD_URL_KEYS) if(k !== "sc") url.searchParams.delete(k);
         for(const [k,v] of cardFilterToParams(filter)) url.searchParams.set(k, v);
         window.history.replaceState(window.history.state, "", url.toString());
       } catch {/* no-op */}
@@ -13371,7 +13398,24 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   // dropdown. Each chip is one of {kind: ink|rarity|set|classification|
   // card_type|keyword|inkable|contains, value}. Filtering merges these with
   // whatever's currently being parsed from the input text.
-  const [smartChips, setSmartChips] = useState([]);
+  const [smartChips, setSmartChips] = useState(() => {
+    if(!urlSync) return [];
+    try { return new URLSearchParams(window.location.search).getAll("sc").map(smartChipFromParam).filter(Boolean); }
+    catch { return []; }
+  });
+  // Mirror the chips into the URL, like the filter above.
+  useEffect(() => {
+    if(!urlSync) return;
+    const h = setTimeout(() => {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("sc");
+        for(const c of smartChips) url.searchParams.append("sc", smartChipToParam(c));
+        if(url.toString() !== window.location.href) window.history.replaceState(window.history.state, "", url.toString());
+      } catch {/* no-op */}
+    }, 350);
+    return () => clearTimeout(h);
+  }, [urlSync, smartChips]);
   const addSmartChip = useCallback((chip) => {
     setSmartChips(prev => {
       // Avoid exact duplicates of (kind, value).
