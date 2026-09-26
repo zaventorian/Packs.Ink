@@ -16687,7 +16687,10 @@ const SCANNER_BUILD = "v20";
 // upload, why, how long we keep it, who sees it — which re-prompts everyone.
 // Wording/typo fixes don't count; re-prompting for those trains people to
 // click through the one screen that has to actually be read.
-const SCAN_BETA_VERSION = "2026-08-04";
+// 2026-09-26: the notice said "the whole camera frame" while every scan also
+// uploads the rectified crop and a filmstrip of the frames before the tap —
+// what we upload was understated, so this is a change of substance.
+const SCAN_BETA_VERSION = "2026-09-26";
 // ── Card VERSIONS in a scan review row (2026-09-12) ─────────────────────
 // Two different questions sit on one review row and must not be conflated. The
 // Non-Foil/Foil segment is the FINISH — one card_id, two SKUs. This is the
@@ -19594,7 +19597,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       can see where it gets cards wrong and fix them.
     </p>
     <ul class="scanner-consent-list">
-      <li>It's the <b>whole camera frame</b>, not a crop of the card — whatever else is in shot goes with it.</li>
+      <li>It's the <b>whole camera frame</b>, a crop of the card, and a strip of the <b>few frames just before you tap</b> — whatever else is in shot goes with them.</li>
       <li>Stored privately against your account. Nobody but us can open it.</li>
       <li>Used only to develop and improve the scanner. Never sold, shared, or published.</li>
       <li>No face detection or recognition is ever run on it, and no location data is attached.</li>
@@ -30710,7 +30713,7 @@ function EloEventRoster({eventId, eventMeta, onClose, onPlayerClick}){
   const scrapedRel = ev.scraped_at ? relativeTime(ev.scraped_at) : null;
   const friendlyErr = err && (
     /not authorized|permission denied/i.test(err) ? "Rosters are restricted — you don't have access."
-    : /could not find the function|PGRST202|does not exist|schema cache/i.test(err) ? "Roster tracking isn't set up yet — apply migration 68 and run the roster scraper."
+    : /could not find the function|PGRST202|does not exist|schema cache/i.test(err) ? "Roster tracking isn't set up on this site yet — tell a site admin (migration 68 and the roster scraper)."
     : "Couldn't load the roster: " + err);
   return html`<div class="sc-modal-overlay" onClick=${onClose}>
     <div class="sc-modal elo-roster-modal" onClick=${e=>e.stopPropagation()} role="dialog" aria-modal="true">
@@ -30770,8 +30773,8 @@ const scoutErrText = (e) => {
     // missing rather than always blaming 143 — "apply 143" on a site that HAS
     // 143 sends whoever reads it to check the wrong thing.
     return /scout_event_(add|remove)/.test(m)
-      ? "Adding events to scouting isn't switched on for this site yet — apply migration 148."
-      : "Scouting isn't switched on for this site yet — apply migration 143.";
+      ? "Adding events to scouting isn't switched on for this site yet — tell a site admin (migration 148)."
+      : "Scouting isn't switched on for this site yet — tell a site admin (migration 143).";
   if(/is not one we scout/i.test(m)) return "That event isn't on our scouting list yet — open it and use Add this event to scouting.";
   if(/we have no event .* on file/i.test(m)) return "We don't have that event on file, so there's nothing to scout.";
   return m || "Something went wrong.";
@@ -30802,18 +30805,18 @@ const edgeErrText = async (e) => {
              one in a toast is worse than the bare status, so drop markup. */
     if(/^\s*</.test(reason)) reason = ""; }
   if(/not authorized/i.test(reason))
-    return "the roster function is still on the old permissions — redeploy refresh-elo-rosters (it predates migration 143).";
+    return "the roster function on the server is out of date — tell a site admin to redeploy refresh-elo-rosters (it predates migration 143).";
   if(/not at a store we track|is not one we scout/i.test(reason))
     return "that event isn't on our scouting list — open it and use Add this event to scouting.";
   if(/unknown event|no event .* on file/i.test(reason))
     return "Ravensburger Play has no event on file with that id.";
   if(ctx.status === 404)
-    return "refresh-elo-rosters isn't deployed on this site yet.";
+    return "the roster function isn't set up on this site yet — tell a site admin (refresh-elo-rosters isn't deployed).";
   if(ctx.status === 408 || ctx.status === 504 || ctx.status >= 500)
     // The pre-143 deployment ignores {event_id} and scrapes EVERY tracked
     // upcoming SC instead, which is exactly how one event's refresh runs long
     // enough to hit the platform's wall clock. Name the redeploy here too.
-    return `the roster function ${reason || "timed out or crashed"} (HTTP ${ctx.status}) — if it predates migration 143, redeploy it.`;
+    return `the roster function ${reason || "timed out or crashed"} (HTTP ${ctx.status}) — try again, and tell a site admin if it keeps happening (a refresh-elo-rosters older than migration 143 needs redeploying).`;
   return reason || `HTTP ${ctx.status}.`;
 };
 // "9/12 · Set Championship" — the shape of the reminder Zaven asked for. Dates
@@ -31091,7 +31094,7 @@ function ScoutEventPanel({eventId, eventMeta, inline, onPlayerClick}){
         const cell = row && row.querySelector(".ss-deck .scout-cell");
         if(cell) cell.focus();
       });
-      else flashToast("Added — apply migration 144 to see off-roster players here.");
+      else flashToast("Added — they'll show here once the site's scouting update is in (migration 144).");
     } catch(e){ flashToast("Couldn't add: " + scoutErrText(e)); }
     finally { setAdding(false); }
   };
@@ -32571,10 +32574,11 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <p><strong>You arrange the home page yourself.</strong> Hit <em>Edit layout</em> at the very bottom of the home page (or the same entry in the profile menu) to show, hide, reorder and re-column every section, including the mover banners. It saves per browser, so your phone and your desktop can be laid out differently. <em>Reset</em> puts everything back.</p>
     <p><strong>Click a section's heading</strong> — News, Following, Tournament Results, Toolbox, Recent set EV, Your Collection — to go deeper. On a wide screen it takes you to that section's own page (Tournament Results opens the Tournaments tab, Recent set EV opens Expected Value). On a phone or a narrow window it opens the box on its own over the page instead, with a <em>Copy link to this section</em> button, so you can send someone the tournament box rather than "scroll down on the home page". The heading is an ordinary link either way, so ctrl/⌘-click opens it in a new tab and right-click offers <em>Copy link address</em> without opening anything.</p>
     <p><strong>Screener</strong> — every tracked card as a sortable financial-database-style table. Filter by set, rarity, ink, price band, and movement window (1D / 1W / 1M / 3M / 6M / 1Y).</p>
-    <p><strong>Price Graphing</strong> — per-card history charts. Multi-select on the Screener to open a Compare view that overlays several cards on one chart.</p>
-    <p><strong>Analytics</strong> — calculator-y tools: Expected Value (EV) per box, a Trade Compare tool that values both sides of a trade, a Set Breakdown of average card prices and where box value lives, Playset Cost, a pack/box Simulator with bulk odds, Swiss Odds (Monte Carlo cut-line odds for tournament Swiss rounds), and a Dice Tray for rolling turn order at the table. Its <em>Overview</em> tab lists every tool and what it answers. Sealed pricing lives in the Screener's Sealed mode.</p>
+    <p><strong>Graphs</strong> (Price Graphing) — per-card history charts. Multi-select on the Screener to open a Compare view that overlays several cards on one chart.</p>
+    <p><strong>Calendar</strong> — set releases, Challenges and qualifiers, plus the events at stores you follow, as a list, a month, a timeline or a map. Export any of it to your own calendar (.ics or Google).</p>
+    <p><strong>Analytics</strong> — calculator-y tools: Expected Value (EV) per box, a Trade Compare tool that values both sides of a trade, a Set Breakdown of average card prices and where box value lives, Playset Cost, a pack/box Simulator with bulk odds, Swiss Odds (Monte Carlo cut-line odds for tournament Swiss rounds), a Lore Tracker and a Dice Tray for the table, and a Stream Ticker overlay for streamers. Its <em>Overview</em> tab lists every tool and what it answers. Sealed pricing lives in the Screener's Sealed mode.</p>
     <p><strong>Cards</strong> — browseable visual catalog of every card with filters for ink, rarity, set, and a free-text smart search.</p>
-    <p><strong>Collection</strong> — what you own. Three sections (Cards, Sealed, Graded) with set-by-set completion tracking, value over time, and per-section sharing.</p>
+    <p><strong>Collection</strong> — what you own. Four sections — Cards, Sealed, Graded, and Pins & Counters — with set-by-set completion tracking, value over time, and per-section sharing.</p>
     <p><strong>Decks</strong> — your decks, the people you follow, the Discover feed of public decks, and the Tournaments index.</p>
 
     <h2>Smart search (Cards & Screener)</h2>
@@ -32582,22 +32586,22 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <ul>
       <li><code>amber legendary</code> — ink + rarity</li>
       <li><code>cost:3 ruby</code> — exact ink cost</li>
-      <li><code>cost&lt;=2</code>, <code>cost&gt;=5</code> — numeric ranges</li>
+      <li><code>${"cost<=2"}</code>, <code>${"cost>=5"}</code> — numeric ranges</li>
       <li><code>set:"wilds unknown"</code> — limit to a set</li>
       <li><code>ench</code> or <code>iconic</code> — chase-tier shortcuts</li>
       <li><code>dual</code> — dual-ink cards only. Combines with everything else: <code>dual legendary</code>, <code>amber dual</code> (dual-ink cards that include Amber).</li>
       <li><code>under $5</code>, <code>over $200</code>, <code>$1-$10</code> — price. A card matches a ceiling on its <em>cheapest</em> printing and a floor on its <em>dearest</em>, so "under $1" keeps a common whose foil is $30.</li>
       <li><code>rush</code>, <code>bodyguard</code>, <code>shift</code> — keywords the card actually declares, not ones its text merely mentions.</li>
       <li><code>-enchanted</code>, <code>non amber</code>, <code>without rush</code> — exclude a rarity, ink, type, keyword or classification.</li>
-      <li>Anything else falls back to a name / text-box / illustrator search.</li>
+      <li>Anything else falls back to a name / rules-text search. Use <code>artist: ${"<name>"}</code> for an illustrator.</li>
     </ul>
     <p>Press <kbd>Enter</kbd> and the box splits a mixed query for you — <code>rapunzel promo</code> becomes a Promo filter plus a name search, rather than looking for the literal words "rapunzel promo".</p>
     <p>Filters and search stack — use ink chips + rarity chips + the smart search together to narrow fast.</p>
 
     <h2>Tracking your collection</h2>
     <p>Sign in (Google) and start adding cards from <strong>Cards</strong>, the <strong>Screener</strong>, any deck detail page, or by clicking a card's title from a deck list. Use the +/- buttons on the card tile or counter to set quantities for normal and foil copies independently.</p>
-    <p><strong>Sealed</strong> tracks unopened products (booster boxes, decks, gift sets) and, at the bottom of that section, the <strong>puzzles, pins and lore dials</strong> Ravensburger has released through Organized Play, Illumineer's Troves and convention drops — checklist-only for now, since none of them have a public price feed. <strong>Graded</strong> tracks PSA / BGS / CGC certifications with per-grade price tracking.</p>
-    <p><strong>CSV goes both ways.</strong> <em>Import CSV</em> takes a paste-in list; <em>Export CSV</em> downloads everything you own in the same format, which also loads into Dreamborn and other tools that read it. Exporting and re-importing is a round trip — nothing is lost in between.</p>
+    <p><strong>Sealed</strong> tracks unopened products (booster boxes, decks, gift sets) and the Ravensburger puzzles (a checklist with an Amazon link — there's no price feed for them). <strong>Pins & Counters</strong> has its own tab: a pin board, a lore-counter board and a checklist of where each one came from. <strong>Graded</strong> tracks PSA, CGC, BGS, SGC, TAG and other slabs with per-grade price tracking.</p>
+    <p><strong>CSV goes both ways.</strong> <em>Import CSV</em> loads a Dreamborn or Packs.Ink CSV file; <em>Export CSV</em> downloads your <em>Cards</em> collection (not sealed, graded or pins) in the same format, so it re-imports here and loads into Dreamborn.</p>
     <p>The Home page's <strong>Collection Value</strong> chart graphs the value of everything you own over time. Pre-release price spikes are filtered out so a brand-new set doesn't inflate your historical value.</p>
     <p><strong>Phantom-spike smoothing.</strong> TCGplayer's <strong>Low</strong> is a published price aggregate, not a sale price — sometimes it detaches from what's actually trading and pins at $200 or $2,000 for a few days while nothing sells at that number. Without intervention, that phantom reading would show up on your Collection Value chart as a brief multi-thousand-dollar windfall and crash. So once enough time has passed to confirm the spike was a phantom (the price snaps back to its prior baseline within a couple of weeks), the chart retroactively replaces those days with the surrounding baseline value. The duration cap means genuine multi-week price moves — a card heating up in a meta shift, for example — are <em>not</em> smoothed; only short blips that resolve quickly.</p>
     <p>This smoothing is scoped to the Collection Value chart only. Every other surface on the site (card detail price history, Price Graphing, the Screener, mover banners) keeps showing the raw Low, because in those views the spike <em>is</em> the signal you came to see. There's also a settling lag: the smoothing waits until there's enough data after the spike to verify it was a phantom, so today's chart still shows in-progress spikes honestly — they only get retroactively corrected once the dust settles.</p>
@@ -32606,11 +32610,11 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <p>The <strong>Scan</strong> tab in the top nav points your phone's camera at a card and identifies it, then lets you review the list and add everything to your collection or a new deck in one go. Sign-in required.</p>
     <p><strong>It runs on your phone.</strong> Your browser downloads a card index once, and the matching happens locally — no photo is sent anywhere to be identified, and the scanner works offline.</p>
     <p><strong>It's a beta, so it will get cards wrong.</strong> Rows it isn't sure about are marked ≈ or ?, and every row has an edit button to correct it. Check the list before you save — nothing touches your collection until you press the button.</p>
-    <p><strong>About the photos.</strong> While it's in beta we upload a photo of each scan so we can find the cards it misreads and fix them. It's the whole camera frame, not a crop; it's stored privately against your account, never sold or shared, never analyzed for faces, and deleted after 12 months. <strong>You can switch the upload off</strong> — on the notice the first time you open the scanner, or from the scanner's review screen — and it identifies cards exactly the same either way. Full details are on the <a href="/privacy#scanner" target="_blank" rel="noopener">privacy page</a>.</p>
+    <p><strong>About the photos.</strong> While it's in beta we upload photos of each scan so we can find the cards it misreads and fix them: the whole camera frame, a crop of the card, and a strip of the few frames just before you tapped — so whatever else is in shot goes with them. They're stored privately against your account, never sold or shared, never analyzed for faces, and deleted after 12 months. <strong>You can switch the upload off</strong> — on the notice the first time you open the scanner, or from the scanner's review screen — and it identifies cards exactly the same either way. Full details are on the <a href="/privacy#scanner" target="_blank" rel="noopener">privacy page</a>.</p>
     <p>Tips for a good read: one card, flat, plain background, decent light, and fill the frame. Sleeves and top-loaders are fine. Japanese and other non-English cards aren't supported yet — it will tell you rather than guess.</p>
 
     <h2>Building decks</h2>
-    <p>Open the <strong>Decks</strong> tab and hit <em>New deck</em>. Add cards from the side panel (works with smart search), and the editor automatically computes <strong>ink legality</strong>, <strong>card count</strong>, <strong>format</strong> (Core Constructed vs Infinity), and the cost-curve / colors / inkable splits.</p>
+    <p>Open the <strong>Decks</strong> tab and hit <em>New deck</em>. Add cards from the side panel (works with smart search), and the editor automatically computes <strong>ink legality</strong>, <strong>card count</strong>, <strong>format</strong> (Core Constructed, Infinity or Coconut), and the cost-curve / colors / inkable splits.</p>
     <p>Each deck has a <strong>visibility</strong> setting:</p>
     <ul>
       <li><strong>Private</strong> — only you can view it.</li>
@@ -32624,11 +32628,11 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <p>History is <strong>yours alone</strong> unless you tick <em>Include version history</em> in the Share panel. Sharing a deck is one decision; sharing every draft it passed through is a bigger one, so it never happens by accident.</p>
 
     <h2>Printing proxies</h2>
-    <p><strong>Print Proxies</strong> in the deck toolbar turns a decklist into a print-and-cut PDF — nine cards to a page at true card size (63 × 88 mm), colour or black-and-white, with crop marks in the margins. Pick the whole deck or tick individual cards and set how many of each you want. The <em>PROXY</em> mark is painted into the image itself, not laid over the page, so it survives whatever happens to the file afterwards.</p>
+    <p><strong>Proxies</strong> in the deck toolbar turns a decklist into a print-and-cut PDF — nine cards to a page at true card size (63 × 88 mm), colour or black-and-white, with crop marks in the margins. Pick the whole deck or tick individual cards and set how many of each you want. The <em>PROXY</em> mark is painted into the image itself, not laid over the page, so it survives whatever happens to the file afterwards.</p>
     <p>One thing matters more than any of the options: set your printer dialog to <strong>Scale: 100%</strong> (or "Actual size"). Browsers default to "Fit to page", which shrinks the cards so they no longer match real ones. The same bulk action is on the Cards tab, for proxying a handful of cards without building a deck first.</p>
 
     <h2>Exporting a deck image</h2>
-    <p>Open any deck and hit <strong>Export Image</strong> to generate a poster you can post or DM. Toggle the QR code, stats, cost curve, and the three deck-cost lines on/off, change the background style (Ink / Dark / Light), and pick 5–8 columns of card art. Use the <em>Copy</em> button to put a PNG on your clipboard, or <em>Save</em> to download.</p>
+    <p>Open any deck and hit <strong>Image</strong> to generate a poster you can post or DM. Toggle the QR code, stats, cost curve, and the three deck-cost lines on/off, change the background style (Ink / Dark / Light), and pick 5–8 columns of card art. Use the <em>Copy</em> button to put a PNG on your clipboard, or <em>Save</em> to download.</p>
     <p><strong>Deck-cost lines</strong> (all three default on, individually toggleable):</p>
     <ul>
       <li><strong>Non-Foil</strong> — total cost if every copy in the deck is a Normal printing.</li>
@@ -32638,7 +32642,7 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <p>All cost lines use the same <strong>Low</strong> price shown elsewhere on the site.</p>
 
     <h2>Linking to what you're looking at</h2>
-    <p>Almost every view keeps its state in the URL, so a refresh, a bookmark or a pasted link all land in the same place: the Screener's mode, the Analytics tool, the Decks section and format, which Collection section you're in, the card you have open, a search and its filters. The <strong>link button</strong> in the top-right copies the current one and tells you what it points at.</p>
+    <p>Almost every view keeps its state in the URL, so a refresh, a bookmark or a pasted link all land in the same place: the Screener's mode, the Analytics tool, the Decks section and format, which Collection section you're in, the card you have open, a search and its filters. <em>Copy link to this page</em> in the profile menu copies the current one and tells you what it points at (in the installed app, where there's no address bar, it's also the link bubble in the top-right).</p>
     <p>Share links for a deck, a collection or a trade are separate things with their own privacy rules — see the sections below.</p>
 
     <h2>Sharing your collection</h2>
@@ -32649,13 +32653,13 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
 
     <h2>Tournaments</h2>
     <p>The Decks tab has a <strong>Tournaments</strong> section listing recent events with full top-finish decklists. Click a tournament to see all uploaded results; click any individual deck to view the full list, mulligan-sim it, or export it as an image. Tournament decks render with a trophy badge wherever they appear in the Discover feed.</p>
-    <p>Tournament results are admin-uploaded. If you run an event and want results listed here, get in touch via the X link below.</p>
+    <p>Tournament results are admin-uploaded. If you run an event and want results listed here, tell us with <em>Send feedback</em> at the foot of any page.</p>
 
     <h2>How often does the data update?</h2>
     <ul>
       <li><strong>Card prices</strong> — once a day, after TCGplayer publishes its daily snapshot (usually by late afternoon, U.S. Central).</li>
       <li><strong>Upcoming events</strong> near you — pulled from Ravensburger Play once a day.</li>
-      <li><strong>Store activity</strong> on the Chicagoland Elo board's <em>Stores</em> tab — each store's events, and who played in them, are pulled from Ravensburger Play once a day, so an event usually shows up the day after it runs. Results a store enters a few days late are picked up too, and a cancelled event only counts if the store recorded results for it. The tab opens on the last four <em>finished</em> set seasons; choose <em>Incl. current</em> to see this season.</li>
+      <li><strong>Store activity</strong> on the Chicagoland Elo board's <em>Store Status</em> tab — each store's events, and who played in them, are pulled from Ravensburger Play once a day, so an event usually shows up the day after it runs. Results a store enters a few days late are picked up too, and a cancelled event only counts if the store recorded results for it. The tab opens on the last four <em>finished</em> set seasons; choose <em>Incl. current</em> to see this season.</li>
       <li><strong>Elo ratings</strong> — recalculated once a week, on Monday mornings (U.S. Central), with any new Set Championship results.</li>
     </ul>
 
@@ -32671,7 +32675,7 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
 
     <h2>How do EV calculations work?</h2>
     <p>Each booster pack contains 12 cards. EV is calculated by multiplying the average price of each rarity (Low or NM Market, depending on the toggle) by the expected number of that rarity per box (24 packs), then summing. So if Legendaries average $5 and you pull 4 per box on average, Legendaries contribute $20 to box EV.</p>
-    <p>The "<strong>${"<$1"} → $0</strong>" toggle treats any card under $1 as $0 — gives a more realistic "sellable" picture since bulk cards aren't worth listing individually. "<strong>No Ench/Iconic</strong>" removes those ultra-rare tiers so you can see the base EV without relying on a jackpot pull.</p>
+    <p>The "<strong>${"<$1"} → $0</strong>" toggle treats any card under $1 as $0 — gives a more realistic "sellable" picture since bulk cards aren't worth listing individually. "<strong>Exclude chase</strong>" removes those ultra-rare tiers so you can see the base EV without relying on a jackpot pull.</p>
     <p><strong>Pull rates (Sets 1–11)</strong> per box: 144 C, 72 U, ~32 R, 12 SR, 4 L, 13 C foils, 6 U foils, 3 R foils, 1 SR foil, 0.5 L foils, 0.25 Enchanted, 1.5 Epic, ~0.014 Iconic.</p>
     <p><strong>Pull rates (Sets 12+, Wilds Unknown onward)</strong>: same C/U/SR counts, <strong>~30 Rares</strong> (down from ~32), <strong>6 Legendaries</strong>, <strong>0.333 Enchanteds</strong>, <strong>2.5 Epics</strong>, with foil counts adjusted proportionally. These are community-estimated averages — your mileage will vary box-to-box.</p>
 
@@ -32686,7 +32690,7 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <p>The full, current policy lives at <a href="/privacy" style=${{color:"var(--accent)"}}>packs.ink/privacy</a> — what we store, the card-scanner photo notice, the graded-data terms of use, the general terms of use, and how to delete your account. In short: browsing needs no account; signing in stores your Google email and display name; only the features you actually use store anything; we never sell data.</p>
 
     <h2>About</h2>
-    <p>Follow <a href="https://x.com/packs_ink" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@packs_ink</a> on Twitter for updates. For bug reports and feature requests, ping <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@HighScoreZAP</a>.</p>
+    <p>Follow <a href="https://x.com/packs_ink" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@packs_ink</a> on Twitter for updates. For bug reports and feature requests, use <em>Send feedback</em> at the foot of any page — we reply there — or ping <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@HighScoreZAP</a>.</p>
     <p>Logo by Valley Creatives.</p>
 
     <h2>Data & image credits</h2>
@@ -33503,10 +33507,10 @@ const PRICE_DB_PRESETS = [
   ["movers",   "Movers",    "Biggest movers over the selected window in EITHER direction — gains and drops interleaved by absolute Δ%. Same ordering the home page banners use."],
   ["gainers",  "Gainers",   "Biggest gainers over the selected window. Top of the leaderboard for that period."],
   ["losers",   "Losers",    "Biggest losers over the selected window. Cards correcting from a peak or fading interest."],
-  ["buyouts",  "Buyouts",   "Fresh sweeps in progress: Low has jumped 25%+ this week AND now sits at or above the market sale average — sellers re-priced upward before recent sales caught up. Includes cards with no market data whose Low jumped 1.5× their 30-day baseline."],
-  ["crashing", "Crashing",  "Cards down 20% or more on low_price over the past week."],
-  ["discount", "Discount",  "Low is 15%+ below the market sale price. Possible undercut bargain — or just a stale Low."],
-  ["premium",  "Premium",   "Settled above-market pricing: Low is 10%+ above market AND hasn't moved much this week. Card is just expensive — not actively being swept (those show up under Buyouts)."],
+  ["buyouts",  "Buyouts",   "Low jumped 15%+ this week and now sits at or above NM Market — or Low is 1.5× its 30-day, 2× its 90-day or 3× its 180-day level. Often thinning supply; check the listings on TCGplayer. The same rule as the BUY badge."],
+  ["crashing", "Crashing",  "Cards whose Low fell 20% or more over the past week."],
+  ["discount", "Discount",  "Low is 15%+ below NM Market — possibly a bargain, or just a stale Low."],
+  ["premium",  "Premium",   "Settled above-market pricing: Low is 10%+ above NM Market AND hasn't moved much this week. The card is just expensive — not a sudden jump (those show up under Buyouts)."],
 ];
 // Graded-specific presets shown when the Graded toggle is on. Tuned for the
 // reality of graded data: sparse sales, slow-moving — so 1D / 1W presets
@@ -33559,17 +33563,17 @@ function priceDbSignals(r){
     (r.low_today != null && r.low_90d  && r.low_today >= 2   * r.low_90d) ||
     (r.low_today != null && r.low_180d && r.low_today >= 3   * r.low_180d);
   if(ratioBuyout || baselineBuyout) out.push(["buy", "BUY",
-    "Buyout — Low jumped this week and now sits at or above the market sale average. Market hasn't caught up yet, so someone is sweeping inventory."]);
+    "Buyout — Low jumped this week and now sits at or above NM Market (or far above its 30 / 90 / 180-day level). Often thinning supply — check the listings on TCGplayer."]);
   if(r.pct_7d != null && r.pct_7d <= -20) out.push(["crash", "CRSH",
-    "Crashing — low_price down 20% or more on the week."]);
+    "Crashing — Low down 20% or more on the week."]);
   if(hasMarket){
     if(ratio <= 0.85) out.push(["disc", "DISC",
-      "Discount — Low is well below the recent sale-price average."]);
+      "Discount — Low is well below NM Market. Possibly a bargain, or just a stale Low."]);
     // Premium = settled-high pricing. The pct_7d < 10 gate is what makes
     // it mutually exclusive with Buyout — if Low *also* spiked this
     // week, the card is being swept (BUY), not just expensive (PREM).
     if(ratio >= 1.10 && (r.pct_7d == null || r.pct_7d < 10)) out.push(["prem", "PREM",
-      "Premium — Low sits above the market sale average and has been there for a while. The card is just expensive; not an active sweep."]);
+      "Premium — Low sits above NM Market and has been there for a while. The card is just expensive; not a sudden jump."]);
   }
   if(r.pct_30d != null && r.pct_30d >= 15) out.push(["trend", "TRND",
     "Trending up — sustained appreciation over the past month, not a one-day blip."]);
@@ -35054,11 +35058,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         // nothing — the rows even wear the BUY / CRSH badges they didn't
         // filter on. Same rules as raw mode.
         if(preset === "buyouts"){
-          const hasMkt = r.low_today != null && r.market_today != null && r.market_today > 0;
-          const ratioBuyout = hasMkt && (r.low_today / r.market_today) >= 1.05
-                              && r.pct_7d != null && r.pct_7d >= 25;
-          const lift = (k, x) => r.low_today != null && r[k] && r.low_today >= x * r[k];
-          if(!(ratioBuyout || lift("low_30d", 1.5) || lift("low_90d", 2) || lift("low_180d", 3))) continue;
+          if(!priceDbSignals(r).some(x => x[0] === "buy")) continue;
         }
         if(sigFilter.size > 0){
           const sigKeys = new Set(priceDbSignals(r).map(x => x[0]));
@@ -35297,16 +35297,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       // legit buyouts (e.g. Snow White Cold Foil +99% 1M, Black Cauldron
       // +1212% 3M — both real, neither were firing on the old rule).
       if(preset === "buyouts"){
-        // Fresh sweep: low/market ratio diverging this week.
-        const hasMkt = r.low_today != null && r.market_today != null && r.market_today > 0;
-        const ratioBuyout = hasMkt && (r.low_today / r.market_today) >= 1.05
-                            && r.pct_7d != null && r.pct_7d >= 25;
-        // Fallback for cards with no market data — old baseline-lift rule.
-        const baselineBuyout =
-          (r.low_today != null && r.low_30d  && r.low_today >= 1.5 * r.low_30d) ||
-          (r.low_today != null && r.low_90d  && r.low_today >= 2   * r.low_90d) ||
-          (r.low_today != null && r.low_180d && r.low_today >= 3   * r.low_180d);
-        if(!(ratioBuyout || baselineBuyout)) return false;
+        // The BUY badge's rule, verbatim: the preset asked for a 25% week where
+        // the badge asked for 15%, so a row could wear BUY and be missing from
+        // the list called Buyouts.
+        if(!priceDbSignals(r).some(x => x[0] === "buy")) return false;
       }
       if(preset === "crashing" && !(r.pct_7d != null && r.pct_7d <= -20)) return false;
       if(preset === "discount"){
@@ -37142,7 +37136,7 @@ const MARKET_TOOL_INFO = {
   setval: {blurb:"What it costs to finish a set.",
            pts:["Master set (1 of each) or a full playset","Priced off Low or NM Market","Counts what you already own"]},
   sim:    {blurb:"Open packs and boxes at real pull rates.",
-           pts:["Pack, box, and thousand-box odds modes","Add what you pull straight to your collection","See how often a box beats its price"]},
+           pts:["Pack, box, and thousand-box odds modes","Open any pulled card to add it to your collection","See how often a box beats its price"]},
   swiss:  {blurb:"Will your record make the cut?",
            pts:["Monte Carlo over any field size and round count","Draw safety and intentional-draw guidance","Prize-tier odds past the cut"]},
   dice:   {blurb:"Roll for turn order, or settle it with a coin.",
@@ -37152,7 +37146,7 @@ const MARKET_TOOL_INFO = {
   ticker: {blurb:"Put the market on your stream.",
            pts:["A scrolling bar of the biggest movers","Pick the time frames and rarities it cycles","One URL to paste into an OBS browser source"]},
   elo:    {blurb:"Ratings for the Chicagoland scene.",
-           pts:["Player leaderboard and event history","Store activity against the RPH tiers","Scout an upcoming event's field"]},
+           pts:["Player leaderboard and event history","Store activity against the RPH tiers","Upcoming Set Championships at tracked stores"]},
 };
 // ── Lore Tracker ────────────────────────────────────────────────────────────
 // An at-the-table score counter. The design rule that everything else follows:
@@ -56044,7 +56038,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
               buttons. Labels drop the Export/Print verb the group already
               implies; the titles keep the full phrasing. */""}
         <button onClick=${()=>setPosterOpen(true)} class="deck-act deck-toolbar-keep"
-          title="Export a printable image of this deck (Save as PDF / screenshot)">
+          title="Export the deck as an image — copy it or save it as a PNG">
           ${DECK_ICONS.image}<span>Image</span></button>
         <button onClick=${()=>setProxyOpen(true)} class="deck-act"
           title="Print proxies — a print-and-cut PDF at true card size">
