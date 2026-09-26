@@ -41083,9 +41083,29 @@ const HomeQuickSearch = ({raw, sealedPrices, openCardsWithSearch, onOpenSealed})
   const handlePick = (r) => {
     openCardsWithSearch && openCardsWithSearch(r["Product Name"], r.card_id);
   };
+  // ONE list for the arrow keys, in the order the rows are drawn: cards, then
+  // variants, then sealed. The arrows only ever reached the first group, so a
+  // keyboard user could see a variant or a booster box and not select it.
+  const navItems = useMemo(() => [
+    ...suggestions.map(r => ({key: "c:" + r.card_id, pick: () => handlePick(r)})),
+    ...variantSuggestions.map(r => ({key: "v:" + r.card_id, pick: () => handlePick(r)})),
+    ...sealedSuggestions.map(sp => ({key: "s:" + sp.tcgplayer_product_id, pick: () => onOpenSealed(sp)})),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [suggestions, variantSuggestions, sealedSuggestions]);
+  const navIdxOf = (k) => navItems.findIndex(n => n.key === k);
+  const listRef = useRef(null);
+  // Keep the highlighted row on screen as the arrows move past the fold.
+  useEffect(() => {
+    if(idx < 0 || !listRef.current) return;
+    const el = listRef.current.querySelector(".home-quick-search-item.active");
+    if(el && el.scrollIntoView) try { el.scrollIntoView({block: "nearest"}); } catch {}
+  }, [idx]);
   return html`<div class="home-quick-search">
     <input type="search" ref=${inputRef}
       placeholder="Search every card…"
+      role="combobox" aria-autocomplete="list" aria-controls="home-qs-list"
+      aria-expanded=${open && navItems.length > 0 ? "true" : "false"}
+      aria-activedescendant=${idx >= 0 && navItems[idx] ? "home-qs-" + idx : undefined}
       value=${q}
       onFocus=${()=>setOpen(true)}
       onBlur=${()=>setTimeout(()=>setOpen(false), 150)}
@@ -41096,23 +41116,24 @@ const HomeQuickSearch = ({raw, sealedPrices, openCardsWithSearch, onOpenSealed})
           // Default Enter = open the Cards tab with this query (same as the
           // Search button). Only jump straight to a card when the user has
           // actively arrow-navigated to a suggestion (idx >= 0).
-          if(open && idx >= 0 && idx < suggestions.length){
-            handlePick(suggestions[idx]);
+          if(open && idx >= 0 && idx < navItems.length){
+            navItems[idx].pick();
           } else {
             handleSubmit();
           }
-        } else if(e.key === "ArrowDown" && suggestions.length){
-          e.preventDefault(); setIdx(i => (i+1) % suggestions.length); setOpen(true);
-        } else if(e.key === "ArrowUp" && suggestions.length){
-          e.preventDefault(); setIdx(i => i <= 0 ? suggestions.length-1 : i-1); setOpen(true);
+        } else if(e.key === "ArrowDown" && navItems.length){
+          e.preventDefault(); setIdx(i => (i+1) % navItems.length); setOpen(true);
+        } else if(e.key === "ArrowUp" && navItems.length){
+          e.preventDefault(); setIdx(i => i <= 0 ? navItems.length-1 : i-1); setOpen(true);
         } else if(e.key === "Escape"){
           setOpen(false);
         }
       }}/>
     <button class="home-quick-search-go" onClick=${handleSubmit}
       title="Open the Cards tab with this search">Search</button>
-    ${open && (suggestions.length > 0 || sealedSuggestions.length > 0) && html`<div class="home-quick-search-list" role="listbox">
-      ${suggestions.map((r, i) => html`<button key=${r.card_id}
+    ${open && (suggestions.length > 0 || sealedSuggestions.length > 0) && html`<div class="home-quick-search-list" role="listbox"
+      id="home-qs-list" ref=${listRef}>
+      ${suggestions.map((r, i) => html`<button key=${r.card_id} id=${"home-qs-" + i}
         class=${"home-quick-search-item" + (i === idx ? " active" : "")}
         role="option" aria-selected=${i === idx}
         onMouseDown=${e=>e.preventDefault()}
@@ -41125,9 +41146,10 @@ const HomeQuickSearch = ({raw, sealedPrices, openCardsWithSearch, onOpenSealed})
       </button>`)}
       ${variantSuggestions.length > 0 && html`
         <div class="home-quick-search-divider">Variants & other versions</div>
-        ${variantSuggestions.map(r => html`<button key=${"var:"+r.card_id}
-          class="home-quick-search-item home-quick-search-item--variant"
-          role="option"
+        ${variantSuggestions.map(r => { const ni = navIdxOf("v:" + r.card_id); return html`<button key=${"var:"+r.card_id}
+          id=${"home-qs-" + ni}
+          class=${"home-quick-search-item home-quick-search-item--variant" + (ni === idx ? " active" : "")}
+          role="option" aria-selected=${ni === idx}
           onMouseDown=${e=>e.preventDefault()}
           onClick=${()=>handlePick(r)}>
           ${r.img_small && html`<img src=${r.img_small} alt="" loading="lazy"/>`}
@@ -41135,14 +41157,16 @@ const HomeQuickSearch = ({raw, sealedPrices, openCardsWithSearch, onOpenSealed})
             <div class="home-quick-search-item-name">${r["Product Name"]}</div>
             <div class="home-quick-search-item-meta">${r.Set || ""} · ${r.Rarity || ""}</div>
           </div>
-        </button>`)}`}
+        </button>`; })}`}
       ${sealedSuggestions.length > 0 && html`
         <div class="home-quick-search-divider">Sealed products</div>
         ${sealedSuggestions.map(p => {
           const px = p.market_price ?? p.low_price;
+          const ni = navIdxOf("s:" + p.tcgplayer_product_id);
           return html`<button key=${"sealed:"+p.tcgplayer_product_id}
-            class="home-quick-search-item home-quick-search-item--sealed"
-            role="option"
+            id=${"home-qs-" + ni}
+            class=${"home-quick-search-item home-quick-search-item--sealed" + (ni === idx ? " active" : "")}
+            role="option" aria-selected=${ni === idx}
             onMouseDown=${e=>e.preventDefault()}
             onClick=${()=>onOpenSealed(p)}>
             <span class="hqs-sealed-img">
@@ -48665,7 +48689,9 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
   // their bar, dimmed, at the bottom of their column.
   const editing = !!(homeEdit && homeEdit.editing);
   const editBar = (p, meta) => {
-    const sameCol = homeLayout.filter(q => q.col === p.col && q.on);
+    // Same neighbours moveHomePanel counts (fixed shortcuts and paired panels
+    // don't take part), or an arrow stays lit that has nothing to swap with.
+    const sameCol = homeLayout.filter(q => q.col === p.col && q.on && !HOME_FIXED_KEYS.has(q.key) && !q.pair);
     const pos = sameCol.findIndex(q => q.key === p.key);
     return html`<div key=${"bar-"+p.key} class=${"home-edit-card"+(p.on?"":" is-off")}>
       <span class="home-edit-name">${meta.label}</span>
@@ -57610,7 +57636,11 @@ function App(){
     if(i < 0) return l;
     const step = dir < 0 ? -1 : 1;
     let j = i + step;
-    while(j >= 0 && j < l.length && !(l[j].col === l[i].col && l[j].on)) j += step;
+    // Skip what isn't really a neighbour on screen: a pinned shortcut (dice,
+    // lore) and a panel paired beside a movers banner both live elsewhere, so
+    // swapping with one was a press that visibly did nothing.
+    const movable = (p) => p.col === l[i].col && p.on && !HOME_FIXED_KEYS.has(p.key) && !p.pair;
+    while(j >= 0 && j < l.length && !movable(l[j])) j += step;
     if(j < 0 || j >= l.length) return l;
     const next = l.slice();
     [next[i], next[j]] = [next[j], next[i]];
