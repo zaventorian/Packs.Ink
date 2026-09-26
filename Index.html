@@ -47143,6 +47143,7 @@ const useHomePoll = (user) => {
   const uid = user?.id || null;
   const fresh = _homePollCache && _homePollCache.uid === uid && Date.now() - _homePollCache.t < 5*60*1000;
   const [poll, setPoll] = useState(fresh ? _homePollCache.poll : null);
+  const [loaded, setLoaded] = useState(!!fresh);
   const [pick, setPick] = useState(null);
   const [busy, setBusy] = useState(false);
   const load = useCallback(async () => {
@@ -47154,6 +47155,7 @@ const useHomePoll = (user) => {
       _homePollCache = {uid, t: Date.now(), poll: p};
       setPoll(p);
     }catch(e){ setPoll(null); }
+    setLoaded(true);
   }, [uid]);
   useEffect(() => { if(!fresh) load(); else setPoll(_homePollCache.poll); }, [uid]); // eslint-disable-line
   const vote = useCallback(async () => {
@@ -47166,7 +47168,7 @@ const useHomePoll = (user) => {
     }catch(e){ flashToast("Couldn't record your vote — try again in a moment"); }
     setBusy(false);
   }, [poll, pick, busy, load]);
-  return {poll, pick, setPick, busy, vote};
+  return {poll, pick, setPick, busy, vote, loaded};
 };
 const HomePollBox = ({state, user, onSignIn}) => {
   const {poll, pick, setPick, busy, vote} = state;
@@ -47258,7 +47260,7 @@ const NEWS_COLLAPSE_LS = "packsink:home:newsCollapsedSig";
 // collapse), so "put this story above the poll" has nowhere else to go. Only
 // the one lead slot: a second thing above the poll would push the poll out of
 // sight on a phone, which is the layout this feed already works hard to avoid.
-const NewsFeed = ({variant, tiles, panelNav, poll, lead, sig}) => {
+const NewsFeed = ({variant, tiles, panelNav, poll, lead, sig, sigPending}) => {
   // "" = expanded. Anything else is the signature that was live when it was
   // minimised, which doubles as the collapsed flag.
   const [seenSig, setSeenSig] = useState(() => {
@@ -47268,7 +47270,19 @@ const NewsFeed = ({variant, tiles, panelNav, poll, lead, sig}) => {
   // than in an effect means a new tile renders the box open on its very first
   // paint, with no expanded-then-collapsed flash — and it needs no cleanup
   // when the two fall back into agreement.
-  const collapsed = !!seenSig && !!sig && seenSig === sig;
+  // "New" means a token on screen now that was not there when it was
+  // minimised. An exact-match test also reopened the box when something LEFT —
+  // a reveal aging out of its fortnight, a poll closing — which is not news.
+  const hasNew = useMemo(() => {
+    if(!seenSig || !sig) return false;
+    const seen = new Set(seenSig.split("\n"));
+    return sig.split("\n").some(t => !seen.has(t));
+  }, [seenSig, sig]);
+  // While its inputs are still loading (the poll, the catalog behind the reveal
+  // and news tiles) the signature is partial. Judging it then opened a
+  // collapsed box on every visit and snapped it shut a second later; hold the
+  // stored answer until the signature settles.
+  const collapsed = !!seenSig && (!!sigPending || !hasNew);
   const setCollapsed = (want) => {
     const v = want ? (sig || "") : "";
     setSeenSig(v);
@@ -47291,7 +47305,9 @@ const NewsFeed = ({variant, tiles, panelNav, poll, lead, sig}) => {
     if(ro) ro.observe(el);
     window.addEventListener("resize", sync);
     return () => { if(ro) ro.disconnect(); window.removeEventListener("resize", sync); };
-  }, [sync, tiles.length]);
+  // `collapsed` too: collapsing unmounts the list, and re-expanding mounts a new
+  // one this observer was never attached to, so its edge fade went stale.
+  }, [sync, tiles.length, collapsed]);
   const titleEl = homePanelTitle({cls:"home-feed-title--chase", label:"News", panelKey:"news", panelNav})
     || html`<div class="home-feed-title--chase">News</div>`;
   return html`<aside class=${"home-feed home-news-feed home-news-feed--"+variant
@@ -48761,8 +48777,18 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
   // the count would not move. The poll's id rides along for the same reason.
   // It must NOT include anything that changes on its own (a countdown, a
   // price), or the box would reopen on a timer and the minimise would be a lie.
+  // Each revealed card's slug, as a primitive, so the memo below can key on it
+  // (freshCoconut is a fresh array every render).
+  const freshCoconutKey = freshCoconut.map(c => c.slug).join(",");
+  const newsSigPending = !homePoll.loaded || !(raw && raw.length);
   const newsSig = useMemo(() => {
-    const keys = newsTiles.map(t => (t && t.key) || "?").join("|");
+    // One token per thing that can be NEW, newline-joined; NewsFeed reopens
+    // only when a token appears that was not there when it was minimised.
+    const toks = newsTiles.map(t => "t:" + ((t && t.key) || "?"));
+    // Every revealed Coconut card is its own token. The reveal tile's key is
+    // one constant ("coconut-new"), so a second reveal landing inside the
+    // fortnight changed nothing here and could never reopen the box.
+    for(const slug of (freshCoconutKey ? freshCoconutKey.split(",") : [])) toks.push("cc:" + slug);
     // \u26a0 poll_id, the column `vote_poll` takes \u2014 there is no `id` on this row,
     // and reading one gave a signature ending "::undefined" that never moved,
     // so a brand-new poll could not reopen a collapsed box. Deliberately NOT
@@ -48772,11 +48798,14 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
     // to "17 cards revealed" is exactly the "something new is posted" the
     // collapse is supposed to reopen for, and unlike a countdown it only moves
     // when reveals actually land.
-    return keys + "::" + (homePoll.poll ? homePoll.poll.poll_id : "-")
-         + "::" + (showNews ? newsSet + ":" + newsCount : "-");
-  }, [newsTiles, homePoll.poll, showNews, newsSet, newsCount]);
+    // A poll or lead that is simply ABSENT adds no token, so its going away
+    // never reads as something new.
+    if(homePoll.poll) toks.push("poll:" + homePoll.poll.poll_id);
+    if(showNews) toks.push("lead:" + newsSet + ":" + newsCount);
+    return toks.join("\n");
+  }, [newsTiles, freshCoconutKey, homePoll.poll, showNews, newsSet, newsCount]);
   const newsFeedAside = (variant) => (panelCol["news"] != null && (newsTiles.length > 0 || homePoll.poll || newsLead))
-    ? html`<${NewsFeed} key=${"news-"+variant} variant=${variant} tiles=${newsTiles} sig=${newsSig}
+    ? html`<${NewsFeed} key=${"news-"+variant} variant=${variant} tiles=${newsTiles} sig=${newsSig} sigPending=${newsSigPending}
         panelNav=${variant === "rail" ? panelTitleNav : null}
         lead=${newsLead}
         poll=${html`<${HomePollBox} state=${homePoll} user=${user} onSignIn=${onSignIn}/>`}/>`
