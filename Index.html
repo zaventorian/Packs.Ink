@@ -7865,9 +7865,24 @@ const EnlargedCardOverlay = () => {
     const el = imgRef.current;
     if(!el) return;
     let sx=0, sy=0, active=false, horiz=false;
-    const onStart = (e) => { const t=e.touches[0]; if(!t) return; sx=t.clientX; sy=t.clientY; active=true; horiz=false; };
+    // Pinch-zoom is allowed (touch-action below) — this is the one surface
+    // where people read a card's rules text, and a phone needs a pinch for
+    // that. So a second finger, or a page already zoomed in, is never a swipe
+    // to the next card; and while zoomed, the image gives the browser every
+    // gesture back so a zoomed card can be panned sideways too.
+    const zoomed = () => !!(window.visualViewport && window.visualViewport.scale > 1.01);
+    const syncTouch = () => { el.style.touchAction = zoomed() ? "auto" : "pan-y pinch-zoom"; };
+    syncTouch();
+    const vv = window.visualViewport;
+    if(vv) vv.addEventListener("resize", syncTouch);
+    const onStart = (e) => {
+      const t=e.touches[0]; if(!t) return;
+      if(e.touches.length > 1 || zoomed()){ active=false; return; }
+      sx=t.clientX; sy=t.clientY; active=true; horiz=false;
+    };
     const onMove = (e) => {
       if(!active) return;
+      if(e.touches.length > 1){ active=false; return; }
       const t=e.touches[0]; if(!t) return;
       const dx=t.clientX-sx, dy=t.clientY-sy;
       if(!horiz && Math.abs(dx)>10 && Math.abs(dx)>Math.abs(dy)) horiz=true;
@@ -7886,6 +7901,7 @@ const EnlargedCardOverlay = () => {
       el.removeEventListener("touchstart", onStart);
       el.removeEventListener("touchmove", onMove);
       el.removeEventListener("touchend", onEnd);
+      if(vv) vv.removeEventListener("resize", syncTouch);
     };
   }, [group]);
   if(!group) return null;
@@ -7904,7 +7920,7 @@ const EnlargedCardOverlay = () => {
   return html`<div class="enlarged-card-overlay" onClick=${()=>setGroup(null)}>
     <img ref=${imgRef} class=${"enlarged-card-img"+(sideways?" enlarged-card-img--sideways":"")} src=${src} alt=${group["Product Name"] || ""}
       onClick=${e=>e.stopPropagation()} draggable=${false}
-      style=${{touchAction:"none", WebkitUserSelect:"none", userSelect:"none", WebkitTouchCallout:"none"}}/>
+      style=${{touchAction:"pan-y pinch-zoom", WebkitUserSelect:"none", userSelect:"none", WebkitTouchCallout:"none"}}/>
     <button class="enlarged-card-close" onClick=${()=>setGroup(null)} aria-label="Close enlarged card">×</button>
   </div>`;
 };
