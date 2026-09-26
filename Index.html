@@ -1440,9 +1440,39 @@ function Tip(props){
   const show = () => {
     if(!enabled || !ref.current) return;
     const r = ref.current.getBoundingClientRect();
-    setPos({left: r.left + r.width/2, top: r.top});
+    setPos({left: r.left + r.width/2, top: r.top, bottom: r.bottom});
   };
   const hide = () => setPos(null);
+  // The bubble is centred on its trigger, so near a screen edge it hung off
+  // the side (an ⓘ at the left of a phone lost half its sentence), and near
+  // the top it opened above the viewport. Measure it before paint and nudge
+  // it in, flipping below the trigger when there is no room above.
+  const bubbleRef = useRef(null);
+  const [adj, setAdj] = useState(null);   // {dx, below}
+  useLayoutEffect(() => {
+    const b = pos && bubbleRef.current;
+    if(!b){ setAdj(null); return; }
+    const r = b.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth || window.innerWidth;
+    let dx = 0;
+    if(r.left < 8) dx = 8 - r.left;
+    else if(r.right > vw - 8) dx = (vw - 8) - r.right;
+    const below = r.top < 8;
+    setAdj(dx || below ? {dx: Math.round(dx), below} : null);
+  }, [pos]);
+  // A bubble is placed where its trigger WAS. Anything scrolling the trigger
+  // away — the page, or a movers marquee that scrolls itself — left it
+  // floating over unrelated content for the rest of its four seconds.
+  useEffect(() => {
+    if(!pos) return;
+    const onScroll = (e) => {
+      const el = ref.current, t = e.target;
+      if(!el) return;
+      if(t === document || t === document.documentElement || t === document.body || (t && t.contains && t.contains(el))) hide();
+    };
+    window.addEventListener("scroll", onScroll, true);
+    return () => window.removeEventListener("scroll", onScroll, true);
+  }, [pos]);
   // Touch devices have no hover, so a tap toggles the bubble (auto-hiding
   // after a few seconds). The click handler deliberately does NOT
   // preventDefault/stopPropagation: a Tip wrapped around a chip or button
@@ -1463,7 +1493,10 @@ function Tip(props){
       onFocus=${show} onBlur=${hide}>
     ${props.children}
     ${enabled && pos ? ReactDOM.createPortal(
-      html`<div class="tip-bubble" style=${{left:pos.left+"px", top:pos.top+"px"}}>${text}</div>`,
+      html`<div ref=${bubbleRef} class=${"tip-bubble" + (adj && adj.below ? " tip-bubble--below" : "")}
+        style=${{left: (pos.left + (adj ? adj.dx : 0)) + "px",
+          top: ((adj && adj.below) ? pos.bottom : pos.top) + "px",
+          "--tip-arrow-x": "calc(50% - " + (adj ? adj.dx : 0) + "px)"}}>${text}</div>`,
       document.body
     ) : null}
   </span>`;
