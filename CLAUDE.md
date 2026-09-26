@@ -2088,6 +2088,9 @@ The FAQ ("Tracking your collection" section, Help bubble `?`) explains this user
 `MARKET_SUBS` = overview / ev / trade / avg ("Set Breakdown") / setval / sim / swiss / lore / dice / ticker (+ elo, hidden unless pinned). The consolidation:
 
 - **Swiss Odds (`swiss`, added 2026-08-20)** embeds the standalone `swiss.html` page as `<iframe src="/swiss?embed=1">` (canonical path is `/swiss` — Workers Assets pretty-URL handling 307s `/swiss.html` and the worker's legacy `/lab/swiss` route to it, DROPPING the query, so never point the iframe at `/lab/swiss`) — the sim stays a separate file on purpose (its Monte Carlo engine is a hot loop ordinary visitors shouldn't download inside Index.html; see the commit that added it). `?embed=1` sets `data-embed` on the page root pre-paint, hiding its own brand/flag/theme chrome, then strips the param via replaceState so the page's Copy-link never leaks `embed=1`. The header's "Open full page ↗" escape hatch was removed 2026-08-21 (user call — redundant once the embed worked; `/swiss` stays reachable by URL and the embed's own Copy-link shares it). swiss.html links `/styles.css` UNVERSIONED (network-first SW keeps it fresh; a `?v=` there would drift from the bump-cache lockstep, which doesn't know about this file).
+  - **Below 960px the Swiss tab is an AUTO-HEIGHT frame** (`SwissEmbed`, 2026-09-26): there the simulator stacks into one column and stops being a sticky-sidebar tool, so a fixed ~600px box made it a window you scrolled inside while the page scrolled past it to the footer. swiss.html carries the same content-measuring height reporter as ticker.html, and its embed CSS sets `body{min-height:0}` (100vh inside a frame sized FROM the content is a growth loop). Wide, it keeps the fixed frame. The embed also hides its own title (`.sw-titles`) — the tab header already names it — and the "Internal preview" pill is gone.
+  - **Both embeds follow the site's theme toggle** (`syncFrameTheme`): their pages read the theme once at load, so a toggle left them the other colour until reload, and a system-mode override (never persisted) never reached them. The host copies its own `data-theme`/`data-mode` in on the frame's load and on every change.
+  - **Swiss Copy link describes the run ON SCREEN** (`LAST_RUN`), not the live form — typing a record used to rewrite the link from settings nobody had run. The link carries the cut the person PICKED (`cutChoice`), never the field-clamped one: `c=12` from a 12-player Top 16 is a value the menu lacks, and reopened as "No cut" (older links now snap to the smallest offered cut at or above it).
 
 - **Stream Ticker (`ticker`, added 2026-09-15)** embeds `ticker.html` the same way —
   `<iframe class="market-embed-frame" src="/ticker?embed=1">` — and for the same reason: the
@@ -2906,6 +2909,45 @@ Name scoring (when no exact-pid hint):
 - `-40` if isCustomCard
 - `-20` if any variant_label
 Highest wins, tiebreak by iteration order.
+
+### The decklist round trip (2026-09-26)
+
+`deckToText` (the Decklist button, both tile copies) and `parseDeckText` (Import + every
+tournament upload) have to agree, and every way they disagree is silent. Guarded by
+`node scripts/test_deck_text.mjs`, which replays the real functions.
+
+- **A Coconut deck's leader is exported as `# Coconut leader: <Name - Version>`** and read back
+  (and applied via `onUpdateMeta`). The leader sits OUTSIDE the 60, so it is not in
+  `deck.cards`, and the export used to drop the one card that defines the deck. A comment, so a
+  tool that doesn't know Coconut skips it.
+- **One line per CARD, not per printing** — a base + its Enchanted exported as two lines with
+  the same name, which a tool that doesn't sum duplicate lines reads as half the copies. A card
+  missing from the catalog is a `# N × <card_id>` comment, never `N crd_…`.
+- **Import folds accents** (a third key, `foldCardName`, after the normalized and squashed ones),
+  so "Te Ka" finds "Te Kā".
+- **A `(set-cn)` wins over the name only when it names a printing OF that card** (its job:
+  picking the Enchanted), or when the name alone matches nothing. When the two name different
+  cards the NAME wins and the line is reported (`mismatched`) — a list numbered by another site's
+  scheme, or one typo, otherwise imported a different card silently.
+- **Over the copy limit is trimmed AND reported** (`trimmed`, summed across lines) in the
+  import confirm, beside the unmatched lines.
+- **Not done, and a decision for Zaven:** exporting a non-default printing WITH a `(set-cn)`
+  suffix would make the Enchanted survive our own round trip, but some other tools choke on the
+  suffix. Today a mixed base + Enchanted exports as one plain line and re-imports as the base.
+
+### One card, however it's spelled — `cardFamilyKey` (2026-09-26)
+
+Lorcast's Product Name is not stable across printings: 12 cards on the live catalog differ by
+case ("HeiHei" / "Heihei", "Down In" / "Down in") or by a curly vs straight apostrophe. Keyed on
+the raw string, a deck could hold 4 of each spelling and pass, and a rotated printing whose
+reprint is spelled differently read as Infinity instead of Core. **`cardFamilyKey(name)`**
+(beside `getDeckLimit`: diacritics folded, curly quotes straightened, whitespace collapsed,
+lower-cased) is what every "is this the same card" question groups by: the 4-of cap in
+`checkDeckLegality`, DecksView's `setsByProductName` (**its keys ARE family keys now** — look it
+up through `cardFamilyKey`, never the raw name), the editor's `deckQtyByName` / +/− caps,
+`deckReprintNotes`, `cardPrintingsFor` and `deckToText`. It lives inside the span
+`test_coconut_legality.mjs` slices, and `test_reprints.mjs` grabs it by name; both pin a split
+spelling in each direction.
 
 ## Deck poster export
 
@@ -6880,9 +6922,11 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   `ticker.html` for it through the asset fall-through with the query intact. Do NOT add a worker
   route that fetches `/ticker.html` — the assets layer 307s that to `/ticker` and DROPS the query
   string, and `?bar=1&…` IS the overlay's configuration (this is the same 307 that moved swiss to
-  `/swiss`). Dev route in `dev_server.py`; listed in `build_dist.mjs`; robots-disallowed + noindex
-  (shared by link, not nav-linked). No sw.js involvement — the page never registers it and OBS's
-  browser profile never visits the SPA.
+  `/swiss`). Dev route in `dev_server.py`; listed in `build_dist.mjs`. **Bare `/ticker` (no `bar` /
+  `embed`) is now the SPA's Stream Ticker TAB** (the worker's `tickerIsSpa`), so it is in the
+  sitemap and NOT robots-disallowed (2026-09-26) — `ticker.html` keeps its noindex meta, and a
+  crawler must be allowed to fetch a page to see that, so blocking `/ticker` only hid the tab. No
+  sw.js involvement — the overlay never registers it and OBS's browser profile never visits the SPA.
 - **The reel is SECTIONS, cycling (windows × rarity groups)** — reworked same day on Zaven's
   feedback. `buildTickerPlan(cfg)` emits one section per (time frame × group) in window-major
   canonical order, each introduced by an IN-REEL header ("1D Movers" over the group name) — the
@@ -6891,7 +6935,10 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   Chase (Enchanted/Epic/Iconic) · Rare – Legendary · Promos · All Rarities.
   **Defaults (Zaven, 2026-09-15): 1D + 1W × Chase + Rare–Legendary, direction BOTH, LOW basis,
   20 cards/section**, **$5 floor** (user-settable; keeps 10-cent cards' +300% "moves" out —
-  matches the Screener's default).
+  matches the Screener's default). **⚠ The floor is on the price the card STARTED the window at**
+  (`low_prev` / `low_7d` … `market_365d`, one per `TK_WINDOWS.prior`), the home banners' rule — on
+  TODAY's price a card that climbed from cents to $22 led a live 1Y bar at "549x" (2026-09-26). A
+  gain past +1000% prints as the price MULTIPLE, `1 + p/100` (+1000% is 11x, not 10x).
   ⚠ **A default here is not a free choice: changing one RETARGETS every overlay already in the
   wild that took it.** `cfgToParams` writes only non-default params, so a streamer who accepted
   the defaults is running a bare `?bar=1` and picks up the new ones on their next load. Anyone who
@@ -6912,12 +6959,17 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   post-ETL check, not polling. Intl supplies Chicago's wall clock so DST is handled (CDT/CST both
   covered in the guard test); the initial page load still fetches immediately, and failed fetches
   retry in 60s. Don't turn it back into an interval.
-- **The "powered by packs.ink" credit is REQUIRED** — flush bottom-RIGHT on the bar (a 22%-of-
-  `--tkt` bottom row with NO band or border, right padding `min(24px, 30% of --tkt)` so it hugs
-  the corner at any bar height; the movers row gets the rest as `--tkh`), always rendered, no
-  param, no checkbox; the left cap (PACKS.INK stacked over the logo) is the optional one
-  (`brand=0`). That attribution is the price of a free overlay riding our data — keep it. In
-  transparent mode the credit sits in its own scrim pill.
+- **The "powered by packs.ink" credit is REQUIRED** — it rides the SECTION HEADERS now (the
+  header's third line, `.tk-sec-pow`), not a bottom strip: streamers cropped the strip away for
+  height. `markTickerBrand` places it once per time frame and never more than
+  `TK_BRAND_MAX_GAP` (2) sections apart. No param, no checkbox; the left cap is the optional one
+  (`brand=0`). That attribution is the price of a free overlay riding our data — keep it.
+  **⚠ The credit is placed on the PLAN, before any query runs, so it must be placed AGAIN after
+  empty sections drop** (`tickerKeepFilled`) — dropping them took their credit along, and with
+  `brand=0` a reel could carry no packs.ink anywhere (found 2026-09-26). Guarded.
+- **A light Bar color swaps the accents** (`data-light`, set by `applyBarLook` from the bar
+  colour's WCAG luminance, crossover 0.28): the gold/green/red/blue are tuned for a dark bar and
+  read ~1.9:1 on white; the light set clears 5:1. A transparent bar keeps its dark scrim.
 - **Double-clicking ticker.html from disk works** — that's how Zaven first tested it. Asset URLs
   are RELATIVE (file sits at site root, so they resolve the same at `/ticker` and on `file://`);
   on file:, card art hotlinks cards.lorcast.io directly (no /img-proxy route exists), the Copy URL
@@ -6947,9 +6999,20 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   header text, window/metric → real matview column names, group rarity filters, foil-toggle
   bypass shapes, the rarity-line foil rule, both-mode split, min=0 not-null guard, clamps. Run it
   after touching the config layer.
-- **It is an Analytics tab as of 2026-09-15** — `/analytics?a=ticker`, embedding this page at
+- **It is an Analytics tab as of 2026-09-15** — at `/ticker` (its own path), embedding this page at
   `/ticker?embed=1`. See "Analytics tab" for the embed mechanism and the `_headers` carve-out it
-  needs. `/ticker` stays the canonical page and `?bar=1` is still what goes into OBS.
+  needs. `?bar=1` is still what goes into OBS.
+- **⚠ The tab's settings live in the PAGE's address, not only the frame's (2026-09-26).**
+  `TICKER_PARAM_KEYS` in Index.html is the one list of ticker params: the landing capture
+  (`TICKER_EMBED_PARAMS`), the view-sync — which OWNS them at `/ticker` (so `?g=`/`?m=`, Price
+  Graphing's and the Screener's letters everywhere else, survive there) and strips them anywhere
+  else — and the mirror: the embedded configurator posts `packsink:embed-params` on every change
+  and `AutoHeightFrame mirrorParamsAt="/ticker"` replaceStates them onto the page. Before, a
+  refresh, a bookmark or Copy link reopened the default reel. Add a ticker param there too.
+- **Switching Analytics tools across a PATH change (/ticker ↔ /analytics) is pushed by the
+  view-sync, not the ?a= sync** (`marketPathPushed`). Replacing there rewrote the ticker's own
+  history entry in place, so Back skipped the ticker — and ticker → Expected Value (no `?a=` on
+  either side) got no entry at all.
 - Not built: sealed products (client-computed in the SPA, no matview), per-card deep links from
   the bar, a home-Toolbox chip (deliberate — see the tab's note under "Analytics tab").
 

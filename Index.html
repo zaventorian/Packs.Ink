@@ -38091,18 +38091,37 @@ const AnalyticsOverview = ({subs, onOpen, onOpenSealed}) => html`<${React.Fragme
    /price-graphing?g=c~123 cannot feed that ?g= to the ticker as a rarity
    group. The overlay URL (?bar=1) never comes through here — the worker hands
    those straight to ticker.html. */
+// Every param ticker.html reads. The ONE list: the landing capture below, the
+// view-sync's ownership at /ticker, and the configurator's mirror onto this
+// page's address all read it, so a param added to the ticker is added here.
+const TICKER_PARAM_KEYS = ["w","g","m","dir","n","min","foil","nf","img","brand",
+                           "speed","bg","fg","gk","gr","gg","gcat","gmin"];
+const tickerParamsOnly = (search) => {
+  const q = new URLSearchParams(search);
+  const out = new URLSearchParams();
+  for(const k of TICKER_PARAM_KEYS) if(q.has(k)) out.set(k, q.get(k));
+  return out.toString();
+};
 const TICKER_EMBED_PARAMS = (() => {
   try {
     if((window.location.pathname.replace(/\/$/, "") || "/") !== "/ticker") return "";
-    const q = new URLSearchParams(window.location.search);
-    const out = new URLSearchParams();
-    for(const k of ["w","g","m","dir","n","min","foil","nf","img","brand",
-                    "speed","bg","fg","gk","gr","gg","gcat","gmin"]){
-      if(q.has(k)) out.set(k, q.get(k));
-    }
-    return out.toString();
+    return tickerParamsOnly(window.location.search);
   } catch { return ""; }
 })();
+
+// The Swiss and Ticker tabs are same-origin frames whose pages read the theme
+// ONCE, at load — so toggling the site's theme left them dark inside a light
+// page (or the reverse) until a reload, and a system-mode override (which is
+// deliberately never persisted) never reached them at all. The host hands
+// them its own resolved attributes: on the frame's load, and on every change.
+const syncFrameTheme = (f) => {
+  try {
+    const d = f && f.contentDocument, root = document.documentElement;
+    if(!d || !d.documentElement) return;
+    d.documentElement.setAttribute("data-theme", root.getAttribute("data-theme") || "");
+    d.documentElement.setAttribute("data-mode", root.getAttribute("data-mode") || "");
+  } catch {/* cross-origin or detached — nothing to do */}
+};
 
 // An embedded tool page that grows to its own content rather than scrolling
 // inside a fixed box. The child posts its height (see the embed reporter in
@@ -38111,25 +38130,52 @@ const TICKER_EMBED_PARAMS = (() => {
 // The fixed-height version is still right for a tool that fills its own
 // viewport and scrolls internally by design (Swiss); it is wrong for a
 // configurator, which is a document.
-function AutoHeightFrame({src, title, minHeight = 420}){
+function AutoHeightFrame({src, title, minHeight = 420, mirrorParamsAt = null}){
   const ref = React.useRef(null);
   const [h, setH] = React.useState(minHeight);
   React.useEffect(() => {
     const onMsg = (e) => {
       // Same-origin only, and only from OUR frame: any page can postMessage.
       if(e.origin !== window.location.origin) return;
-      if(!e.data || e.data.type !== "packsink:embed-height") return;
+      if(!e.data) return;
       if(ref.current && e.source !== ref.current.contentWindow) return;
+      if(e.data.type === "packsink:embed-params"){
+        // The embedded configurator's settings, mirrored onto THIS page's
+        // address. They lived only in the frame's own URL, so a refresh, a
+        // bookmark or "Copy link to this page" reopened the default reel.
+        // replaceState: a setting is not a page. Only the ticker's own keys.
+        if(!mirrorParamsAt || _normPath(window.location.pathname) !== mirrorParamsAt) return;
+        const q = tickerParamsOnly(String(e.data.params || ""));
+        try { window.history.replaceState(window.history.state, "", window.location.pathname + (q ? "?" + q : "")); } catch {}
+        return;
+      }
+      if(e.data.type !== "packsink:embed-height") return;
       const next = Math.ceil(Number(e.data.height));
       if(Number.isFinite(next) && next > 0) setH(Math.max(minHeight, next));
     };
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
-  }, [minHeight]);
+  }, [minHeight, mirrorParamsAt]);
   // scrolling="no" is the legacy attribute, but it is the one that still
   // suppresses a same-origin frame's own scrollbar in every engine we target.
   return html`<iframe ref=${ref} class="market-embed-frame market-embed-frame--auto"
-    src=${src} title=${title} scrolling="no" style=${{height: h + "px"}}></iframe>`;
+    src=${src} title=${title} scrolling="no" style=${{height: h + "px"}}
+    onLoad=${e => syncFrameTheme(e.currentTarget)}></iframe>`;
+}
+
+// The Swiss simulator, embedded. Wide, it keeps the fixed frame its sticky
+// setup panel is built for. Narrow, the simulator stacks into one column (its
+// setup stops being sticky), which makes it a DOCUMENT — and a document in a
+// ~600px box on a phone was a window you scrolled inside while the page
+// scrolled past it to the footer. There it grows to its own height instead,
+// the way the ticker does. 960, not the page's own 900: the frame is the page
+// minus its gutters, and the simulator decides by the FRAME's width.
+function SwissEmbed(){
+  const narrow = useMaxWidth(960);
+  return narrow
+    ? html`<${AutoHeightFrame} src="/swiss?embed=1" title="Swiss Simulator"/>`
+    : html`<iframe class="market-embed-frame" src="/swiss?embed=1" title="Swiss Simulator"
+        onLoad=${e => syncFrameTheme(e.currentTarget)}></iframe>`;
 }
 
 function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
@@ -38259,13 +38305,13 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
     ${sub==="swiss" && html`<${React.Fragment}>
       <${MarketHeader} title="Swiss Odds"
         sub="Monte Carlo odds for Swiss events — what record makes the cut, where the bubble sits, and whether to take the draw."/>
-      <iframe class="market-embed-frame" src="/swiss?embed=1" title="Swiss Simulator"></iframe>
+      <${SwissEmbed}/>
     <//>`}
     ${sub==="ticker" && html`<${React.Fragment}>
       <${MarketHeader} title="Stream Ticker"
         sub="A scrolling bar of the biggest movers for your stream — set it up here, then paste one URL into an OBS browser source."/>
       <${AutoHeightFrame} src=${"/ticker?embed=1" + (TICKER_EMBED_PARAMS ? "&" + TICKER_EMBED_PARAMS : "")}
-        title="Stream Ticker"/>
+        title="Stream Ticker" mirrorParamsAt="/ticker"/>
     <//>`}
   </div>`;
 }
@@ -57578,6 +57624,10 @@ function App(){
   }, []);
   const closeEventFinder = useCallback(() => setEventFinderOpen(false), []);
   const marketSubSynced = useRef(false);
+  // Set when the view-sync PUSHED a move between two Analytics paths (/ticker
+  // <-> /analytics), so the ?a= sync that runs next replaces instead of pushing
+  // a second entry for the same switch.
+  const marketPathPushed = useRef(false);
   const viewSyncedOnce = useRef(false);
   // Keep the URL pathname in sync with `view` so back/forward + reload +
   // bookmarks all work. Strips view-specific deep-link params (?deck=,
@@ -57609,7 +57659,7 @@ function App(){
                            ...CARD_URL_KEYS,
                            "ck","cv","cm","cr","cq","cspan","cn","cg",
                            "cmap","cmr","cms","cmk","ce",
-                           ...ELO_URL_PARAMS, ...SC_DEEP_PARAMS];
+                           ...ELO_URL_PARAMS, ...SC_DEEP_PARAMS, ...TICKER_PARAM_KEYS];
       // Each view "owns" the deep-link params it actually consumes — those
       // survive a same-view strip so /decks?tourney=<id> deep-links + ctrl-
       // click new-tab opens hold their query even though the view didn't
@@ -57638,7 +57688,13 @@ function App(){
         calendar:   new Set(["ck","cv","cm","cr","cq","cspan","cn","cg",
                              "cmap","cmr","cms","cmk","ce"]),
       };
-      const owned = VIEW_OWNED[view] || new Set();
+      // At /ticker the ticker's own settings belong to the page — ?g= and ?m=
+      // included, which Price Graphing and the Screener own everywhere else.
+      // Stripping them made a refresh, a bookmark or Copy link reopen the
+      // default reel.
+      const owned = (view === "market" && marketSub === "ticker")
+        ? new Set([...(VIEW_OWNED[view] || []), ...TICKER_PARAM_KEYS])
+        : (VIEW_OWNED[view] || new Set());
       if(tabStripRef.current){
         for(const k of tabStripRef.current) url.searchParams.delete(k);
         tabStripRef.current = null;
@@ -57651,12 +57707,15 @@ function App(){
       // Same page, just a param cleanup → replace. Pushing would leave a
       // history entry whose only difference is the params we just consumed,
       // so Back would land on the dirty URL and appear to do nothing.
-      // Switching between Analytics tools is ONE navigation, and the ?a= sync
-      // below is what pushes it. /ticker is an Analytics path too, so moving to
-      // or from it must not push a second entry here — Back would otherwise
-      // land on /analytics and look like it did nothing.
+      // Switching between Analytics tools is ONE navigation. When the switch
+      // changes the PATH (/ticker <-> /analytics) it is pushed HERE and the ?a=
+      // sync below replaces; otherwise the ?a= sync pushes. Replacing here
+      // instead rewrote the ticker's own entry in place, so Back from the
+      // next tool skipped the ticker entirely — and Expected Value (no ?a= on
+      // either side) never got an entry at all.
       const withinMarket = view === "market" && MARKET_PATHS.has(current);
-      const method = (firstSync || current === normalizedTarget || withinMarket) ? "replaceState" : "pushState";
+      const method = (firstSync || current === normalizedTarget) ? "replaceState" : "pushState";
+      if(method === "pushState" && withinMarket) marketPathPushed.current = true;
       window.history[method]({view}, "", url.toString());
     } catch {/* SSR / blocked storage / no-op */}
   }, [view, marketSub]);
@@ -57667,7 +57726,14 @@ function App(){
       document.title = (view === "market" && MARKET_SUB_TITLES[marketSub]) || VIEW_TITLES[view] || VIEW_TITLES.home;
       let link = document.querySelector('link[rel="canonical"]');
       if(!link){ link = document.createElement("link"); link.rel = "canonical"; document.head.appendChild(link); }
-      link.href = "https://packs.ink" + viewPathFor(view, marketSub);
+      // An Analytics tool is its own page (own title, own ?a= link), so its
+      // canonical says so — pointing all of them at /analytics told search
+      // engines /analytics?a=swiss was a duplicate of Expected Value. EV is the
+      // default and lives at the bare path; a tool with its own path carries
+      // itself there already.
+      const subQ = (view === "market" && marketSub && marketSub !== "ev" && !MARKET_SUB_PATHS[marketSub])
+        ? "?a=" + marketSub : "";
+      link.href = "https://packs.ink" + viewPathFor(view, marketSub) + subQ;
     } catch {/* no-op */}
   }, [view, marketSub]);
   // Mirror the Analytics sub-tab into ?a=<sub> while viewing Analytics.
@@ -57677,6 +57743,10 @@ function App(){
   // pushState so Back works. The cur===want guard makes a popstate-driven
   // setMarketSub a no-op here, avoiding a push loop.
   useEffect(() => {
+    // Read AND clear the view-sync's flag up front: every exit below must drop
+    // it, or it lingers into the next switch and swallows that one's push.
+    const pathPushed = marketPathPushed.current;
+    marketPathPushed.current = false;
     if(view !== "market"){ marketSubSynced.current = false; return; }
     try {
       const url = new URL(window.location.href);
@@ -57692,8 +57762,9 @@ function App(){
       if(cur === want && !staleElo){ marketSubSynced.current = true; return; }
       if(want) url.searchParams.set("a", want); else url.searchParams.delete("a");
       if(staleElo) ELO_URL_PARAMS.forEach(k => url.searchParams.delete(k));
-      // Dropping stale params isn't a navigation, so only a change of tool pushes.
-      if(marketSubSynced.current && cur !== want) window.history.pushState({view, a: want}, "", url.toString());
+      // Dropping stale params isn't a navigation, so only a change of tool
+      // pushes — and not when the view-sync already pushed this switch.
+      if(marketSubSynced.current && cur !== want && !pathPushed) window.history.pushState({view, a: want}, "", url.toString());
       else window.history.replaceState(window.history.state, "", url.toString());
       marketSubSynced.current = true;
     } catch {/* no-op */}
@@ -58196,6 +58267,7 @@ function App(){
     // dark-mode override instead of silently dropping them (the bug that left
     // velvet/aurora/black showing light-theme price colors after the rewrite).
     document.documentElement.setAttribute("data-mode", isDarkTheme(resolvedTheme) ? "dark" : "light");
+    document.querySelectorAll("iframe.market-embed-frame").forEach(syncFrameTheme);
     try { localStorage.setItem("packsink:theme", resolvedTheme); } catch {}
     // The browser chrome follows the theme: theme-color was fixed at the dark
     // purple, so on a light theme Android's status bar and Safari's tab bar

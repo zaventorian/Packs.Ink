@@ -115,8 +115,8 @@ html[data-embed="1"] .tk-app{max-width:none;}
 .tk-chips button,.tk-seg button{cursor:pointer;font-family:'Nunito Sans',sans-serif;}
 .tk-chips button{border:1px solid var(--btn-border,#8a8a8a);border-radius:999px;
   background:var(--btn-bg,transparent);color:inherit;}
-.tk-chips button:not(.active),.tk-seg button:not(.active){opacity:0.5;font-weight:400;}
-.tk-chips button:not(.active):hover,.tk-seg button:not(.active):hover{opacity:0.85;}
+.tk-chips button:not(.active),.tk-seg button:not(.active){opacity:0.72;font-weight:400;}
+.tk-chips button:not(.active):hover,.tk-seg button:not(.active):hover{opacity:0.92;}
 .tk-chips button.active,.tk-seg button.active{
   background:var(--btn-active-bg,#31284d) !important;
   color:var(--btn-active-text,#fff) !important;
@@ -238,6 +238,20 @@ html:not([data-bar]) .tk-bar:hover .tk-rail{animation-play-state:paused;}
 .tk-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   font-size:calc(var(--tkh)*0.24);opacity:0.55;z-index:1;}
 
+/* A LIGHT bar colour (Bar color set near white) swaps the accents for darker
+   ones: the gold, green, red and blue above are tuned for a dark bar and read
+   at ~1.9:1 on white. Each replacement clears 5:1 on #fff. applyBarLook sets
+   data-light from the bar colour's luminance; a transparent bar keeps its dark
+   scrim and never does. */
+.tk-bar[data-light="1"] .tk-sec{border-left-color:#8a6414;}
+.tk-bar[data-light="1"] .tk-sec-title,.tk-bar[data-light="1"] .tk-sec-pow b{color:#8a6414;}
+.tk-bar[data-light="1"] .tk-rar{color:#8a6414;border-color:rgba(138,100,20,0.55);}
+.tk-bar[data-light="1"] .tk-pct.up{color:#127a45;}
+.tk-bar[data-light="1"] .tk-pct.down{color:#c0263a;}
+.tk-bar[data-light="1"] .tk-slab{color:#0b6d9e;border-color:rgba(11,109,158,0.55);}
+.tk-bar[data-light="1"] .tk-sec--graded{border-left-color:#0b6d9e;}
+.tk-bar[data-light="1"] .tk-sec--graded .tk-sec-title{color:#0b6d9e;}
+
 /* ───────── OBS bar mode ───────── */
 /* styles.css paints the page for the configurator; in bar mode every page-level
    surface goes transparent so an oversized OBS source shows the stream, not a
@@ -286,71 +300,71 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
       <h2>What's in the reel</h2>
 
       <div class="tk-field">
-        <label>Time frames — cycles in this order</label>
-        <div class="tk-chips" id="chipsWin"></div>
+        <label id="lblWin">Time frames — cycles in this order</label>
+        <div class="tk-chips" id="chipsWin" role="group" aria-labelledby="lblWin"></div>
         <div class="tk-hint">Each frame gets its own section in the reel, introduced by a "1D Risers"-style header.</div>
       </div>
 
       <div class="tk-field">
-        <label>Rarity groups — one section each</label>
-        <div class="tk-chips" id="chipsGrp"></div>
+        <label id="lblGrp">Rarity groups — one section each</label>
+        <div class="tk-chips" id="chipsGrp" role="group" aria-labelledby="lblGrp"></div>
         <div class="tk-hint" id="rawOffNote" style="display:none;">Raw cards are off — this reel is graded only.</div>
       </div>
 
       <div class="tk-field">
-        <label>Printings</label>
-        <div class="tk-chips" id="chipsFoil"></div>
+        <label id="lblFoil">Printings</label>
+        <div class="tk-chips" id="chipsFoil" role="group" aria-labelledby="lblFoil"></div>
         <div class="tk-hint">Chase rarities (Enchanted / Epic / Iconic / Promo) only exist one way, so they ignore this — same rule as the Screener.</div>
       </div>
 
       <div class="tk-field">
-        <label>Direction</label>
-        <div class="tk-seg" id="segDir"></div>
+        <label id="lblDir">Direction</label>
+        <div class="tk-seg" id="segDir" role="group" aria-labelledby="lblDir"></div>
       </div>
 
       <div class="tk-field">
-        <label>Price basis</label>
-        <div class="tk-seg" id="segMetric"></div>
+        <label id="lblMetric">Price basis</label>
+        <div class="tk-seg" id="segMetric" role="group" aria-labelledby="lblMetric"></div>
         <div class="tk-hint">Low is TCGplayer's published Low Price — it tracks the cheap end of the market. NM Market is their Near-Mint market price, a smoothed average of recent sales.</div>
       </div>
 
       <div class="tk-row">
         <div class="tk-field">
-          <label>Cards per section</label>
+          <label for="inCount">Cards per section</label>
           <input type="number" id="inCount" min="3" max="60" step="1">
         </div>
         <div class="tk-field">
-          <label>Min price $</label>
+          <label for="inMin">Min price $</label>
           <input type="number" id="inMin" min="0" max="500" step="0.5">
         </div>
       </div>
-      <div class="tk-hint" style="margin-top:-6px;margin-bottom:11px;">A price floor keeps 10¢ cards' +300% "moves" out of the bar.</div>
+      <div class="tk-hint" style="margin-top:-6px;margin-bottom:11px;">Only cards worth at least this at the <b>start</b> of the time frame — so a 10¢ card's +300% "move" stays off the bar.</div>
     </div>
 
     <div class="tk-card">
       <h2>Graded slabs</h2>
       <div class="tk-field">
-        <label>Add graded sections — off by default</label>
-        <div class="tk-chips" id="chipsGraded"></div>
+        <label id="lblGraded">Add graded sections — off by default</label>
+        <div class="tk-chips" id="chipsGraded" role="group" aria-labelledby="lblGraded"></div>
         <div class="tk-hint">From our own eBay sale record, not TCGplayer — a slab is a different asset from the card. <b>Graded movers</b> ranks by % move; <b>Top Sales</b> ranks by the biggest individual sales in the window.</div>
       </div>
       <div id="gradedOpts">
         <div class="tk-field">
-          <label>Card types — pick any combination</label>
-          <div class="tk-chips" id="chipsGcat"></div>
+          <label id="lblGcat">Card types — pick any combination</label>
+          <div class="tk-chips" id="chipsGcat" role="group" aria-labelledby="lblGcat"></div>
           <div class="tk-hint"><b>Normal</b> is every booster rarity, Common through Legendary — people grade commons, so this is wider than the raw reel's "Rare – Legendary".</div>
         </div>
         <div class="tk-field">
-          <label>Graders — pick any combination</label>
-          <div class="tk-chips" id="chipsGrader"></div>
+          <label id="lblGrader">Graders — pick any combination</label>
+          <div class="tk-chips" id="chipsGrader" role="group" aria-labelledby="lblGrader"></div>
         </div>
         <div class="tk-field">
-          <label>Grades — pick any combination</label>
-          <div class="tk-chips" id="chipsGrade"></div>
+          <label id="lblGrade">Grades — pick any combination</label>
+          <div class="tk-chips" id="chipsGrade" role="group" aria-labelledby="lblGrade"></div>
           <div class="tk-hint">Every card still shows its own grader and grade, so a mixed section stays readable.</div>
         </div>
         <div class="tk-field">
-          <label>Min price $</label>
+          <label for="inGmin">Min price $</label>
           <input type="number" id="inGmin" min="0" max="100000" step="5">
           <div class="tk-hint">Slabs sell for much more than raw cards, so this floor starts at $100. Graded also needs a longer window than raw does: a slab sells rarely, so <b>1D</b> and <b>1W</b> have far fewer cards to draw on than <b>1M</b> or <b>1Y</b>.</div>
         </div>
@@ -360,7 +374,7 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
     <div class="tk-card">
       <h2>Look &amp; motion</h2>
       <div class="tk-field">
-        <label>Scroll speed <span id="speedVal" style="text-transform:none;letter-spacing:0;"></span></label>
+        <label for="inSpeed">Scroll speed <span id="speedVal" style="text-transform:none;letter-spacing:0;"></span></label>
         <input type="range" id="inSpeed" min="15" max="200" step="5" style="width:100%;">
       </div>
       <label class="tk-check"><input type="checkbox" id="ckImg"> Card art thumbnails</label>
@@ -368,11 +382,11 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
       <label class="tk-check"><input type="checkbox" id="ckTransparent"> Transparent bar (stream shows through)</label>
       <div class="tk-row" style="margin-top:4px;">
         <div class="tk-field">
-          <label>Bar color</label>
+          <label for="inBg">Bar color</label>
           <div class="tk-colorrow"><input type="color" id="inBg"></div>
         </div>
         <div class="tk-field">
-          <label>Text color</label>
+          <label for="inFg">Text color</label>
           <div class="tk-colorrow"><input type="color" id="inFg"></div>
         </div>
       </div>
@@ -383,7 +397,7 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
     <div class="tk-card">
       <h2>Your overlay URL</h2>
       <div class="tk-urlrow">
-        <input type="text" id="urlOut" readonly spellcheck="false">
+        <input type="text" id="urlOut" readonly spellcheck="false" aria-label="Your overlay URL">
         <button class="tk-copy" id="btnCopy">Copy URL</button>
       </div>
       <div class="tk-hint" style="margin-top:8px;">The URL carries every setting above — paste it into OBS once and it's set. Prices update once a day (~3:30 PM Chicago); the bar re-checks once daily at 5:00 PM Chicago, so a long stream picks the new numbers up automatically.</div>
@@ -437,12 +451,12 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
    free, and keep the end marker below. */
 
 const TK_WINDOWS = [
-  {key:"1d", label:"1D", col:"_1d"},
-  {key:"1w", label:"1W", col:"_7d"},
-  {key:"1m", label:"1M", col:"_30d"},
-  {key:"3m", label:"3M", col:"_90d"},
-  {key:"6m", label:"6M", col:"_180d"},
-  {key:"1y", label:"1Y", col:"_365d"},
+  {key:"1d", label:"1D", col:"_1d",   prior:"prev"},
+  {key:"1w", label:"1W", col:"_7d",   prior:"7d"},
+  {key:"1m", label:"1M", col:"_30d",  prior:"30d"},
+  {key:"3m", label:"3M", col:"_90d",  prior:"90d"},
+  {key:"6m", label:"6M", col:"_180d", prior:"180d"},
+  {key:"1y", label:"1Y", col:"_365d", prior:"365d"},
 ];
 /* Mirrors the home movers banners: Chase, Rare–Legendary, Promos. */
 const TK_GROUPS = [
@@ -670,12 +684,17 @@ function buildTickerPlan(cfg, now){
   const sections = [];
   for(const win of TK_WINDOWS.filter(w => cfg.wins.includes(w.key))){
     const pctCol = pcPrefix + win.col;
+    // ⚠ The floor is on the price the card STARTED the window at, the rule the
+    // home movers banners use. On today's price, a card that climbed from a
+    // few cents to $22 qualified and led a live 1Y bar at "549x" — a move
+    // nobody could have traded. It also lets a real crash from $50 to $3 in.
+    const priorCol = (cfg.metric === "low" ? "low_" : "market_") + win.prior;
     for(const group of TK_GROUPS.filter(g => cfg.groups.includes(g.key))){
       const requests = dirs.map(dir => {
         const q = new URLSearchParams();
         q.set("select", "card_id,name,version,rarity,printing,image_small," + priceCol + "," + pctCol);
         q.set(pctCol, dir === "up" ? "gt.0" : "lt.0");
-        if(cfg.min > 0) q.set(priceCol, "gte." + cfg.min);
+        if(cfg.min > 0) q.set(priorCol, "gte." + cfg.min);
         else q.set(priceCol, "not.is.null");
         if(group.rarities){
           q.set("rarity", group.rarities.length === 1
@@ -758,6 +777,16 @@ function markTickerBrand(sections){
     prevWin = sec.win;
   }
   return sections;
+}
+
+/* The sections a fetch round actually filled, with the credit placed AGAIN.
+   ⚠ The credit is assigned to the PLAN, before any query runs, so dropping an
+   empty section afterwards took its credit with it — and a reel whose branded
+   sections all came back empty carried no credit at all (with brand=0, no
+   packs.ink anywhere on a live overlay). */
+function tickerKeepFilled(results){
+  return markTickerBrand(results.filter(r => r.rows && r.rows.length)
+    .map(r => Object.assign({}, r.sec, {rows: r.rows})));
 }
 
 /* How long ago a slab sold, for the Top Sales column that would otherwise
@@ -853,7 +882,9 @@ const fmtPx = (v) => {
 const fmtPct = (p) => {
   if(p == null) return "—";
   const a = Math.abs(p);
-  if(a >= 1000) return (p > 0 ? "+" : "") + Math.round(p / 100) + "x";
+  // A move past +1000% reads as a multiple of the starting price — which is
+  // 1 + p/100 (+1000% is 11x), not p/100.
+  if(a >= 1000) return Math.round(1 + p / 100) + "x";
   return (p > 0 ? "+" : "") + p.toFixed(a >= 100 ? 0 : 1) + "%";
 };
 let cfg = parseTickerCfg(location.search);
@@ -916,8 +947,7 @@ async function loadData(){
   if(seq !== fetchSeq) return;
   loadedOnce = true;
   const anyFail = results.some(r => !r.ok);
-  const filled = results.filter(r => r.rows.length)
-    .map(r => Object.assign({}, r.sec, {rows: r.rows}));
+  const filled = tickerKeepFilled(results);
   if(filled.length){
     sections = filled;
     renderStrip();
@@ -1093,11 +1123,22 @@ window.addEventListener("resize", () => {
 if(document.fonts && document.fonts.ready) document.fonts.ready.then(() => layoutStrip());
 
 /* ───────── bar cosmetics from cfg ───────── */
+// Relative luminance (WCAG) of a #rrggbb colour.
+function tkLuminance(hex){
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ""));
+  if(!m) return 0;
+  const n = parseInt(m[1], 16);
+  const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+  return 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
+}
 function applyBarLook(){
   const bar = $("bar");
   bar.style.setProperty("--tk-bg", cfg.transparent ? "transparent" : cfg.bg);
   bar.style.setProperty("--tk-fg", cfg.fg);
   bar.dataset.transparent = cfg.transparent ? "1" : "0";
+  // 0.28 is the crossover: above it the dark accents out-contrast the gold
+  // ones against the bar, below it the gold ones win.
+  bar.dataset.light = (!cfg.transparent && tkLuminance(cfg.bg) > 0.28) ? "1" : "0";
   $("cap").style.display = cfg.brand ? "" : "none";
 }
 
@@ -1140,7 +1181,9 @@ function initConfigUI(){
       const b = document.createElement("button");
       b.textContent = o.label;
       if(o.title) b.title = o.title;
+      b.type = "button";
       b.className = "chip" + (isOn(o.value) ? " active" : "");
+      b.setAttribute("aria-pressed", isOn(o.value) ? "true" : "false");
       b.addEventListener("click", () => { toggle(o.value); syncUI(); onCfgChange(true); });
       host.appendChild(b);
     });
@@ -1158,7 +1201,9 @@ function initConfigUI(){
     options.forEach(o => {
       const b = document.createElement("button");
       b.textContent = o.label;
+      b.type = "button";
       b.className = get() === o.value ? "active" : "";
+      b.setAttribute("aria-pressed", get() === o.value ? "true" : "false");
       b.addEventListener("click", () => { set(o.value); syncUI(); onCfgChange(true); });
       host.appendChild(b);
     });
@@ -1247,6 +1292,12 @@ function onCfgChange(refetch){
   // replaceState can throw on file:// in some browsers — the URL sync is a
   // nicety, never worth breaking the controls over.
   try{ history.replaceState(null, "", location.pathname + (rest ? "?" + rest : "")); }catch(e){}
+  // Embedded in the Analytics tab, THIS page's address is inside the frame and
+  // nobody can see, refresh or bookmark it — so the host mirrors the settings
+  // onto its own (AutoHeightFrame's mirrorParamsAt in Index.html).
+  if(document.documentElement.getAttribute("data-embed") === "1"){
+    try { parent.postMessage({type: "packsink:embed-params", params: rest}, location.origin); } catch(e){}
+  }
   params.set("bar", "1");
   $("urlOut").value = TICKER_URL_BASE + "?" + params.toString();
   applyBarLook();
