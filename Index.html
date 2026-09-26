@@ -37634,7 +37634,10 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
   // Pack ↔ Box ↔ Odds remounts the mode component, which re-reads this in
   // its useState initializer, so the picked set survives the switch. Also the
   // EV row → Simulator handoff target (preselect the set, land on Box mode).
-  const [simSet, setSimSet] = useState(null);
+  // Opens on the newest set that has actually released, so "Open a pack" works
+  // on arrival — it opened on an empty picker with the button disabled.
+  const [simSet, setSimSet] = useState(() =>
+    [...(sets || [])].reverse().find(x => !PRERELEASE_SETS.has(x)) || null);
   const simulateSet = useCallback((setName)=>{
     setSimSet(setName);
     setSimKind("box");
@@ -37818,6 +37821,10 @@ const flashToast = (msg, ms = 2200) => {
     el = document.createElement("div");
     el.id = "packsink-flash-toast";
     el.className = "packsink-flash-toast";
+    // Announced to screen readers — every save failure and "copied" message
+    // on the site goes through here, and none of them were ever spoken.
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-live", "polite");
     document.body.appendChild(el);
   }
   el.textContent = msg;
@@ -44807,6 +44814,24 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   // follow — the usual case for a link somebody SENT — fetched directly, since
   // it will never appear in their `all`.
   const cePending = useRef(seed.ce || null);
+  // A link that can never resolve (the event passed or was pruned, the reader
+  // hid it, a typo) used to wait forever: nothing opened, nothing said so, and
+  // the stale ?ce= stayed in the URL for "Copy link" to share onward.
+  const giveUpCe = useCallback(() => {
+    if(!cePending.current) return;
+    cePending.current = null;
+    try {
+      const url = new URL(location.href);
+      url.searchParams.delete("ce");
+      history.replaceState(history.state, "", url.toString());
+    } catch {}
+    flashToast("That event isn't on the calendar any more — it may have passed or been removed.", 4000);
+  }, []);
+  useEffect(() => {
+    if(!cePending.current) return;
+    const t = setTimeout(giveUpCe, 12000);
+    return () => clearTimeout(t);
+  }, [giveUpCe]);
   useEffect(() => {
     const want = cePending.current;
     if(!want) return;
@@ -44821,7 +44846,9 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     (async () => {
       const {data, error} = await calSelectEvents((cols) =>
         sbClient.from("lorcana_events").select(cols).eq("event_id", Number(m[1])).limit(1));
-      if(cancelled || error || !data || !data[0] || cePending.current !== want) return;
+      if(cancelled || error || cePending.current !== want) return;
+      // No such event on the live feed: it has passed or been pruned.
+      if(!data || !data[0]){ giveUpCe(); return; }
       const entry = calendarStoreEntry(data[0]);
       if(entry){ cePending.current = null; setSel(entry); }
     })();
@@ -52817,7 +52844,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // Toast portal — rendered into <body> so it floats above whichever
   // sub-view (editor / list / empty state) is on screen.
   const toastEl = toast ? ReactDOM.createPortal(
-    html`<div class="deck-toast">${toast}</div>`,
+    html`<div class="deck-toast" role="status" aria-live="polite">${toast}</div>`,
     document.body
   ) : null;
 
@@ -57117,11 +57144,18 @@ function App(){
   const [autoInstallVisits] = useState(() => {
     try {
       const prev = parseInt(localStorage.getItem("packsink:installVisits") || "0", 10) || 0;
+      // A VISIT, not a page load: reloading twice in one sitting used to count
+      // as three visits and pop the nudge on someone's first day.
+      if(sessionStorage.getItem("packsink:installVisitCounted")) return prev;
+      sessionStorage.setItem("packsink:installVisitCounted", "1");
       const next = prev + 1;
       localStorage.setItem("packsink:installVisits", String(next));
       return next;
     } catch { return 0; }
   });
+  // Arrived on a shared link (a deck, a card, a trade…): that is what they
+  // came to see, and an install modal on top of it is in the way.
+  const [landedOnLink] = useState(() => { try { return !!window.location.search; } catch { return false; } });
   useEffect(() => {
     if(IS_NATIVE_APP) return; // already installed as a native app — no PWA nudge
     if(isStandalone) return;
@@ -57134,13 +57168,18 @@ function App(){
     // grace before the nudge). Beyond that, stay quiet — they've had two
     // chances and either dismissed forever or ignored it twice, which is
     // its own signal.
+    if(landedOnLink) return;
     if(autoInstallVisits >= 3 && autoInstallVisits <= 4){
       // Delay slightly so the modal doesn't slam in during the initial
-      // render; lets the page paint first.
-      const t = setTimeout(() => setInstallHelpOpen(true), 800);
+      // render; lets the page paint first. Never over another dialog (the
+      // welcome, the name prompt, the graded terms, an open card).
+      const t = setTimeout(() => {
+        if(document.querySelector('[role="dialog"], [aria-modal="true"], .modal-backdrop, .card-detail-overlay, .welcome-tour')) return;
+        setInstallHelpOpen(true);
+      }, 800);
       return () => clearTimeout(t);
     }
-  }, [autoInstallVisits, isStandalone, isIOS, isAndroid]);
+  }, [autoInstallVisits, isStandalone, isIOS, isAndroid, landedOnLink]);
   const dismissInstallForever = () => {
     try { localStorage.setItem("packsink:installDismissed", "1"); } catch {}
   };
@@ -57299,6 +57338,15 @@ function App(){
     // velvet/aurora/black showing light-theme price colors after the rewrite).
     document.documentElement.setAttribute("data-mode", isDarkTheme(resolvedTheme) ? "dark" : "light");
     try { localStorage.setItem("packsink:theme", resolvedTheme); } catch {}
+    // The browser chrome follows the theme: theme-color was fixed at the dark
+    // purple, so on a light theme Android's status bar and Safari's tab bar
+    // sat as a dark slab over a cream page. --bg-solid is each theme's flat
+    // chrome colour (the gradient themes can't hand theme-color a gradient).
+    try {
+      const c = getComputedStyle(document.documentElement).getPropertyValue("--bg-solid").trim();
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if(meta && c) meta.setAttribute("content", c);
+    } catch {}
   }, [resolvedTheme]);
   // Back-compat aliases for the rest of the file: `theme` = effective theme.
   const theme = resolvedTheme;
@@ -59891,6 +59939,12 @@ class ErrorBoundary extends React.Component {
       try { window.history.replaceState(null, "", href); } catch {}
       root.render(html`<${ErrorBoundary}><${App}/><//>`);
     };
+    // Something on screen while the code resolves — it could take up to 8s
+    // before, with nothing painted but an empty page.
+    root.render(html`<div class="boot-error boot-loading" role="status">
+      <img src="Logos/packs-ink-logo-sm.png?v=5" alt="" class="boot-error-logo"/>
+      <div class="boot-loading-spinner" aria-hidden="true"></div>
+      <h2 class="title-font">Opening the deck…</h2></div>`);
     const bail = setTimeout(() => settle("/decks"), 8000);
     sbClient.rpc("resolve_deck_short_code", {p_code: shortCode}).then(({data, error}) => {
       clearTimeout(bail);
