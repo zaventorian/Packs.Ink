@@ -46,6 +46,7 @@ const parents  = grab("const SET_PARENT = {", "\n};");
 const parentsFixture = 'SET_PARENT["Attack of the Vine! Promos"] = "Attack of the Vine!";';
 const display  = grab("const SET_DISPLAY_NAMES = {", "\n};");
 const maps     = grab("let _setReleaseById = new Map();", "_setMainlineById = main;\n};");
+const famKey   = grab("const cardFamilyKey = (name) =>", ".toLowerCase();");
 const fromRows = grab("const printingsFromRows = (rows) => {", "\n};");
 const printFn  = grab("const cardPrintingsFor = (catalog, productName) => {", "\n};");
 const spansFn  = grab("const spansTwoReleases = (printings) =>", ";");
@@ -55,7 +56,7 @@ const verdictFn = grab("const reprintVerdict = (printings, curSetId) => {", "\n}
 
 const { setSetReleaseDates, cardPrintingsFor, reprintVerdict, deckReprintNotes } =
   await import("data:text/javascript," + encodeURIComponent(
-    [mainline, parents, parentsFixture, display, maps, fromRows, printFn, spansFn, spansMain, deckFn, verdictFn,
+    [mainline, parents, parentsFixture, display, maps, famKey, fromRows, printFn, spansFn, spansMain, deckFn, verdictFn,
      "export {setSetReleaseDates, cardPrintingsFor, reprintVerdict, deckReprintNotes};"].join("\n")));
 
 // The real sets table, trimmed to the rows these cases exercise. Dates are the

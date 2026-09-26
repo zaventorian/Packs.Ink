@@ -38,6 +38,7 @@ import argparse
 import os
 import re
 import sys
+import unicodedata
 import uuid
 
 import requests
@@ -91,6 +92,22 @@ def product_name(row):
     return f"{row['name']} - {row['version']}" if row.get("version") else row["name"]
 
 
+def norm_name(n):
+    """Match key for a card name. Lorcast's spelling is not stable across
+    printings — "HeiHei" / "Heihei", "Strike a" / "Strike A", curly vs straight
+    apostrophes — and an exact match silently landed a deck line on whichever
+    printing happened to share the file's spelling: the Enchanted "Islands"
+    ($48) instead of the $1 one, a promo Ursula's Lair, an Enchanted Bruno."""
+    n = unicodedata.normalize("NFKD", n or "")
+    n = "".join(c for c in n if not unicodedata.combining(c))
+    n = n.replace("’", "'").replace("‘", "'")
+    return re.sub(r"\s+", " ", n).strip().lower()
+
+
+# Printings a starter deck should never land on when an ordinary one exists.
+SPECIAL_RARITIES = ("Enchanted", "Iconic", "Epic", "Promo")
+
+
 def load_catalog(sb):
     """Product Name -> best card row. Prefers the earliest mainline printing so
     the deck links to the ordinary version of a card rather than a promo."""
@@ -100,7 +117,7 @@ def load_catalog(sb):
                 "Wilds Unknown", "Attack of the Vine!"]
     rank = {s: i for i, s in enumerate(mainline)}
     sets = {s["id"]: s["name"] for s in sb.select("sets", "id,name", limit=500)}
-    rows = sb.select("cards", "id,name,version,set_id,rarity,ink,inks,cost,card_type", order="id.asc")
+    rows = sb.select("cards", "id,name,version,set_id,rarity,ink,inks,cost,card_type,collector_number", order="id.asc")
     best = {}
     for r in rows:
         set_name = sets.get(r["set_id"])
@@ -108,8 +125,19 @@ def load_catalog(sb):
             # The leaders themselves have catalog rows the client suppresses.
             # A deck_cards row pointing at one would render as nothing.
             continue
-        key = (rank.get(set_name, 90), r.get("rarity") in ("Enchanted", "Iconic", "Epic"), r["id"])
-        n = product_name(r)
+        if str(r["id"]).endswith("_foil"):
+            # patch_pid_overrides' connecting-foil companion rows. The client
+            # folds these into the base card and never draws them, so a deck
+            # line pointing here rendered as an "Unknown" tile, dropped out of
+            # the poster and proxies, and exported as a raw id.
+            continue
+        # Earliest booster set first, then an ordinary printing over a chase or
+        # promo one, then a plain collector number over a lettered one — the
+        # connecting-art foils (Louie "1f") are separate cards rows the client
+        # folds into the base card and never draws — then the id.
+        cn = str(r.get("collector_number") or "")
+        key = (rank.get(set_name, 90), r.get("rarity") in SPECIAL_RARITIES, not cn.isdigit(), r["id"])
+        n = norm_name(product_name(r))
         if n not in best or key < best[n][0]:
             r["set"] = set_name
             best[n] = (key, r)
@@ -146,11 +174,14 @@ def validate(path, meta, cards, catalog):
     leader_ink, assoc, extra = LEADERS[slug]
     errs, inks, counts = [], set(), {}
     for qty, name in cards:
-        counts[name] = counts.get(name, 0) + qty
-        row = catalog.get(name)
+        counts[norm_name(name)] = counts.get(norm_name(name), 0) + qty
+        row = catalog.get(norm_name(name))
         if row is None:
             errs.append(f"no such card: {name!r}")
             continue
+        if row.get("rarity") in SPECIAL_RARITIES:
+            # Only reachable when the card has NO ordinary printing at all.
+            print(f"      note: {name!r} resolves to a {row['rarity']} printing ({row.get('set')})")
         for ink in (row.get("inks") or ([row["ink"]] if row.get("ink") else [])):
             inks.add(ink)
     total = sum(q for q, _ in cards)
@@ -163,12 +194,14 @@ def validate(path, meta, cards, catalog):
     declared = {i.strip() for i in meta["INKS"].split(",") if i.strip()}
     if declared != inks:
         errs.append(f"INKS: says {sorted(declared)}, cards say {sorted(inks)}")
+    extra_n = {norm_name(k): v for k, v in extra.items()}
+    special_n = {norm_name(k): v for k, v in SPECIAL_LIMITS.items()}
     for name, qty in counts.items():
-        limit = 4 if name == assoc else extra.get(name, SPECIAL_LIMITS.get(name, 1))
+        limit = 4 if name == norm_name(assoc) else extra_n.get(name, special_n.get(name, 1))
         if qty > limit:
             errs.append(f"{qty}x {name} (limit {limit})")
-    if counts.get(assoc, 0) != 4:
-        errs.append(f"{counts.get(assoc, 0)}x {assoc} — the associated card should be a full playset")
+    if counts.get(norm_name(assoc), 0) != 4:
+        errs.append(f"{counts.get(norm_name(assoc), 0)}x {assoc} — the associated card should be a full playset")
     return errs
 
 
@@ -195,7 +228,7 @@ def publish(sb, slug, meta, cards, catalog):
                         headers=headers, timeout=60)
     if not d.ok:
         raise RuntimeError(f"deck_cards clear failed ({d.status_code}): {d.text[:300]}")
-    rows = [{"deck_id": did, "card_id": catalog[name]["id"], "printing": "Normal", "quantity": qty}
+    rows = [{"deck_id": did, "card_id": catalog[norm_name(name)]["id"], "printing": "Normal", "quantity": qty}
             for qty, name in cards]
     c = requests.post(f"{sb.url}/rest/v1/deck_cards", headers=headers, json=rows, timeout=60)
     if not c.ok:
