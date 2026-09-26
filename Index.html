@@ -16600,7 +16600,7 @@ const scanVariantTitle = (v) => v.label + (v.set ? " · " + v.set : "")
 // families in the shipped index hang on this one call. Each entry keeps its
 // OWN name string; only the grouping folds.
 const scanVariantFamilyKey = (productName) => String(productName || "").toLowerCase();
-function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail, onOpenReview, onOpenDeck }){
+function CardScannerModal({ raw, collection, updateQty, addManyToCollection, user, onSignIn, onClose, onOpenDetail, onOpenReview, onOpenDeck }){
   const videoRef = useRef(null);
   const stageRef = useRef(null);
   const overlayRef = useRef(null);
@@ -16701,6 +16701,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // the list land a frame later, the same way the Cards browser does it.
   const qaEditQd = React.useDeferredValue(qaEditQ);
   const [qaDeckBusy, setQaDeckBusy] = useState(false);
+  const [qaSaving, setQaSaving] = useState(false);
   const [qaUndo, setQaUndo] = useState(null);         // {label} — undo chip after a row delete
   const qaUndoRef = useRef(null);                     // { row, idx, timer }
   const [qaClearArm, setQaClearArm] = useState(false);
@@ -16761,17 +16762,27 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       } catch(_e){}
     })();
   }, [qaPersistKey]);
+  const qaPersistPendingRef = useRef(null);
   useEffect(() => {
     if(!qaPersistKey) return;
+    // in-flight rows are dropped (their identify jobs die with the modal);
+    // everything else persists verbatim, including user edits + saved marks
+    const rows = qaResults.filter(x => x.status !== "identifying");
+    qaPersistPendingRef.current = { key: qaPersistKey, rows };
     clearTimeout(qaPersistTimerRef.current);
     qaPersistTimerRef.current = setTimeout(() => {
-      // in-flight rows are dropped (their identify jobs die with the modal);
-      // everything else persists verbatim, including user edits + saved marks
-      const rows = qaResults.filter(x => x.status !== "identifying");
+      qaPersistPendingRef.current = null;
       idbSet(qaPersistKey, { t: Date.now(), rows });
     }, 600);
     return () => clearTimeout(qaPersistTimerRef.current);
   }, [qaResults, qaPersistKey]);
+  // Closing the scanner inside that 600ms window dropped the write — so a
+  // save, a Clear all or a delete made just before closing came back on the
+  // next open, and "+ Add" then added those cards a second time.
+  useEffect(() => () => {
+    const pend = qaPersistPendingRef.current;
+    if(pend){ qaPersistPendingRef.current = null; idbSet(pend.key, { t: Date.now(), rows: pend.rows }); }
+  }, []);
 
   const lbl = (c) => (c.name || "") + (c.version ? " - " + c.version : "");
   const toDisp = (card) => ({ id: card.id, name: card.name, version: card.version,
@@ -16779,7 +16790,12 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // price lookup for a catalog group — canonical pick chain (Low / NM Market).
   const resolveGroup = (card) => {
     const row = raw && raw.find(x => x.card_id === card.id && x.tcgplayer_product_id);
-    return row ? groupFromSimCard(row, raw) : null;
+    if(row) return groupFromSimCard(row, raw);
+    // No TCGplayer SKU yet — a new set's unlisted cards, an unpriced promo, a
+    // regional exclusive. Still a real card with a real printing, so it can be
+    // saved; it just has no price. (groupFromSimCard looks rows up by pid.)
+    const own = raw ? raw.filter(x => x.card_id === card.id) : [];
+    return own.length ? (groupCards(own)[0] || null) : null;
   };
   const priceOf = (g) => {
     if(!g) return { low: null, mkt: null };
@@ -16809,10 +16825,14 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // truth there and the state is only for rendering.
   const uploadsOnRef = useRef(true);
   useEffect(() => { uploadsOnRef.current = uploadsOn; }, [uploadsOn]);
+  // Per ACCOUNT: on a shared device the next person's camera started on the
+  // previous person's acceptance until their own record was read, and they
+  // inherited that person's upload choice.
+  const scanFlagKey = (base) => base + (user && user.id ? ":" + user.id.slice(0, 8) : "");
   useEffect(() => {
     let local = false, localUp = null;
-    try { local = localStorage.getItem("packsink:scanBeta") === SCAN_BETA_VERSION; } catch {}
-    try { const u = localStorage.getItem("packsink:scanUploads"); if(u != null) localUp = (u === "1"); } catch {}
+    try { local = localStorage.getItem(scanFlagKey("packsink:scanBeta")) === SCAN_BETA_VERSION; } catch {}
+    try { const u = localStorage.getItem(scanFlagKey("packsink:scanUploads")); if(u != null) localUp = (u === "1"); } catch {}
     if(localUp != null){ setUploadsOn(localUp); uploadsOnRef.current = localUp; }
     if(local) setConsentOk(true);
     if(!user || !sbClient){ setConsentLoaded(true); return; }
@@ -16826,12 +16846,12 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         if(error) return;
         const ok = !!data && data.version === SCAN_BETA_VERSION;
         setConsentOk(ok);
-        try { ok ? localStorage.setItem("packsink:scanBeta", SCAN_BETA_VERSION)
-                 : localStorage.removeItem("packsink:scanBeta"); } catch {}
+        try { ok ? localStorage.setItem(scanFlagKey("packsink:scanBeta"), SCAN_BETA_VERSION)
+                 : localStorage.removeItem(scanFlagKey("packsink:scanBeta")); } catch {}
         if(data && typeof data.uploads_enabled === "boolean"){
           setUploadsOn(data.uploads_enabled);
           uploadsOnRef.current = data.uploads_enabled;
-          try { localStorage.setItem("packsink:scanUploads", data.uploads_enabled ? "1" : "0"); } catch {}
+          try { localStorage.setItem(scanFlagKey("packsink:scanUploads"), data.uploads_enabled ? "1" : "0"); } catch {}
         }
       }, () => { if(!cancelled) setConsentLoaded(true); });
     return () => { cancelled = true; };
@@ -16844,15 +16864,20 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       .then(()=>{}, ()=>{});
   };
   const acceptConsent = () => {
-    try { localStorage.setItem("packsink:scanBeta", SCAN_BETA_VERSION); } catch {}
+    try { localStorage.setItem(scanFlagKey("packsink:scanBeta"), SCAN_BETA_VERSION); } catch {}
     setConsentOk(true);
     writeConsent({ accepted_at: new Date().toISOString(), uploads_enabled: uploadsOnRef.current });
   };
   const setUploadPref = (on) => {
     setUploadsOn(on);
     uploadsOnRef.current = on;
-    try { localStorage.setItem("packsink:scanUploads", on ? "1" : "0"); } catch {}
-    writeConsent({ uploads_enabled: on });
+    try { localStorage.setItem(scanFlagKey("packsink:scanUploads"), on ? "1" : "0"); } catch {}
+    // ⚠ Before acceptance the choice stays LOCAL. writeConsent stamps the
+    // notice version, and the table defaults accepted_at to now(), so ticking
+    // this box on the notice recorded an acceptance nobody gave — the next
+    // open started the camera without "Got it" ever being pressed.
+    // acceptConsent carries the choice up with the real acceptance.
+    if(consentOk) writeConsent({ uploads_enabled: on });
   };
 
   // mount: index + camera + worker
@@ -18786,12 +18811,21 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     const f = qaRowFields(m, []);
     delete f.predId; delete f.cands;   // the scanner's answer + alternates stay frozen
     if(pick.label) f.guess = pick.label;
+    // A user-chosen side (a Foil flip, "All Foil") survives picking a different
+    // version, the same way it survives the scanner's own re-reads in
+    // updateQaRow. Resetting it silently saved a foil as Non-Foil.
+    const side = x.userPrSide || null;
+    if(side){
+      const pr2 = side === "F" ? (f.prF || f.prN) : (f.prN || f.prF);
+      const px2 = side === "F" ? (f.prF ? f.pxF : f.pxN) : (f.prN ? f.pxN : f.pxF);
+      if(pr2){ f.printing = pr2; if(px2) f.price = px2.mkt ?? px2.low ?? f.price; }
+    }
     const changed = (x.guessId || null) !== pick.id;
     traceRef.current.n[changed ? "userEdits" : "userConfirms"]++;
     trc(changed ? "user-edit" : "user-confirm", { from: x.guessId || null, to: pick.id, how: how || "search", conf: x.conf || null });
     labelSample(x, { __truth: pick.id, reviewed: true, printing: f.printing || null });
     setQaResults(prev => prev.map(r => r.id === rid
-      ? { ...r, ...f, status: "done", conf: "user", ver: false, alts: "", userSet: true, userPrSide: null }
+      ? { ...r, ...f, status: "done", conf: "user", ver: false, alts: "", userSet: true, userPrSide: side }
       : r));
     setQaEditOpen(null);
   };
@@ -18884,21 +18918,34 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   };
   // The ONLY collection write in QA mode: the explicit review-screen button.
   // Stage → human review → explicit save, same invariant as the staging flow.
-  const qaSaveToCollection = () => {
+  const qaSaveToCollection = async () => {
     if(!user){ onSignIn && onSignIn(); return; }
+    if(qaSaving) return;
     const rows = qaResults.filter(x => !x.saved && x.guessId && x.printing && x.status !== "identifying");
     if(!rows.length) return;
     const agg = new Map();
     for(const x of rows){
       const k = x.guessId + ":" + x.printing;
-      const a = agg.get(k) || { cardId: x.guessId, printing: x.printing, n: 0 };
-      a.n++; agg.set(k, a);
+      const a = agg.get(k) || { cardId: x.guessId, printing: x.printing, delta: 0 };
+      a.delta++; agg.set(k, a);
     }
-    let n = 0;
-    for(const a of agg.values()){
-      const cur = (collection && collection[a.cardId + ":" + a.printing]) || 0;
-      updateQty(a.cardId, a.printing, cur + a.n);
-      n += a.n;
+    const n = rows.length;
+    // Added relative to what the SERVER holds, and awaited: rows only turn
+    // "✓ saved" when the write landed. A failed write used to be marked saved
+    // anyway, leaving a rescan as the only way to retry.
+    setQaSaving(true);
+    let ok = false;
+    try {
+      ok = addManyToCollection ? await addManyToCollection([...agg.values()]) : false;
+    } finally {
+      setQaSaving(false);
+    }
+    if(!ok){
+      setSavedMsg(navigator.onLine === false
+        ? "You're offline — nothing was saved. Try again when you're back online."
+        : "Couldn't save to your collection — nothing was changed. Try again.");
+      setTimeout(() => setSavedMsg(""), 5000);
+      return;
     }
     traceRef.current.n.savedRows += n;
     trc("user-save", { n, uniq: agg.size });
@@ -19327,8 +19374,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         : qaResults.map(qaRowJsx)}
     </div>
     <div class="scanner-qa-review-actions">
-      <button class="scanner-btn primary" disabled=${!qaAgg.unsaved} onClick=${qaSaveToCollection}>
-        ${qaAgg.unsaved ? "+ Add " + qaAgg.unsaved + " to collection" : (qaAgg.savable ? "Added to collection ✓" : "+ Add to collection")}
+      <button class="scanner-btn primary" disabled=${!qaAgg.unsaved || qaSaving} onClick=${qaSaveToCollection}>
+        ${qaSaving ? "Saving…" : qaAgg.unsaved ? "+ Add " + qaAgg.unsaved + " to collection" : (qaAgg.savable ? "Added to collection ✓" : "+ Add to collection")}
       </button>
       <button class="scanner-btn" disabled=${!qaAgg.savable || qaDeckBusy} onClick=${qaCreateDeck}>${qaDeckBusy ? "Creating deck…" : "New deck"}</button>
     </div>
@@ -40903,10 +40950,18 @@ async function fetchCalendarEvents(force){
       ({data, error} = await run(cols));
       if(!missingCol(error)) break;
     }
+    // A table that isn't deployed IS the "no curated events" state; anything
+    // else (offline, a timeout, a 5xx) is a failure to read one that is.
+    if(error && !calendarUnavailable(error)) throw error;
     out = error
-      ? {rows: [], at: Date.now(), unavailable: calendarUnavailable(error)}
+      ? {rows: [], at: Date.now(), unavailable: true}
       : {rows: data || [], at: Date.now(), unavailable: false};
-  } catch { out = {rows: [], at: Date.now(), unavailable: false}; }
+  } catch {
+    // ⚠ Not cached, and not "empty": every Challenge and Qualifier used to
+    // vanish for ten minutes with nothing on screen, and nothing retried when
+    // the connection came back. Keep whatever we already had and say it failed.
+    return {rows: _calEventsCache ? _calEventsCache.rows : [], at: 0, unavailable: false, failed: true};
+  }
   _calEventsCache = out;
   return out;
 }
@@ -40915,13 +40970,20 @@ function useCalendarEvents(){
   const [state, setState] = useState(() => _calEventsCache || {rows: [], at: 0, unavailable: false});
   const reload = useCallback((force) => fetchCalendarEvents(force).then(setState), []);
   useEffect(() => { reload(false); }, [reload]);
+  // Coming back online retries a read that failed while offline.
+  useEffect(() => {
+    if(!state.failed) return;
+    const on = () => reload(true);
+    window.addEventListener("online", on);
+    return () => window.removeEventListener("online", on);
+  }, [state.failed, reload]);
   const events = useMemo(
     () => calendarMergeEvents([...calendarSetEntries(SET_RELEASE_DATES),
                                ...calendarEstimatedSetEntries(
                                     calendarSetEstimates(SET_RELEASE_DATES, UPCOMING_SET_NAMES)),
                                ...calendarProductEntries(PRODUCT_RELEASE_DATES)], state.rows),
     [state.rows]);
-  return {events, rows: state.rows, unavailable: state.unavailable, reload};
+  return {events, rows: state.rows, unavailable: state.unavailable, failed: !!state.failed, reload};
 }
 
 // localStorage is the source of truth for a signed-out visitor and the mirror
@@ -40945,6 +41007,33 @@ const calWriteLocalSubs = (subs) => { try { localStorage.setItem(CAL_SUBS_LS, JS
 // really were made signed-out (no owner) or by this same account.
 const CAL_SUBS_OWNER_LS = "packsink:calSubsOwner";
 const calSubsOwner = () => { try { return localStorage.getItem(CAL_SUBS_OWNER_LS) || ""; } catch { return ""; } };
+// Rows added while signed in whose server write has not been confirmed (made
+// offline, or the request failed). Only these — and rows made signed-out — are
+// re-uploaded on the next load. Everything else the server doesn't have was
+// removed on ANOTHER device, and re-upserting it undid that unfollow.
+const CAL_SUBS_PENDING_LS = "packsink:calSubsPending";
+const calReadPending = () => {
+  try { const a = JSON.parse(localStorage.getItem(CAL_SUBS_PENDING_LS) || "[]"); return new Set(Array.isArray(a) ? a : []); }
+  catch { return new Set(); }
+};
+const calWritePending = (set) => { try { localStorage.setItem(CAL_SUBS_PENDING_LS, JSON.stringify([...set])); } catch {} };
+const calMarkPending = (key, on) => {
+  const p = calReadPending();
+  if(on) p.add(key); else p.delete(key);
+  calWritePending(p);
+};
+// ONE list for every surface. The calendar page, the home tile and the event
+// finder overlay each ran this hook, and each held its own copy: a store
+// followed in the overlay did not appear on the calendar underneath until a
+// reload, and the calendar's next write (a hide, a kind toggle) wrote its stale
+// copy back over localStorage — permanently losing a signed-out follow.
+const _calSubsStore = {subs: null, listeners: new Set()};
+const calSubsCurrent = () => _calSubsStore.subs || calReadLocalSubs();
+const calSubsPublish = (next) => {
+  _calSubsStore.subs = next;
+  calWriteLocalSubs(next);
+  _calSubsStore.listeners.forEach(fn => { try { fn(next); } catch {} });
+};
 
 // `skip` is for a component that has been HANDED a subs object by its parent:
 // the hook still has to run (hook order), but it must not fetch the same rows
@@ -40953,17 +41042,25 @@ const calSubsOwner = () => { try { return localStorage.getItem(CAL_SUBS_OWNER_LS
 // tile so that following a store there updates the calendar above it at once.
 function useCalendarSubs(user, skip){
   const uid = user && user.id;
-  const [subs, setSubs] = useState(calReadLocalSubs);
+  const [subs, setSubsState] = useState(calSubsCurrent);
+  useEffect(() => {
+    const fn = (next) => setSubsState(next);
+    _calSubsStore.listeners.add(fn);
+    // Anything published between the first render and this subscription.
+    if(_calSubsStore.subs && _calSubsStore.subs !== subs) setSubsState(_calSubsStore.subs);
+    return () => { _calSubsStore.listeners.delete(fn); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const migrated = useRef(false);
   useEffect(() => {
     let cancelled = false;
     if(skip) return;
     if(!uid){
       if(calSubsOwner()){
-        calWriteLocalSubs([]);
         try { localStorage.removeItem(CAL_SUBS_OWNER_LS); } catch {}
-        setSubs([]);
-      } else setSubs(calReadLocalSubs());
+        calWritePending(new Set());
+        calSubsPublish([]);
+      } else calSubsPublish(calReadLocalSubs());
       return;
     }
     (async () => {
@@ -40976,18 +41073,25 @@ function useCalendarSubs(user, skip){
       const remote = data || [];
       const have = new Set(remote.map(calSubKey));
       const owner = calSubsOwner();
+      const pending = calReadPending();
+      // No owner stamp: the local rows were made signed-out, so all of them
+      // move up. This account's own mirror: only the writes that never landed.
       const orphans = (owner && owner !== uid) ? []
-        : calReadLocalSubs().filter(s => !have.has(calSubKey(s)));
+        : calReadLocalSubs().filter(s => !have.has(calSubKey(s)) && (!owner || pending.has(calSubKey(s))));
       let merged = remote;
       if(orphans.length && !migrated.current){
         migrated.current = true;
         const {error: upErr} = await sbClient.from("calendar_subscriptions").upsert(
           orphans.map(s => ({user_id: uid, kind: s.kind, ref: String(s.ref), label: s.label || null, meta: s.meta || null})),
           {onConflict: "user_id,kind,ref"});
-        if(!upErr) merged = remote.concat(orphans);
+        if(!upErr){
+          merged = remote.concat(orphans);
+          for(const o of orphans) pending.delete(calSubKey(o));
+          calWritePending(pending);
+        }
       }
       if(!cancelled){
-        setSubs(merged); calWriteLocalSubs(merged);
+        calSubsPublish(merged);
         try { localStorage.setItem(CAL_SUBS_OWNER_LS, uid); } catch {}
       }
     })();
@@ -41009,25 +41113,25 @@ function useCalendarSubs(user, skip){
     // left the other row standing and the two never cancelled.
     const oppRefs = !opposite ? [] : row.kind === "event" ? [row.ref, "ev:" + row.ref]
       : [row.ref].concat(/^ev:/.test(row.ref) ? [row.ref.slice(3)] : []);
-    setSubs(prev => {
+    {
+      const prev = calSubsCurrent();
       let next = opposite ? prev.filter(s => !(s.kind === opposite && oppRefs.includes(String(s.ref)))) : prev;
       next = next.some(s => calSubKey(s) === calSubKey(row)) ? next : next.concat([row]);
-      calWriteLocalSubs(next);
-      return next;
-    });
+      calSubsPublish(next);
+    }
     if(uid){
       if(opposite) sbClient.from("calendar_subscriptions").delete()
         .eq("user_id", uid).eq("kind", opposite).in("ref", oppRefs).then(() => {}, () => {});
+      const key = calSubKey(row);
+      calMarkPending(key, true);
       sbClient.from("calendar_subscriptions")
-        .upsert({user_id: uid, ...row}, {onConflict: "user_id,kind,ref"}).then(() => {}, () => {});
+        .upsert({user_id: uid, ...row}, {onConflict: "user_id,kind,ref"})
+        .then(({error}) => { if(!error) calMarkPending(key, false); }, () => {});
     }
   }, [uid]);
   const remove = useCallback((kind, ref) => {
-    setSubs(prev => {
-      const next = prev.filter(s => !(s.kind === kind && String(s.ref) === String(ref)));
-      calWriteLocalSubs(next);
-      return next;
-    });
+    calSubsPublish(calSubsCurrent().filter(s => !(s.kind === kind && String(s.ref) === String(ref))));
+    calMarkPending(kind + ":" + ref, false);
     if(uid) sbClient.from("calendar_subscriptions").delete()
       .eq("user_id", uid).eq("kind", kind).eq("ref", String(ref)).then(() => {}, () => {});
   }, [uid]);
@@ -41043,9 +41147,10 @@ function useCalendarSubs(user, skip){
     const cur = subs.find(s => s.kind === kind && String(s.ref) === String(ref));
     if(!cur) return;
     const meta = {...(cur.meta || {}), ...patch};
-    const next = subs.map(s => s === cur ? {...s, meta} : s);
-    setSubs(next);
-    calWriteLocalSubs(next);
+    // From the SHARED list, not this instance's copy, so a follow another
+    // surface just added is not written away by this one.
+    const next = calSubsCurrent().map(s => (s.kind === kind && String(s.ref) === String(ref)) ? {...s, meta} : s);
+    calSubsPublish(next);
     if(uid) sbClient.from("calendar_subscriptions").update({meta})
       .eq("user_id", uid).eq("kind", kind).eq("ref", String(ref)).then(() => {}, () => {});
   }, [subs, uid]);
@@ -43955,7 +44060,7 @@ const CalendarFilterChips = ({kinds, onToggle, counts, compact}) => html`<div cl
 // The home panel: the next few things, nothing else. The title links to /calendar
 // through the standard panelNav, so ⌘-click and "Copy link address" work.
 const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices}) => {
-  const {events} = useCalendarEvents();
+  const {events, failed: curatedFailed, reload: reloadCurated} = useCalendarEvents();
   const subs = useCalendarSubs(user);
   const storeEvents = useStoreCalendarEvents(subs.subs);
   // Filters are SHARED with /calendar (one preference about you); the list/month
@@ -44036,7 +44141,9 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
             // and App writes the pathname after the view changes — so a param
             // set here is not on the URL yet when CalendarView reads it. Same
             // shape as the `?a=sealed` → Screener handoff.
-            try { localStorage.setItem(CAL_VIEW_LS, "map"); } catch {}
+            // Spend the one-shot month-default stamp too, or calReadViewPref
+            // spends it on arrival and forces Month over the Map just asked for.
+            try { localStorage.setItem(CAL_VIEW_MONTH_KEY, "1"); localStorage.setItem(CAL_VIEW_LS, "map"); } catch {}
             calNav.go();
           })}>${uiIcon("map", 12)}</a>`}
         ${onFindEvents && html`<button type="button" class="cal-panel-tool"
@@ -44050,6 +44157,9 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
           : CALENDAR_KIND_KEYS.filter(x => p.includes(x) || x === k))}/>
       <${CalendarRegionChips} region=${region} onChange=${setRegion} compact=${true}/>
     </div>`}
+    ${curatedFailed && html`<div class="cal-panel-note cal-panel-note--warn" role="status">
+      Couldn't load Challenges and Qualifiers.${" "}
+      <button type="button" class="cal-warn-retry" onClick=${() => reloadCurated(true)}>Retry</button></div>`}
     ${mode === "month"
       ? html`<${CalendarMonthView} month=${month} events=${pool} today=${today}
           compact=${true} onOpen=${setSel} onOpenDay=${(d, evs) => setDayList({day: d, events: evs})}
@@ -44161,7 +44271,7 @@ const CalendarPanelList = ({rows, today, onOpen, art}) => {
 
 function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   const isAdmin = useContext(GradedAdminContext);
-  const {events, rows: curated, unavailable, reload} = useCalendarEvents();
+  const {events, rows: curated, unavailable, failed: curatedFailed, reload} = useCalendarEvents();
   const subs = useCalendarSubs(user);
   const storeEvents = useStoreCalendarEvents(subs.subs);
   const seed = useMemo(() => {
@@ -44600,6 +44710,10 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
       </div>
     </header>
 
+    ${curatedFailed && html`<div class="cal-warn" role="status">
+      ${uiIcon("warn", 14)} Couldn't load the Challenge and Qualifier schedule, so those events
+      are missing below. Set releases still show.${" "}
+      <button type="button" class="cal-warn-retry" onClick=${() => reload(true)}>Try again</button></div>`}
     ${unavailable && isAdmin && html`<div class="cal-warn">
       ${uiIcon("warn", 14)} Couldn't read the curated calendar — apply${" "}
       <code>supabase/139_calendar_events.sql</code>, then${" "}
@@ -44897,7 +45011,10 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           <${EventMapView} events=${mapRows} height=${CAL_MAP_VIEW_H} fit=${CAL_MAP_FIT} focus=${mapFocus}
             onPan=${(c) => setMapFocus(f => ({lat: c.lat, lng: c.lng,
               zoom: (f && f.zoom) || c.zoom || CAL_MAP_FOCUS_Z,
-              label: (f && f.label) || CAL_MAP_ANY_LABEL}))}
+              // Not the town you searched: the map is somewhere else now, and
+              // "near Chicago" on a map centred on Milwaukee is wrong, in the
+              // empty message and in a shared ?cmap= link alike.
+              label: CAL_MAP_ANY_LABEL}))}
             dateOf=${(e) => calShortDay(e && e.starts_on)}
             labelOf=${(e) => calEventTitle(e)}
             subLabelOf=${(e) => [calDayLabel(e && e.starts_on), e && e.location].filter(Boolean).join(" · ")}
@@ -44907,6 +45024,13 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
               : mapScope === "mine"
                 ? `Nothing you follow is near ${mapFocus.label}. Switch to All events, or zoom out.`
                 : mapNear.busy ? `Finding events near ${mapFocus.label}…`
+                // Name the filter that emptied it — distance was blamed even
+                // when "My stores" was off or a search had removed everything.
+                : !kinds.includes("store") ? `Local events are hidden while "My stores" is switched off above.`
+                : (mapNear.rows.length > 0 && (dQuery || calRegionSet(region)))
+                  ? `Your search or region filter hides the ${mapNear.rows.length} event${mapNear.rows.length === 1 ? "" : "s"} near ${mapFocus.label}.`
+                : (mapNear.rows.length > 0 && mapStoreKinds.length < CAL_STORE_KIND_KEYS.length)
+                  ? `The events near ${mapFocus.label} are the kinds you've switched off. Turn them back on above the map.`
                 : `No Lorcana events near ${mapFocus.label} within ${mapNearRadius} mi. Try a wider radius, or zoom out.`}
             onPick=${setSel}/>
         </div>`
@@ -44927,7 +45051,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
               <p>Nothing coming up${off.length ? " in the types you've got switched on" : ""}.</p>
               ${off.length > 0 && html`<p class="muted">${off.join(", ")} ${off.length === 1 ? "is" : "are"} switched off.</p>`}
               ${last && !showPast && html`<p class="muted">
-                The last thing was <strong>${calEventTitle(last)}</strong> on ${calDayLabel(last.starts_on)} —
+                The last thing was <strong>${calEventTitle(last)}</strong> on ${calDayLabel(last.starts_on)} —${" "}
                 <button type="button" class="cal-linkish" onClick=${() => setShowPast(true)}>show past events</button>.</p>`}
               ${isAdmin && html`<p class="muted">
                 <button type="button" class="cal-linkish" onClick=${() => setEditing({})}>Add the next set's dates</button>${" "}
@@ -45667,14 +45791,30 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   useEffect(() => { try { localStorage.setItem("packsink:scDateFrom", dates.join(",")); } catch {} }, [dates]);
   useEffect(() => { try { localStorage.setItem("packsink:scPinned", JSON.stringify(pinned)); } catch {} }, [pinned]);
   // Esc exits the full-screen view; lock body scroll while it's open.
+  // ⚠ Esc belongs to the INNERMOST thing: the ✚ menu, a scouting sheet or a
+  // player's history, then an open result — and only then the finder. It used
+  // to close the whole finder from under whichever of those was on top.
   useEffect(() => {
     if(!expanded) return;
-    const onKey = (e) => { if(e.key === "Escape") closeExpanded(); };
+    const onKey = (e) => {
+      if(e.key !== "Escape" || document.querySelector(CAL_DIALOG_INNER + ", .sc-modal-overlay")) return;
+      closeExpanded();
+    };
     document.addEventListener("keydown", onKey);
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.removeEventListener("keydown", onKey); document.body.style.overflow = prevOverflow; };
   }, [expanded]);
+  // The result modal had no Esc of its own.
+  useEffect(() => {
+    if(!sel) return;
+    const onKey = (e) => {
+      if(e.key !== "Escape" || document.querySelector(CAL_DIALOG_INNER + ", .scout-modal")) return;
+      setSel(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [sel]);
   const todayStr = new Date().toLocaleDateString("en-CA");
 
   // One RPC does the bounding box, the haversine refine AND the collapse into
@@ -46093,7 +46233,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
         </div>
       </div>`}
       ${!loading && !results && !err && html`<div class="sc-msg muted">
-        Enter your ZIP to find ${isAll?"locals, prereleases & Set Championships":isPre?"set-launch Prereleases":"Set Championships"} near you.</div>`}
+        Enter a postal code or a town to find ${isAll ? "locals, prereleases & Set Championships" : isPre ? "set-launch Prereleases" : KIND_PLURAL} near you.</div>`}
     </div>`}
     ${sel && (() => {
       // The venue/format/geo live on the series; the date, price, capacity and
@@ -57144,6 +57284,8 @@ function App(){
   // Tracks the post-sign-in fetch so the Home panel can show a "loading"
   // state instead of the "empty collection" CTA during the round-trip.
   const [collectionLoading, setCollectionLoading] = useState(false);
+  const collectionLoadingRef = useRef(false);
+  collectionLoadingRef.current = collectionLoading;
   // Example collection for the walk's Collection stop — see buildDemoCollection.
   // Only kicks in while the walk is running, for a signed-in user whose real
   // collection has LOADED and is EMPTY; anyone with actual cards always sees
@@ -58221,6 +58363,54 @@ function App(){
     }
   }, [user]);
 
+  // Add copies RELATIVE to what the server holds — for the scanner's save.
+  // It used to write collection[key] + n from the local map, and that map is
+  // {} until the paged fetch lands (and stays {} or a stale mirror if it
+  // fails): saving one scanned copy of a card you own 4 of recorded 1.
+  // Reads the current rows for these cards, then writes every total in ONE
+  // upsert (a single statement, so it lands whole or not at all). Returns
+  // true only when that write succeeded, so the caller can tell the user.
+  const addManyToCollection = useCallback(async (entries) => {
+    if(!user || !entries || !entries.length) return false;
+    const want = new Map();
+    for(const e of entries){
+      if(!e || !e.cardId || !e.printing || !(e.delta > 0)) continue;
+      const k = e.cardId + ":" + e.printing;
+      want.set(k, {cardId: e.cardId, printing: e.printing, delta: (want.get(k)?.delta || 0) + e.delta});
+    }
+    if(!want.size) return false;
+    try {
+      const ids = [...new Set([...want.values()].map(e => e.cardId))];
+      const have = new Map();
+      for(let i = 0; i < ids.length; i += 100){
+        const {data, error} = await sbClient.from("collection_items")
+          .select("card_id,printing,quantity")
+          .eq("user_id", user.id).eq("condition", "NM").in("card_id", ids.slice(i, i + 100));
+        if(error) throw error;
+        for(const r of (data || [])) have.set(r.card_id + ":" + r.printing, r.quantity || 0);
+      }
+      const rows = [...want.entries()].map(([k, e]) => ({
+        user_id: user.id, card_id: e.cardId, printing: e.printing, condition: "NM",
+        quantity: Math.min(9999, (have.get(k) || 0) + e.delta),
+      }));
+      const {error} = await sbClient.from("collection_items")
+        .upsert(rows, {onConflict: "user_id,card_id,printing,condition"});
+      if(error) throw error;
+      setCollection(c => {
+        const next = {...c};
+        for(const r of rows) next[r.card_id + ":" + r.printing] = r.quantity;
+        return next;
+      });
+      // A fetch still in flight read the old totals; restart it so what lands
+      // on screen includes this write.
+      if(collectionLoadingRef.current) setCollectionReload(n => n + 1);
+      return true;
+    } catch(e){
+      console.error("collection add failed:", e?.message || e);
+      return false;
+    }
+  }, [user]);
+
   // CSV import path. Optimistically updates local state, then chunks the
   // supabase upsert so a 5000-row import doesn't blow PostgREST's body size
   // limit. The supabase-js client returns {error} rather than throwing — we
@@ -58982,7 +59172,7 @@ function App(){
       onClose=${()=>setInstallHelpOpen(false)}
       onDismissForever=${autoInstallVisits >= 4 ? dismissInstallForever : null}/>`}
     ${scanOpen && canScan && html`<${CardScannerModal}
-      raw=${raw} collection=${collection} updateQty=${updateQty}
+      raw=${raw} collection=${collection} updateQty=${updateQty} addManyToCollection=${addManyToCollection}
       user=${user} onSignIn=${signIn}
       onClose=${()=>setScanOpen(false)}
       onOpenReview=${isGradedAdmin ? ()=>{ setScanOpen(false); setScanReviewOpen(true); } : null}
