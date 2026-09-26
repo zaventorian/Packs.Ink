@@ -33438,20 +33438,21 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   //   Gainers → signed desc (biggest +Δ first)
   //   Losers  → signed asc  (deepest -Δ first)
   //   Movers  → abs desc    (biggest move in either direction)
-  useEffect(() => {
-    if(preset !== "gainers" && preset !== "losers" && preset !== "movers") return;
-    const winKey = priceMode === "market" ? moverWin.replace("pct_", "mkt_pct_") : moverWin;
-    if(preset === "movers"){
-      // Re-use the abs_pct_<window> virtual sort key the home banner handoff
-      // already plumbed through getVal (line ~10543).
-      const absKey = "abs_pct_" + winKey.replace(/^mkt_pct_|^pct_/, "");
-      setSortKey(absKey);
-      setSortDesc(true);
-    } else {
-      setSortKey(winKey);
-      setSortDesc(preset === "gainers");
-    }
-  }, [preset, moverWin, priceMode]);
+  //
+  // ⚠ A restored view (saved view, banner jump, ?v= link) already carries its
+  // sort. applyView records the mode it restored; while the inputs still match
+  // it, these effects stand down — otherwise they re-derived the sort a frame
+  // later and a saved custom sort, or a banner's absolute-change order, was
+  // silently replaced.
+  const restoredModeRef = useRef(null);
+  const restoredModeHolds = (m) => {
+    const r = restoredModeRef.current;
+    if(!r) return false;
+    if(r.preset === m.preset && r.moverWin === m.moverWin && r.priceMode === m.priceMode
+       && r.showGraded === m.showGraded) return true;
+    restoredModeRef.current = null;
+    return false;
+  };
   // Graded mode toggle — flips the entire screener over to graded eBay
   // entries (PSA/CGC/BGS/SGC/TAG). Each (pid, grader, grade) becomes its
   // own row with its own price + Δ% windows. Persisted so the user's view
@@ -33465,6 +33466,30 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:screener:showGraded", showGraded ? "1" : "0"); } catch{} }, [showGraded]);
   useEffect(()=>{ if(showGraded) signalGradedSurface(); }, [showGraded]);
+  // The raw preset-sort effect (see the comment above restoredModeRef). It
+  // lives HERE, below showGraded, because its deps array is evaluated at the
+  // declaration point: above the useState it read showGraded in the TDZ.
+  useEffect(() => {
+    // Graded mode has its own preset-sort effect below; running both let the
+    // graded one win by declaration order, by accident.
+    if(showGraded) return;
+    if(preset !== "gainers" && preset !== "losers" && preset !== "movers") return;
+    if(restoredModeHolds({preset, moverWin, priceMode, showGraded})) return;
+    const winKey = priceMode === "market" ? moverWin.replace("pct_", "mkt_pct_") : moverWin;
+    if(preset === "movers"){
+      // Re-use the abs_pct_<window> virtual sort key the home banner handoff
+      // already plumbed through getVal (line ~10543).
+      const absKey = "abs_pct_" + winKey.replace(/^mkt_pct_|^pct_/, "");
+      setSortKey(absKey);
+      setSortDesc(true);
+    } else {
+      setSortKey(winKey);
+      setSortDesc(preset === "gainers");
+    }
+  // showGraded is read above, so it has to be a dep: flipping back to raw
+  // mode re-derives the raw preset's sort.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset, moverWin, priceMode, showGraded]);
   // Premium accounts (graded_premium_viewers) get the per-sale model in graded
   // mode: rows come from graded_sales_rollup (Last Sold + Avg of Last 5 + sale
   // count + last-sold date) instead of TCGPriceLookup Δ% windows.
@@ -33588,12 +33613,15 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // can pick 1W / 1M / 3M / 6M / 1Y — same UX pattern as raw's Gainers/Losers.
   useEffect(() => {
     if(!showGraded) return;
+    if(restoredModeHolds({preset, moverWin, priceMode, showGraded})) return;
     const w = moverWin || "pct_180d";
     if(preset === "all"){ setSortKey("set_rank"); setSortDesc(true); }   // newest set first
     else if(preset === "top")                { setSortKey("low_today"); setSortDesc(true); }
     else if(preset === "climbers")           { setSortKey(w); setSortDesc(true); }
     else if(preset === "droppers")           { setSortKey(w); setSortDesc(false); }
-    else if(preset === "movers"){ setSortKey(w); setSortDesc(true); }
+    // Movers means the biggest move EITHER way — the same absolute key raw
+    // mode uses; a signed sort put every drop at the bottom.
+    else if(preset === "movers"){ setSortKey("abs_" + w); setSortDesc(true); }
     else if(preset === "recent")             { setSortKey("pct_30d"); setSortDesc(true); }
   }, [preset, showGraded, moverWin]);
   // Reset the preset when flipping between raw / graded so we never land on
@@ -33749,6 +33777,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     }
   };
   const applyView = (v) => {
+    // A view is a complete description of a screen: its mode's filters and
+    // its sort are IN it. Tell the mode-flip reset and the preset-sort effects
+    // that this change is a restore, or they re-apply their defaults over it a
+    // frame later (a banner jump from Graded landed with no rarity filter; a
+    // saved graded view lost its Sold sort).
+    prevShowGraded.current = !!v.showGraded;
+    restoredModeRef.current = {preset: v.preset || "all", moverWin: v.moverWin || "pct_1d",
+      priceMode: v.priceMode || "low", showGraded: !!v.showGraded};
     setPreset(v.preset || "all");
     setMoverWin(v.moverWin || "pct_1d");
     setPriceMode(v.priceMode || "low");
@@ -34305,6 +34341,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   }, [activeList]);
   // Membership across ALL lists — drives the star's "on another list" state, so
   // starring a card you already track elsewhere doesn't look like a no-op.
+  // A graded row is a slab of a card the list holds raw, so in Graded mode
+  // "Filter to list" narrows to the cards on the list, every grade of them.
+  const watchedCardIds = useMemo(() => {
+    const s = new Set();
+    for(const it of (activeList ? activeList.items : [])) if(it.card_id) s.add(it.card_id);
+    return s;
+  }, [activeList]);
   const watchedAnywhere = useMemo(() => {
     const s = new Set();
     for(const w of (watchlists || [])) for(const it of w.items){
@@ -34432,6 +34475,8 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           // printings share a card_id (C1 Prize Wall vs Top Prize). "" for normal cards.
           _variant: g.printing || "",
           grader, grade: g.grade,
+          // As stored — graded_sales is filtered on this exact string.
+          _graderRaw: g.grader || "",
           // Raw Low / Market for this card (from the price_movers join) so the
           // graded Screener can compare graded vs raw side by side.
           raw_low: m.low_today != null ? Number(m.low_today) : null,
@@ -34528,7 +34573,8 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return true;
     };
     const passes = (r) => {
-      if(watchOnly && !watchedKeys.has(r.card_id + "|" + (r.printing || "Normal"))) return false;
+      if(watchOnly && !(r.grader ? watchedCardIds.has(r.card_id)
+                                 : watchedKeys.has(r.card_id + "|" + (r.printing || "Normal")))) return false;
       if(!passesFoilFilter(r)) return false;
       const catalogRow = catalogByCardId.get(r.card_id);
       if(catalogRow){
@@ -34707,7 +34753,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     });
     return out;
   }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes, gradedPop,
-    watchOnly, watchedKeys]);
+    watchOnly, watchedKeys, watchedCardIds]);
 
   // Plain click sets the primary sort; shift-click sets the tiebreaker applied
   // within equal primary values. A column can't be both, so promoting the
@@ -34985,7 +35031,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       // The star column appears/disappears with sign-in, and the vs-Market
       // column appears when its (async) fetch lands. Both change how many <th>s
       // there are and therefore where every grip belongs.
-      user, watchlistsUnavailable, benchmarkReady]);
+      user, watchlistsUnavailable, benchmarkReady, showGraded]);
   const onGripMove = useCallback((e)=>{
     const d = dragRef.current; if(!d) return;
     // 44px floor keeps a column from collapsing into an untouchable sliver.
@@ -35087,6 +35133,41 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     return tcgMassEntryParts(lines);
   };
 
+  // ONE key for a row, read by the checkbox AND the Actions menu. The menu
+  // used to rebuild it without the variant, so every batch action — buy, add
+  // to watchlist, copy, graph — ran on zero rows while the bar said
+  // "3 selected".
+  const screenerRowKey = (r) => r.card_id + ":" + r.printing + ":" + (r._variant || "");
+  // A selected row as a Price Graphing item of the RIGHT kind. Kindless items
+  // were left out of ?g= (the graph could not be shared or refreshed) and got
+  // no "+ variants"; a graded row went out as printing "PSA 10" and graphed an
+  // empty line; a sealed row was fetched as a card.
+  const screenerCompareItem = (r) => {
+    if(r._sealedProduct){
+      const sp = r._sealedProduct;
+      return {kind:"sealed", card_id:"sealed-" + sp.tcgplayer_product_id, productId: sp.tcgplayer_product_id,
+        printing:"Normal", name: cleanSealedName(sp.name), sub: deriveSealedDisplayType(sp),
+        image: sp.image_url || null};
+    }
+    const meta = catalogByCardId.get(r.card_id) || {};
+    const title = (r.name || "") + (r.version ? " - " + r.version : "");
+    const sub = `${meta.Set || ""}${meta.Number ? " · #" + String(meta.Number).split("/")[0] : ""}${meta.Rarity ? " · " + meta.Rarity : ""}`;
+    const image = r.image_normal || r.image_small || meta.img_normal || meta.img_small || null;
+    if(r.grader){
+      const grader = r._graderRaw || r.grader;
+      const tier = String(grader).toUpperCase() + " " + r.grade;
+      const label = gradedVariantLabel(r._variant || null, meta.Set);
+      const tag = label ? " " + label : "";
+      return {kind:"graded", card_id:`graded-${r.card_id}-${r._variant || "-"}-${grader}-${r.grade}`,
+        gradedCardId: r.card_id, productId: r.tcgplayer_product_id ?? null,
+        grader, grade: r.grade, gradedPrinting: r._variant || null,
+        printing: tier + tag, name: title + " — " + tier + tag, sub: sub + " · " + tier + tag, image};
+    }
+    // "::printing" keeps a card's Normal and Foil rows distinct series (the
+    // addAllVariants convention); the fetch keys off (productId, printing).
+    return {kind:"card", card_id: r.card_id + (r.printing && r.printing !== "Normal" ? "::" + r.printing : ""),
+      productId: r.tcgplayer_product_id, printing: r.printing, name: title, sub, image};
+  };
   const toggleSelect = (k) => {
     setSelected(prev => {
       const next = new Set(prev);
@@ -35337,7 +35418,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // (indexOf → nth <th>) and the width <style> block's nth-child rules — so it
   // MUST include the watch column on exactly the renders that draw one, or
   // every grip past it resizes the column to its left.
-  const gripKeys = ["check", ...(user && !watchlistsUnavailable ? ["watch"] : []), "img", "name", ...orderedCols.map(c=>c.key)];
+  const gripKeys = ["check", ...(user && !watchlistsUnavailable && !showGraded ? ["watch"] : []), "img", "name", ...orderedCols.map(c=>c.key)];
   gripKeysRef.current = gripKeys;
   const onGripDown = (e, key)=>{
     const thead = theadRef.current; if(!thead) return;
@@ -35850,9 +35931,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         <button class="price-db-batchbtn" onClick=${()=>setBatchOpen(o=>!o)}>Actions ▾</button>
         ${batchOpen && html`<div class="price-db-batchmenu">
           ${(() => {
-            const selRows = filtered.filter(r => selected.has(r.card_id + ":" + r.printing));
-            const buyParts = buildBatchBuyUrl(selRows) || [];
-            return html`${buyParts.length <= 1
+            const selRows = filtered.filter(r => selected.has(screenerRowKey(r)));
+            // Mass entry and a decklist are for RAW CARDS: a booster box is a
+            // line TCGplayer and the deck importer both reject, and a graded
+            // row would put a raw copy in the cart once per selected grade.
+            const cardRows = selRows.filter(r => !r._sealedProduct && !r.grader);
+            const buyParts = buildBatchBuyUrl(cardRows) || [];
+            return html`${!cardRows.length ? null : buyParts.length <= 1
               ? html`<a class="price-db-batchitem" href=${buyParts[0]?.url || "#"} target="_blank"
                   rel="noopener nofollow sponsored"
                   onClick=${(e) => { if(!buyParts.length) e.preventDefault(); setBatchOpen(false); }}>
@@ -35862,7 +35947,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                   rel="noopener nofollow sponsored" onClick=${() => setBatchOpen(false)}>
                   ${uiIcon("cart")} Buy on TCGplayer — part ${i + 1} of ${buyParts.length} (${p.copies})
                 </a>`)}
-            ${user && !watchlistsUnavailable && html`<button class="price-db-batchitem"
+            ${user && !watchlistsUnavailable && !showGraded && html`<button class="price-db-batchitem"
               onClick=${async () => {
                 setBatchOpen(false);
                 let listId = activeWatchlist;
@@ -35885,29 +35970,18 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                 showToast(`Added ${selRows.length} to "${(watchlists||[]).find(w=>w.id===listId)?.name || "watchlist"}".`);
                 clearSelected();
               }}>★ Add to watchlist</button>`}
-            <button class="price-db-batchitem" onClick=${() => {
-              const lines = selRows.map(r => `1 ${(r.name||"") + (r.version ? " - " + r.version : "")}`).join("\n");
+            ${cardRows.length > 0 && html`<button class="price-db-batchitem" onClick=${() => {
+              const lines = cardRows.map(r => `1 ${(r.name||"") + (r.version ? " - " + r.version : "")}`).join("\n");
               if(navigator.clipboard && navigator.clipboard.writeText){
-                navigator.clipboard.writeText(lines).then(() => showToast(`Copied ${selRows.length} cards — paste into a deck's Import.`)).catch(() => showToast("Copy failed."));
+                navigator.clipboard.writeText(lines).then(() => showToast(`Copied ${cardRows.length} cards — paste into a deck's Import.`)).catch(() => showToast("Copy failed."));
               } else {
                 prompt("Copy this decklist text:", lines);
               }
               setBatchOpen(false);
-            }}>${uiIcon("clipboard")} Copy as decklist (paste into a deck)</button>
+            }}>${uiIcon("clipboard")} Copy as decklist (paste into a deck)</button>`}
             <button class="price-db-batchitem"
               onClick=${() => {
-                const cards = selRows.slice(0, COMPARE_MAX).map(r => ({
-                  // Synthesize "::printing" for non-Normal so a card's Normal
-                  // AND Foil rows become distinct compare series instead of
-                  // colliding on the card_id-keyed dedupe + React keys (the
-                  // same convention addAllVariants uses). The real card_id is
-                  // recoverable by splitting on "::"; the series fetch keys off
-                  // (productId, printing) regardless.
-                  card_id: r.card_id + (r.printing && r.printing !== "Normal" ? "::" + r.printing : ""),
-                  productId: r.tcgplayer_product_id,
-                  printing: r.printing,
-                  name: r.name + (r.version ? " - " + r.version : ""),
-                }));
+                const cards = selRows.slice(0, COMPARE_MAX).map(screenerCompareItem);
                 setBatchOpen(false);
                 if(onCompareCards) onCompareCards(cards);
               }}>
@@ -35957,7 +36031,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       <table class=${"price-db-table"+(hasCustomWidths?" pdb-resized":"")}>
         <thead ref=${theadRef}><tr>
           <th class="th-check"></th>
-          ${user && !watchlistsUnavailable && html`<th class="th-watch" title="Add to the active watchlist"></th>`}
+          ${user && !watchlistsUnavailable && !showGraded && html`<th class="th-watch" title="Add to the active watchlist"></th>`}
           <th></th>
           <th class="sortable th-name" title="Click to sort by name — shift-click any column to set a tiebreaker" onClick=${(e) => onSort("name", e)}>Name${arrow("name")}</th>
           ${orderedCols.map(c => c.th())}
@@ -35965,7 +36039,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         <tbody>
           ${filtered.slice(0, visibleRows).map((r) => {
             const img = r.image_small || r.image_normal;
-            const key = r.card_id + ":" + r.printing + ":" + (r._variant || "");
+            const key = screenerRowKey(r);
             const isSel = selected.has(key);
             const tcg = tcgUrl(r.tcgplayer_product_id, r.printing);
             const isSealedRow = !!r._sealedProduct;
@@ -35973,7 +36047,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             return html`<tr key=${key} class=${isSel ? "price-db-row-sel" : ""}>
               <td class="td-check"><input type="checkbox" checked=${isSel}
                 onChange=${() => toggleSelect(key)}/></td>
-              ${user && !watchlistsUnavailable && (() => {
+              ${user && !watchlistsUnavailable && !showGraded && (() => {
                 const wk = rowWatchKey(r);
                 const on = watchedKeys.has(wk);
                 // Three states, not two: on this list, on a different list, on
@@ -51321,7 +51395,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       const enteringDeck    = deckId    && cur.searchParams.get("deck") !== deckId;
       const enteringProfile = profileId && cur.searchParams.get("user") !== profileId;
       if(enteringDeck || enteringProfile) window.history.pushState({deck: deckId || null}, "", url);
-      else                                window.history.replaceState({}, "", url);
+      else                                window.history.replaceState(deckId ? (window.history.state || {}) : {}, "", url);
     } catch {/* SSR / blocked storage / no-op */}
   }, [selectedDeckId, externalDeck, creatorProfile, decks]);
 
@@ -51969,12 +52043,22 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   }, [user, refreshDecks, showToast, openDeckInMode, buildDuplicateName]);
 
   const deleteDeck = useCallback(async (deckId) => {
-    if(!confirm("Delete this deck? This can't be undone.")) return;
+    // Name it: a list of similar decks makes "this deck" easy to misread.
+    const d = (decks || []).find(x => x.id === deckId);
+    if(!confirm(`Delete ${d && d.name ? `"${d.name}"` : "this deck"}? This can't be undone.`)) return;
     const {error} = await sbClient.from("decks").delete().eq("id", deckId);
     if(error){ flashToast("Delete failed: " + error.message); return; }
-    if(selectedDeckId === deckId) setSelectedDeckId(null);
+    if(selectedDeckId === deckId){
+      // A deleted deck has no version history left to write.
+      editSessionDeck.current = null;
+      // Step back over the deck's own page, or the next Back lands on it and
+      // reads "Deck not found".
+      const st = window.history.state;
+      if(st && st.deck === deckId) window.history.back();
+      else setSelectedDeckId(null);
+    }
     await refreshDecks();
-  }, [selectedDeckId, refreshDecks]);
+  }, [selectedDeckId, refreshDecks, decks]);
 
   // Optimistic add/remove for the editor — updates local state immediately,
   // upserts/deletes the row in Supabase in the background. Errors revert.
@@ -52261,13 +52345,31 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // Bumped after a successful write so an open History modal refetches.
   const [deckVersionNonce, setDeckVersionNonce] = useState(0);
 
-  // Leaving edit mode is the session boundary. Snapshot BEFORE flipping the
-  // flag — the effect that owns editSnapshot clears it the moment editMode
-  // goes false, so reading it afterwards would always come up empty.
+  // Leaving edit mode is the session boundary, and there are more ways out
+  // than Done and the in-app Back: the browser's Back, a nav tab, opening
+  // another deck. This effect watches the session END itself, so every one of
+  // them writes the version (they used to skip it, leaving whole edits out of
+  // history). It reads editSnapshot in the same commit the flag flips, before
+  // the snapshot effect's clear has applied, so the pre-edit state is intact.
+  const saveVersionRef = useRef(saveDeckVersionIfChanged);
+  saveVersionRef.current = saveDeckVersionIfChanged;
+  const editSessionDeck = useRef(null);
+  useEffect(() => {
+    const active = editMode && selectedDeckId ? selectedDeckId : null;
+    const was = editSessionDeck.current;
+    editSessionDeck.current = active;
+    if(was && was !== active) saveVersionRef.current(was);
+    // Nothing is open: the next deck opens in whatever mode ITS entry asks
+    // for, not in an edit flag left over from a deck closed by Back.
+    if(!selectedDeckId && editMode) setEditMode(false);
+  }, [editMode, selectedDeckId]);
+  // A nav tab unmounts the Decks view mid-session.
+  useEffect(() => () => {
+    if(editSessionDeck.current) saveVersionRef.current(editSessionDeck.current);
+  }, []);
   const toggleDeckEditMode = useCallback(() => {
-    if(editMode && selectedDeckId) saveDeckVersionIfChanged(selectedDeckId);
     setEditMode(m => !m);
-  }, [editMode, selectedDeckId, saveDeckVersionIfChanged]);
+  }, []);
 
   // Update deck-level metadata (format/tags/description/etc). Optimistic
   // local merge + Supabase update with rollback on failure. Reads the
@@ -52445,10 +52547,15 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         onOpenTournament=${(tid)=>{ setDeckSection("tournaments"); setSelectedTournamentId(tid); setSelectedDeckId(null); }}
         ownerDisplayName=${ownerDisplayName}
         onToggleEditMode=${toggleDeckEditMode}
-        ${/* Backing out mid-edit still ends the session, so the version gets
-              written — otherwise a whole edit is missing from history purely
-              because the user hit Back instead of Done. */""}
-        onBack=${()=>{ if(editMode) saveDeckVersionIfChanged(deck.id); setSelectedDeckId(null); }}
+        ${/* The session-end effect writes the version on the way out. When
+              this deck's page was pushed, step BACK over it: clearing the
+              selection only replaced the entry, so the browser's next Back
+              landed on the same list and appeared to do nothing. */""}
+        onBack=${()=>{
+          const st = window.history.state;
+          if(st && st.deck === deck.id){ window.history.back(); return; }
+          setSelectedDeckId(null);
+        }}
         deckVersionNonce=${deckVersionNonce}
         shareToken=${deck.share_token || null}
         onRename=${(newName)=>renameDeckInline(deck.id, newName)}
@@ -55840,12 +55947,11 @@ function App(){
   // same shape as the home page banner-into-Screener jumps for raw chase.
   //
   // Wrinkles encoded here:
-  //   - preset MUST be "movers" (not "all"): there's a useEffect at line
-  //     ~13306 that re-derives sortKey from preset whenever graded mode
-  //     fires. preset:"all" → sortKey:"set_rank" (newest-set-first),
-  //     which silently overrides our sortKey:"abs_pct_7d" the next tick.
-  //     preset:"movers" → sortKey:moverWin which we set explicitly, so
-  //     the override agrees with what we want.
+  //   - preset "movers": applyView marks the payload as a restore, so the
+  //     preset-sort effects leave sortKey:"abs_pct_7d" alone. (They used to
+  //     re-derive it a tick later — this whole comment once existed to work
+  //     around that — and "movers" in graded mode now sorts by the same
+  //     absolute key anyway if the window is changed afterwards.)
   //   - moverWin AND sortKey both set explicitly. moverWin drives the
   //     UI window picker; sortKey is the row comparator. They must agree
   //     for the sort to make visual sense.
@@ -56185,6 +56291,7 @@ function App(){
   }, []);
   const closeEventFinder = useCallback(() => setEventFinderOpen(false), []);
   const marketSubSynced = useRef(false);
+  const viewSyncedOnce = useRef(false);
   // Keep the URL pathname in sync with `view` so back/forward + reload +
   // bookmarks all work. Strips view-specific deep-link params (?deck=,
   // ?collection=, ?token=, ?user=, ?set=, ?tourney=) so navigating from
@@ -56194,6 +56301,12 @@ function App(){
     // Leaving home retires the ?sczip deep link: coming back must land on the
     // ordinary home page, not re-stage the shared event view.
     if(view !== "home") clearScSeed();
+    // The first sync tidies the URL the visitor ARRIVED on (/help → /faq,
+    // /?t=<token> → /analytics?a=trade, /?collection=…). Pushing it made a
+    // second entry, so the first Back landed on the arrival URL — the same
+    // page — and looked like it did nothing.
+    const firstSync = !viewSyncedOnce.current;
+    viewSyncedOnce.current = true;
     try {
       const target = viewPathFor(view, marketSub);
       const current = window.location.pathname.replace(/\/$/, "") || "/";
@@ -56248,7 +56361,7 @@ function App(){
       // or from it must not push a second entry here — Back would otherwise
       // land on /analytics and look like it did nothing.
       const withinMarket = view === "market" && MARKET_PATHS.has(current);
-      const method = (current === normalizedTarget || withinMarket) ? "replaceState" : "pushState";
+      const method = (firstSync || current === normalizedTarget || withinMarket) ? "replaceState" : "pushState";
       window.history[method]({view}, "", url.toString());
     } catch {/* SSR / blocked storage / no-op */}
   }, [view, marketSub]);
@@ -56296,7 +56409,10 @@ function App(){
       try {
         const params = new URLSearchParams(window.location.search);
         const a = params.get("a");
-        setMarketSub(a && MARKET_SUBS.some(([k]) => k === a) ? a : (a && MARKET_SUB_ALIASES[a]) || "ev");
+        // /ticker carries its tool in the PATH, not ?a= — without this, Back
+        // onto it rendered Expected Value under the /ticker address.
+        const byPath = MARKET_SUB_BY_PATH[_normPath(window.location.pathname)];
+        setMarketSub(a && MARKET_SUBS.some(([k]) => k === a) ? a : (a && MARKET_SUB_ALIASES[a]) || byPath || "ev");
         if(params.get("deck") || params.get("user") || params.get("tourney")){
           // ?tourney=<id> on its own → land on the tournament detail page.
           // ?deck=<id> still wins when both are present (deep-link into a
@@ -57673,7 +57789,10 @@ function App(){
     const rows = (data || []).map(w => ({
       id: w.id, name: w.name, position: w.position, created_at: w.created_at,
       items: (w.watchlist_items || []).map(i => ({
-        card_id: i.card_id, printing: i.printing || "Normal",
+        // Sealed items are stored as "sealed::<pid>" (see addItem); every
+        // reader here expects null for sealed.
+        card_id: (i.card_id && String(i.card_id).startsWith("sealed::")) ? null : i.card_id,
+        printing: i.printing || "Normal",
         productId: i.tcgplayer_product_id, note: i.note, added_at: i.added_at,
       })),
     }));
@@ -57727,12 +57846,15 @@ function App(){
       await refreshWatchlists();
     },
     // (card_id, printing) is the item key. Sealed rows pass card_id null and
-    // carry their pid instead — the CHECK requires one of the two.
+    // carry their pid. ⚠ The table's primary key includes card_id, which makes
+    // it NOT NULL whatever migration 127's comment says, so a sealed star
+    // always failed. It is written as "sealed::<pid>" (the Screener's own
+    // synthetic id) and read back as null.
     addItem: async (listId, item) => {
       if(!user || !listId) return;
       const {error} = await sbClient.from("watchlist_items").upsert({
         watchlist_id: listId,
-        card_id: item.card_id || null,
+        card_id: item.card_id || (item.productId != null ? "sealed::" + item.productId : null),
         printing: item.printing || "Normal",
         tcgplayer_product_id: item.productId ?? null,
         note: item.note || null,
