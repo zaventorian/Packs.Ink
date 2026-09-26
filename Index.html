@@ -16287,8 +16287,31 @@ const scanVariantsFor = (rows) => {
 // to the editor's list, which shows each version's ART and set and therefore
 // cannot lie. That covers the 205 of 623 families (reprints, multi-promo runs)
 // where a one-word label would be a coin flip dressed as a choice.
-const scanVariantChipsOk = (vars) => vars.length >= 2 && vars.length <= SCAN_VARIANT_MAX
-  && new Set(vars.map(v => v.label)).size === vars.length;
+// Short set name for a chip: "Set 4" for a booster set (its release position —
+// what's printed in the card's bottom corner), the printed suffix for a promo
+// set (P1, C1, D23), else the set's initials.
+const scanSetShort = (set) => {
+  const i = MAINLINE_SETS.indexOf(set);
+  if(i >= 0) return "Set " + (i + 1);
+  for(const [k, v] of Object.entries(DREAMBORN_CN_SUFFIX_SETS)) if(v === set) return k.toUpperCase();
+  return String(set || "").split(/\s+/).filter(w => /^[A-Za-z0-9]/.test(w)).map(w => w[0]).join("").toUpperCase().slice(0, 4) || "?";
+};
+// Chip labels for a family. Rarity is the default axis, but a REPRINT usually
+// keeps its rarity (Daisy Duck - Musketeer Spy is Common in Ursula's Return and
+// in Fabled), and two chips both saying "Common" answer nothing. So a chip
+// whose rarity collides is labelled by its SET instead — that is the one
+// thing the scanner cannot read and the tester can: it's printed on the card
+// (2026-09-25, Zaven: "it scanned my cards as set 4 when they were 9"). Returns
+// [] when even the set labels collide (Dalmatian 4a/4e: same set, same rarity),
+// which is left to the editor's art list, as before.
+const scanVariantChips = (vars) => {
+  if(vars.length < 2 || vars.length > SCAN_VARIANT_MAX) return [];
+  const count = new Map();
+  for(const v of vars) count.set(v.label, (count.get(v.label) || 0) + 1);
+  const out = vars.map(v => count.get(v.label) > 1 ? {...v, short: scanSetShort(v.set), bySet: true} : v);
+  return new Set(out.map(v => v.short)).size === out.length ? out : [];
+};
+const scanVariantChipsOk = (vars) => scanVariantChips(vars).length > 0;
 const scanVariantTitle = (v) => v.label + (v.set ? " · " + v.set : "")
   + (v.number ? " #" + v.number : "");
 // ⚠ Case-folded, because Lorcast's own spelling is not stable across sets:
@@ -18796,7 +18819,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     const editing = qaEditOpen === x.id;
     const others = (x.cands || []).filter(c => c.id !== x.guessId).slice(0, 4);
     const vars = (x.status !== "identifying" && x.guessId && qaVariantIndex.get(x.guessId)) || [];
-    const varChips = scanVariantChipsOk(vars) ? vars : [];
+    const varChips = scanVariantChips(vars);
+    // For a card printed in more than one set, name the set the scan landed on
+    // right on the row — checking it shouldn't need the editor.
+    const guessVar = vars.length && new Set(vars.map(v => v.set)).size > 1 ? vars.find(v => v.id === x.guessId) : null;
     // A lone chase print has no Non-Foil side to offer, so its printing is
     // stated rather than chosen. Nothing to state and nothing to choose means
     // no segment row at all — an empty one still costs the row a gap.
@@ -18808,7 +18834,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       <div class="scanner-qa-rowinfo">
         ${x.status === "identifying"
           ? html`<span class="scanner-session-name scanner-qa-identifying">Identifying…</span>`
-          : html`<span class="scanner-session-name">${qaConfChip(x.conf, x.ver)} ${x.conf === "unread" ? html`<span class="scanner-qa-unread">${x.foreign ? "Non-English card — not supported yet" : "Couldn't read — tap edit to pick"}</span>` : (x.guess || "(no match)")}</span>`}
+          : html`<span class="scanner-session-name">${qaConfChip(x.conf, x.ver)} ${x.conf === "unread" ? html`<span class="scanner-qa-unread">${x.foreign ? "Non-English card — not supported yet" : "Couldn't read — tap edit to pick"}</span>` : (x.guess || "(no match)")}${guessVar ? html` <span class="scanner-qa-setname" title=${guessVar.set + (guessVar.number ? " #" + guessVar.number : "")}>${scanSetShort(guessVar.set)}${guessVar.number ? " #" + guessVar.number : ""}</span>` : null}</span>`}
         ${x.alts && x.status !== "identifying" ? html`<span class="scanner-qa-alts">maybe: ${x.alts}</span>` : null}
         ${(x.hasFoilPair || prOnly || varChips.length) ? html`<span class="scanner-qa-segs">
           ${x.hasFoilPair ? html`<span class="scanner-qa-foilseg" title="Which printing is the physical card?">
