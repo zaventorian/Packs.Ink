@@ -19665,24 +19665,54 @@ function PackSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSe
   </div>`;
 }
 
-function Histogram({data}){
+// Today's price of ONE booster box of a set on TCGplayer — never the 12-box
+// case — Low first, the same pick the EV tool makes. Null when the set has no
+// listed box (promo sets, a set not yet on the market).
+const currentBoxPrice = (sealedPrices, setName, rawData) => {
+  if(!sealedPrices || !sealedPrices.length || !setName) return null;
+  const row = (rawData || []).find(r => r.Set === setName && r.set_id);
+  const setId = row && row.set_id;
+  if(!setId) return null;
+  let best = null;
+  for(const p of sealedPrices){
+    if(p.set_id !== setId || p.product_type !== "Booster Box") continue;
+    if((p.name || "").toLowerCase().includes("case")) continue;
+    const v = parseFloat(p.low_price != null ? p.low_price : p.market_price);
+    if(!Number.isFinite(v) || v <= 0) continue;
+    if(best == null || v < best) best = v;
+  }
+  return best;
+};
+
+function Histogram({data, line}){
   const ents=Object.entries(data.buckets).sort(([a],[b])=>+a-+b);const maxC=Math.max(...ents.map(([,c])=>c));
   const bw=Math.max(4,Math.min(22,Math.floor(560/ents.length))),H=100,skip=Math.max(1,Math.ceil(ents.length/10));
+  // Where today's box price falls on the axis, as a marker — the question a
+  // box histogram exists to answer is "how often does it beat what it costs".
+  const w0 = ents.length > 1 ? (+ents[1][0] - +ents[0][0]) : 10;
+  const lineX = (line != null && ents.length) ? ((line - +ents[0][0]) / w0) * (bw + 2) : null;
+  const lineOn = lineX != null && lineX >= 0 && lineX <= ents.length * (bw + 2);
   return html`<div><div class="muted" style=${{fontSize:11,marginBottom:6}}>Distribution across ${data.n.toLocaleString()} simulated boxes</div>
     <div class="scr"><svg width=${ents.length*(bw+2)+10} height=${H+28} style=${{display:"block"}}>
       ${ents.map(([b,c],i)=>{const bh=Math.max(2,(c/maxC)*H),x=i*(bw+2),near=Math.abs(+b-data.mean)<15;
         return html`<g key=${b}><rect x=${x} y=${H-bh} width=${bw} height=${bh} fill=${near?"var(--accent)":"rgba(200,168,70,0.25)"} rx="2"/>
           ${i%skip===0&&html`<text x=${x+bw/2} y=${H+18} textAnchor="middle" fontSize="9" fill="var(--text-muted)">$${b}</text>`}</g>`;})}
-      <line x1="0" y1=${H} x2=${ents.length*(bw+2)} y2=${H} stroke="var(--border)" strokeWidth="0.5"/></svg></div>
-    <div class="muted" style=${{fontSize:11,marginTop:4}}>Dark = near mean (${fmt(data.mean)}). ${((data.totals.filter(t=>t>=100).length/data.n)*100).toFixed(1)}% of boxes hit $100+.</div></div>`;
+      <line x1="0" y1=${H} x2=${ents.length*(bw+2)} y2=${H} stroke="var(--border)" strokeWidth="0.5"/>
+      ${lineOn && html`<line x1=${lineX} y1="0" x2=${lineX} y2=${H} stroke="var(--green)" strokeWidth="1.5" strokeDasharray="4,3"/>`}</svg></div>
+    <div class="muted" style=${{fontSize:11,marginTop:4}}>Dark = near mean (${fmt(data.mean)}). ${line != null
+      ? `${((data.totals.filter(t=>t>=line).length/data.n)*100).toFixed(1)}% of boxes beat today's ${fmt(line)} box price${lineOn ? " (the dashed line)" : ""}.`
+      : `${((data.totals.filter(t=>t>=100).length/data.n)*100).toFixed(1)}% of boxes hit $100+.`}</div></div>`;
 }
 
-function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSet,onSetChange,onOpenOdds}){
+function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSet,onSetChange,onOpenOdds,sealedPrices}){
   const [s,setS]=useState(()=>presetSet&&sets.includes(presetSet)?presetSet:"");const [res,setRes]=useState(null);const [boxHist,setBoxHist]=useState([]);
   const [selectedGroup,setSelectedGroup]=useState(null);
   const openBestPull = () => { if(!res?.best) return; const g = groupFromSimCard(res.best, rawData); if(g) setSelectedGroup(g); };
   const pools=useMemo(()=>s?buildPools(rawData,s):null,[rawData,s]);
   const bestBox = useMemo(()=>boxHist.length?boxHist.reduce((best,b)=>b.total>best.total?b:best,boxHist[0]):null,[boxHist]);
+  // Every set's box costs something different, and none of them $109.99 —
+  // the figure "Total spent" used to multiply by for every set.
+  const boxPrice = useMemo(()=>currentBoxPrice(sealedPrices, s, rawData), [sealedPrices, s, rawData]);
   const openBox=()=>{
     if(!pools) return;
     const pull=getPull(s);
@@ -19705,14 +19735,14 @@ function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSet
       <${Stat} label="Boxes opened" value=${boxHist.length}/>
       <${Stat} label="Avg box" value=${fmt(boxHist.reduce((a,b)=>a+b.total,0)/boxHist.length)}/>
       <${Stat} label="Best box" value=${fmt(bestBox?.total)} accent="var(--green)"/>
-      <${Stat} label="Total spent" value=${fmt(boxHist.length*109.99)}/>
+      <${Stat} label=${boxPrice != null ? "Spent at " + fmt(boxPrice) + "/box" : "Total spent"} value=${boxPrice != null ? fmt(boxHist.length*boxPrice) : "—"}/>
     </div>`}
     ${res&&html`<div style=${{marginBottom:"1.5rem"}}>
       <div class="muted" style=${{fontSize:11,marginBottom:8}}>Box #${res.num} \u2014 ${s}</div>
       <div style=${{display:"flex",gap:16,flexWrap:"wrap"}}>
         <div style=${{flex:1,minWidth:200}}>
           <div class="stat-grid stat-grid-3" style=${{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
-            <${Stat} label="Box total" value=${fmt(res.total)} accent=${res.total>=100?"var(--green)":null}/>
+            <${Stat} label="Box total" value=${fmt(res.total)} accent=${res.total>=(boxPrice ?? 100)?"var(--green)":null}/>
             <${Stat} label="Best pull" value=${(res.best?.name||"").substring(0,24)}/>
             <${Stat} label="Best card $" value=${fmt(res.best?.price)} accent=${res.best?.price>=10?"var(--green)":null}/>
           </div>
@@ -32570,6 +32600,26 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode,user,collectio
   };
   const toggleRar=r=>{setActiveRars(prev=>{const next=new Set(prev);if(next.has(r)) next.delete(r); else next.add(r);return next;});};
   const getTotal=s=>{const d=setData[s];if(!d) return 0;let t=0;for(const r of SET_RARS) if(activeRars.has(r)) t+=(d.byRar[r]?.total||0);return t*mult;};
+  // What you already own, per card, across EVERY printing — a foil copy plays
+  // exactly like a non-foil one, so it counts toward the four. This is what the
+  // Analytics overview has always promised ("counts what you already own").
+  const ownedByCard = useMemo(() => {
+    const m = new Map();
+    if(!user || !collection) return m;
+    for(const [k, q] of Object.entries(collection)){
+      if(!(q > 0)) continue;
+      const i = k.lastIndexOf(":");
+      if(i <= 0) continue;
+      const cid = k.slice(0, i);
+      m.set(cid, (m.get(cid) || 0) + q);
+    }
+    return m;
+  }, [user, collection]);
+  const showOwned = ownedByCard.size > 0;
+  const getNeed=s=>{const d=setData[s];if(!d) return 0;let t=0;
+    for(const c of d.cards){ if(!activeRars.has(c.rarity)) continue;
+      t += Math.max(0, mult - (ownedByCard.get(c.card_id) || 0)) * (c.price || 0); }
+    return t;};
   return html`<div>
     <${MarketHeader} title="Playset Cost"
       sub="What it costs to buy every constructed-legal card in a set — as a 4-of playset or a 1-of master set.">
@@ -32583,6 +32633,7 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode,user,collectio
       <ul class="market-explainer-defs">
         <li><strong>Total</strong> — the cost to assemble that mode for that set at the active price tier.</li>
         <li><strong>Rarity columns</strong> — the contribution from each rarity. Toggle a rarity chip off to drop it from the Total.</li>
+        <li><strong>Still to buy</strong> — signed in, the same total less the copies already in your collection. Any printing counts toward the four.</li>
         <li>Click any set row to expand into card-by-card detail.</li>
       </ul>
     <//>
@@ -32599,6 +32650,7 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode,user,collectio
     <div class="scr"><table>
       <thead><tr>
         <th class="mkt-sticky-col" style=${{textAlign:"left",minWidth:160}}>Set</th><th style=${{minWidth:90}}>Total</th>
+        ${showOwned && html`<th style=${{minWidth:96}} title="The Total less the copies already in your collection (any printing counts).">Still to buy</th>`}
         ${SET_RARS.map(r=>html`<th key=${r} style=${{minWidth:70,opacity:activeRars.has(r)?1:0.3}}>${r}</th>`)}
         <th style=${{width:40}}>Cards</th>
       </tr></thead>
@@ -32607,11 +32659,12 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode,user,collectio
           <tr onClick=${()=>setExpanded(isExp?null:s)} style=${{cursor:"pointer",background:isExp?"var(--accent-glow)":"inherit"}}>
             <td class="mkt-sticky-col" style=${{fontWeight:500,textAlign:"left"}}><span style=${{marginRight:6,fontSize:10,color:"var(--text-muted)"}}>${isExp?"▼":"▶"}</span>${s}</td>
             <td style=${{fontWeight:600}}>${fmt(total)}</td>
+            ${showOwned && html`<td style=${{fontWeight:600,color:"var(--accent)"}}>${fmt(getNeed(s))}</td>`}
             ${SET_RARS.map(r=>{const rv=(d.byRar[r]?.total||0)*mult;
               return html`<td key=${r} style=${{opacity:activeRars.has(r)?1:0.3}}>${fmt(rv)}</td>`;})}
             <td class="muted">${d.cards.length}</td>
           </tr>
-          ${isExp&&html`<tr><td colspan=${SET_RARS.length+3} style=${{padding:0,border:"none"}}>
+          ${isExp&&html`<tr><td colspan=${SET_RARS.length+3+(showOwned?1:0)} style=${{padding:0,border:"none"}}>
             <${SetDetail} data=${d} mult=${mult} activeRars=${activeRars} theme=${theme} onOpenCard=${openCard}/>
           </td></tr>`}
         <//>`;})}</tbody>
@@ -32669,8 +32722,9 @@ function MarketExplainer({id, children}){
 
 // Monte Carlo box simulator — the Simulator's "Odds" mode. Runs N box
 // openings and renders the EV distribution histogram plus summary stats.
-function MonteCarloView({rawData, sets, theme, presetSet, onSetChange}){
+function MonteCarloView({rawData, sets, theme, presetSet, onSetChange, sealedPrices}){
   const [s, setS] = useState(()=>presetSet&&sets.includes(presetSet)?presetSet:"");
+  const boxPrice = useMemo(()=>currentBoxPrice(sealedPrices, s, rawData), [sealedPrices, s, rawData]);
   const [n, setN] = useState(1000);
   const [running, setRunning] = useState(false);
   const [dist, setDist] = useState(null);
@@ -32719,9 +32773,11 @@ function MonteCarloView({rawData, sets, theme, presetSet, onSetChange}){
         <${Stat} label="Min"    value=${fmt(dist.min)}/>
         <${Stat} label="Max"    value=${fmt(dist.max)} accent="var(--green)"/>
       </div>
-      <${Histogram} data=${dist}/>
+      <${Histogram} data=${dist} line=${boxPrice}/>
       <p class="muted" style=${{fontSize:11,marginTop:10}}>
-        ${dist.n.toLocaleString()} simulated boxes for ${s}. Mean is the long-run average box value; median is the typical box (half above, half below). Box MSRP is $109.99 — anything to the right of that on the histogram is profit at single-card resale.
+        ${dist.n.toLocaleString()} simulated boxes for ${s}. Mean is the long-run average box value; median is the typical box (half above, half below).${boxPrice != null
+          ? ` A booster box of ${s} is ${fmt(boxPrice)} on TCGplayer today (Low) — anything to the right of that on the histogram is profit at single-card resale.`
+          : ""}
       </p>
     </div>`}
   </div>`;
@@ -37895,10 +37951,10 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
       ${simKind==="pack" && html`<${PackSim} rawData=${raw} sets=${setsNewest} theme=${theme}
         presetSet=${simSet} onSetChange=${setSimSet}
         user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
-      ${simKind==="box"  && html`<${BoxSim} rawData=${raw} sets=${setsNewest} theme=${theme}
+      ${simKind==="box"  && html`<${BoxSim} rawData=${raw} sets=${setsNewest} theme=${theme} sealedPrices=${sealedPrices}
         presetSet=${simSet} onSetChange=${setSimSet} onOpenOdds=${()=>setSimKind("bulk")}
         user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
-      ${simKind==="bulk" && html`<${MonteCarloView} rawData=${raw} sets=${setsNewest} theme=${theme}
+      ${simKind==="bulk" && html`<${MonteCarloView} rawData=${raw} sets=${setsNewest} theme=${theme} sealedPrices=${sealedPrices}
         presetSet=${simSet} onSetChange=${setSimSet}/>`}
     <//>`}
     ${sub==="swiss" && html`<${React.Fragment}>
