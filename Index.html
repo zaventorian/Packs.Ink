@@ -20766,11 +20766,15 @@ const BulkAddByRarityModal = ({groups, setRarities, collection, bulkUpdateCollec
     for(const g of groups){
       if(!picked.has(g.Rarity)) continue;
       const isChase = ["Enchanted","Iconic","Epic"].includes(g.Rarity);
-      // Chase cards only exist as Holofoil — apply regardless of foilMode.
-      // Non-chase respects the toggle.
+      // Chase cards only exist as Holofoil — apply regardless of foilMode. So
+      // does ANY card with a single printing (promos, C2, a foil-only reprint):
+      // the Non-foil / Foil toggle is a choice between two printings, and with
+      // only one it used to skip the card and report a false "No changes".
+      const single = !(g.normal && g.foil);
       const printingsToTouch = [];
-      if(isChase){
-        if(g.foil) printingsToTouch.push(g.foil);
+      if(isChase || single){
+        const only = g.foil || g.normal;
+        if(only) printingsToTouch.push(only);
       } else {
         if((foilMode === "normal" || foilMode === "both") && g.normal) printingsToTouch.push(g.normal);
         if((foilMode === "foil"   || foilMode === "both") && g.foil)   printingsToTouch.push(g.foil);
@@ -20822,7 +20826,7 @@ const BulkAddByRarityModal = ({groups, setRarities, collection, bulkUpdateCollec
       </div>
       <div class="modal-body" style=${{padding:18}}>
         <p class="muted" style=${{fontSize:12,margin:"0 0 14px",lineHeight:1.5}}>
-          Adds copies for every card matching the chosen rarities in this set. <strong>Set quantity</strong> brings each slot up to the chosen count (won't touch slots that already have more). <strong>Add on top</strong> increments existing quantities. Chase rarities (Enchanted / Iconic / Epic) always count as foil — the foil toggle only affects the rest.
+          Adds copies for every card matching the chosen rarities in this set. <strong>Set quantity</strong> brings each slot up to the chosen count (won't touch slots that already have more). <strong>Add on top</strong> increments existing quantities. Chase rarities (Enchanted / Iconic / Epic) and any card that exists in only one printing are added as that printing — the foil toggle only chooses between cards that come both ways.
         </p>
         <div style=${{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
           <div>
@@ -20873,7 +20877,9 @@ const BulkAddByRarityModal = ({groups, setRarities, collection, bulkUpdateCollec
         </div>
         <div style=${{padding:"10px 12px",background:"var(--accent-glow)",border:"1px solid var(--border-accent)",
           borderRadius:6,fontSize:12,marginBottom:14,lineHeight:1.5,color:"var(--accent)"}}>
-          <strong>Plan:</strong> ${plan.cardsTouched === 0
+          <strong>Plan:</strong> ${picked.size === 0
+            ? html`<span style=${{color:"var(--text-muted)"}}>Pick at least one rarity above.</span>`
+            : plan.cardsTouched === 0
             ? html`<span style=${{color:"var(--text-muted)"}}>No changes — every matching slot already meets the target.</span>`
             : html`Update <strong>${plan.cardsTouched}</strong> slot${plan.cardsTouched===1?"":"s"} ·
                   <strong>+${plan.totalCopies}</strong> ${plan.totalCopies===1?"copy":"copies"} to your collection.`}
