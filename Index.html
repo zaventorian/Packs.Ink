@@ -20446,6 +20446,28 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     }
     return {count, value};
   }, [visibleGroups, collection, foilMode]);
+  // All Cards is the whole catalog — ~2,500 rows, each with two counters —
+  // and mounted every one at once, which is seconds of jank on a phone. It
+  // renders in slabs and grows as you scroll, the same windowing the Cards
+  // grid uses. A single set is small enough to render whole.
+  const ALL_CARDS_WINDOW = 200;
+  const [allShown, setAllShown] = useState(ALL_CARDS_WINDOW);
+  const allSentinelRef = useRef(null);
+  // Reset when the FILTERS change, never on a count change — visibleGroups is
+  // rebuilt on every +/- (it reads the collection), and resetting then threw
+  // someone 800 rows down back to 200, past the end of what is drawn.
+  useEffect(() => { setAllShown(ALL_CARDS_WINDOW); },
+    [drawerFilter, inkFilter, rarityFilter, statusFilter, foilMode, sortKey, priceBand, separateBySet]);
+  useEffect(() => {
+    const el = allSentinelRef.current;
+    if(!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver((es) => {
+      if(es.some(e => e.isIntersecting)) setAllShown(c => c + ALL_CARDS_WINDOW);
+    }, {rootMargin: "1200px 0px"});
+    io.observe(el);
+    return () => io.disconnect();
+  }, [visibleGroups, allShown]);
+  const shownGroups = allMode ? visibleGroups.slice(0, allShown) : visibleGroups;
 
   return html`<div>
     <div class="setdet-header">
@@ -20574,9 +20596,9 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
           // Flat by default; only the "Separate by set" toggle adds per-set
           // headers. visibleGroups is already in sort order, so Map insertion
           // order = display order (sort by set first for clean sections).
-          if(!separateBySet) return [{key: "__all__", label: null, items: visibleGroups}];
+          if(!separateBySet) return [{key: "__all__", label: null, items: shownGroups}];
           const setBuckets = new Map();
-          for(const g of visibleGroups){
+          for(const g of shownGroups){
             const k = g.Set || "Other";
             if(!setBuckets.has(k)) setBuckets.set(k, []);
             setBuckets.get(k).push(g);
@@ -20662,10 +20684,16 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
         : html`<div class="muted deck-feed-state">No cards match these filters.
             <button type="button" class="settings-action link" style=${{marginLeft:6}}
               onClick=${()=>{ setSearch(""); setInkFilter(new Set()); setRarityFilter(new Set()); setStatusFilter("all"); setPriceBand(""); if(allMode) setDrawerFilter(emptyFilter()); }}>Clear filters</button></div>`;
-      return groupsByOrigin.map(bucket => html`<div key=${bucket.key} class="setdet-origin-bucket">
-        ${bucket.label && html`<div class="setdet-origin-header">${bucket.label}</div>`}
-        ${renderItems(bucket.items, bucket.printingMode || null)}
-      </div>`);
+      return html`<${React.Fragment}>
+        ${groupsByOrigin.map(bucket => html`<div key=${bucket.key} class="setdet-origin-bucket">
+          ${bucket.label && html`<div class="setdet-origin-header">${bucket.label}</div>`}
+          ${renderItems(bucket.items, bucket.printingMode || null)}
+        </div>`)}
+        ${allMode && shownGroups.length < visibleGroups.length && html`<div ref=${allSentinelRef}
+          class="muted" style=${{textAlign:"center",padding:"14px 0 22px",fontSize:12}}>
+          Showing ${shownGroups.length.toLocaleString()} of ${visibleGroups.length.toLocaleString()} cards — keep scrolling…
+        </div>`}
+      </>`;
     })()}
 
     ${allMode && drawerOpen && html`<${FilterDrawer} filter=${drawerFilter} setFilter=${setDrawerFilter}
