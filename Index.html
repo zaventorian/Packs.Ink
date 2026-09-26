@@ -9783,8 +9783,11 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   // every other variant once expanded. Same array feeds the copy-image poster.
   const statRows = useMemo(() => {
     const rows = [];
+    // Name a printing by its finish only when the card HAS the other one —
+    // the rule the price boxes above already follow. A promo that exists only
+    // in foil was labelled "Foil" here, a difference that does not exist.
     if(history.normal && history.normal.length) rows.push({
-      key:"__normal", label:"Non-Foil", color:"#1d8d4a", sub:null,
+      key:"__normal", label: group.foil ? "Non-Foil" : (group.Rarity || "Non-Foil"), color:"#1d8d4a", sub:null,
       productId: group.normal && group.normal.tcgplayer_product_id,
       printing: (group.normal && group.normal.tcg_printing) || "Normal",
       low: computeSeriesDeltas(history.normal, "low_price"),
@@ -9794,7 +9797,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
         (group.normal && group.normal.tcg_printing) || "Normal"),
     });
     if(history.foil && history.foil.length) rows.push({
-      key:"__foil", label: group.isChase ? group.Rarity : "Foil", color:"#7e54c4", sub:null,
+      key:"__foil", label: group.isChase ? group.Rarity : (group.normal ? "Foil" : (group.Rarity || "Foil")), color:"#7e54c4", sub:null,
       productId: group.foil && group.foil.tcgplayer_product_id,
       printing: (group.foil && group.foil.tcg_printing) || "Foil",
       low: computeSeriesDeltas(history.foil, "low_price"),
@@ -10155,7 +10158,10 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           ? html`<div class="chart-empty large">Loading history…</div>`
           : !hasAnyHistory
             ? html`<div class="chart-empty large">No price history available for this card.</div>`
-            : html`<${LineChart} series=${clipSeriesFrom(chartSeries, chartStartMs)} width=920 height=260/>`}
+            : (!showLow && !showMarket && !(rawChartPoints && rawChartPoints.length))
+              // Both lines switched off drew an empty box with nothing to say why.
+              ? html`<div class="chart-empty large">Turn on Low or NM Market above to draw the chart.</div>`
+              : html`<${LineChart} series=${clipSeriesFrom(chartSeries, chartStartMs)} width=920 height=260/>`}
       </div>`}
       ${detailTab === "graded" && gradedPremium && isSplitCard && cardPrintings.length >= 2 && html`<div class="graded-printing-toggle seg-toggle">
         ${cardPrintings.map(p=>html`<button key=${p}
