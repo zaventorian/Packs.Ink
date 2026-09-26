@@ -20021,7 +20021,10 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     return true;
   };
   // In All Cards mode, sort + filters persist (per-set views stay ephemeral).
-  const [viewMode, setViewMode] = useState(()=>{ try { return allMode ? (localStorage.getItem("packsink:allCards:view")||"list") : "list"; } catch { return "list"; } });
+  // A set page remembers List / Grid too (its own key, so All Cards and a set
+  // can differ) — it snapped back to List on every visit.
+  const [viewMode, setViewMode] = useState(()=>{ try { return (allMode ? localStorage.getItem("packsink:allCards:view") : localStorage.getItem("packsink:setDetail:view")) || "list"; } catch { return "list"; } });
+  useEffect(()=>{ if(allMode) return; try { localStorage.setItem("packsink:setDetail:view", viewMode); } catch {} }, [viewMode, allMode]);
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   // Undo state — populated by the bulk-add modal's onApplied callback.
   // Holds the snapshot of prior quantities + a summary line for the toast.
@@ -23976,9 +23979,17 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
             <button onClick=${()=>bump(-1)} disabled=${qty<=0} aria-label="Decrease quantity">−</button>
             <span class=${"sealed-coll-counter-qty"+(qty>0?" has":"")}>${qty}</span>
             <button onClick=${()=>bump(+1)} disabled=${qty>=99} aria-label="Increase quantity">+</button>
-            ${qty > 0 && (lowToday != null || marketToday != null) && html`<span class="sealed-detail-owned-value muted">
-              Value: <strong>${fmt(((marketToday ?? lowToday) || 0) * qty)}</strong>
-            </span>`}
+            ${qty > 0 && (lowToday != null || marketToday != null) && (() => {
+              // The SAME basis the Sealed tab totals with (its Low / NM Market
+              // toggle, Low by default) — this said Market while the tab said
+              // Low, so one box had two values a click apart. Labelled.
+              let useMkt = false;
+              try { useMkt = localStorage.getItem("packsink:sealedColl:priceMode") === "market"; } catch {}
+              const unit = useMkt ? (marketToday ?? lowToday) : (lowToday ?? marketToday);
+              return html`<span class="sealed-detail-owned-value muted">
+                Value at ${useMkt ? "NM Market" : "Low"}: <strong>${fmt((unit || 0) * qty)}</strong>
+              </span>`;
+            })()}
           </div>`}
           ${!readOnly && qty > 0 && html`<${CostDateInputs}
             currentPaid=${sealedMeta?.[pid]?.amount_paid ?? null}
@@ -24059,7 +24070,9 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
     catch { return "low"; }
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:sealedColl:priceMode", priceMode); } catch {} }, [priceMode]);
-  const [hideUnowned, setHideUnowned] = useState(false);
+  // Remembered, like the tab's display and price toggles beside it.
+  const [hideUnowned, setHideUnowned] = useState(() => { try { return localStorage.getItem("packsink:sealedColl:ownedOnly") === "1"; } catch { return false; } });
+  useEffect(() => { try { localStorage.setItem("packsink:sealedColl:ownedOnly", hideUnowned ? "1" : "0"); } catch {} }, [hideUnowned]);
   // Grid (image tiles) vs Compact (text-only rows) — mirrors Graded.
   const [displayMode, setDisplayMode] = useState(()=>{
     try { return localStorage.getItem("packsink:sealedColl:display") || "grid"; }
