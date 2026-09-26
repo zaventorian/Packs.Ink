@@ -9801,7 +9801,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           // so the copied link always routes through the Cards view.
           // SITE_ORIGIN keeps native-app copies saying packs.ink.
           try {
-            const u = SITE_ORIGIN + (VIEW_PATHS.cards || "/cards") + "?card=" + encodeURIComponent(group.card_id);
+            const u = SITE_ORIGIN + (VIEW_PATHS.cards || "/cards") + "?card=" + encodeURIComponent(cardUrlParam(group));
             navigator.clipboard.writeText(u).then(
               ()=>flashToast("Card link copied"),
               ()=>flashToast("Couldn't copy the link"));
@@ -14046,25 +14046,15 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
     // would null the id in App and the modal would never open. Hold until
     // `raw` lands (the effect re-runs on it).
     if(incomingOpenCardId && (!raw || !raw.length)) return;
-    setPendingSearch(incomingSearch || "");
+    // Only a real handoff sets the search. A cold /cards?q=…&card=… link comes
+    // in with no search of its own, and "" here blanked the ?q= it arrived with.
+    if(incomingSearch != null) setPendingSearch(incomingSearch);
     if(incomingOpenCardId && raw && raw.length){
-      // Build a fully-populated "group" via the canonical groupCards()
-      // helper so every CardDetailModal subsection (normal + foil rows,
-      // price compares, ownership counters) renders correctly. Same path
-      // the Pack/Box sims + Playset rows use.
-      const row = raw.find(r => r.card_id === incomingOpenCardId);
-      if(row){
-        // ⚠ groupFromSimCard looks rows up BY PID, so it cannot serve a card
-        // that has none — every Format Coconut row, which is why a reveal could
-        // not be linked to and the handoff silently landed on the tab with
-        // nothing open. Those have exactly one printing, so grouping their own
-        // row is the whole job. The pid path is untouched: it is the one that
-        // finds BOTH printings of an ordinary card.
-        const g = row.tcgplayer_product_id
-          ? groupFromSimCard(row, raw)
-          : (groupCards([row])[0] || null);
-        if(g) setSelectedGroup(g);
-      }
+      // A fully-populated "group" (normal + foil rows, price compares,
+      // ownership counters) for the id — and for a split-printing card, the
+      // side the link named. Pid-less rows (Format Coconut) group on their own.
+      const g = groupFromCardParam(incomingOpenCardId, raw);
+      if(g) setSelectedGroup(g);
     }
     onConsumedIncomingCardsSearch && onConsumedIncomingCardsSearch();
   }, [incomingSearch, incomingOpenCardId, raw, onConsumedIncomingCardsSearch]);
@@ -14078,7 +14068,7 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
     try {
       const url = new URL(window.location.href);
       const cur = url.searchParams.get("card");
-      const want = selectedGroup ? (selectedGroup.card_id || null) : null;
+      const want = selectedGroup ? cardUrlParam(selectedGroup) : null;
       if(cur === want) return;
       // Closing a modal WE opened pops the entry we pushed. Replacing it in
       // place left a duplicate /cards entry behind, so the next Back did
@@ -14105,13 +14095,8 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
         const id = new URLSearchParams(window.location.search).get("card");
         setSelectedGroup(prev => {
           if(!id) return allowClear ? null : prev;
-          if(prev && prev.card_id === id) return prev;
-          const row = (raw || []).find(r => r.card_id === id);
-          if(row && row.tcgplayer_product_id){
-            const g = groupFromSimCard(row, raw);
-            if(g) return g;
-          }
-          return prev;
+          if(prev && cardUrlParam(prev) === id) return prev;
+          return groupFromCardParam(id, raw) || prev;
         });
       } catch {}
     };
@@ -16435,6 +16420,24 @@ const groupFromSimCard = (simCard, rawData) => {
     if(picked) return picked;
   }
   return groups[0] || null;
+};
+
+// ?card= carries the SIDE of a split-printing card — Challenge Promo C1's Top
+// Prize foil and Prize Wall non-foil share one card_id and are two very
+// different markets, and a bare id reopened a shared Top Prize link as the
+// Prize Wall. "<id>~F" / "<id>~N"; a plain id opens the card exactly as before.
+// ("~" appears in no card_id; "::" does, in custom-variant ids.)
+const cardUrlParam = (g) => !g || !g.card_id ? null
+  : g.card_id + (g.isSplitPrinting ? ((g.foil && !g.normal) ? "~F" : "~N") : "");
+const groupFromCardParam = (param, rawData) => {
+  if(!param || !rawData || !rawData.length) return null;
+  const m = /^(.*?)~([FN])$/.exec(param);
+  const id = m ? m[1] : param, side = m ? m[2] : null;
+  const row = rawData.find(r => r.card_id === id);
+  if(!row) return null;
+  // No pid (every Format Coconut row): one printing, so its own row is the group.
+  if(!row.tcgplayer_product_id) return groupCards(rawData.filter(r => r.card_id === id))[0] || null;
+  return groupFromSimCard(side ? {...row, printing: side === "F" ? "Foil" : "Normal"} : row, rawData);
 };
 
 // --- Card scanner v3: opencv in a Web Worker (detect → rectify → match) -----
@@ -35234,6 +35237,21 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // mode flips, preset/window (visibleWins), sort arrows, density, column
   // prefs, and the row data itself (table-layout auto sizes to content).
   const theadRef = useRef(null);
+  // Sortable headers are <th onClick> built by a dozen column factories; make
+  // every one of them reachable and pressable from the keyboard in one place
+  // (Shift+Enter keeps the shift-click tiebreaker). Every render: a header
+  // re-created by React comes back without the attribute.
+  useEffect(() => {
+    const head = theadRef.current;
+    if(!head) return;
+    head.querySelectorAll("th.sortable").forEach(th => { if(th.tabIndex !== 0) th.tabIndex = 0; });
+  });
+  const onTheadKey = useCallback((e) => {
+    const th = e.target && e.target.closest && e.target.closest("th.sortable");
+    if(!th || (e.key !== "Enter" && e.key !== " ")) return;
+    e.preventDefault();
+    th.dispatchEvent(new MouseEvent("click", {bubbles: true, shiftKey: e.shiftKey}));
+  }, []);
   const gripKeysRef = useRef([]);
   const dragRef = useRef(null);
   const [gripGeom, setGripGeom] = useState({headH: 0, edges: []});
@@ -36277,7 +36295,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         ? `.price-db-table.pdb-resized th:nth-child(${i+1}),.price-db-table.pdb-resized td:nth-child(${i+1}){width:${colWidths[k]}px;min-width:${colWidths[k]}px;max-width:${colWidths[k]}px;}`
         : "").join("")}</style>`}
       <table class=${"price-db-table"+(hasCustomWidths?" pdb-resized":"")}>
-        <thead ref=${theadRef}><tr>
+        <thead ref=${theadRef} onKeyDown=${onTheadKey}><tr>
           <th class="th-check"></th>
           ${user && !watchlistsUnavailable && !showGraded && html`<th class="th-watch" title="Add to the active watchlist"></th>`}
           <th></th>
@@ -36321,6 +36339,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
               <td class="td-name">
                 <div class="td-name-main">
                   <span class="td-name-link" onClick=${openThisRow}
+                    role="button" tabIndex="0" onKeyDown=${keyActivate(openThisRow)}
                     style=${{cursor:"pointer"}}>${r.name}${r.version ? " - " + r.version : ""}</span>
                   ${tcg && html`<a class="td-tcg-link" href=${tcg} target="_blank"
                     rel="noopener nofollow sponsored"
