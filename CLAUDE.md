@@ -24,7 +24,7 @@ This does NOT weaken the rule above: without the word, still commit and stop. It
 
 ## Stack
 
-- **Frontend**: `Index.html` + `styles.css` + `logo.js`, React via `htm` template literals, no build step. Served by `python scripts/dev_server.py` (port 8766 — AnkiConnect squats 8765). CSS extraction is deliberate for caching + editor sanity — do NOT inline CSS back into Index.html.
+- **Frontend**: `Index.html` + `styles.css` + `logo.js`, React via `htm` template literals, no build step. Served by `python scripts/dev_server.py` (port 8766 — AnkiConnect squats 8765; it 404s any path with a dot-segment, because it used to serve the repo-root `.env` — the service key — to anything on loopback, 2026-09-27). CSS extraction is deliberate for caching + editor sanity — do NOT inline CSS back into Index.html.
 - **Prod is the Cloudflare Worker** (`packs-ink`), not Netlify — cutover 2026-08-04. Netlify still exists only to serve `www`'s 301 → apex; see `scripts/CLOUDFLARE_MIGRATION.md`. **Netlify no longer builds anything**: `netlify.toml` carries `[build] ignore = "exit 0"` (2026-09-05) because every push and PR was still running a full metered build + Deploy Preview (whose `_headers` check fails on the Cloudflare-only `!` lines). The last Netlify deploy stays live for the www redirect. Delete the file to build on Netlify again.
 
 ### ⚠️ Deploying — a git push does NOT ship the site
@@ -74,16 +74,163 @@ Android/iOS shell around the SAME zero-build web app. **Read `native/README.md` 
 
 ## Card scanner — PUBLIC BETA 2026-08-04
 
-Camera → identify → review → save. **Identification is 100% on-device**: `scanner.js` + `scanner-cv.js` (OpenCV in `scanner-worker.js`) + PP-OCRv3 ONNX in `scanner-ocr-worker.js`, matched against index files the browser downloads once. No frame is ever sent anywhere to be read — say this plainly in any user-facing copy, it's the feature's best property and it's true.
+Camera → identify → review → save. **Identification is 100% on-device**: `scanner.js` (the matcher) + OpenCV in `scanner-worker.js` (detect, rectify, and the ORB version check) + PP-OCRv3 ONNX in `scanner-ocr-worker.js`, matched against index files the browser downloads once. (`scanner-cv.js` was a dead main-thread copy of the worker's job and is gone, 2026-09-27.) No frame is ever sent anywhere to be read — say this plainly in any user-facing copy, it's the feature's best property and it's true.
 
 Accuracy work (round-by-round history, replay harness, the miss taxonomy) lives in the **`project-scanner-spec` memory** — read its NEW-SESSION HANDOFF before touching the matcher. This section is only the shipping/consent surface.
 
 ### Gating
 
-- **`canScan = true`** in App — everyone gets the 📷 button. It was `isGradedAdmin || isScannerTester`; the client-side `is_scanner_tester()` probe is GONE (it fired on every sign-in to answer a question no longer asked).
+- **`canScan = true`** in App — everyone gets the 📷 button, **and since 2026-09-27 a signed-out visitor can actually SCAN** (see "Scanning signed out" below); an account is asked for only to save. It was `isGradedAdmin || isScannerTester`; the client-side `is_scanner_tester()` probe is GONE (it fired on every sign-in to answer a question no longer asked).
 - **`scanner_testers` + `is_scanner_tester()` still gate the WRITE path in the repo's own migrations — and that is the open question of the 2026-09-04 audit.** Migration 98 requires `is_scanner_tester() OR is_graded_admin()` on `scan_samples` INSERT/UPDATE and on the `scan-samples` storage INSERT (the READ policy is 91's owner-or-graded-admin and never mentions testers). No later migration drops that clause, so either every non-allowlisted user's uploads have been failing silently since the public beta (`uploadSample` swallows every error) or the live policy was changed outside the repo. **`supabase/132_scan_samples_public_beta.sql` — APPLIED 2026-09-05 by Zaven** — drops the tester clause and adds a per-user rolling-24h storage-object cap (3000 = 1000 rows × 3 objects), so public uploads work from that day whichever way the history went. Whether `scanner_testers` / `is_scanner_tester()` still have any referrer is a question for §1 of `supabase/diagnostics/public_release_live_checks.sql`; don't drop them without running it.
 - **`SCANNER_QA_ONLY` stays `true` — PERMANENTLY, as of 2026-08-23.** Zaven's call: *"I don't want auto-add to collection; let the user confirm the list after running a session."* Review-before-save is the shipping UX, so the ≥95% precision bar gates nothing any more; flipping this to false restores the Stack-scan / Single auto-add flow and needs a new product decision, not a metric.
   - **The bar was measured anyway that day, the honest way** (photo-verify a random sample of UNREVIEWED shown-✓ rows — labelled rows cannot tell you, per round 11): 170 v16 samples judged against official art in two disjoint seeded rounds → **167 correct = 98.2%, one-sided 95% lower bound 95.7%. It clears.** Retired pre-v16 builds: 83.3% (25/30); the gap is real (Fisher exact p=0.009), so v16's matcher work is what moved it. All 3 v16 misses were name/art collisions between distinct cards (Minnie *Curious Adventurer* vs *Drum Major*; *Genie - Hard to Grasp* read as *Gene - Niceland Resident*; one red-panda song read as another) — exactly the class review catches. Method, if it ever needs re-running: pull `scan_samples` where `reviewed=false AND corrected=false AND debug->>conf='high'`, seeded-sample per build, compose side-by-side sheets of the stored scan crop vs the claimed card's `image_normal`, judge each pair, then Wilson-interval the result.
+
+### Scanning signed out (2026-09-27)
+
+The 2026-09-26 audit's headline: 13 consents ever, **0 cards saved** through the scanner
+since the beta, and a consent screen whose only button was "Sign in to scan". A guest
+can scan now; an account is asked for only to SAVE. Guarded by
+`node scripts/test_scanner_guest.mjs`, which pins every point below at source (every
+way this breaks is silent) and checks the three copy places agree.
+
+- **Nothing is uploaded while signed out — no photo, no label, no session telemetry.**
+  That is a different promise from the upload notice, so it is a different notice
+  (`guestPanel`) accepted under its own key (`SCAN_GUEST_OK_KEY`). Signing in still
+  shows the upload notice; a guest's acceptance never carries into an account.
+- **⚠ The upload gate is the SNAP's flag (`job.guest`), never `user`.** The native
+  app signs in without leaving the page, so a guest's snap still queued when the
+  account arrives would otherwise upload under it. Rows carry `guest: true` too, and
+  `labelSample` bails on it. Session telemetry belongs to whoever STARTED the camera
+  (`sessionUser`), not whoever is signed in when it stops.
+- **⚠ The account's consent effect sets `consentOk` EITHER way** (`setConsentOk(local)`,
+  not `if(local) setConsentOk(true)`), or the camera keeps running on the guest's
+  acceptance until the account's record comes back.
+- **Saving:** "Sign in to add N" (`qaSignInToSave`) **awaits** the IDB write of the list
+  under `scanSession:guest` (the persist effect's 600ms debounce would lose it on the
+  way out), leaves a resume flag (`SCAN_RESUME_KEY`, 30 min), then signs in. App reopens
+  the scanner once `user` arrives (that effect sits BELOW `user`'s declaration — above
+  it, its deps array is a TDZ ReferenceError); the scanner consumes the flag and lands
+  on the review screen; the restore moves the guest list into the account (written
+  under the account BEFORE the guest copy is deleted).
+- **A returning guest reaches the review screen before the upload notice**
+  (`reviewOnly`): saving opens no camera and uploads nothing. "← Camera" shows the
+  notice.
+- **A dead camera no longer takes the list with it.** The error screen (blocked /
+  no camera / camera error) offers "Review N scans" whenever there are rows, and the
+  review screen renders over the dead stage. Before this, a phone with the camera
+  blocked could never reach its own scanned list.
+- **`/scan` is a real route** (`PATH_TO_VIEW`, `LANDED_ON_SCAN`): it rewrites the address
+  to `/` and opens the scanner, so the Scan tab is an `<a href="/scan">` like every other
+  nav target, and `manifest.json` carries a **"Scan a card" app shortcut** (long-press the
+  installed icon).
+  - **⚠ A `/scan` landing opens the modal BEFORE the deferred `scanner.js` has run**, so
+    the mount effect waits for `window.CardScanner` (up to 20s) instead of reading it once.
+    Read once, anyone who had already accepted the notice got "Scanner unavailable" on
+    exactly the link this route exists for.
+
+### Which PRINTING: the ORB version check (2026-09-26)
+
+The name read settles WHICH CHARACTER well and WHICH PRINTING badly, and colour carries
+no signal on a camera photo (41% right version on 860 field crops). After the name read,
+`verifyIdentity` asks the detector worker to match ORB keypoints of the snap against each
+candidate printing's own catalog art and count RANSAC homography inliers — **97–98% right
+version** on human-reviewed crops, and it works on a bad rectify because a homography does
+not care where the card sits in the crop. `scanner-worker.js` only MEASURES; the pure
+functions in Index.html's "ORB version verification" block DECIDE. Guarded by
+`node scripts/test_scanner_verify.mjs`.
+
+- **Confident = the winner has ≥ 20 inliers AND ≥ 1.6× the best non-twin**
+  (`SCAN_ORB`). Candidates: the pick, identify's alternates, then the character's other
+  printings (`scannerFamilyOf`, case-folded like the version chips), capped at 8.
+- **ART TWINS (an Epic and its base, a reprint across sets) are a TIE with the winner**,
+  not the runner-up it must beat (thumbnail NCC > 0.97). A tie goes to the **registered
+  collector-number read**: the homography warps the full-resolution photo onto the
+  winner's canonical frame, the number line then sits at a known spot (y .952–.992,
+  x .015–.34), and rec (no detector) reads it at three vertical offsets. `scanCnPick`
+  matches that ONLY against the tied cards' own numbers — every offset that reads must
+  agree, an exact number whose set clearly disagrees abstains, and a one-glyph miss is
+  accepted only when every other tied card is two edits further. Unread, the row keeps
+  its ≈ and stays within the tied group.
+- **A confident ORB result may change the VERSION of the character the name read found,
+  but when a DECISIVE name read and the art disagree about the CHARACTER the row shows
+  both (≈) rather than siding with either.**
+- **The old look (second OCR pass) runs only when ORB was not confident** (`orbDecided`).
+  Its name re-read could only flip ORB's version back to a text guess.
+- **⚠ A NOT-confident ORB winner does not replace the read's pick** — measured, not assumed:
+  on the 60 field rows where ORB ran but fell short of the margin, its winner was right 32
+  times and the read's pick 34. The row keeps the read's pick and shows ≈ with the rest.
+- **The family fill is ranked by the version text the read found** (`scanFamilyByText`),
+  because a third of the index sits in a family bigger than the 8-candidate cap (Mickey
+  Mouse 61, Minnie 36) and index order let the right printing of a popular character go
+  unchecked.
+  - **Measured and NOT shipped: sending a non-decisive read's OTHER-character candidates to
+    the art check.** On all 275 field crops it changed exactly one answer, and
+    made it worse: a glare-washed *Winifred - Exasperated Elephant* that the read called
+    *Swordplay* at low confidence (honestly unsure, no ✓) came back as *Starkey - Devious
+    Pirate* with 26 inliers and a ✓. It also cost ~0.35s on the uncertain scans it touched.
+    **⚠ When the right card is not among the candidates, ORB still finds 20+ inliers on some
+    other card's art** — Winifred was never checked. Widening the candidates across
+    characters buys spurious matches, not answers; a future change there needs a higher
+    inlier bar for a character switch than for a version switch.
+- **⚠ References go to the shared detector worker ONE PER MESSAGE** (`verify-ref`). The
+  live loop waits on every detect reply, and one message carrying a cold family's eight
+  ORB extractions froze the live badge for all of them.
+- The snap path's primary read **dets the name at max-side 544** (`NAME_DET_SIDE`; 162 vs
+  343ms desktop and MORE accurate — char 92.7% vs 89.3%) and **skips the subtitle band**
+  (2–3× the name read's cost, and ORB answers the question it existed for).
+- **`window.__scanBench(canvas, opts)`** runs exactly this pipeline on a canvas —
+  `{rect:true}` skips capture, `{band:true, verify:false}` is the pre-ORB path. The field
+  set lives in `scripts/scanner/data/field_eval/` (gitignored; README inside), served by the
+  dev server. It is defined INSIDE the scanner modal, so open the scanner first (`/scan`
+  does it); the Browser pane cannot fetch other localhost ports, so serve the crops from the
+  same dev server the page is on.
+  **⚠ Persist a long bench's results as it goes** (localStorage): the scanner reloads its
+  tab whenever a new service worker takes control, so opening the site in another tab
+  after an `sw.js` edit wipes an in-memory run.
+- **Measured 2026-09-27 on the 275 human-reviewed field crops** (`{rect:true}`): exact card
+  **82.9%**, right name+version **87.6%**, a ✓ on **74.2%** of rows at 97.5% name+version
+  precision by label — and **every ✓ that disagreed with its label was a MISLABEL on
+  inspection** (the printed `N/204 · EN · set` line settles it), so judge a ✓ by eye, never by
+  the label. Against the pre-ORB path on the first 110 rows: ✓ shown 49.1% → 76.4%,
+  name+version 84.5% → 87.3%, median 7.3s → 2.8s (desktop).
+- **Perfect framing is worth ~4 points, not a rewrite.** The same frames warped by their
+  SIFT-registered true quads (`truerect/`) score exact 86.1% / name+version 92.3% / ✓ 79.2%
+  on 274 rows, against 83.2% / 88.0% / 74.1% on the field crops. Some field frames never held
+  the whole card (a close-up of the text box), which no detector can frame — so asking people
+  to fit the whole card in view may be worth as much as detector work. A thinner-edge
+  detector variant raised correct framing 19% → 37% but put the quad INSIDE the card 25% of
+  the time, cutting the name off: measured and not shipped.
+
+### The index follows the catalog; its assets survive deploys (2026-09-26)
+
+- **The catalog supplement.** `scanner/text.json` + `index.json` are built by hand and ship
+  with a deploy, so a card Lorcast indexed after the last build could not be scanned until
+  somebody rebuilt AND redeployed. When the scanner opens, the page hands it every catalog
+  card its index lacks (`scannerExtraRows` → `CardScanner.addCards`); name matching and the
+  review rows work the day a card reaches the catalog. Colour stays build-only (it carries
+  no signal on camera photos anyway). The review paths resolve ids through ONE lookup,
+  `scannerMetaMap()`. Guarded by `node scripts/test_scanner_extra.mjs`.
+- **One image rule for both index builders** (`scanner_scope.card_image`: normal, then large,
+  then small); `test_scanner_scope.py` pins text ⊆ index. Unreleased cards carry `d` (release
+  date) in text.json and lose `UNRELEASED_PENALTY` on a one-line name read until release day
+  (`test_scanner_unreleased.mjs`).
+- **`packsink-scan-v1`** (`SCAN_CACHE` in sw.js) keeps the scanner's ~37 MB — PP-OCR models,
+  onnxruntime wasm, OpenCV, the indexes — ACROSS deploys, like `packsink-img-v1`. Before it,
+  every deploy made every returning scanner user download all of it again. Served cache-first
+  by exact URL; a new `?v=` evicts the old entry for that path.
+  - **⚠ A persistent cache turns a forgotten version bump into stale bytes FOREVER.**
+    `node scripts/test_scanner_asset_cache.mjs` fails when a cached file's bytes change while
+    its version stays put, and `--update` refuses to record it. Hashing folds CRLF→LF, so a
+    Windows checkout and CI agree.
+  - The scanner's JS (`scanner.js`, both workers) is NOT in it — those stay network-first
+    with the app shell, so code always updates.
+  - **⚠ But bump a worker's `?v=` whenever its bytes change** (`SCAN_WORKER_URL`,
+    `OCR_WORKER_URL`, the `scanner.js` tag, all in Index.html): network-first in the SW does
+    not stop an HTTP cache in between from answering for the exact URL. The OCR worker
+    changed on 2026-09-26 while `OCR_WORKER_URL` still said `?v=299`; caught at the bump.
+- **OpenCV is vendored** (`vendor/opencv/opencv.js`, byte-identical to the jsDelivr build
+  prod loaded; jsDelivr is the worker's fallback only). Apache-2.0 notice in
+  `vendor/LICENSES.md`.
 
 ### Version chips in the review row (2026-09-12)
 
@@ -236,7 +383,7 @@ UNDER the scanner while the scanner stayed open with the camera still running.
 
 ### Where the user-facing copy lives
 
-Three places, keep them consistent: the in-scanner notice (`consentPanel`), **privacy.html `#scanner`**, and the Help page's "Card scanner (beta)" section. `Permissions-Policy: camera=(self)` in `_headers` already allows the camera — don't tighten it.
+Three places, keep them consistent: the in-scanner notice (`consentPanel` — and `guestPanel`, the signed-out version it returns when there is no account), **privacy.html `#scanner`**, and the Help page's "Card scanner (beta)" section. `test_scanner_guest.mjs` checks all three still say nothing is uploaded while signed out. `Permissions-Policy: camera=(self)` in `_headers` already allows the camera — don't tighten it.
 
 ## Deck import from a PICTURE of a deck (2026-09-08)
 
@@ -906,7 +1053,7 @@ a card out, not reading it. Click through and it's landscape.
 
 Icons live in `NAV_ICONS` (Index.html) — hand-coded inline SVG (Tabler/Lucide-style line glyphs), `stroke="currentColor"` so they inherit theme color. To add/swap an icon: edit the `path` for that key in NAV_ICONS, no asset file needed.
 
-- **Scan** (added 2026-08-04, gated on `canScan`) is the one tab rendered as a `<button>`, not an `<a href>` — the scanner is a modal with no route, so there's no URL for a modifier-click to open. Everything else in the nav must stay an `<a>` (see "SPA navigation"). It went in **row 1, not row 2**: both rows are 217px wide at the mobile sizing, so a 4th chip on row 2's longer labels (PRICE GRAPHING / ANALYTICS) is what pushed ANALYTICS off the edge on ≤420px phones before. It carries a `.nav-tab-beta` "BETA" flag, absolutely positioned over the icon so it costs no layout width — `.tabs` is a horizontal scroller on mobile, and because `overflow-x:auto` forces the cross axis to clip too, a badge hanging outside the chip would be cut off rather than drawn.
+- **Scan** (added 2026-08-04, gated on `canScan`) is an `<a href="/scan">` + `navHandler` like every other tab since 2026-09-27, when `/scan` became a route (it opens the scanner and rewrites the address to `/`). It was the one `<button>` in the nav because the scanner had no URL for a modifier-click to open. Everything in the nav must stay an `<a>` (see "SPA navigation"). It went in **row 1, not row 2**: both rows are 217px wide at the mobile sizing, so a 4th chip on row 2's longer labels (PRICE GRAPHING / ANALYTICS) is what pushed ANALYTICS off the edge on ≤420px phones before. It carries a `.nav-tab-beta` "BETA" flag, absolutely positioned over the icon so it costs no layout width — `.tabs` is a horizontal scroller on mobile, and because `overflow-x:auto` forces the cross axis to clip too, a badge hanging outside the chip would be cut off rather than drawn.
 - **The top-bar 📷 bubble is GONE** (2026-08-10, user request). It predated the Scan tab and was kept as a second entry point; once the tab shipped it was a redundant control competing for the crowded right cluster. `.tabs-grid` carries `padding-right:8px` on mobile so the last chip in a row isn't flush against the scroller's right edge (which read as clipping). That gutter belongs on the scrolled CHILD, not on `.tabs` — padding on a scroll *container* is dropped at the end of the scroll range in several engines.
 
 - **Screener** = sortable financial-database table (price_movers + filters + signals). Top-level since cards-as-instruments is the north-star surface. Has a prominent **Raw Prices / Graded mode toggle** (segmented buttons) above the preset chips — flips the table between TCGCSV raw + graded data.
@@ -968,7 +1115,7 @@ The PWA works offline after one online visit. Layers:
 - **Shell**: SW precaches Index.html + vendored libs + styles; navigations fall back to cached Index.html. (Pre-existing.)
 - **Catalog**: IndexedDB (see "Client cache rules") — Cards browse, search (incl. body text), and cached prices render offline. Boot-error screen shows an offline-specific message (`isOnline` in App) when there's no catalog at all.
 - **User data mirrors**: every successful fetch of collection / sealed(+meta) / pack-arts / graded items+goals / graded_prices_latest / own decks (incl. `deck_cards`, decoded) writes an IDB mirror (`offlineMirrorWrite("<what>:<uid>")`); the same fetch's failure path hydrates from the mirror. Decks mirror at `refreshDecks` covers both the list and opening a deck (DeckEditor reads from `decks` state). Offline is READ-ONLY: mutators fail → existing rollback + an offline-aware toast. Screener graded ownership + home portfolio chart intentionally NOT mirrored (market surfaces, online-only).
-- **Images**: SW caches every `destination === "image"` request (plus lorcast.io) into **`packsink-img-v1`** — a cache that SURVIVES deploys (activate purge keeps it). Two critical gotchas fixed 2026-07: (1) opaque (no-cors cross-origin) responses have `res.ok === false` — the old `if (res.ok)` guard meant NO image was ever cached; use `cacheable(res)` (`ok || type === 'opaque'`). (2) The image branch runs BEFORE the data-API skip so Supabase-storage prestaged art is cacheable; PostgREST responses are never destination "image" so data stays uncached. Catalog `img_normal` URLs are same-origin `/img-proxy/...` paths, so cache keys line up between browsing, the downloader, and tile requests.
+- **Images**: SW caches every `destination === "image"` request (plus lorcast.io) into **`packsink-img-v1`** — a cache that SURVIVES deploys (activate purge keeps it; so does **`packsink-scan-v1`**, the scanner's models, wasm and indexes — see the scanner section). Two critical gotchas fixed 2026-07: (1) opaque (no-cors cross-origin) responses have `res.ok === false` — the old `if (res.ok)` guard meant NO image was ever cached; use `cacheable(res)` (`ok || type === 'opaque'`). (2) The image branch runs BEFORE the data-API skip so Supabase-storage prestaged art is cacheable; PostgREST responses are never destination "image" so data stays uncached. Catalog `img_normal` URLs are same-origin `/img-proxy/...` paths, so cache keys line up between browsing, the downloader, and tile requests.
 - **Image pack downloader**: settings popover → "Offline card images". `startOfflineImagePack(urls, scope)` + `OfflineImagesPanel` (Index.html, above App). Module-level task singleton (popover close doesn't abort), 6-worker pool, skips already-cached, no-cors fetches into `packsink-img-v1`, progress/cancel/clear UI, `~45KB/image` estimate, last-run stamp in `localStorage["packsink:offlineImages"]`. Signed-in users also get a "My collection" scope.
 - **Offline UX**: `isOnline` state in App (online/offline listeners; regaining connectivity re-runs `loadFromSupabase`). `.offline-pill` (styles.css) shows "Offline — showing saved data". One-shot `navigator.storage.persist()` request shields IDB + caches from eviction. `fetchCardHistory` serves an expired hist cache entry when the fetch fails (`readCardHistCache(..., ignoreTtl)`).
 - **Testing gotcha**: Chrome defers ALL `loading="lazy"` images while `document.visibilityState === "hidden"` — a backgrounded preview pane shows every tile image "pending" forever. Not an app bug; test with the pane visible or force `img.loading = "eager"`.

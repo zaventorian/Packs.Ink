@@ -1,6 +1,6 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v487';
+const CACHE_VERSION = 'packsink-v488';
 // Card art + other images live in their own cache that is NOT wiped on
 // deploys. Before this existed, every CACHE_VERSION bump threw away every
 // runtime-cached card image, so devices never accumulated art for offline
@@ -8,6 +8,20 @@ const CACHE_VERSION = 'packsink-v487';
 // never change content), so keeping them across app versions is safe. The
 // in-app "offline images" downloader writes into this same cache.
 const IMG_CACHE = 'packsink-img-v1';
+// The card scanner's heavy assets: the PP-OCR models (13 MB), onnxruntime's wasm
+// (11 MB), the vendored OpenCV (10 MB) and the card indexes (3.3 MB). They used
+// to land in the per-deploy cache, so every deploy made every returning scanner
+// user fetch ~37 MB again. They live here instead and survive deploys.
+// ⚠ It is keyed by EXACT URL and served cache-first, so what makes it safe is that
+// no file here ever changes content under a URL it is already cached at:
+//   - the indexes carry ?v= (scanner.js IDXV / TXTV); caching a new ?v= evicts the
+//     old entry for the same path.
+//   - everything else (models, ort, opencv) is versioned by THIS NAME. Bump it when
+//     any of them changes; activate then deletes the old cache.
+// node scripts/test_scanner_asset_cache.mjs fails when a file's bytes change and
+// its version did not — the one mistake a persistent cache turns permanent.
+const SCAN_CACHE = 'packsink-scan-v1';
+const SCAN_ASSET_RE = /^\/(scanner\/|vendor\/ort\/|vendor\/opencv\/)/;
 const CORE_ASSETS = [
   '/',
   '/Index.html',
@@ -17,7 +31,7 @@ const CORE_ASSETS = [
   '/vendor/react-dom.production.min.js?v=254',
   '/vendor/htm.js?v=254',
   '/vendor/supabase.js?v=254',
-  '/styles.css?v=487',
+  '/styles.css?v=488',
   '/logo.js?v=348',
   // scanner*.js intentionally NOT precached: the scanner is a modal most
   // visits never open — it runtime-caches on first use instead of costing
@@ -43,7 +57,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_VERSION && k !== IMG_CACHE).map((k) => caches.delete(k)))
+      Promise.all(keys.filter((k) => k !== CACHE_VERSION && k !== IMG_CACHE && k !== SCAN_CACHE).map((k) => caches.delete(k)))
     )
   );
   self.clients.claim();
@@ -161,12 +175,36 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Scanner models / wasm / indexes: cache-first in the deploy-surviving
+  // SCAN_CACHE (see its declaration for why exact-URL keys are safe here).
+  if (url.origin === self.location.origin && SCAN_ASSET_RE.test(url.pathname)) {
+    event.respondWith(
+      caches.open(SCAN_CACHE).then((cache) =>
+        cache.match(req).then((hit) => hit || fetch(req).then((res) => {
+          // An HTML body under an asset URL is the SPA fallback answering a
+          // MISSING file. Never keep it: it would be served as that model forever.
+          if (res.ok && !(res.headers.get('content-type') || '').includes('text/html')) {
+            const copy = res.clone();
+            cache.put(req, copy)
+              .then(() => cache.keys())
+              .then((keys) => Promise.all(keys
+                .filter((k) => { const u = new URL(k.url); return u.pathname === url.pathname && u.search !== url.search; })
+                .map((k) => cache.delete(k))))
+              .catch(() => {});
+          }
+          return res;
+        }))
+      )
+    );
+    return;
+  }
+
   // App-shell styles/scripts (styles.css, logo.js): network-first, same as the
   // HTML — so a freshly-served (network-first) Index.html is NEVER paired with
   // a STALE cache-first stylesheet. That skew is what rendered the home page's
   // mover tiles at giant natural-image size after a deploy until the visitor
   // hard-refreshed. Falls back to cache only when the network is unreachable.
-  if (url.origin === self.location.origin && /\/(styles\.css|logo\.js|scanner\.js|scanner-cv\.js|scanner-worker\.js|scanner-ocr-worker\.js)$/.test(url.pathname)) {
+  if (url.origin === self.location.origin && /\/(styles\.css|logo\.js|scanner\.js|scanner-worker\.js|scanner-ocr-worker\.js)$/.test(url.pathname)) {
     event.respondWith(
       fetch(req)
         .then((res) => {

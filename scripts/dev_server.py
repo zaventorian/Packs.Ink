@@ -24,9 +24,9 @@ import urllib.request
 
 # Folders that must serve their own files (and 404 if a child is missing).
 # Only what prod ships (scripts/build_dist.mjs is an include-list): scripts/,
-# supabase/ and .github/ used to be listed here as well, which served
-# scripts/.env — the file that holds the service key — to anything on
-# loopback. Nothing at runtime ever fetched them.
+# supabase/ and .github/ used to be listed here as well. Removing them did NOT
+# stop scripts/.env being served (an existing file is served regardless, see
+# do_GET) — the dot-segment deny at the top of do_GET is what does that.
 PASSTHROUGH_FOLDERS = ("Logos", "vendor", "scanner")
 
 
@@ -78,6 +78,16 @@ class SPAHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 - stdlib API
         parsed = urllib.parse.urlsplit(self.path)
         url_path = parsed.path or "/"
+        # Never serve a dot-file or anything under a dot-folder. Any file that
+        # EXISTS falls through to the stdlib handler below, so taking scripts/
+        # off PASSTHROUGH_FOLDERS (above) never stopped /.env or /scripts/.env —
+        # both hold the Supabase service key — nor .git/ or .claude/. Checked on
+        # the DECODED path, split on both slashes: the stdlib handler unquotes,
+        # so /%2Eenv would otherwise walk straight past a raw-string test.
+        decoded = urllib.parse.unquote(url_path).replace("\\", "/")
+        if any(seg.startswith(".") for seg in decoded.split("/") if seg):
+            self.send_error(404)
+            return
         if url_path.startswith("/img-proxy/"):
             return self._proxy_image("https://cards.lorcast.io/", url_path[len("/img-proxy/"):])
         if url_path.startswith("/tcg-img-proxy/"):

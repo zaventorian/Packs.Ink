@@ -1,6 +1,8 @@
 """
 Validate card DETECTION + RECTIFICATION + match on the real slab benchmark.
-Mirrors scanner-cv.js. Saves annotated originals + rectified crops to
+Mirrors the detector (scanner-worker.js detectQuad; scanner-cv.js, the
+main-thread original, was removed 2026-09-26 — nothing had called it since the
+worker took detection over). Saves annotated originals + rectified crops to
 data/detect_out/ so the detection quality can be eyeballed, and reports
 top-1/3 with detection vs the fixed-crop baseline.
 
