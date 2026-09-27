@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=489">
+<link rel="stylesheet" href="styles.css?v=490">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -48974,127 +48974,6 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
   </section>`;
 };
 
-// Home poll (migration 161) — one active poll, one final vote per account,
-// results as percentages only and only once you have voted (the server never
-// returns results to anyone else). It rides the TOP of the News feed so both of
-// its mounts (desktop rail, the phone copy beside Rare–Legendary) carry it with
-// no layout of its own. State lives in a hook at HomeView so the two mounts
-// share one fetch and one pending pick. Pre-161, or no active poll: renders
-// nothing. The question and options come from the DB, so the next poll is an
-// INSERT, not a deploy.
-let _homePollCache = null; // {uid, t, poll}
-const pollWholePct = (pct) => {
-  // Largest remainder, so the shown whole numbers always add up to 100.
-  const v = (pct || []).map(x => Number(x) || 0);
-  const total = v.reduce((s, x) => s + x, 0);
-  if(!total) return v.map(() => 0);
-  const floors = v.map(x => Math.floor(x));
-  let left = 100 - floors.reduce((s, x) => s + x, 0);
-  v.map((x, i) => [x - Math.floor(x), i]).sort((a, b) => b[0] - a[0])
-    .forEach(([, i]) => { if(left > 0 && v[i] > 0){ floors[i]++; left--; } });
-  return floors;
-};
-const useHomePoll = (user) => {
-  const uid = user?.id || null;
-  const fresh = _homePollCache && _homePollCache.uid === uid && Date.now() - _homePollCache.t < 5*60*1000;
-  const [poll, setPoll] = useState(fresh ? _homePollCache.poll : null);
-  const [loaded, setLoaded] = useState(!!fresh);
-  const [pick, setPick] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const load = useCallback(async () => {
-    try{
-      const {data, error} = await sbClient.rpc("get_active_poll");
-      if(error) throw error;
-      const row = Array.isArray(data) ? data[0] : data;
-      const p = row && Array.isArray(row.options) ? row : null;
-      _homePollCache = {uid, t: Date.now(), poll: p};
-      setPoll(p);
-    }catch(e){ setPoll(null); }
-    setLoaded(true);
-  }, [uid]);
-  useEffect(() => { if(!fresh) load(); else setPoll(_homePollCache.poll); }, [uid]); // eslint-disable-line
-  const vote = useCallback(async () => {
-    if(!poll || pick == null || busy) return;
-    setBusy(true);
-    try{
-      const {error} = await sbClient.rpc("vote_poll", {p_poll: poll.poll_id, p_choice: pick});
-      if(error) throw error;
-      await load();
-    }catch(e){ flashToast("Couldn't record your vote — try again in a moment"); }
-    setBusy(false);
-  }, [poll, pick, busy, load]);
-  return {poll, pick, setPick, busy, vote, loaded};
-};
-const HomePollBox = ({state, user, onSignIn}) => {
-  const {poll, pick, setPick, busy, vote} = state;
-  if(!poll) return null;
-  // A CLOSED poll (migration 167: winner is set) stops asking and starts
-  // answering. Results go public at that point — while it is live they are
-  // shown only to voters, so the standings can't steer later votes, but once a
-  // winner is announced hiding the split from everyone else says less than
-  // nothing. `winner == null` on a pre-167 database, so it renders exactly as
-  // it did before and the client is safe to ship first.
-  const closed = poll.winner != null && poll.options[poll.winner] != null;
-  const voted = poll.my_choice != null && Array.isArray(poll.pct);
-  const showPct = Array.isArray(poll.pct) && (voted || closed);
-  const whole = showPct ? pollWholePct(poll.pct) : null;
-  // A poll's declared answer is not always the vote leader — a PREDICTION
-  // poll ("which card gets revealed next?") is answered by the reveal, not by
-  // the room. Calling that option "Winner" beside a 0% bar read as a counting
-  // bug, so it says "Answer" and how many people called it instead.
-  const winnerLed = !whole || whole[poll.winner] === Math.max(...whole);
-  const calledIt = closed && whole && !winnerLed
-    ? (whole[poll.winner] > 0 ? whole[poll.winner] + "% called it" : "Nobody called it") : null;
-  if(closed) return html`<div class="home-poll home-poll--closed" role="group" aria-label="Poll result">
-    <div class="home-poll-kicker">Poll · result</div>
-    <div class="home-poll-q">${poll.question}</div>
-    <div class="home-poll-winner">
-      ${poll.winner_image && html`<img class="home-poll-winner-art" src=${poll.winner_image}
-        alt="" loading="eager" onError=${hideBrokenImg}/>`}
-      <div class="home-poll-winner-text">
-        <div class="home-poll-winner-lbl">${winnerLed ? "Winner" : "Answer"}</div>
-        <div class="home-poll-winner-name">${poll.options[poll.winner]}</div>
-        ${calledIt && html`<div class="home-poll-called muted">${calledIt}</div>`}
-      </div>
-    </div>
-    ${whole && html`<ul class="home-poll-results">
-      ${poll.options.map((o, i) => html`<li key=${i}
-          class=${"home-poll-res" + (i === poll.winner ? " won" : "") + (i === poll.my_choice ? " mine" : "")}>
-        <span class="home-poll-bar" style=${{width: whole[i] + "%"}}></span>
-        <span class="home-poll-res-name">${i === poll.my_choice ? "✓ " : ""}${o}</span>
-        <span class="home-poll-res-pct">${whole[i]}%</span>
-      </li>`)}
-    </ul>`}
-  </div>`;
-  const choose = (i) => {
-    if(!user){ flashToast("Sign in to vote"); onSignIn && onSignIn(); return; }
-    setPick(i);
-  };
-  return html`<div class="home-poll" role="group" aria-label="Poll">
-    <div class="home-poll-kicker">Poll</div>
-    <div class="home-poll-q">${poll.question}</div>
-    ${voted
-      ? html`<ul class="home-poll-results">
-          ${poll.options.map((o, i) => html`<li key=${i}
-              class=${"home-poll-res" + (i === poll.my_choice ? " mine" : "")}>
-            <span class="home-poll-bar" style=${{width: whole[i] + "%"}}></span>
-            <span class="home-poll-res-name">${i === poll.my_choice ? "✓ " : ""}${o}</span>
-            <span class="home-poll-res-pct">${whole[i]}%</span>
-          </li>`)}
-        </ul>`
-      : html`<div class="home-poll-opts">
-          ${poll.options.map((o, i) => html`<button key=${i} type="button"
-              class=${"home-poll-opt" + (pick === i ? " on" : "")}
-              aria-pressed=${pick === i} onClick=${() => choose(i)}>${o}</button>`)}
-          ${user
-            ? html`<button type="button" class="home-poll-vote" disabled=${pick == null || busy}
-                onClick=${vote}>${busy ? "Voting…" : "Vote"}</button>
-              <div class="home-poll-note">One vote each — it can't be changed.</div>`
-            : html`<div class="home-poll-note">Sign in to vote and see results.</div>`}
-        </div>`}
-  </div>`;
-};
-
 // News feed — the tile list scrolls internally once it outgrows its cap, but a
 // clipped list reads as "cut off" rather than "scrollable" on phones, which
 // hide their scrollbars until you're already scrolling. `edge` tracks which
@@ -49109,13 +48988,7 @@ const HomePollBox = ({state, user, onSignIn}) => {
 // That shape is what makes it safe to forget about: a box you collapsed in
 // March cannot swallow a set announcement in June. A plain boolean would.
 const NEWS_COLLAPSE_LS = "packsink:home:newsCollapsedSig";
-// `lead` is a single tile that renders ABOVE the poll, where everything else in
-// `tiles` renders below it. It exists because the poll sits at the top of this
-// feed by design (it is the tallest thing here and must stay inside the
-// collapse), so "put this story above the poll" has nowhere else to go. Only
-// the one lead slot: a second thing above the poll would push the poll out of
-// sight on a phone, which is the layout this feed already works hard to avoid.
-const NewsFeed = ({variant, tiles, panelNav, poll, lead, sig, sigPending}) => {
+const NewsFeed = ({variant, tiles, panelNav, sig, sigPending}) => {
   // "" = expanded. Anything else is the signature that was live when it was
   // minimised, which doubles as the collapsed flag.
   const [seenSig, setSeenSig] = useState(() => {
@@ -49127,16 +49000,16 @@ const NewsFeed = ({variant, tiles, panelNav, poll, lead, sig, sigPending}) => {
   // when the two fall back into agreement.
   // "New" means a token on screen now that was not there when it was
   // minimised. An exact-match test also reopened the box when something LEFT —
-  // a reveal aging out of its fortnight, a poll closing — which is not news.
+  // a reveal aging out of its fortnight — which is not news.
   const hasNew = useMemo(() => {
     if(!seenSig || !sig) return false;
     const seen = new Set(seenSig.split("\n"));
     return sig.split("\n").some(t => !seen.has(t));
   }, [seenSig, sig]);
-  // While its inputs are still loading (the poll, the catalog behind the reveal
-  // and news tiles) the signature is partial. Judging it then opened a
-  // collapsed box on every visit and snapped it shut a second later; hold the
-  // stored answer until the signature settles.
+  // While its inputs are still loading (the catalog behind the reveal and news
+  // tiles) the signature is partial. Judging it then opened a collapsed box on
+  // every visit and snapped it shut a second later; hold the stored answer
+  // until the signature settles.
   const collapsed = !!seenSig && (!!sigPending || !hasNew);
   const setCollapsed = (want) => {
     const v = want ? (sig || "") : "";
@@ -49167,17 +49040,12 @@ const NewsFeed = ({variant, tiles, panelNav, poll, lead, sig, sigPending}) => {
     || html`<div class="home-feed-title--chase">News</div>`;
   return html`<aside class=${"home-feed home-news-feed home-news-feed--"+variant
       + (collapsed ? " is-collapsed" : "") + (edge && !collapsed ? " news-edge-"+edge : "")} aria-label="News">
-    ${/* ⚠ The poll sits INSIDE the collapse. It is the tallest thing in this
-          box (~200px of the 578 it measured on a phone), so a collapse that
-          left it standing would not be a collapse. */""}
-    ${!collapsed && (lead || null)}
-    ${!collapsed && (poll || null)}
     <div class="home-feed-head">
       ${titleEl}
       <button class=${"home-feed-collapse-btn"+(collapsed?" is-collapsed":"")}
         onClick=${() => setCollapsed(!collapsed)}
         aria-expanded=${collapsed ? "false" : "true"}
-        title=${collapsed ? "Show news and the poll" : "Hide news and the poll — it reopens when something new is posted"}>
+        title=${collapsed ? "Show news" : "Hide news — it reopens when something new is posted"}>
         <span class="home-feed-chev" aria-hidden="true">▾</span>
       </button>
     </div>
@@ -49924,7 +49792,6 @@ const HomePanelModal = ({panelKey, label, node, cta, onClose, onNavAway}) => {
 };
 
 const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, openAnalyticsTool, openEventFinder, finderOpen, onEventArtistClick, layout, homeEdit}) => {
-  const homePoll = useHomePoll(user);
   // Resolved home layout (set in App from the settings popover): which panels
   // are on, which column each sits in, and their order within that column.
   const homeLayout = useMemo(() => normalizeHomeLayout(layout), [layout]);
@@ -50522,21 +50389,14 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
   // beside the Rare–Legendary movers banner — NOT as full-width announce
   // tiles, which ate half a phone screen when two conventions ran at once.
   const newsTiles = [];
-  // ⚠ The reveal counter is the LEAD tile — it renders above the poll, not in
-  // `newsTiles` with the rest. Reveal season is the most time-sensitive thing
-  // this feed carries and the count moves every few days, where the poll sits
-  // still for weeks; below a ~200px poll it was the one story you had to scroll
-  // to reach. Everything else stays below the poll.
-  const newsLead = showNews
-    ? html`<a key="news" class="home-news-tile home-news-clickable"
+  if(showNews) newsTiles.push(html`<a key="news" class="home-news-tile home-news-clickable"
           href=${"/cards?set=" + encodeURIComponent(newsSet)}
           onClick=${navHandler(() => openCardsFilteredBySet && openCardsFilteredBySet(newsSet))}
           style=${{display:"block", textDecoration:"none", color:"inherit", cursor:"pointer"}}>
           <div class="home-news-kicker">${uiIcon("news", 13)} News</div>
           <div class="home-news-title">${newsSet}! ${newsCount} card${newsCount===1?"":"s"} revealed!</div>
           <div class="home-news-sub">Click here to see them →</div>
-        </a>`
-    : null;
+        </a>`);
   for(const ev of activeEvents) newsTiles.push(html`<div key=${"ev-"+ev.id} class="home-news-tile">
           <div class="home-news-title">${ev.title}</div>
           ${/* No event page means a plain date, not a link to "#" that jumped
@@ -50633,13 +50493,13 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
   // ⚠ The signature is what decides whether a collapsed box reopens, so it has
   // to change when — and only when — there is something NEW to see. Tile KEYS,
   // not tile count: a set announcement replacing a convention tile is new, and
-  // the count would not move. The poll's id rides along for the same reason.
+  // the count would not move.
   // It must NOT include anything that changes on its own (a countdown, a
   // price), or the box would reopen on a timer and the minimise would be a lie.
   // Each revealed card's slug, as a primitive, so the memo below can key on it
   // (freshCoconut is a fresh array every render).
   const freshCoconutKey = freshCoconut.map(c => c.slug).join(",");
-  const newsSigPending = !homePoll.loaded || !(raw && raw.length);
+  const newsSigPending = !(raw && raw.length);
   const newsSig = useMemo(() => {
     // One token per thing that can be NEW, newline-joined; NewsFeed reopens
     // only when a token appears that was not there when it was minimised.
@@ -50648,26 +50508,20 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
     // one constant ("coconut-new"), so a second reveal landing inside the
     // fortnight changed nothing here and could never reopen the box.
     for(const slug of (freshCoconutKey ? freshCoconutKey.split(",") : [])) toks.push("cc:" + slug);
-    // \u26a0 poll_id, the column `vote_poll` takes \u2014 there is no `id` on this row,
-    // and reading one gave a signature ending "::undefined" that never moved,
-    // so a brand-new poll could not reopen a collapsed box. Deliberately NOT
-    // my_choice or pct: those change when YOU vote, which would pop the box
-    // open at the one moment you have just finished with it.
-    // The lead tile's COUNT rides along deliberately: "3 cards revealed" going
-    // to "17 cards revealed" is exactly the "something new is posted" the
-    // collapse is supposed to reopen for, and unlike a countdown it only moves
-    // when reveals actually land.
-    // A poll or lead that is simply ABSENT adds no token, so its going away
-    // never reads as something new.
-    if(homePoll.poll) toks.push("poll:" + homePoll.poll.poll_id);
-    if(showNews) toks.push("lead:" + newsSet + ":" + newsCount);
+    // The reveal counter's key is the same constant ("news") all season, so
+    // its COUNT rides along too: "3 cards revealed" going to "17 cards
+    // revealed" is exactly the "something new is posted" the collapse is
+    // supposed to reopen for, and unlike a countdown it only moves when
+    // reveals actually land. Nothing that changes when YOU act may go in here
+    // either — it would pop the box open the moment you finished with it.
+    // A tile that is simply ABSENT adds no token, so its going away never
+    // reads as something new.
+    if(showNews) toks.push("reveals:" + newsSet + ":" + newsCount);
     return toks.join("\n");
-  }, [newsTiles, freshCoconutKey, homePoll.poll, showNews, newsSet, newsCount]);
-  const newsFeedAside = (variant) => (panelCol["news"] != null && (newsTiles.length > 0 || homePoll.poll || newsLead))
+  }, [newsTiles, freshCoconutKey, showNews, newsSet, newsCount]);
+  const newsFeedAside = (variant) => (panelCol["news"] != null && newsTiles.length > 0)
     ? html`<${NewsFeed} key=${"news-"+variant} variant=${variant} tiles=${newsTiles} sig=${newsSig} sigPending=${newsSigPending}
-        panelNav=${variant === "rail" ? panelTitleNav : null}
-        lead=${newsLead}
-        poll=${html`<${HomePollBox} state=${homePoll} user=${user} onSignIn=${onSignIn}/>`}/>`
+        panelNav=${variant === "rail" ? panelTitleNav : null}/>`
     : null;
   // The legacy CSS-gated ride on the Rare–Legendary banner stays the default
   // (it is what every existing browser already renders on a phone), but an
