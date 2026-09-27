@@ -17011,6 +17011,30 @@ const SCANNER_BUILD = "v21";
 // uploads the rectified crop and a filmstrip of the frames before the tap —
 // what we upload was understated, so this is a change of substance.
 const SCAN_BETA_VERSION = "2026-09-26";
+// ── Scanning while signed out (2026-09-27) ────────────────────────────────
+// A guest can scan. Identification was always on-device, and nothing is
+// uploaded while signed out: no photos, no labels, no session telemetry. That
+// is its own notice (the upload notice's promise is not what a guest agrees to),
+// accepted under its own key, so signing in still shows the upload notice.
+// Signing in is for SAVING: the review screen's buttons write the list to IDB
+// under the guest key, leave a resume flag, and start sign-in; the app reopens
+// the scanner on the review screen once the account is back, and the list moves
+// across to that account.
+const SCAN_GUEST_OK_KEY = "packsink:scanGuest";
+const SCAN_GUEST_SESSION = "scanSession:guest";
+const SCAN_RESUME_KEY = "packsink:scanResume";
+const SCAN_RESUME_TTL = 30 * 60 * 1000;   // a sign-in that takes longer was abandoned
+// {review} when a guest left the scanner to sign in, else null. review: they
+// were saving (reopen on the review screen), not just signing in from the notice.
+const scanResumeRead = () => {
+  try {
+    const v = JSON.parse(localStorage.getItem(SCAN_RESUME_KEY) || "null");
+    return (v && v.t && Date.now() - v.t < SCAN_RESUME_TTL) ? { review: !!v.review } : null;
+  } catch { return null; }
+};
+const scanResumeMark = (review) => {
+  try { localStorage.setItem(SCAN_RESUME_KEY, JSON.stringify({ t: Date.now(), review: review ? 1 : 0 })); } catch {}
+};
 // ── The scanner's catalog supplement (2026-09-26) ─────────────────────────
 // scanner/text.json + index.json are built by hand (scripts/scanner/*) and ship
 // with a deploy, so a card Lorcast indexes AFTER the last build was invisible to
@@ -17498,21 +17522,53 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   //    100-card review session. Resolved rows mirror to IDB (debounced) on
   //    every change; reopening the scanner within 24h restores them. Rows are
   //    plain JSON (thumbs are small dataURLs) so this is a few MB at worst.
-  const qaPersistKey = (SCANNER_QA_ONLY && user) ? "scanSession:" + user.id : null;
+  // A guest's list lives under its own key and moves to the account on sign-in
+  // (SCAN_GUEST_SESSION). The account's own session is never visible signed out.
+  const qaPersistKey = SCANNER_QA_ONLY ? (user ? "scanSession:" + user.id : SCAN_GUEST_SESSION) : null;
+  // Opened from a guest's "Sign in to add": land on the review screen, which is
+  // what they were in the middle of (scanResumePending, SCAN_RESUME_KEY).
+  const [qaResume, setQaResume] = useState(false);
+  useEffect(() => {
+    const r = user ? scanResumeRead() : null;
+    if(!r) return;
+    try { localStorage.removeItem(SCAN_RESUME_KEY); } catch {}
+    if(r.review){ setQaResume(true); setQaReview(true); }
+  }, [user]);
+  const qaFresh = (s) => !!(s && Array.isArray(s.rows) && s.rows.length && Date.now() - (s.t || 0) <= 24 * 3600 * 1000);
   useEffect(() => {
     if(!qaPersistKey || qaRestoredRef.current) return;
     qaRestoredRef.current = true;
     (async () => {
       try {
         const saved = await idbGet(qaPersistKey);
-        if(!saved || !Array.isArray(saved.rows) || !saved.rows.length) return;
-        if(Date.now() - (saved.t || 0) > 24 * 3600 * 1000){ idbDel(qaPersistKey); return; }
-        setQaResults(prev => prev.length ? prev : saved.rows);
-        setSavedMsg("Restored " + saved.rows.length + " scan" + (saved.rows.length === 1 ? "" : "s") + " from your last session");
+        const guest = qaPersistKey !== SCAN_GUEST_SESSION ? await idbGet(SCAN_GUEST_SESSION) : null;
+        if(saved && !qaFresh(saved)) idbDel(qaPersistKey);
+        if(guest && !qaFresh(guest)) idbDel(SCAN_GUEST_SESSION);
+        const own = qaFresh(saved) ? saved.rows : [];
+        const moved = qaFresh(guest) ? guest.rows : [];
+        if(!own.length && !moved.length) return;
+        // newest first, as the list is built; an id seen twice is one row
+        const seen = new Set();
+        const rows = moved.concat(own).filter(r => r && r.id && !seen.has(r.id) && seen.add(r.id))
+          .sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 400);
+        if(moved.length){
+          // write the account's copy BEFORE dropping the guest one: a tab closed
+          // inside the persist debounce must not lose the list in between
+          await idbSet(qaPersistKey, { t: Date.now(), rows });
+          idbDel(SCAN_GUEST_SESSION);
+        }
+        setQaResults(prev => prev.length ? prev : rows);
+        setSavedMsg(moved.length
+          ? "Brought over " + moved.length + " scan" + (moved.length === 1 ? "" : "s") + " from before you signed in"
+          : "Restored " + own.length + " scan" + (own.length === 1 ? "" : "s") + " from your last session");
         setTimeout(() => setSavedMsg(""), 3200);
       } catch(_e){}
     })();
   }, [qaPersistKey]);
+  // Signed in without leaving the page (the native app's sign-in returns in
+  // place): the guest rows are already on screen and the persist effect writes
+  // them under the account, so the guest copy only has to go once it has.
+  const qaGuestKeyUsedRef = useRef(false);
   const qaPersistPendingRef = useRef(null);
   useEffect(() => {
     if(!qaPersistKey) return;
@@ -17520,10 +17576,15 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     // everything else persists verbatim, including user edits + saved marks
     const rows = qaResults.filter(x => x.status !== "identifying");
     qaPersistPendingRef.current = { key: qaPersistKey, rows };
+    if(qaPersistKey === SCAN_GUEST_SESSION) qaGuestKeyUsedRef.current = true;
     clearTimeout(qaPersistTimerRef.current);
-    qaPersistTimerRef.current = setTimeout(() => {
+    qaPersistTimerRef.current = setTimeout(async () => {
       qaPersistPendingRef.current = null;
-      idbSet(qaPersistKey, { t: Date.now(), rows });
+      const ok = await idbSet(qaPersistKey, { t: Date.now(), rows });
+      if(ok && qaPersistKey !== SCAN_GUEST_SESSION && qaGuestKeyUsedRef.current){
+        qaGuestKeyUsedRef.current = false;
+        idbDel(SCAN_GUEST_SESSION);
+      }
     }, 600);
     return () => clearTimeout(qaPersistTimerRef.current);
   }, [qaResults, qaPersistKey]);
@@ -17591,12 +17652,25 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   // inherited that person's upload choice.
   const scanFlagKey = (base) => base + (user && user.id ? ":" + user.id.slice(0, 8) : "");
   useEffect(() => {
+    // Signed out: the guest notice, under its own key. Nothing uploads, so there
+    // is no preference to read and nothing to fetch.
+    if(!user){
+      let ok = false;
+      try { ok = localStorage.getItem(SCAN_GUEST_OK_KEY) === SCAN_BETA_VERSION; } catch {}
+      setConsentOk(ok); setConsentLoaded(true);
+      return;
+    }
     let local = false, localUp = null;
     try { local = localStorage.getItem(scanFlagKey("packsink:scanBeta")) === SCAN_BETA_VERSION; } catch {}
     try { const u = localStorage.getItem(scanFlagKey("packsink:scanUploads")); if(u != null) localUp = (u === "1"); } catch {}
     if(localUp != null){ setUploadsOn(localUp); uploadsOnRef.current = localUp; }
-    if(local) setConsentOk(true);
-    if(!user || !sbClient){ setConsentLoaded(true); return; }
+    // ⚠ Set it EITHER way. A guest who accepted the guest notice and then signed
+    // in without leaving the page (the native app) would otherwise keep the
+    // camera running on the guest's acceptance until the account's record came
+    // back — scanning, and uploading, on a notice the account never saw.
+    setConsentOk(local);
+    if(!local) setConsentLoaded(false);
+    if(!sbClient){ setConsentLoaded(true); return; }
     let cancelled = false;
     sbClient.from("scanner_consents").select("version,uploads_enabled").eq("user_id", user.id).maybeSingle()
       .then(({data, error}) => {
@@ -17629,6 +17703,10 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     setConsentOk(true);
     writeConsent({ accepted_at: new Date().toISOString(), uploads_enabled: uploadsOnRef.current });
   };
+  const acceptGuest = () => {
+    try { localStorage.setItem(SCAN_GUEST_OK_KEY, SCAN_BETA_VERSION); } catch {}
+    setConsentOk(true);
+  };
   const setUploadPref = (on) => {
     setUploadsOn(on);
     uploadsOnRef.current = on;
@@ -17645,6 +17723,9 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   useEffect(() => {
     if(!consentOk) return;
     let cancelled = false;
+    // the session telemetry below belongs to whoever STARTED the camera: a guest
+    // session sends none, even when the account arrives before it ends
+    const sessionUser = userRef.current;
     try {
       const w = new Worker(SCAN_WORKER_URL);
       w.onmessage = (e) => {
@@ -17761,7 +17842,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       // OCR hit rate) is visible end-to-end. Best-effort — a killed PWA loses
       // it, but every snap already embedded its own trace.
       try {
-        const T = traceRef.current, u = userRef.current;
+        const T = traceRef.current, u = sessionUser;
         // Opted out of contributing data → no session telemetry either. It
         // carries no photo, but "I turned that off" has to mean all of it.
         if(u && sbClient && uploadsOnRef.current && T.ev.length > 6){
@@ -19132,6 +19213,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     try {
       if(!sbClient || !user) return;
       if(!uploadsOnRef.current) return;   // opted out → there's no sample to label
+      if(row.guest) return;               // snapped signed out → never uploaded, never will be
       if(row.sampleId == null){
         const P = pendingLabelRef.current;
         P.set(row.id, { ...(P.get(row.id) || {}), ...patch });
@@ -19507,7 +19589,9 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
           // deferred looks below, and corrected-vs-truth must compare against
           // what this upload recorded as the prediction.
           const upPred = top ? top.id : null;
-          if(rectBlob) uploadSample(top ? top.id : null, upPred, false, null, rectBlob, debug, rawBlob, stripBlob)
+          // ⚠ job.guest, not `user`: a guest's snap still queued when the account
+          // arrives (the native app signs in in place) must not upload under it
+          if(rectBlob && !job.guest) uploadSample(top ? top.id : null, upPred, false, null, rectBlob, debug, rawBlob, stripBlob)
             .then(sid => { if(sid != null){ updateQaRow(rid, { sampleId: sid, uploadPredId: upPred }); flushPendingLabel(rid, sid, upPred); } })
             .catch(() => {});
         } catch(_e){}
@@ -19643,7 +19727,9 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     tail();
   };
   const snapForQA = useCallback(() => {
-    if(!user){ onSignIn && onSignIn(); return; }
+    // Signed out is allowed: nothing a guest snaps is ever uploaded (job.guest),
+    // and signing in is asked for only when the list is saved.
+    const guest = !userRef.current;
     const now = Date.now();
     if(now - qaTapAtRef.current < 350) return;   // one snap per tap (shutter + tap-anywhere)
     qaTapAtRef.current = now;
@@ -19746,7 +19832,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       // the row lands IMMEDIATELY — locked answer, or "Identifying…" filled by
       // the job. Cap 400 (was 40): review-&-save sessions keep every row; the
       // rows are ~96px dataURL thumbs so even a big pile stays a few MB.
-      setQaResults(prev => [{ id: rid, ts: now, thumb: rawThumb, saved: false,
+      setQaResults(prev => [{ id: rid, ts: now, thumb: rawThumb, saved: false, ...(guest ? { guest: true } : null),
         ...(lock
           ? { ...qaRowFields(lock, [lock]), alts: "", conf: "lock", status: "done" }
           : { guess: null, alts: "", cardImg: null, price: null, conf: null, status: "identifying" }) }].concat(prev).slice(0, 400));
@@ -19758,7 +19844,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
         setTimeout(() => setSavedMsg(""), 4000);
       } else if(lock){ setSavedMsg("✓ " + qaLabelOf(lock) + " — next card"); setTimeout(() => setSavedMsg(""), 1400); }
       // snapshot the telemetry BEFORE the release below extends it
-      const job = { rid, tSnap: now, rawBlobP, capBlobP, stripBlobP, lock, lockVerify,
+      const job = { rid, guest, tSnap: now, rawBlobP, capBlobP, stripBlobP, lock, lockVerify,
         lockNames: (lock && A.lockNames) || null, lockVerBy: (lock && A.lockVerBy) || null, live,
         trace: traceRef.current.ev.slice(-150),
         counters: Object.assign({}, traceRef.current.n),
@@ -19905,8 +19991,20 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   };
   // The ONLY collection write in QA mode: the explicit review-screen button.
   // Stage → human review → explicit save, same invariant as the staging flow.
+  // A guest's save: keep the list, leave a note to come back to it, sign in.
+  // ⚠ The IDB write is AWAITED: sign-in leaves the page on the web, and the
+  // persist effect's 600ms debounce would lose the list on the way out. Rows
+  // still identifying are dropped, the same as a save drops them.
+  const qaSignInToSave = async () => {
+    if(!onSignIn) return;
+    clearTimeout(qaPersistTimerRef.current);
+    qaPersistPendingRef.current = null;
+    await idbSet(SCAN_GUEST_SESSION, { t: Date.now(), rows: qaResults.filter(x => x.status !== "identifying") });
+    scanResumeMark(true);
+    onSignIn();
+  };
   const qaSaveToCollection = async () => {
-    if(!user){ onSignIn && onSignIn(); return; }
+    if(!user){ qaSignInToSave(); return; }
     if(qaSaving) return;
     const rows = qaResults.filter(x => !x.saved && x.guessId && x.printing && x.status !== "identifying");
     if(!rows.length) return;
@@ -19944,7 +20042,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   // Create a new deck from the reviewed scans (one row per card_id, qty
   // summed, printing = the chosen side) and jump to it in the Decks tab.
   const qaCreateDeck = async () => {
-    if(!user){ onSignIn && onSignIn(); return; }
+    if(!user){ qaSignInToSave(); return; }
     if(qaDeckBusy) return;
     const rows = qaResults.filter(x => x.guessId && x.printing && x.status !== "identifying");
     if(!rows.length) return;
@@ -20085,10 +20183,11 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     }
   };
 
-  const errBody = (title, body, retry) => html`<div class="scanner-msg">
+  const errBody = (title, body, retry, extra) => html`<div class="scanner-msg">
     <div class="scanner-msg-title">${title}</div>
     <div class="scanner-msg-body">${body}</div>
     <div class="scanner-msg-actions">
+      ${extra || null}
       ${retry ? html`<button class="scanner-btn primary" onClick=${retry}>Try again</button>` : null}
       <button class=${"scanner-btn" + (retry ? "" : " primary")} onClick=${onClose}>Close</button>
     </div>
@@ -20097,10 +20196,17 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   if(staleUpdating){
     return html`<div class="scanner-overlay" role="dialog" aria-modal="true" aria-label="Card scanner" ref=${scanRootRef}>
       <div class="scanner-head"><span class="scanner-title">Scan a card</span></div>
-      ${errBody("Updating to the latest version…", "A newer scanner just went live — refreshing so you're testing the current build. One sec.")}
+      ${errBody("Updating to the latest version…", "A newer scanner just went live — refreshing so you're on the current build. One sec.")}
     </div>`;
   }
-  if(phase === "denied" || phase === "nocam" || phase === "noindex" || phase === "error"){
+  // A camera that fails must not take the LIST with it: scans already taken (a
+  // guest's list brought back after signing in, or a session the camera dropped
+  // out of) stay reachable, and while their review screen is open it renders
+  // over the dead stage as it would over a live one.
+  const qaListReachable = SCANNER_QA_ONLY && qaResults.length > 0;
+  if((phase === "denied" || phase === "nocam" || phase === "noindex" || phase === "error") && !(qaListReachable && qaReview)){
+    const reviewBtn = qaListReachable
+      ? html`<button class="scanner-btn" onClick=${() => setQaReview(true)}>Review ${qaResults.length} scan${qaResults.length === 1 ? "" : "s"}</button>` : null;
     const onPhone = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
     const m = { denied: ["Camera blocked", "Allow camera access for packs.ink in your browser settings, then reopen the scanner."],
       nocam: ["No camera found", onPhone
@@ -20111,7 +20217,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     return html`<div class="scanner-overlay" role="dialog" aria-modal="true" aria-label="Card scanner" ref=${scanRootRef}>
       <div class="scanner-head"><span class="scanner-title">Scan a card</span>
         <button class="scanner-close" onClick=${onClose} aria-label="Close scanner">×</button></div>
-      ${errBody(m[0], m[1], (phase === "error" || phase === "denied") && onRetry ? onRetry : null)}
+      ${errBody(m[0], m[1], (phase === "error" || phase === "denied") && onRetry ? onRetry : null, reviewBtn)}
     </div>`;
   }
 
@@ -20263,17 +20369,16 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
           ${qpv ? html`${qpv.disp && qpv.disp.thumb ? html`<img class="scanner-amb-now-img" src=${qpv.disp.thumb} alt=""/>` : null}<span class="scanner-amb-now-name">${qpv.verUnsure ? "≈ " : ""}${lbl(qpv.disp)}${qpv.textOk ? html` <span class="scanner-amb-ok">✓ name</span>` : null}</span><span class="scanner-amb-now-price">${qmoney(qpv.mkt ?? qpv.low)}</span>`
                 : html`<span class="scanner-amb-now-empty">${!workerReady ? (workerFailed ? "Live detection unavailable — the shutter still identifies" : "Loading detector…") : (detected ? "Identifying…" : "Point at one card")}</span>`}
         </div>
-        ${user ? html`<div class="scanner-amb-mid">
-                 ${torchAvail ? html`<button class=${"scanner-torch" + (torchOn ? " on" : "")} onClick=${toggleTorch} aria-label="Toggle flashlight" title="Flashlight">${uiIcon("torch", 18)}</button>` : null}
-                 <button class=${"scanner-shutter scanner-amb-add" + (detected ? " ready" : "") + (qpv && qpv.textOk ? " locked" : "")} onClick=${snapForQA} aria-label="Snap this card"
-                   title=${qpv && qpv.textOk ? "Log this card and move to the next" : "Snap — identifies in the background"}>${uiIcon("camera", 26)}</button>
-               </div>`
-               : html`<button class="scanner-btn primary" onClick=${onSignIn}>Sign in to test</button>`}
+        <div class="scanner-amb-mid">
+          ${torchAvail ? html`<button class=${"scanner-torch" + (torchOn ? " on" : "")} onClick=${toggleTorch} aria-label="Toggle flashlight" title="Flashlight">${uiIcon("torch", 18)}</button>` : null}
+          <button class=${"scanner-shutter scanner-amb-add" + (detected ? " ready" : "") + (qpv && qpv.textOk ? " locked" : "")} onClick=${snapForQA} aria-label="Snap this card"
+            title=${qpv && qpv.textOk ? "Log this card and move to the next" : "Snap — identifies in the background"}>${uiIcon("camera", 26)}</button>
+        </div>
         <span class="scanner-amb-auto scanner-qa-count">${qaResults.length} snapped</span>
       </div>
       ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
       ${qaUndo ? html`<div class="scanner-saved-msg">Removed ${qaUndo.label} · <button class="scanner-link" onClick=${qaUndoDelete}>Undo</button></div>` : null}
-      ${qaNoteHidden ? null : html`<div class="scanner-qa-note">Point at a card — when the name is <b>✓ confirmed</b>, the shutter logs it instantly. Not confirmed yet? It still captures and identifies in the background, so you can move straight to the next card. Wrong match? Tap <b>✎</b> on its row to fix it — every fix helps train the scanner. <b>${"Nothing is added anywhere until you Review & save."}</b>
+      ${qaNoteHidden ? null : html`<div class="scanner-qa-note">Point at a card — when the name is <b>✓ confirmed</b>, the shutter logs it instantly. Not confirmed yet? It still captures and identifies in the background, so you can move straight to the next card. Wrong match? Tap <b>✎</b> on its row to fix it${user && uploadsOn ? " — every fix helps train the scanner" : ""}. <b>${"Nothing is added anywhere until you Review & save."}</b>
         <button type="button" class="scanner-link scanner-qa-note-hide" onClick=${hideQaNote}>Got it</button></div>`}
       <div class="scanner-session">
         <div class="scanner-session-head">
@@ -20367,10 +20472,10 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       <button class="scanner-qa-flipall" onClick=${() => qaFlipAll("N")}>All Non-Foil</button>
       <button class="scanner-qa-flipall" onClick=${() => qaFlipAll("F")}>All Foil</button>
     </div>` : null}
-    <label class="scanner-qa-privacy">
+    ${user ? html`<label class="scanner-qa-privacy">
       <input type="checkbox" checked=${uploadsOn} onChange=${e => setUploadPref(e.target.checked)}/>
       <span>Upload my scan photos to help improve the scanner${uploadsOn ? "" : " — off, your scans stay on this device"}</span>
-    </label>
+    </label>` : html`<div class="scanner-qa-privacy scanner-qa-guest">You're signed out, so nothing was uploaded — these scans are only on this device. Sign in to save them; the list comes with you.</div>`}
     ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
     ${qaUndo ? html`<div class="scanner-saved-msg">Removed ${qaUndo.label} · <button class="scanner-link" onClick=${qaUndoDelete}>Undo</button></div>` : null}
     <div class="scanner-session-list scanner-qa-review-list">
@@ -20380,9 +20485,9 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     </div>
     <div class="scanner-qa-review-actions">
       <button class="scanner-btn primary" disabled=${!qaAgg.unsaved || qaSaving} onClick=${qaSaveToCollection}>
-        ${qaSaving ? "Saving…" : qaAgg.unsaved ? "+ Add " + qaAgg.unsaved + " to collection" : (qaAgg.savable ? "Added to collection ✓" : "+ Add to collection")}
+        ${qaSaving ? "Saving…" : qaAgg.unsaved ? (user ? "+ Add " : "Sign in to add ") + qaAgg.unsaved + " to collection" : (qaAgg.savable ? "Added to collection ✓" : "+ Add to collection")}
       </button>
-      <button class="scanner-btn" disabled=${!qaAgg.savable || qaDeckBusy} onClick=${qaCreateDeck}>${qaDeckBusy ? "Creating deck…" : "New deck"}</button>
+      <button class="scanner-btn" disabled=${!qaAgg.savable || qaDeckBusy} onClick=${qaCreateDeck}>${qaDeckBusy ? "Creating deck…" : (user ? "New deck" : "Sign in for a deck")}</button>
     </div>
     ${(qaAgg.pending || qaAgg.unmatched || qaAgg.unpriceable) ? html`<div class="scanner-qa-note">${[
       qaAgg.pending ? qaAgg.pending + " still identifying" : null,
@@ -20392,13 +20497,40 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   </div>`;
   // QA mode: the 📸 BUTTON is the only shutter (7/18 field: tap-anywhere fired
   // on incidental touches — adjusting grip, tapping to focus — and read as the
-  // scanner "auto-snapping" on its own). Signed-out taps still route to sign-in.
-  const stageTap = SCANNER_QA_ONLY ? (user ? null : (onSignIn || null))
+  // scanner "auto-snapping" on its own). A guest scans like anyone else now.
+  const stageTap = SCANNER_QA_ONLY ? null
     : ((mode === "ambient" && !result && user) ? tapCommit : null);
 
+  // Signed out: nothing is uploaded, so the notice is a different promise —
+  // and the one place the only reason to sign in (saving) is said up front.
+  const guestPanel = html`<div class="scanner-consent">
+    <h3 class="scanner-consent-title title-font">Card scanner <span class="scanner-consent-beta">beta</span></h3>
+    <p class="scanner-consent-lead">
+      Identification happens <b>entirely on your phone</b> — your camera is matched
+      against a card index your browser already downloaded. No photo is sent anywhere
+      to be read.
+    </p>
+    <p class="scanner-consent-lead">
+      You're signed out, so <b>nothing is uploaded</b>: no photos, no scans. Your list
+      stays on this device.
+    </p>
+    <p class="scanner-consent-lead">
+      Scan as much as you like. Sign in when you want to <b>add the cards to your
+      collection or a deck</b> — your list comes with you.
+    </p>
+    <p class="scanner-consent-note">
+      It's a beta: it <i>will</i> misread cards, so check the list before you save anything.
+      Details on our <a href="/privacy#scanner" target="_blank" rel="noopener">privacy page</a>.
+    </p>
+    <div class="scanner-consent-actions">
+      <button class="scanner-btn" onClick=${onClose}>Not now</button>
+      ${onSignIn ? html`<button class="scanner-btn" onClick=${() => { scanResumeMark(false); onSignIn(); }}>Sign in</button>` : null}
+      <button class="scanner-btn primary" onClick=${acceptGuest}>Start scanning</button>
+    </div>
+  </div>`;
   // Beta notice — the gate, not a banner. Everything the user needs to decide
   // is on this one screen; the privacy page is the long form, not the disclosure.
-  const consentPanel = html`<div class="scanner-consent">
+  const consentPanel = !user ? guestPanel : html`<div class="scanner-consent">
     <h3 class="scanner-consent-title title-font">Card scanner <span class="scanner-consent-beta">beta</span></h3>
     <p class="scanner-consent-lead">
       Identification happens <b>entirely on your phone</b> — your camera is matched
@@ -20426,12 +20558,15 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     </p>
     <div class="scanner-consent-actions">
       <button class="scanner-btn" onClick=${onClose}>Not now</button>
-      ${user
-        ? html`<button class="scanner-btn primary" onClick=${acceptConsent}>Got it — start scanning</button>`
-        : html`<button class="scanner-btn primary" onClick=${() => onSignIn && onSignIn()}>Sign in to scan</button>`}
+      <button class="scanner-btn primary" onClick=${acceptConsent}>Got it — start scanning</button>
     </div>
   </div>`;
   const gated = !consentOk;
+  // A guest who signed in to SAVE lands on the review screen even before the
+  // account has accepted the upload notice: saving opens no camera and uploads
+  // nothing. The notice still stands in front of the camera — "← Camera" from
+  // here shows it.
+  const reviewOnly = gated && qaResume && qaReviewing;
 
   return html`<div class="scanner-overlay" role="dialog" aria-modal="true" aria-label="Card scanner" ref=${scanRootRef}>
     <div class="scanner-head">
@@ -20442,7 +20577,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       </div>` : null}
       <button class="scanner-close" onClick=${onClose} aria-label="Close scanner">×</button>
     </div>
-    ${gated ? (consentLoaded ? consentPanel
+    ${gated && !reviewOnly ? (consentLoaded ? consentPanel
       : html`<div class="scanner-consent scanner-consent-wait">Checking your settings…</div>`) : null}
     ${gated ? null : html`<div class="scanner-stage" ref=${stageRef} onClick=${stageTap} style=${qaReviewing ? { display: "none" } : null}>
       <video ref=${videoRef} class="scanner-video" playsInline muted autoplay></video>
@@ -20454,7 +20589,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       ${busy ? html`<div class="scanner-busy">Reading card…</div>` : null}
       ${phase === "starting" ? html`<div class="scanner-starting">Starting camera…</div>` : null}
     </div>`}
-    ${gated ? null : (qaReviewing ? qaReviewPanel : below)}
+    ${reviewOnly ? qaReviewPanel : (gated ? null : (qaReviewing ? qaReviewPanel : below))}
   </div>`;
 }
 
@@ -33417,10 +33552,11 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <p>This smoothing is scoped to the Collection Value chart only. Every other surface on the site (card detail price history, Price Graphing, the Screener, mover banners) keeps showing the raw Low, because in those views the spike <em>is</em> the signal you came to see. There's also a settling lag: the smoothing waits until there's enough data after the spike to verify it was a phantom, so today's chart still shows in-progress spikes honestly — they only get retroactively corrected once the dust settles.</p>
 
     <h2>Card scanner (beta)</h2>
-    <p>The <strong>Scan</strong> tab in the top nav points your phone's camera at a card and identifies it, then lets you review the list and add everything to your collection or a new deck in one go. Sign-in required.</p>
+    <p>The <strong>Scan</strong> tab in the top nav points your phone's camera at a card and identifies it, then lets you review the list and add everything to your collection or a new deck in one go. You don't need an account to scan — you sign in when you save, and the list comes with you.</p>
     <p><strong>It runs on your phone.</strong> Your browser downloads a card index once, and the matching happens locally — no photo is sent anywhere to be identified, and the scanner works offline.</p>
     <p><strong>It's a beta, so it will get cards wrong.</strong> Rows it isn't sure about are marked ≈ or ?, and every row has an edit button to correct it. Check the list before you save — nothing touches your collection until you press the button.</p>
     <p><strong>About the photos.</strong> While it's in beta we upload photos of each scan so we can find the cards it misreads and fix them: the whole camera frame, a crop of the card, and a strip of the few frames just before you tapped — so whatever else is in shot goes with them. They're stored privately against your account, never sold or shared, never analyzed for faces, and deleted after 12 months. <strong>You can switch the upload off</strong> — on the notice the first time you open the scanner, or from the scanner's review screen — and it identifies cards exactly the same either way. Full details are on the <a href="/privacy#scanner" target="_blank" rel="noopener">privacy page</a>.</p>
+    <p><strong>Signed out, nothing is uploaded</strong> — no photos, no scan data. The list stays on your device until you sign in to save it, and the photos you took signed out are never sent, then or later.</p>
     <p>Tips for a good read: one card, flat, plain background, decent light, and fill the frame. Sleeves and top-loaders are fine. Japanese and other non-English cards aren't supported yet — it will tell you rather than guess.</p>
 
     <h2>Building decks</h2>
@@ -59563,9 +59699,10 @@ function App(){
   }, [feedbackUnread.latest]);
 
   // The scanner is a PUBLIC beta (2026-08-04) — everyone gets the button. The
-  // modal's own consent gate does the rest: explains that scan photos are
-  // uploaded, records the accept, and shows a sign-in CTA to signed-out
-  // visitors (uploads + save-to-collection both need an account).
+  // modal's own consent gate does the rest: signed in, it explains that scan
+  // photos are uploaded and records the accept; signed out (2026-09-27) it says
+  // nothing is uploaded and lets a guest scan, asking for an account only to
+  // save the list.
   //
   // The client-side is_scanner_tester() probe that used to gate this is gone
   // (it fired on every sign-in to decide something no longer in question). The
@@ -59573,6 +59710,13 @@ function App(){
   // migration 98's scan_samples RLS uses them for who may read OTHER people's
   // samples. Don't drop them thinking they're orphaned.
   const canScan = true;
+  // A guest left the scanner to sign in (scanResumeRead): bring it back once the
+  // account has arrived. The scanner consumes the flag itself, and opens on the
+  // review screen when they were saving.
+  useEffect(() => {
+    if(!user || scanOpen || !scanResumeRead()) return;
+    openScan();
+  }, [user]);
 
   // Public profile state — display name + avatar URL the rest of the world
   // sees on your shared decks. Distinct from auth.users metadata (which is
