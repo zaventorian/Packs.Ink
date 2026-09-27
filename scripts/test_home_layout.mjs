@@ -265,14 +265,13 @@ for (const [k, rars] of Object.entries(HOME_BANNER_RARITIES)) {
     typeof HOME_BANNER_LABELS[k] === "string", true);
 }
 
-// ── The news/poll collapse signature ─────────────────────────────────────
+// ── The news collapse signature ──────────────────────────────────────────
 // The collapse is remembered as the CONTENT SIGNATURE that was on screen when
 // it was minimised, so the box reopens itself when something new is posted.
 // ⚠ Every failure here is silent in the same direction — the box just never
-// reopens — and one already shipped: the signature read `poll.id`, which does
-// not exist on that row, so it ended "::undefined", never moved, and a brand
-// new poll could not have reopened anything. Caught only by reading the stored
-// string. These assertions are that bug, written down.
+// reopens, and nothing errors. One already shipped (a token read a field that
+// did not exist, so it never moved); it was caught only by reading the stored
+// string.
 // ⚠ End on "}, [newsTiles" rather than the whole dependency array. Spelling the
 // deps out made this marker break the moment one was added — which is exactly
 // when you most want the assertions below to run, since a new dep usually means
@@ -280,25 +279,27 @@ for (const [k, rars] of Object.entries(HOME_BANNER_RARITIES)) {
 const sigFn = grab("const newsSig = useMemo(() => {", "}, [newsTiles");
 check("the signature keys off tile KEYS, not their count",
   /\.key\b/.test(sigFn) && !/\.length/.test(sigFn), true);
-check("the signature reads poll_id, not the nonexistent poll.id",
-  /homePoll\.poll\.poll_id/.test(sigFn), true);
 // ⚠ The other direction: anything that changes on its own would make the box
 // reopen on a timer, and anything that changes when YOU act would pop it open
-// at the moment you finished with it. Voting is the live example.
-// ⚠ Strip comments first. The memo's own comment SAYS "deliberately not
-// my_choice or pct", so a raw substring test reads the reasoning as the code
-// and fails on a correct file — which it did on the first run.
+// at the moment you finished with it.
+// ⚠ Strip comments first. The memo's own comment explains what is kept OUT, so
+// a raw substring test reads the reasoning as the code and fails on a correct
+// file — which it did on the first run.
 const sigCode = sigFn.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
-for (const vol of ["my_choice", "pct", "Date.now", "nowMs"]) {
+for (const vol of ["Date.now", "nowMs"]) {
   check(`the signature excludes ${vol}`, sigCode.includes(vol), false);
 }
-// The reveal counter is the LEAD tile, so it is not in `newsTiles` and its keys
-// can never reach the signature on their own. Its COUNT has to, or new reveals
-// landing during spoiler season — the one time this feed changes often — would
-// not reopen a collapsed box, which is the whole contract. It is a safe input
-// for the same reason my_choice is not: it moves only when cards actually land.
-check("the signature carries the reveal count, which the lead tile is not in `tiles` to supply",
+// The reveal counter's tile key is the same constant all season, so the key
+// alone never moves as cards land. Its COUNT has to reach the signature, or new
+// reveals landing during spoiler season — the one time this feed changes often
+// — would not reopen a collapsed box, which is the whole contract. It is a safe
+// input because it moves only when cards actually land.
+check("the signature carries the reveal count, which the tile's constant key cannot",
   /newsCount/.test(sigCode), true);
+// The home poll was removed from the News box (2026-09-27). A long-lived branch
+// merging back can resurrect it without a conflict, so say it out loud.
+check("the home page no longer fetches or renders a poll",
+  /get_active_poll|HomePollBox|home-poll/.test(src), false);
 // The stored key must survive an aux-cache wipe, or a collapse silently
 // un-collapses for everyone on the next AUX_CACHE_VERSION bump. It lives
 // under packsink:home:, which is preferences, not the packsink:home:tourneys:

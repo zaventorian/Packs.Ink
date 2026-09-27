@@ -3598,7 +3598,7 @@ and a chip per row: **3274px, 4.0 screens, calendar at 1.6**.
   quietly move the banner order. An explicit pick still wins: a heuristic may choose for
   you, never over you.
 
-### The news/poll box collapses, and un-collapses itself (2026-09-20)
+### The news box collapses, and un-collapses itself (2026-09-20)
 
 591px → 45px, desktop and mobile. **⚠ The stored value is not a boolean — it is the
 CONTENT SIGNATURE that was on screen when you minimised it** (`NEWS_COLLAPSE_LS`). If what
@@ -3607,19 +3607,36 @@ posted" (Zaven). That shape is what makes it safe to forget — a box collapsed 
 cannot swallow a set announcement in June, which a plain boolean would.
 
 - Signature = tile **keys** (not count: a new tile replacing an old one is news and the
-  count would not move) + the poll's **`poll_id`**. ⚠ There is no `id` on that row — the
-  first cut read one, the signature ended `::undefined`, never moved, and a brand-new poll
-  could not have reopened anything. It fails silently in exactly one direction.
-- **⚠ Nothing volatile may enter it.** `my_choice`/`pct` change when YOU vote, which would
-  pop the box open at the moment you finished with it; a countdown would reopen it on a
-  timer and make the minimise a lie.
+  count would not move) + each fresh Coconut reveal's slug + the reveal counter's
+  **count** — its tile key is the constant `news` all season, so the key alone never
+  moves as cards land. It fails silently in exactly one direction: the box just never
+  reopens.
+- **⚠ Nothing volatile may enter it.** A countdown would reopen it on a timer and make the
+  minimise a lie; anything that changes when YOU act would pop it open at the moment you
+  finished with it.
+- **⚠ Renaming a token reopens every collapsed box once**, because the stored signature no
+  longer contains it. Fine when the box is changing anyway (the poll removal below did
+  exactly that); don't rename one for tidiness.
 - The comparison is at RENDER, not in an effect, so new content paints open with no
-  expanded-then-collapsed flash. The poll sits inside the collapse — it is ~200px of the
-  578 and a collapse that left it standing would not be one.
+  expanded-then-collapsed flash.
 - **⚠ `contain:size` has to be released** on the `.rl-news-row` copy, which takes its
   height from the banner beside it: without that, collapsing leaves a full-height empty
   rectangle.
 - Guarded by the signature section of `node scripts/test_home_layout.mjs`.
+
+**The home poll is GONE (2026-09-27, Zaven: "remove the poll from news").** It sat at the
+top of this box, above the News title, from 2026-09-18 (commits `4e8c8eb` and `af34a13`;
+migrations 161 / 162 / 167). The client went with it — `useHomePoll`, `HomePollBox`,
+`.home-poll*` — and so did the `lead` slot, which existed only to lift the reveal counter
+ABOVE the poll; the counter is the first tile in the list again, under the title.
+`test_home_layout.mjs` fails if the poll comes back, because a long-lived branch merging in
+can resurrect it without a conflict.
+
+- **The database side was left alone**: `polls`, `poll_votes`, `get_active_poll()` and
+  `vote_poll()` are still live, now called by nothing. Dropping them is a human paste —
+  and it deletes every vote ever cast — so it waits for an explicit ask.
+- Bringing a poll back means restoring those two commits' code, not a rewrite; the next
+  poll was always meant to be an INSERT, not a deploy.
 
 ## Mobile top-nav
 
