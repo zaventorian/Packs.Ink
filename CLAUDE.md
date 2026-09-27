@@ -3991,6 +3991,21 @@ residual is reported, never guessed. `raw_load.py` is **dry-run by default**.
   different catalog cards; "Brave Little Tailor" alone returns The First Chapter
   #115 (a bulk rare), D23 Collection #1, and Promo Set 1 #1, whose graded copies
   pass $14,000.
+- **⚠ So the searches pair a name with a PROMO token, and they were MEASURED
+  (2026-09-27).** The first deep run of bare `"Lorcana" "Brave Little Tailor"`
+  hit the 60-page cap on bulk #115s and never reached the 2022 sales. Now: 8
+  set-wide nets (`C1`, `Top Prize`, `Prize Wall`, `Side Event`, `C2`,
+  `D23`+`2022`, `Expo`+`2022`, `Cruise`) plus per-card `<name>`+`Challenge` /
+  `D23` / `2022` / `P3`, 45 in all. Replayed against all 3,225 evidence-bearing
+  titles we hold for the 24 cards, they catch **3,201**, and every one of the 24
+  misses is a graded row on the wrong card or a typo. The old subtitle-only list
+  was WORSE on recall, not just noisier: of 184 Captain Hook P1 #7 sales only 41
+  say "Forceful Duelist". **Terapeak also matches item specifics** (a "Lorcana"
+  search returns PSA auto-titles with no "Lorcana" in them), so a title-only
+  replay is a floor. **⚠ A per-card search that is a subset of a net is
+  redundant** (`"Rapunzel" "C1"` ⊂ `"C1"`) and just adds ~67s of anti-captcha
+  wait; `test_raw_match.py` pins that every search names its card and that no
+  one-term search on a base-card name comes back.
 - **⚠ `terapeak_match.match_one` stays the ONLY matcher.** Measured over the
   8,253 corpus titles carrying a watchlist token, stripping every grading token
   out of a title (which is what a raw title looks like) changed the attributed

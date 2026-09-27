@@ -38,39 +38,86 @@ record, $1.97M of sale value, because most correct titles carry no number).
 """
 from __future__ import annotations
 
-# (set, collector_number, name, version, query, printing_tracked)
-# `query` is the eBay/Terapeak keyword. The version subtitle is the most
-# distinctive token a listing reliably carries; a card with no subtitle uses its
-# name. `printing_tracked` is the printing whose raw price we are after — "Foil"
-# where the card_id is shared with a cheaper non-foil, None where the card has
-# only one printing.
+# (set, collector_number, name, version, searches, printing_tracked)
+#
+# `searches` are the eBay/Terapeak keyword searches that find THIS card. Each
+# pairs the character (or the version subtitle) with a token only the promo
+# printing carries -- "C1", "Challenge", "D23", "2022", "P3" -- because a bare
+# subtitle drowns the promo in its own base card: '"Lorcana" "Brave Little
+# Tailor"' hit the 60-page cap (3,000 rows) on its first deep run, nearly all of
+# them the $1 First Chapter #115, and never reached the 2022 sales it existed for.
+#
+# ⚠ NARROW MUST NOT MEAN LOSSY, so this list was MEASURED, not written from
+# memory (2026-09-27): every graded + raw title we hold for these 24 cards that
+# carries identity evidence (3,225) was replayed against the 45 searches, and
+# 3,201 are caught. The 24 that are not are rows already sitting on the wrong
+# card in graded_sales (a D23 Collection Cinderella on C1 #42, base Ursula's
+# Return Minnie on P3 #17) or seller typos ("Cindarella", "Michey"). The OLD
+# subtitle-only list missed far more: of 184 Captain Hook P1 #7 sales, only 41
+# say "Forceful Duelist" -- sellers write "2022 Captain Hook #7 D23 Expo".
+#
+# ⚠ Terapeak matches ITEM SPECIFICS as well as the title: a "Lorcana" search
+# returns PSA auto-titles like "2024 PRIZE WALL EXCLUSIVE #4 RAPUNZEL - GIFTED
+# WITH HEALING PSA 9", which never say Lorcana. So that title-only measurement is
+# a FLOOR on what these searches catch, not a ceiling.
+#
+# `printing_tracked` is the printing whose raw price we are after -- "Foil" where
+# the card_id is shared with a cheaper non-foil, None where the card has only one
+# printing.
+def _q(*words):
+    return " ".join(f'"{w}"' for w in ("Lorcana",) + words)
+
+
 WATCHLIST = [
     # --- Challenge Promo (C1) Top Prize foils ------------------------------
-    ("Challenge Promo", "5",  "Mickey Mouse", "Brave Little Tailor",   '"Lorcana" "Brave Little Tailor"',  "Foil"),
-    ("Challenge Promo", "43", "Rapunzel",     "Gifted with Healing",   '"Lorcana" "Gifted with Healing"',   "Foil"),
-    ("Challenge Promo", "8",  "Kuzco",        "Temperamental Emperor", '"Lorcana" "Temperamental Emperor"', "Foil"),
-    ("Challenge Promo", "7",  "Elsa's Ice Palace", "Place of Solitude",'"Lorcana" "Place of Solitude"',     "Foil"),
-    ("Challenge Promo", "9",  "Baymax",       "Armored Companion",     '"Lorcana" "Armored Companion"',     "Foil"),
-    ("Challenge Promo", "10", "A Whole New World", None,               '"Lorcana" "A Whole New World"',     "Foil"),
-    ("Challenge Promo", "6",  "Invited to the Ball", None,             '"Lorcana" "Invited to the Ball"',   "Foil"),
-    ("Challenge Promo", "42", "Cinderella",   "Stouthearted",          '"Lorcana" "Stouthearted"',          "Foil"),
-    ("Challenge Promo", "41", "Let It Go",    None,                    '"Lorcana" "Let It Go"',             "Foil"),
+    ("Challenge Promo", "5",  "Mickey Mouse", "Brave Little Tailor",
+        (_q("Mickey", "Challenge"),), "Foil"),
+    ("Challenge Promo", "43", "Rapunzel",     "Gifted with Healing",
+        (_q("Rapunzel", "Challenge"),), "Foil"),
+    ("Challenge Promo", "8",  "Kuzco",        "Temperamental Emperor",
+        (_q("Kuzco", "Challenge"),), "Foil"),
+    # "Ice Palace", not "Elsa's Ice Palace": sellers use both apostrophes.
+    ("Challenge Promo", "7",  "Elsa's Ice Palace", "Place of Solitude",
+        (_q("Ice Palace"),), "Foil"),
+    ("Challenge Promo", "9",  "Baymax",       "Armored Companion",
+        (_q("Baymax", "Challenge"), _q("Armored Companion", "Promo")), "Foil"),
+    ("Challenge Promo", "10", "A Whole New World", None,
+        (_q("A Whole New World", "Promo"),), "Foil"),
+    ("Challenge Promo", "6",  "Invited to the Ball", None,
+        (_q("Invited to the Ball"),), "Foil"),
+    ("Challenge Promo", "42", "Cinderella",   "Stouthearted",
+        (_q("Cinderella", "Challenge"),), "Foil"),
+    ("Challenge Promo", "41", "Let It Go",    None,
+        (_q("Let It Go", "Promo"), _q("Let It Go", "Challenge")), "Foil"),
 
     # --- Challenge Year 3 (C2) foils ---------------------------------------
     # #1-4 are the foils (Top 64 / Top 32 / Participation), #5-8 the Prize Wall
     # non-foils — confirmed from sale titles, not assumed. Only #2 and #4 clear
     # the $1,000 bar; #1 Pegasus ($150) and #3 Mulan ($385) are out.
-    ("Lorcana Challenge Year 3", "2", "Elsa",  "Ice Maker",            '"Lorcana" "Ice Maker"',             "Foil"),
-    ("Lorcana Challenge Year 3", "4", "Simba", "Pride Protector",      '"Lorcana" "Pride Protector"',       "Foil"),
+    ("Lorcana Challenge Year 3", "2", "Elsa",  "Ice Maker",
+        (_q("Elsa", "Challenge"),), "Foil"),
+    ("Lorcana Challenge Year 3", "4", "Simba", "Pride Protector",
+        (_q("Simba", "Challenge"), _q("Simba", "Tournament")), "Foil"),
 
     # --- Promo Set 1 #1-7 (the 2022 D23 Expo set; first Lorcana promos) -----
-    ("Promo Set 1", "3", "Elsa",           "Snow Queen",               '"Lorcana" "Snow Queen"',            None),
-    ("Promo Set 1", "2", "Stitch",         "Rock Star",                '"Lorcana" "Rock Star"',             None),
-    ("Promo Set 1", "5", "Maleficent",     "Monstrous Dragon",         '"Lorcana" "Monstrous Dragon"',      None),
-    ("Promo Set 1", "1", "Mickey Mouse",   "Brave Little Tailor",      '"Lorcana" "Brave Little Tailor"',   None),
-    ("Promo Set 1", "7", "Captain Hook",   "Forceful Duelist",         '"Lorcana" "Forceful Duelist"',      None),
-    ("Promo Set 1", "6", "Robin Hood",     "Unrivaled Archer",         '"Lorcana" "Unrivaled Archer"',      None),
-    ("Promo Set 1", "4", "Cruella De Vil", "Miserable As Usual",       '"Lorcana" "Miserable As Usual"',    None),
+    # Both "D23" and "2022": TCGplayer-style titles say "4 D23 Promos Holo" with
+    # no year, and PSA auto-titles say "2022 DISNEY LORCANA PROMO #4" with no D23.
+    ("Promo Set 1", "3", "Elsa",           "Snow Queen",
+        (_q("Elsa", "D23"), _q("Elsa", "2022")), None),
+    ("Promo Set 1", "2", "Stitch",         "Rock Star",
+        (_q("Stitch", "D23"), _q("Stitch", "2022")), None),
+    ("Promo Set 1", "5", "Maleficent",     "Monstrous Dragon",
+        (_q("Maleficent", "D23"), _q("Maleficent", "2022")), None),
+    # Mickey + "D23" alone is the 2024 D23 Collection's market as well, and gate 4
+    # drops any #1 sale without "2022" (TWIN_REQUIRE) -- so the year IS the search.
+    ("Promo Set 1", "1", "Mickey Mouse",   "Brave Little Tailor",
+        (_q("Brave Little Tailor", "2022"),), None),
+    ("Promo Set 1", "7", "Captain Hook",   "Forceful Duelist",
+        (_q("Captain Hook", "D23"), _q("Captain Hook", "2022")), None),
+    ("Promo Set 1", "6", "Robin Hood",     "Unrivaled Archer",
+        (_q("Robin Hood", "D23"), _q("Robin Hood", "2022"), _q("Robinhood", "D23")), None),
+    ("Promo Set 1", "4", "Cruella De Vil", "Miserable As Usual",
+        (_q("Cruella", "D23"), _q("Cruella", "2022"), _q("Cruella", "P1")), None),
 
     # --- Disney Cruise Line promos (Promo Set 3) ---------------------------
     # ⚠ Weakest group on the list, kept at Zaven's call. Unlike the Challenge
@@ -78,12 +125,30 @@ WATCHLIST = [
     # raw sales we already caught by accident land at $175-$250 — so TCGplayer is
     # already right and the 5-7x graded gap is a real grading premium. Expect
     # this group to confirm the number we show rather than change it.
-    ("Promo Set 3", "10", "Mickey Mouse",  "True Friend",              '"Lorcana" "True Friend"',           None),
-    ("Promo Set 3", "13", "Mickey Mouse",  "Pirate Captain",           '"Lorcana" "Pirate Captain"',        None),
-    ("Promo Set 3", "14", "Goofy",         "Expert Shipwright",        '"Lorcana" "Expert Shipwright"',     None),
-    ("Promo Set 3", "15", "Donald Duck",   "Buccaneer",                '"Lorcana" "Buccaneer"',             None),
-    ("Promo Set 3", "17", "Minnie Mouse",  "Pirate Lookout",           '"Lorcana" "Pirate Lookout"',        None),
-    ("Promo Set 3", "16", "Daisy Duck",    "Pirate Captain",           '"Lorcana" "Pirate Captain"',        None),
+    ("Promo Set 3", "10", "Mickey Mouse",  "True Friend",
+        (_q("Mickey", "P3"),), None),
+    ("Promo Set 3", "13", "Mickey Mouse",  "Pirate Captain",
+        (_q("Mickey", "P3"), _q("Pirate Captain", "P3")), None),
+    ("Promo Set 3", "14", "Goofy",         "Expert Shipwright",
+        (_q("Goofy", "P3"), _q("Expert Shipwright")), None),
+    ("Promo Set 3", "15", "Donald Duck",   "Buccaneer",
+        (_q("Donald", "P3"),), None),
+    ("Promo Set 3", "17", "Minnie Mouse",  "Pirate Lookout",
+        (_q("Minnie", "P3"), _q("Pirate Lookout")), None),
+    ("Promo Set 3", "16", "Daisy Duck",    "Pirate Captain",
+        (_q("Daisy", "P3"), _q("Pirate Captain", "P3")), None),
+]
+
+# Set-wide nets, searched FIRST. They name no card, so they catch what a
+# per-card search cannot: a title that misspells the character ("Maymax",
+# "Kuzo"), or a "Top 8 Prize Card 5/C1" that never says Challenge. Each is
+# bounded by a token only promos carry, and raw_match throws away anything they
+# drag in that is not a watchlist card.
+SET_NETS = [
+    _q("C1"), _q("Top Prize"), _q("Prize Wall"), _q("Side Event"),
+    _q("C2"),
+    _q("D23", "2022"), _q("Expo", "2022"),
+    _q("Cruise"),
 ]
 
 
@@ -119,18 +184,29 @@ TWIN_REQUIRE = {
 
 
 def queries():
-    """The DISTINCT keyword searches covering the whole list, ordered so the
-    highest-value cards are scraped first (a captcha mid-run keeps what it got).
-
-    Fewer queries than cards: a version subtitle is shared by every printing of
-    that character, so '"Lorcana" "Brave Little Tailor"' nets C1 #5 and P1 #1 in
-    one pass, and '"Lorcana" "Pirate Captain"' nets P3 #13 and #16."""
+    """The DISTINCT keyword searches covering the whole list: the set-wide nets
+    first, then each card's own searches in list order (highest-value cards
+    first, so a captcha mid-run keeps what it got). Cards share searches --
+    '"Lorcana" "Mickey" "P3"' covers P3 #10 and #13 -- hence the dedupe."""
     seen, out = set(), []
-    for _set, _cn, _n, _v, q, _p in WATCHLIST:
+    for q in SET_NETS + [q for row in WATCHLIST for q in row[4]]:
         if q not in seen:
             seen.add(q)
             out.append(q)
     return out
+
+
+# The short forms a per-card search may use for a character name.
+_NAME_FORMS = {"Elsa's Ice Palace": ("ice palace",), "Robin Hood": ("robin hood", "robinhood")}
+
+
+def names_card(search, name, ver):
+    """True when a per-card search names its card -- by version subtitle, full
+    name, or the first word of the character name ("Mickey", "Cruella"). A
+    search that names nobody belongs in SET_NETS, not on a card's row."""
+    s = search.lower()
+    forms = _NAME_FORMS.get(name, (name.lower(), name.lower().split()[0]))
+    return bool(ver and ver.lower() in s) or any(f'"{f}"' in s for f in forms)
 
 
 def verify():
@@ -173,9 +249,11 @@ def verify():
         if c["name"] != name or (c.get("version") or None) != ver:
             fails.append(f"  {st} #{cn}: catalog says {c['name']!r}/{c.get('version')!r}, "
                          f"list says {name!r}/{ver!r}")
-        token = (ver or name).lower()
-        if token not in q.lower():
-            fails.append(f"  {st} #{cn}: query {q!r} does not contain {token!r}")
+        if not q:
+            fails.append(f"  {st} #{cn}: no searches — nothing would ever look for this card")
+        for one in q:
+            if not names_card(one, name, ver):
+                fails.append(f"  {st} #{cn}: search {one!r} does not name this card")
         sib = fam[(c["name"] + "|" + (c.get("version") or "")).lower()]
         if len(sib) < 2:
             fails.append(f"  {st} #{cn}: expected a name collision (every promo reprints a "
