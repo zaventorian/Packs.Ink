@@ -226,6 +226,20 @@ const D = await mod("discord/src/data.js");
   const hist = Array.from({ length: 400 }, (_, i) => ({ date: new Date(Date.UTC(2025, 7, 1) + i * DAY).toISOString().slice(0, 10), low_price: 4 + i / 200, market_price: 5 + i / 150 }));
   const price = D.priceSummary(hist);
   ok(price.market != null && price.mktDelta["1w"] != null, "priceSummary gives a price and a 1W change");
+  // Migration 172's rule, as the site's card page applies it: a printing whose
+  // last price is 100 days older than the index's price date keeps showing that
+  // price, but reports no move for a window that doesn't contain it, and gets no
+  // "Cheapest in 12 months" for a price nobody can buy today.
+  {
+    const asOf = hist[hist.length - 1].date;
+    const stale = D.priceSummary(hist.slice(0, 300), asOf);
+    ok(stale.market != null, "a stale printing still shows its last price");
+    ok(["1d", "1w", "1m", "3m"].every((k) => stale.mktDelta[k] == null && stale.lowDelta[k] == null),
+      `a stale printing reports no 1D/1W/1M/3M move (${JSON.stringify(stale.mktDelta)})`);
+    eq(stale.standing, null, "a stale printing gets no price-standing note");
+    const fresh = D.priceSummary(hist, asOf);
+    ok(fresh.mktDelta["1d"] != null && fresh.mktDelta["1w"] != null, "a printing priced today keeps its changes");
+  }
   for (const q of ["mowgli", "enchanted elsa", "elsa psa 10", "peter pan text error", "stitch"]) {
     const res = R.resolve(q);
     if (res.kind !== "card") { ok(false, `"${q}" should be a card`); continue; }

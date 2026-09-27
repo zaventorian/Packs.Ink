@@ -63,6 +63,111 @@ ok("the standing windows match the site",
 ok("the bot reads market, not low", dd.PRICE_COL == "market_today" and
    dd.PCT_PREFIX == "mkt_pct_", f"{dd.PRICE_COL} / {dd.PCT_PREFIX}")
 
+# ── A move has to be observed inside its window ─────────────────────────────
+# On 2026-09-26 price_movers handed this bot Cruella De Vil - Miserable As Usual
+# at +108% "1D" — a Jun 1 -> Aug 9 move, 48 days after its last market price —
+# and it led "Heating up". Migration 172 fixed the matview; the bot checks the
+# same rule again against prices_daily, and the two rules must stay one rule.
+ok("every window the CLI offers has a freshness bound",
+   set(dd.WINDOW_DAYS) == set(dd.WINDOWS), f"{sorted(dd.WINDOW_DAYS)} vs {sorted(dd.WINDOWS)}")
+ok("the bot over-fetches, so a stale row can't cost a real mover its slot", dd.OVERFETCH > 1)
+
+
+def newest_movers_migration():
+    """The migration that defines price_movers today: the highest-numbered file
+    that creates it, so a later rebuild is the one this test reads."""
+    best = None
+    for p in (ROOT / "supabase").glob("*.sql"):
+        m = re.match(r"(\d+)_", p.name)
+        if m and "create materialized view public.price_movers" in p.read_text(encoding="utf-8"):
+            if best is None or int(m.group(1)) > best[0]:
+                best = (int(m.group(1)), p)
+    return best[1]
+
+
+mig = newest_movers_migration()
+bounds = {w: int(n) for n, w in re.findall(
+    r"a\.market_date > a\.newest_date - (\d+)\s+then .*? as mkt_pct_(\w+)", mig.read_text(encoding="utf-8"))}
+ok(f"{mig.name} still guards mkt_pct_* on the latest observation", bool(bounds), mig.name)
+ok("…and bounds each window exactly as the bot does",
+   all(bounds.get(w) == n for w, n in dd.WINDOW_DAYS.items()), f"matview {bounds} vs bot {dd.WINDOW_DAYS}")
+
+PD = dt.date(2026, 9, 26)
+D = lambda n: PD - dt.timedelta(days=n)  # noqa: E731
+ok("1d: priced on the newest date counts", dd.observed_in_window(PD, PD, "1d"))
+ok("1d: priced the day before does not", not dd.observed_in_window(D(1), PD, "1d"))
+ok("7d: six days ago is inside the week", dd.observed_in_window(D(6), PD, "7d"))
+ok("7d: seven days ago is not", not dd.observed_in_window(D(7), PD, "7d"))
+ok("no market price at all never counts", not dd.observed_in_window(None, PD, "1d"))
+
+cru = {"card_id": "cru", "name": "Cruella De Vil", "version": "Miserable As Usual",
+       "printing": "Holofoil", "tcgplayer_product_id": 454229,
+       "market_today": 1250.0, "mkt_pct_1d": 108.33}
+fresh = [{"card_id": f"f{i}", "name": f"Fresh {i}", "version": "Riser", "printing": "Normal",
+          "tcgplayer_product_id": 100 + i, "market_today": 10.0, "mkt_pct_1d": 30.0 - i} for i in range(3)]
+ghost = {"card_id": "g", "name": "Ghost", "version": "No History", "printing": "Cold Foil",
+         "tcgplayer_product_id": 7, "market_today": 6.0, "mkt_pct_1d": 25.0}
+hist = {(454229, "Holofoil"): [(dt.date(2026, 6, 1), 600.0), (dt.date(2026, 8, 9), 1250.0)],
+        # The same pid's OTHER printing priced today must not vouch for the foil.
+        (454229, "Normal"): [(D(1), 20.0), (PD, 21.0)]}
+for i in range(3):
+    hist[(100 + i, "Normal")] = [(D(1), 7.0), (PD, 10.0)]
+kept, skipped = dd.keep_fresh([cru, fresh[0], ghost, fresh[1], fresh[2]], hist, PD, "1d", 2)
+ok("the reported shape is dropped, and the next real movers take its slots",
+   [r["card_id"] for r in kept] == ["f0", "f1"], [r["card_id"] for r in kept])
+ok("…with the stale rows reported, and when each was last priced",
+   [(r["card_id"], last) for r, last in skipped] == [("cru", dt.date(2026, 8, 9)), ("g", None)], skipped)
+ok("the same SKU passes a window that contains its last price",
+   dd.keep_fresh([cru], hist, PD, "90d", 1)[0] == [cru])
+
+
+class FakeSB:
+    def __init__(self, rows=()):
+        self.rows, self.calls = list(rows), []
+
+    def select(self, table, columns="*", limit=None, filters=None, page_size=1000, order=None):
+        self.calls.append({"table": table, "filters": filters or {}, "order": order})
+        return list(self.rows)
+
+
+sb = FakeSB([{"tcgplayer_product_id": 1, "printing": "Normal", "date": "2026-09-26", "market_price": 2.0},
+             {"tcgplayer_product_id": 1, "printing": "Normal", "date": "2026-09-25", "market_price": None},
+             {"tcgplayer_product_id": 1, "printing": "Normal", "date": "2026-09-24", "market_price": 1.0}])
+got = dd.fetch_history(sb, [1], "2025-08-22")
+call = sb.calls[0]
+ok("history reads the same rows the matview is built from (tcgcsv / raw)",
+   call["filters"].get("source") == "eq.tcgcsv" and call["filters"].get("grade") == "eq.raw", call)
+ok("…in a total order, so paging can't skip or repeat a printing's row",
+   call["order"] == "tcgplayer_product_id.asc,printing.asc,date.asc", call["order"])
+ok("…bucketed per printing, ascending, skipping days with no market price",
+   got == {(1, "Normal"): [(dt.date(2026, 9, 24), 1.0), (dt.date(2026, 9, 26), 2.0)]}, got)
+
+# End to end, with the matview behaving as it did BEFORE 172: the post must
+# still leave Cruella out, because the bot checks prices_daily itself.
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+saved = (dd.Supabase, dd.latest_price_date, dd.fetch_movers, dd.fetch_history, sys.argv)
+try:
+    dd.Supabase = lambda: FakeSB()
+    dd.latest_price_date = lambda sb: PD
+    dd.fetch_movers = lambda sb, window, direction, limit: (
+        [cru, *fresh][:limit] if direction == "up" else [])
+    dd.fetch_history = lambda sb, pids, since: hist
+    sys.argv = ["discord_digest.py", "--allow-stale"]
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = dd.main()
+    out = buf.getvalue()
+finally:
+    dd.Supabase, dd.latest_price_date, dd.fetch_movers, dd.fetch_history, sys.argv = saved
+post = out.split("DRY RUN — would post:")[-1]
+ok("a dry run with the pre-172 matview exits cleanly", rc == 0 and "DRY RUN" in out, out[-400:])
+ok("…and the post leaves the stale riser out", "Cruella" not in post, post)
+ok("…while the fresh risers still lead", "Fresh 0" in post and post.index("Fresh 0") < post.index("Fresh 1"), post)
+ok("…and the log names what it skipped and why",
+   "Skipped a stale mover: Cruella De Vil - Miserable As Usual" in out and "2026-08-09" in out, out[:400])
+
 # ── The standing itself, same fixtures as the JS suite ──────────────────────
 END = dt.date(2026, 9, 10)
 

@@ -295,7 +295,7 @@ const CARD_DELTA_WINDOWS = [
   {key:"1y", label:"1Y", days:365},
 ];
 // ---- site ----
-const computeSeriesDeltas = (rows, field) => {
+const computeSeriesDeltas = (rows, field, asOf) => {
   const DAY = 86400000;
   const pts = (rows || [])
     .map(r => ({ t: Date.parse(r.date), v: (r[field] != null ? parseFloat(r[field]) : null) }))
@@ -303,9 +303,14 @@ const computeSeriesDeltas = (rows, field) => {
   if(!pts.length) return { now: null, byWin: {} };
   const last = pts[pts.length - 1];
   const now = last.v;
+  // Never anchored BEFORE the series' own last sample: an asOf older than the
+  // data (a session that outlived an ETL) must not reach past it.
+  const asOfMs = asOf ? Date.parse(asOf) : NaN;
+  const anchor = Number.isFinite(asOfMs) && asOfMs > last.t ? asOfMs : last.t;
   const byWin = {};
   for(const w of CARD_DELTA_WINDOWS){
-    const target = last.t - w.days * DAY;
+    const target = anchor - w.days * DAY;
+    if(last.t <= target){ byWin[w.key] = null; continue; }
     let ref = null;
     for(let i = pts.length - 1; i >= 0; i--){
       if(pts[i].t <= target){ ref = pts[i]; break; }
@@ -313,6 +318,14 @@ const computeSeriesDeltas = (rows, field) => {
     byWin[w.key] = (ref && ref.v) ? ((now - ref.v) / ref.v * 100) : null;
   }
   return { now, byWin };
+};
+// ---- site ----
+const seriesPricedOn = (rows, field, asOf) => {
+  if(!asOf) return true;
+  for(let i = (rows || []).length - 1; i >= 0; i--){
+    if(rows[i] && rows[i][field] != null) return String(rows[i].date).slice(0, 10) >= asOf;
+  }
+  return false;
 };
 // ---- site ----
 const PRICE_STANDING_WINDOWS = [
@@ -722,4 +735,4 @@ const scLocalTime12 = (hhmm) => {
   h = h % 12 || 12;
   return `${h}:${m[2]} ${ap}`;
 };
-export { AMAZON_ASIN_BY_SET, AMAZON_DEPT_DEFAULT, AMAZON_PUZZLE_ASINS, AMAZON_SEALED_RULES, AMAZON_TAG, CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_REGIONS, CAL_D, CAL_EST_SUFFIX, CARD_DELTA_WINDOWS, GRADED_FOIL_PRINTINGS, GRADED_NONFOIL_PRINTINGS, PRICE_STANDING_HIGH, PRICE_STANDING_LOW, PRICE_STANDING_MIN_POINTS, PRICE_STANDING_MIN_SPAN_RATIO, PRICE_STANDING_MIN_SPREAD, PRICE_STANDING_NEAR_LOW, PRICE_STANDING_WINDOWS, PRODUCT_RELEASE_DATES, SC_GEO_COUNTRIES, SC_GEO_TIMEOUT_MS, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, SC_POSTAL_FORMATS, SEALED_DISPLAY_TYPE_FOR, SET_CADENCE_DAYS, SET_LGS_WEEKDAY, SET_RELEASE_DATES, SET_RELEASE_LABELS, SET_RELEASE_PHASES, SET_RETAIL_LAG_DAYS, TCG_AFFILIATE_BASE, UPCOMING_SET_NAMES, _CAL_REGION_BY_CC, _amznNorm, _calKindRank, _calPhaseRank, _calSetKey, _calSetPhase, amazonForSealed, amazonSearchUrl, amazonUrl, calAddDays, calEndOf, calEstimated, calEventFullLabel, calEventSubtitle, calEventTitle, calRegionOf, calStoreEventName, calTodayYmd, calUTCToYmd, calYmdParts, calYmdToUTC, calendarEstimatedSetEntries, calendarMergeEvents, calendarProductEntries, calendarSetEntries, calendarSetEstimates, calendarSort, calendarUpcoming, cleanSealedName, computeSeriesDeltas, deriveSealedDisplayType, gradedSlotBucket, haversineMi, priceStanding, rawSaleMatch, scLocalTime12, scNormalizePostal, scPlaceLabel, scPostalCandidates, scPostalShape, scRankPlaces, scZippo, searchNorm, tcgSetSearchUrl, tcgUrl };
+export { AMAZON_ASIN_BY_SET, AMAZON_DEPT_DEFAULT, AMAZON_PUZZLE_ASINS, AMAZON_SEALED_RULES, AMAZON_TAG, CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_REGIONS, CAL_D, CAL_EST_SUFFIX, CARD_DELTA_WINDOWS, GRADED_FOIL_PRINTINGS, GRADED_NONFOIL_PRINTINGS, PRICE_STANDING_HIGH, PRICE_STANDING_LOW, PRICE_STANDING_MIN_POINTS, PRICE_STANDING_MIN_SPAN_RATIO, PRICE_STANDING_MIN_SPREAD, PRICE_STANDING_NEAR_LOW, PRICE_STANDING_WINDOWS, PRODUCT_RELEASE_DATES, SC_GEO_COUNTRIES, SC_GEO_TIMEOUT_MS, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, SC_POSTAL_FORMATS, SEALED_DISPLAY_TYPE_FOR, SET_CADENCE_DAYS, SET_LGS_WEEKDAY, SET_RELEASE_DATES, SET_RELEASE_LABELS, SET_RELEASE_PHASES, SET_RETAIL_LAG_DAYS, TCG_AFFILIATE_BASE, UPCOMING_SET_NAMES, _CAL_REGION_BY_CC, _amznNorm, _calKindRank, _calPhaseRank, _calSetKey, _calSetPhase, amazonForSealed, amazonSearchUrl, amazonUrl, calAddDays, calEndOf, calEstimated, calEventFullLabel, calEventSubtitle, calEventTitle, calRegionOf, calStoreEventName, calTodayYmd, calUTCToYmd, calYmdParts, calYmdToUTC, calendarEstimatedSetEntries, calendarMergeEvents, calendarProductEntries, calendarSetEntries, calendarSetEstimates, calendarSort, calendarUpcoming, cleanSealedName, computeSeriesDeltas, deriveSealedDisplayType, gradedSlotBucket, haversineMi, priceStanding, rawSaleMatch, scLocalTime12, scNormalizePostal, scPlaceLabel, scPostalCandidates, scPostalShape, scRankPlaces, scZippo, searchNorm, seriesPricedOn, tcgSetSearchUrl, tcgUrl };

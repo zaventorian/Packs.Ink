@@ -115,7 +115,7 @@ export async function cardPayload(res, { view, range, query }, deps) {
   const wantGrade = res.dims && res.dims.grade ? res.dims.grade : null;
   const settle = (pr) => pr.then((v) => v, (e) => { deps.log && deps.log("fetch failed", e && e.message); return null; });
   const [price, gradedAll, rawRows] = await Promise.all([
-    pid && !(f && f[6]) ? settle(D.priceHistory(db, pid, printingStr).then(D.priceSummary)) : null,
+    pid && !(f && f[6]) ? settle(D.priceHistory(db, pid, printingStr).then((rows) => D.priceSummary(rows, deps.index.priceDate))) : null,
     (c.gs > 0 || p.g > 0 || wantGrade) ? settle(D.gradedRollup(db, gt.cardId)) : null,
     p.raw ? settle(D.rawRollup(db, gt.cardId)) : null,
   ]);
@@ -143,7 +143,7 @@ export async function cardPayload(res, { view, range, query }, deps) {
 }
 
 async function sealedPayload(res, { view, range }, deps) {
-  const price = await D.priceHistory(deps.db, res.item.pid, "Normal").then(D.priceSummary, () => null);
+  const price = await D.priceHistory(deps.db, res.item.pid, "Normal").then((rows) => D.priceSummary(rows, deps.index.priceDate), () => null);
   return E.sealedMessage({ R: deps.R, res, price, view, range, origin: deps.origin });
 }
 
@@ -169,7 +169,7 @@ async function priceCheck(it, deps) {
     }
     const f = res.printing.f[res.fi] || res.printing.f[0];
     const price = f && f[1] && !f[6]
-      ? await D.priceHistory(deps.db, f[1], f[2] || "Normal").then(D.priceSummary, () => null) : null;
+      ? await D.priceHistory(deps.db, f[1], f[2] || "Normal").then((rows) => D.priceSummary(rows, deps.index.priceDate), () => null) : null;
     embeds.push(E.compactCardEmbed({ R: deps.R, res, price, inkColors: deps.index.inkColors, origin: deps.origin }));
   }
   const options = found.map((res) => res.kind === "sealed"

@@ -15,7 +15,7 @@ import { closureSource } from "./sitecode.mjs";
 
 export const WANT = [
   // prices
-  "computeSeriesDeltas", "CARD_DELTA_WINDOWS", "priceStanding",
+  "computeSeriesDeltas", "CARD_DELTA_WINDOWS", "priceStanding", "seriesPricedOn",
   // links
   "tcgUrl", "tcgSetSearchUrl", "TCG_AFFILIATE_BASE", "amazonForSealed",
   // release calendar
