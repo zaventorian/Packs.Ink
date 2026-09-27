@@ -48,7 +48,7 @@ node scripts/build_dist.mjs && npx wrangler@4 deploy
 - It also warns (never blocks) when the `Index.html` / `sw.js CORE_ASSETS` / `CACHE_VERSION` trio fall out of lockstep.
 - **⚠ The verify step is blind to a version that never moved, and on 2026-09-08 two shells shipped as `v377`.** PR #31 and PR #32 each branched from a main at v376 and each bumped to 377; #31 deployed, then #32 merged and deployed, and its verify compared the served `styles.css?v=377` against the built `377` and passed — against the *previous* PR's HTML. Nothing was broken for users (Workers Assets is content-addressed, so wrangler re-uploaded the three changed files, and `Index.html` / `styles.css` / `logo.js` are network-first anyway), but the run proved nothing and the number now names two different shells. **When two PRs are in flight, the second one to merge must bump PAST the version, not to it.** The workflow now records what the edge serves BEFORE deploying and warns when new `Index.html` bytes ship under a version that was already live — the one signal that separates a genuine collision from an innocent redeploy is wrangler's own `+ /index.html` line, which only appears when the bytes actually differ. It stays a warning: by the time it can be known the deploy has already happened and is fine, and it is the label that is ambiguous, not the code.
 - **DB**: Supabase (Postgres + PostgREST).
-  - **Catalog**: `cards`, `sets`, `prices_daily`, `sealed_products`, `graded_prices_daily`.
+  - **Catalog**: `cards`, `sets`, `prices_daily`, `sealed_products`, `graded_prices_daily`, `playmats` (+ view `playmat_prices_latest`; see "Playmats").
   - **User**: `profiles` (carries collection-sharing visibility + share_token cols), `collection_items`, `sealed_collection_items`, `graded_collection_items`, `graded_collection_goals`, `decks`, `deck_cards`, `deck_favorites`, `user_follows`, `deck_views`, `screener_views`.
   - **Tournament**: `tournaments`, `tournament_decks`, `tournament_admins`, view `tournament_results_v` (security_invoker on).
   - **Events (RPH)**: `lorcana_events` (migration 113) — EVERY upcoming Ravensburger Play Lorcana event (~17k), `kind` ∈ `sc|prerelease|other`. What the site's "Near me" event finder reads. `set_championships` is the SC subset kept in lockstep for the Elo pipeline only. `prerelease_events` was DROPPED 2026-08-22 (migration 123). See "Upcoming-events finder".
@@ -838,6 +838,117 @@ the Graded collection in Index.html), with three views: **Pin board · Counter b
 - The Sealed tab carries a one-line pointer to the new tab, for everyone who remembers the pins
   living there.
 
+## Playmats — a Collection tab of its own (2026-09-27)
+
+From the beta: *"I have all the prize wall and set champion mats and would love to log them."*
+Zaven's spec: TCGplayer listings, price history, and sections — retail, Set Championship, DLC,
+events. `/collection?c=playmats` → `PlaymatsView` (just above the Graded collection in
+Index.html). Guarded by `python scripts/test_playmats.py` (offline, over a frozen copy of the
+group in `scripts/fixtures/`).
+
+**Sections** (`SECTIONS` in the loader = `PLAYMAT_SECTIONS` keys in Index.html, same order —
+the test pins both, plus the newest migration's CHECK): **Retail** · **Disney Exclusives**
+(`disney`: the Disney-location mats plus the D23 2026 Hunny Wizard, by Zaven's ruling) ·
+**Ravensburger Store** (`ravensburger`: online-store exclusives) · **Set Championship**
+(Champion / Participant) · **Disney Lorcana Challenge**, split into **Top Prize** and **Prize
+Wall** sub-grids (`tiers` on the section; `PLAYMAT_DLC_TIERS` = the loader's `DLC_TIERS`) ·
+**Events** (conventions, and Mother Knows Best — the Season 3 CCQ Top 32 prize, though TCGplayer
+lists it as a Challenge mat) · Other. Adding a section value needs a migration: 171 widened the
+CHECK for disney / ravensburger.
+
+- **⚠ TCGplayer never says Top Prize or Prize Wall.** Every Challenge mat's tier is a ruling in
+  the overrides file (Zaven, 2026-09-27: Cinderella, Simba and Mulan are Prize Wall; the rest Top
+  Prize). A new Challenge mat arrives with none — the loader reports it and the tab lists it in a
+  trailing "Not sorted yet" group rather than dropping it.
+- **A shop section doesn't repeat itself on the tile**: `shop` on the section hides the source
+  every mat there shares, so only the D23 mat names its source in Disney Exclusives. A tier the
+  section groups by is hidden on the tile the same way; the detail modal still carries both.
+
+- **TCGplayer files every Lorcana mat in a DIFFERENT category** — Playmats (35), group
+  "Ravensburger Playmats" (23280) — not Lorcana (71), which is why no mat ever reached
+  `sealed_products` or `prices_daily`. `tcgcsv_common.EXTRA_PRICE_GROUPS` makes the daily ETL
+  fetch the group too; a failure there is a WARNING and never costs the day's card prices.
+- **Its own table, `playmats` (migration 170), deliberately NOT `sealed_products`.** Every sealed
+  surface reads sealed_products, and so does the market index's `sealed` scope (130 admits every
+  product_type but Promo Single) — a mat filed there would silently join the sealed benchmark,
+  the Sealed tab, the sealed Screener and Sealed Movers. `playmat_prices_latest` is a plain
+  `security_invoker` VIEW (the newest priced row per mat, ~60 lookups on
+  `prices_daily_tcgcsv_raw_idx`), so there is no refresh step for anything to forget.
+- **`scripts/load_playmats.py`** (daily, in etl.yml's sealed job, `continue-on-error`) classifies
+  the group off TCGplayer's own copy: `(Champion)` / `(Participant)` → Set Championship, with the
+  set and year read from the description (it copes with TCGplayer's `Archazia�s` mojibake and its
+  `Reign of Jafarl` typo); `(Disney Lorcana Challenge)` → DLC; `YYYY Convention Playmat` → event;
+  "exclusively available on the Ravensburger Online Store" / "at Disney locations" → that shop's
+  section; a retail mat's set from its street date (within 45 days after a set's release). What
+  the rules cannot know lives in **`scripts/playmat_overrides.json`, every entry with a `why`** —
+  the Challenge tiers, the D23 2026 mat, several exclusives, a replacement photo, TCGplayer's
+  pre-order "Stitch - Miguel Rivera" (a Miguel Rivera mat). `--dry-run` prints the whole placement.
+- **Ownership = `sealed_collection_items` under `PLAYMAT_PID_BASE` (980000000) + the TCGplayer
+  id** — the pins' band trick. `isOwnTabPid` keeps mats out of the Sealed tab's COUNTS. ⚠ The REAL
+  id stays the price, history and TCGplayer-link key; only the stepper uses the band, and
+  `SealedDetailModal` carries both (`own_pid`, `is_playmat`).
+- **A mat's VALUE counts as sealed** (Zaven, 2026-09-27: *"add playmats value to collection value
+  as part of sealed"*). Every surface that turns the sealed collection into money keys it through
+  **`sealedPricePid(pid)`** (band id → TCGplayer id) and takes today's mat prices from
+  **`useOwnedPlaymatPrices`** (one cached `fetchPlaymats`, only when a mat is owned): the home
+  Collection panel's Sealed line and headline, the Sealed tab's Est. value (with **"incl. $X in
+  playmats"** under it — the units and SKU counts still exclude them), and the Sealed portfolio
+  chart. The Playmats tab's value carries an asterisk and a one-line note saying where it is
+  counted. ⚠ Miss `sealedPricePid` on a new money surface and an owned mat silently adds $0 again;
+  the test pins all three at source. Measured: one box + three mats read $2,016.99 on all three.
+- **⚠ Both sealed value charts go through `fetchSealedValueHistory`, not the plain history
+  fetch.** The rollup counts an item only from its first IN-WINDOW price, and a mat's first price
+  inside a short window is the day after the hole — so the 3M chart drew owned mats arriving from
+  nothing, **"+324% past 3M"** on a collection that hadn't moved. Each owned mat is seeded with its
+  newest price from BEFORE the window, re-dated to the window's first day (what forward-fill would
+  have carried): the same collection now reads +52%, the mats' real move across the hole. Mats
+  only — every other sealed product has daily prices.
+- **Sharing rides the SEALED visibility axis**, like Pins & Counters.
+- **One grid per section, the set named on each tile.** A heading per set left a column of single
+  tiles (most sets have one Championship mat and two retail ones). Newest set first; the regular
+  retail pair before the exclusives; Champion before Participant. Rows STRETCH so the steppers
+  line up.
+- **Photos are 16:9 with `object-fit:cover`.** TCGplayer ships some mats as a 16:9 shot and some
+  as a 400x400 with the mat in a white band across the middle; cover crops that band to the mat
+  in both cases, where contain drew the square ones at half the tile's width.
+- **Two of TCGplayer's photos are the BOX, not the mat** (Ursula's Return Tinker Bell 543891 and
+  Rapunzel - Gifted Artist 543892: a tall tube, which the wide tile crops to a sliver that reads as
+  "no image" — reported by Zaven 2026-09-27; the other 61 are real mat shots, checked on a contact
+  sheet of all 63). An `image` override points at our own photo under **`Logos/playmats/`** (the
+  loader writes it to `image_url`; `playmatPhoto(r, px)` prefers any non-http `image_url` over the
+  TCGplayer CDN). Ravensburger's product shot, cropped to the mat's 16:9 frame, the white outside
+  its rounded corners cut to transparency, saved as WebP. **⚠ It is passed `noCut`**: it's already
+  just the mat, and `cutProductWhiteBg`'s flood fill would eat the light Rapunzel art. The test
+  checks every override photo exists on disk — a missing one renders the glyph with no error.
+- **`PLAYMAT_CACHE_KEY` is v3**: the section split and the photos landed after browsers had
+  cached rows, and a replayed row files a mat under its old section for up to 12h.
+- **Amazon only on a plain retail mat** (a search — "Find on Amazon"). A prize or an exclusive is
+  not on a shelf, and a search for one lands on resellers' lots.
+- **⚠ The history has a HOLE: 2026-05-12 .. 2026-09-25**, because TCGCSV's archive went offline
+  (see the TCGCSV notes). `scripts/backfill_playmat_prices.py` filled 2024-02-08..2026-05-11 from
+  the local cache (21,570 rows) and `--live` loaded the 2026-09-26 publish. Four things keep the
+  hole from lying (the fourth is the value-chart seed above), all opt-in so no other product
+  changes:
+  - `computeSealedDeltas(history, {maxLagDays})` — a window whose stand-in snapshot sits more than
+    max(14, window/2) days before its cut reads "—" instead of comparing across the hole. Only
+    the mat modal passes it; sealed keeps the documented fall-back-to-the-day-before.
+  - `LineChart` series `breakGapMs` breaks the line at the hole, and the modal names it in a
+    caption ("Gap in our price record: …").
+  - A tile whose newest price is more than a week behind the newest mat's says **"Price as of
+    <date>"** — never "last listed", which would overclaim: it may well have been listed inside
+    the hole.
+- **The price-standing chip is hidden whenever TODAY has no NM Market price** (the sealed modal,
+  every product). `priceStanding` judges the newest row that HAS one, which on a thin product is
+  months old — it said "Near its 12-month high" about a price nobody could see, beside a Low that
+  said otherwise.
+- **⚠ Until this ships, the ETL (which runs from `main`) does not fetch the mats**, so every day
+  before the deploy extends the hole. `python scripts/backfill_playmat_prices.py --live` loads the
+  current publish by hand, and **refuses until that day's CARD prices are loaded**: the ETL's
+  idempotency probe asks "is there any tcgcsv/raw row for today, written after the publish
+  window?", so a mat row written first would make it skip the whole day's card prices.
+- Mats TCGplayer doesn't list (demo and youth mats, older one-offs) are out of scope; adding one
+  would mean a static entry, the `SEALED_EXCLUSIVES` shape.
+
 ## Official Lorcana brand art (2026-09-12)
 
 Ravensburger distributes a **"Complete Bundle"** of brand assets — 890 files, 313 MB: all 13 set
@@ -1517,6 +1628,34 @@ The Screener has parity with the Cards browse filters as of 2026-05-26 via the c
 - Filter chips wrap to multiple rows naturally.
 - **Rarity icon chips fit on one line (2026-05-27):** at ≤720px `.price-db-raritybtns` gap drops to 2px and `.price-db-raritybtn-icon` padding drops to `4px 5px` so all 9 canonical rarity chips fit a single row on a ~375px phone (the 9th, Promo, was wrapping at the desktop `4px 10px`/`3px gap` sizing).
 - **Landscape / short viewport (2026-05-27):** `.price-db-tablewrap` normally caps at `max-height: calc(100vh - 280px)` with an internal scroll. On a landscape phone (~411px tall) that left only ~1.5 rows. At `@media (max-height:600px)` the cap is removed (`max-height:none`) so the table flows into natural page scroll instead of a nested "sub-menu". Tradeoff: the sticky `thead` only pins within its scroll container, so once you scroll past the table top the column headers scroll off with it (pinning headers to viewport while keeping horizontal scroll needs a header/body structural split — deferred). Horizontal scroll on the wrap is preserved (table is wider than the viewport).
+
+### PSA population columns in RAW mode (2026-09-27)
+
+Zaven, from the Screener: *"Should be able to add columns for PSA stuff in raw section."* The
+gear offers eight — PSA Pop, PSA 10s, PSA Gem %, PSA 9.5 / 9s / 8s / 7s, PSA Qualified — all
+hidden by default (no Pop @ Grade: a raw row has no grade). Every header says PSA, for the reason
+the graded ones do: `graded_pop` holds no CGC, BGS, SGC or TAG counts. Guarded by section 9 of
+`node scripts/test_graded_pop.mjs`.
+
+- **⚠ `rawPopPick`, not `gradedPopPick`.** A raw row IS one printing, so on a card the catalog
+  holds in both finishes (the `_printBadge` index) only that printing's PSA row counts, and no
+  match reads "—". gradedPopPick's largest-row fallback put a card's non-foil population on its
+  Cold Foil row (and a C1 Prize Wall row would have read the Top Prize count). A one-printing
+  card — every Enchanted, most promos — takes the largest row, since PSA's Variety names the
+  rarity or the provenance there, not a finish.
+- **The pop fields land on COPIES of the filtered rows** — after the filter so only shown rows
+  pay, before the sort so the columns order. Raw rows are the shared `price_movers` objects;
+  writing onto them would leak pop fields into every other consumer.
+- **Fetched only when shown**: a pop column switched on, or a pop sort arriving in a saved view or
+  a `?v=` link (`rawPopWanted`). ⚠ It is declared BELOW `colPrefs` because its deps read it — a
+  deps array is evaluated at its own declaration point, and above that line it is a TDZ crash.
+- **⚠ `colPrefs[mode].known` — why eight new columns didn't appear for everybody.** The saved
+  prefs list the HIDDEN columns, so a column added later is "shown" by omission: everyone who had
+  ever customised the Raw table would have got all eight PSA columns at once. A column the prefs
+  have not KNOWN now takes its own default, and toggling any column writes `known`. Raw prefs
+  saved before `known` get it reconstructed WITHOUT the pop keys. **Other modes' legacy prefs
+  keep the old rule** (they gained no columns), so a future column added to Graded or Sealed
+  wants the same reconstruct line, or it will pop up for every legacy user until their next toggle.
 
 ## Screener saved views
 
@@ -2823,7 +2962,7 @@ Decks' sections and the Screener's mode were localStorage-only, so every one of 
 - **`/decks?s=<section>`** — `yours|favorites|following|discover|tournaments` (`DECK_SECTION_KEYS`).
 - **`/decks?f=<format>`** — `core|infinity|coconut`; implies Discover, so `/decks?f=coconut` alone is the short share link.
 - **`/screener?m=<mode>`** — `raw|graded|sealed` (`SCREENER_MODES`).
-- **`/collection?c=<section>`** — `cards|sealed|graded|pins` (`COLLECTION_SECTIONS`, added 2026-08-24; `pins` = Pins & Counters, 2026-09-11). Same rules as the rest; `cards` is the default so it's omitted. In viewer mode the tab hrefs keep `?collection=`+`?token=` (`collectionSectionHref`) — drop the token and you hand someone a link that dead-ends on "this collection is private", which the owner can never reproduce.
+- **`/collection?c=<section>`** — `cards|sealed|graded|pins|playmats` (`COLLECTION_SECTIONS`, added 2026-08-24; `pins` = Pins & Counters, 2026-09-11; `playmats`, 2026-09-27). Same rules as the rest; `cards` is the default so it's omitted. In viewer mode the tab hrefs keep `?collection=`+`?token=` (`collectionSectionHref`) — drop the token and you hand someone a link that dead-ends on "this collection is private", which the owner can never reproduce.
 
 Rules that keep this from fighting the rest of the URL machinery:
 
@@ -3652,6 +3791,15 @@ SELECT public.refresh_graded_prices_latest();
 - **Lorcast's API key for inkable is `inkwell`**, not `inkable`. Our column is `inkable`; loader translates.
 - **The legacy graded feed (retired 2026-06-30) capped `/history` at ~1 year and was very sparse for low-liquidity cards** — which is why the graded value chart needs its backward-fill. Kept only to explain that backward-fill's existence; the API and the tables are gone (see "Legacy graded deletion").
 - **Image sizes**: small (200w), normal (400w), large (734w). Use `img_normal` for tiles ≤200px; `img_large` for hover/modal/poster; `img_small` ≤80px thumbs. `img_large` NOT in catalog cache (stripped); fallback to img_normal.
+- **⚠ TCGCSV took its public price ARCHIVE offline (found 2026-09-27).** Every
+  `/archive/tcgplayer/prices-<date>.ppmd.7z` now answers 403 with a notice from its operator
+  ("temporarily removed due to rising server costs"; he asks for per-group requests and for no
+  file to be fetched twice in 24 hours). The live `/tcgplayer/<category>/<group>/prices`
+  endpoints still work — the daily ETL is unaffected. **`scripts/backfill_cache/` (825
+  archives, 2024-02-08..2026-05-11) is therefore the only copy of those days anywhere we can
+  reach: don't delete it, and it is worth a backup off OneDrive.** Any backfill of a category we
+  never pulled (the playmats were the first) can reach that range and no further;
+  `backfill_playmat_prices.py` reports the missing days as "archive offline", not as failures.
 
 ## Raw eBay sales — the ~24 promos TCGplayer cannot price (2026-09-20)
 
@@ -7402,6 +7550,16 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
+- ~~`supabase/171_playmat_sections.sql`~~ — **APPLIED 2026-09-27** through the Supabase connector.
+  Widens `playmats_section_chk` to allow `disney` and `ravensburger` (Zaven's own headers for the
+  shop exclusives); nothing else. The catalog was reloaded under it the same day.
+- ~~`supabase/170_playmats.sql`~~ — **APPLIED 2026-09-27** through the Supabase connector (additive:
+  a new table, its read policy and grants, and the `playmat_prices_latest` view). Loaded the same
+  day: 63 mats (`load_playmats.py`), 21,570 prices from the local archive cache plus the
+  2026-09-26 publish (`backfill_playmat_prices.py`). Safe ahead of the client — nothing read it
+  until the Playmats tab shipped. ⚠ Open PR #138 carries a
+  `169_calendar_chattanooga_london_youth.sql` that collides with main's `169_tcgplayer_names.sql`;
+  renumber that one (to 172 or later — 171 is taken by the playmat sections) before it merges.
 - **`supabase/168_curators_cc2.sql`** — **STAGED 2026-09-22, needs a paste.** Creates
   `set_curators_cc2` — "Curator's Collection: Beauty and the Beast" (code **CC2**), the second
   Curator's Collection drop (see 107 for CC1, Heroines). Announced at D23 2026, six premium foil

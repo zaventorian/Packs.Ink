@@ -49,12 +49,23 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const GRADED_NONFOIL_PRINTINGS = "),
   grab("const gradedSlotBucket = (p) => {", NL + "};"),
   grab("const gradedPopPick = (rows, printing) => {", NL + "};"),
+  // Raw mode (2026-09-27). rawPopPick reads the catalog's two-printing index,
+  // stood in here by a settable Map, and folds printings with the real
+  // gradedFoilBucket.
+  grabLine("const gradedFoilBucket = "),
+  "let _printBadge = new Map();",
+  "const setBadges = (keys) => { _printBadge = new Map(keys.map((k) => [k, 'Foil'])); };",
+  grabLine("const RAW_POP_COL_KEYS = "),
+  grab("const rawPopPick = (rows, printing, cardId) => {", NL + "};"),
+  grab("const screenerColOn = (pref, key) =>", ";"),
   "export {popNameKey, popSetName, popCardKey, gradedPopBucket, gradedPopStats,"
-  + " POP_SET_ALIASES, POP_SORT_FIELD, gradedPopPick};",
+  + " POP_SET_ALIASES, POP_SORT_FIELD, gradedPopPick, RAW_POP_COL_KEYS, rawPopPick,"
+  + " screenerColOn, setBadges};",
 ].join(NL)));
 
 const { popNameKey, popSetName, popCardKey, gradedPopBucket, gradedPopStats,
-        POP_SORT_FIELD, gradedPopPick } = mod;
+        POP_SORT_FIELD, gradedPopPick, RAW_POP_COL_KEYS, rawPopPick,
+        screenerColOn, setBadges } = mod;
 const SRC = src;
 
 let pass = 0, fail = 0;
@@ -317,6 +328,65 @@ section("8. POP_SORT_FIELD covers the shipped columns");
   for (const k of Object.keys(POP_SORT_FIELD)) {
     ok(keys.has(k), `POP_SORT_FIELD.${k} corresponds to a real column`);
   }
+}
+
+// 9. Raw mode — "should be able to add columns for PSA stuff in raw section"
+section("9. Raw-mode pop columns");
+{
+  // Every raw pop column must sort, and a raw row has no grade to count at.
+  for (const k of RAW_POP_COL_KEYS) {
+    ok(POP_SORT_FIELD[k] !== undefined, `raw column ${k} is sortable`);
+  }
+  ok(!RAW_POP_COL_KEYS.includes("popgrade"), "no Pop @ Grade in raw — a raw row has no grade");
+
+  const nf = { variety: "", total: 462, pop_10: 319 };
+  const fo = { variety: "Foil", total: 419, pop_10: 229 };
+  // A card the catalog holds in BOTH finishes: only its own printing's row.
+  setBadges(["tink|Foil"]);
+  eq(rawPopPick([nf, fo], "Cold Foil", "tink"), fo, "a Cold Foil row reads the Foil population");
+  eq(rawPopPick([nf, fo], "Holofoil", "tink"), fo, "…and a Holofoil row too");
+  eq(rawPopPick([nf, fo], "Normal", "tink"), nf, "a Normal row reads the non-foil population");
+  // ⚠ The failure this exists for: gradedPopPick falls back to the largest row,
+  // which put the non-foil count on the foil row. Raw must say "—" instead.
+  eq(rawPopPick([nf], "Cold Foil", "tink"), null, "a foil row with only a non-foil pop reads null, not the non-foil count");
+  eq(gradedPopPick([nf], "Cold Foil").row, nf, "(gradedPopPick would have borrowed it — which is why raw has its own)");
+  // C1: Top Prize foil vs Prize Wall non-foil, two different markets.
+  setBadges(["cind|Foil"]);
+  const top = { variety: "Top Prize", total: 120, pop_10: 50 };
+  const wall = { variety: "Prize Wall Exclusive", total: 300, pop_10: 200 };
+  eq(rawPopPick([top, wall], "Holofoil", "cind"), top, "C1 Top Prize row reads the Top Prize population");
+  eq(rawPopPick([top, wall], "Normal", "cind"), wall, "C1 Prize Wall row reads the Prize Wall population");
+  // A card with ONE printing: PSA's Variety names the rarity or provenance, so
+  // the largest row is the card.
+  setBadges([]);
+  const ench = { variety: "Enchanted", total: 2049, pop_10: 1039 };
+  eq(rawPopPick([ench], "Holofoil", "ench"), ench, "an Enchanted's one row is its population");
+  const starter = { variety: "Fabled Collection Starter Set", total: 572, pop_10: 486 };
+  const league = { variety: "League Promo", total: 10, pop_10: 9 };
+  eq(rawPopPick([league, starter], "Normal", "promo"), starter, "a one-printing promo takes its largest row");
+  eq(rawPopPick([], "Normal", "x"), null, "no PSA rows → null");
+
+  // screenerColOn mirrors the colHidden rule: a column the prefs never KNEW is off.
+  eq(screenerColOn(undefined, "poptot"), false, "no prefs → off (the default)");
+  eq(screenerColOn({ hidden: ["d_pct_90d"] }, "poptot"), false, "prefs saved before `known` → off");
+  eq(screenerColOn({ known: ["poptot"], hidden: [] }, "poptot"), true, "known and not hidden → on");
+  eq(screenerColOn({ known: ["poptot"], hidden: ["poptot"] }, "poptot"), false, "known and hidden → off");
+  eq(screenerColOn({ known: ["pop10"], hidden: [] }, "poptot"), false, "a different known column says nothing about this one");
+
+  // The wiring. Each of these fails silently: columns appearing for everyone
+  // with saved prefs, a Screener that crashes into the error boundary, or pop
+  // fields written onto the shared price_movers rows.
+  ok(SRC.includes("colDefs.map(c=>c.key).filter(k=>!RAW_POP_COL_KEYS.includes(k))"),
+     "legacy Raw prefs get `known` reconstructed WITHOUT the pop columns, so they stay hidden");
+  ok(/setModePref\(\{hidden:\[\.\.\.h\], known:/.test(SRC), "toggling a column records `known`");
+  const prefsAt = SRC.indexOf("const [colPrefs, setColPrefs] = useState(");
+  const wantAt = SRC.indexOf("const rawPopWanted = ");
+  ok(prefsAt > 0 && wantAt > prefsAt,
+     "the Raw pop fetch sits BELOW colPrefs (its deps read it; above is a TDZ crash)");
+  ok(SRC.includes("out = out.map(r => {") && SRC.includes("const o = {...r, _pop: st,"),
+     "raw pop fields land on COPIES of the rows, not on the shared price_movers objects");
+  ok(SRC.includes("const rawPopCols = (showGraded || showSealed) ? [] : ["),
+     "the pop columns are Raw-only in that branch — never on the Sealed table");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

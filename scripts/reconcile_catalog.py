@@ -955,8 +955,16 @@ def main() -> int:
     priced = recent_priced_pids(sb, args.days)
     card_pids = column_pids(sb, "cards")
     sealed_pids = resolved_sealed_pids(sb, audit_promo_singles=args.audit_promo_singles)
-    orphans = priced - card_pids - sealed_pids
-    print(f"  priced={len(priced)}  cards={len(card_pids)}  sealed={len(sealed_pids)}  orphans={len(orphans)}")
+    # Playmats are priced (the ETL pulls their group, tcgcsv_common.EXTRA_PRICE_GROUPS)
+    # but live in their own table, not cards or sealed_products - they are cataloged,
+    # not orphans. A database without migration 170 simply has none to subtract.
+    try:
+        playmat_pids = column_pids(sb, "playmats")
+    except Exception:
+        playmat_pids = set()
+    orphans = priced - card_pids - sealed_pids - playmat_pids
+    print(f"  priced={len(priced)}  cards={len(card_pids)}  sealed={len(sealed_pids)}"
+          f"  playmats={len(playmat_pids)}  orphans={len(orphans)}")
 
     if not orphans:
         print("\n✅ Catalog reconciled — every actively-priced product maps to a card or sealed row.")
@@ -1028,6 +1036,18 @@ def _probe_pids(sb: Supabase, pids: list[int], days: int) -> int:
                            filters={"tcgplayer_product_id": in_list},
                            order="tcgplayer_product_id.asc")
     }
+    # Playmats have their own table (migration 170) and their own TCGplayer
+    # category, so neither lookup above can see one. Absent table = no playmats.
+    try:
+        by_playmat = {
+            r["tcgplayer_product_id"]: r
+            for r in sb.select("playmats",
+                               columns="tcgplayer_product_id,name,section,set_id",
+                               filters={"tcgplayer_product_id": in_list},
+                               order="tcgplayer_product_id.asc")
+        }
+    except Exception:
+        by_playmat = {}
     meta = build_tcgcsv_index(set(pids))
     prices = latest_prices(sb, set(pids), days)
 
@@ -1037,6 +1057,7 @@ def _probe_pids(sb: Supabase, pids: list[int], days: int) -> int:
         pr = prices.get(pid) or {}
         card = by_card.get(pid)
         sealed = by_sealed.get(pid)
+        playmat = by_playmat.get(pid)
         print(f"\n{'='*70}\npid {pid}\n{'='*70}")
         if m:
             num = f"  #{m['number']}" if m.get("number") else ""
@@ -1061,13 +1082,17 @@ def _probe_pids(sb: Supabase, pids: list[int], days: int) -> int:
         else:
             print("  sealed    —")
 
+        if playmat:
+            print(f"  playmats  ✅ [{playmat.get('section')}] {playmat.get('name')}  "
+                  f"set={playmat.get('set_id') or '—'}")
+
         if pr:
             print(f"  prices    ✅ {pr.get('date')}  low={fmt_money(pr.get('low'))}  "
                   f"market={fmt_money(pr.get('market'))}  printings={sorted(pr.get('printings', set()))}")
         else:
             print(f"  prices    — nothing in prices_daily in the last {days}d")
 
-        if card or sealed:
+        if card or sealed or playmat:
             print("  VERDICT   we have it.")
         else:
             missing += 1

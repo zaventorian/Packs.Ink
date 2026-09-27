@@ -157,6 +157,16 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/load_sealed_products.py --skip-promo-singles
+      # Lorcana playmats sit in TCGplayer's separate Playmats category, so the
+      # sealed loader never sees them (supabase/170_playmats.sql). OPTIONAL on
+      # purpose, like the market index: a new mat a day late costs one tile,
+      # never the sealed catalog. Prices ride the prices job (EXTRA_PRICE_GROUPS).
+      - name: Load playmats (optional)
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/load_playmats.py
 
   # The orphan watchdog MOVED OUT of the ETL on 2026-08-24 → catalog-watch.yml.
   # Two reasons. It fired on every prices/both dispatch (3-4x a day) to answer a

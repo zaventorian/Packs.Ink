@@ -37,7 +37,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("function isHiddenSealedListing(item){", NL + "}"),
   grabLine("const isUnpricedSealed = "),
   grab("function deriveSealedDisplayType(item){", NL + "}"),
-  grab("function computeSealedDeltas(history){", NL + "}"),
+  grab("function computeSealedDeltas(history, opts){", NL + "}"),
   grab("const MOVER_WINDOWS = [", NL + "];"),
   grabLine("const SEALED_MOVER_KIND_ORDER = "),
   grab("const SEALED_MOVER_KIND_OF_TYPE = {", NL + "};"),
@@ -100,6 +100,32 @@ const series = (pid, end, days, fnLow, fnMkt) => Array.from({length: days}, (_, 
   const [d] = mod.computeSealedDeltas(rows);
   ok("a missing day falls back to the latest snapshot before the cut", near(d.pct_7d, 20), d.pct_7d);
   ok("…and 1D uses it too when nothing sits between", near(d.pct_1d, 20), d.pct_1d);
+}
+{
+  // The playmats' opt-in: a record with a months-long hole (TCGCSV's archive went
+  // offline) must not let 1D compare today with the far side of it. Off by default.
+  const lag = {maxLagDays: (w) => Math.max(14, w / 2)};
+  const rows = [
+    {tcgplayer_product_id: 5, printing: "Normal", date: "2025-09-20", low_price: 40},
+    {tcgplayer_product_id: 5, printing: "Normal", date: "2026-03-28", low_price: 80},
+    {tcgplayer_product_id: 5, printing: "Normal", date: "2026-05-11", low_price: 100},
+    {tcgplayer_product_id: 5, printing: "Normal", date: "2026-09-26", low_price: 94},
+  ];
+  const [off] = mod.computeSealedDeltas(rows);
+  ok("default: 1D still reaches across the hole (documented sealed behaviour)", near(off.pct_1d, -6), off.pct_1d);
+  const [on] = mod.computeSealedDeltas(rows, lag);
+  ok("opt-in: 1D across a 138-day hole is null", on.pct_1d === null, on.pct_1d);
+  ok("opt-in: 1W and 1M across it are null", on.pct_7d === null && on.pct_30d === null,
+    JSON.stringify([on.pct_7d, on.pct_30d]));
+  ok("opt-in: 3M's stand-in is 48 days past its cut, beyond half the window: null", on.pct_90d === null, on.pct_90d);
+  ok("opt-in: 6M has a snapshot beside its cut and keeps its value", near(on.pct_180d, (94 - 80) / 80 * 100), on.pct_180d);
+  ok("opt-in: 1Y likewise", near(on.pct_365d, (94 - 40) / 40 * 100), on.pct_365d);
+  // A short, ordinary gap still falls back under the opt-in (14-day floor).
+  const [short] = mod.computeSealedDeltas([
+    {tcgplayer_product_id: 6, printing: "Normal", date: "2026-09-01", low_price: 50},
+    {tcgplayer_product_id: 6, printing: "Normal", date: "2026-09-10", low_price: 60},
+  ], lag);
+  ok("opt-in: a 9-day gap still stands in for 1D", near(short.pct_1d, 20), short.pct_1d);
 }
 {
   // Without market_price in the history (the collection rollup's default select),

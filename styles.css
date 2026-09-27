@@ -2739,6 +2739,77 @@ body:has(.deck-quickadd):has(.offline-pill) .packsink-flash-toast{
   .gc-pack-arts{flex-wrap:wrap;gap:4px;row-gap:2px;}
   .gc-pack-art-dot{width:20px;height:20px;font-size:10px;}
 }
+/* Playmats tab (Collection » Playmats). It rides the Sealed tab's classes for
+   the header, counters and footers, and turns the tile the other way up: a mat
+   is a WIDE thing, and at the sealed tile's 56px square thumbnail a 24x14 inch
+   piece of art is a smudge. Photo on top at 16:9, text under it.
+   ⚠ `.sealed-coll.playmat-coll` (three classes) is what beats `.sealed-coll
+   .gc-card{flex-direction:row}` whatever the source order. */
+/* Rows STRETCH here (the Sealed tab packs to the top): a mat's name wraps to a
+   second line often enough that a ragged row put every stepper at a different
+   height. Stretched, the body fills the tile and the foot's margin-top:auto
+   lines the steppers up along the bottom of the row. */
+.sealed-coll.playmat-coll .gc-set-grid.playmat-grid{grid-template-columns:repeat(auto-fill, minmax(230px, 1fr));
+  align-items:stretch;}
+.sealed-coll.playmat-coll .gc-card.playmat-card{flex-direction:column;gap:6px;padding:6px;}
+/* The slot carries the size: ProductPhoto's wrapper is absolute (inset:0), so
+   without one the well collapses to nothing. `cover`, not `contain`: TCGplayer
+   ships some mats as a 16:9 photo and some as a 400x400 with the mat in a white
+   band across the middle, and cover crops that band to exactly the mat in both
+   cases — contain would draw the square ones at half the tile's width. */
+.sealed-coll.playmat-coll .playmat-card-photo{position:relative;display:block;width:100%;
+  aspect-ratio:16/9;border-radius:5px;overflow:hidden;
+  background:rgba(255,255,255,0.06);color:var(--text-muted);}
+.sealed-coll.playmat-coll .playmat-card-photo .prod-photo,
+.sealed-coll.playmat-coll .playmat-card-photo .prod-photo-wrap:not(.on-white) .prod-photo{
+  position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+.playmat-badge{position:absolute;top:5px;right:5px;z-index:1;padding:2px 6px;border-radius:4px;
+  background:var(--bg-modal);color:var(--accent);border:1px solid var(--accent);
+  font-size:9px;font-weight:800;letter-spacing:0.4px;text-transform:uppercase;}
+.sealed-coll.playmat-coll .gc-card-name{-webkit-line-clamp:2;}
+.playmat-stale{font-size:9.5px;line-height:1.2;}
+.playmat-of{font-size:13px;font-weight:600;color:var(--text-muted);}
+.playmat-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.playmat-search{flex:1 1 240px;max-width:420px;min-width:0;padding:7px 10px;font-size:13px;
+  border:1px solid var(--border);border-radius:7px;background:var(--bg-modal);color:var(--text);}
+.playmat-search:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-glow);}
+.playmat-stalenote{font-size:11.5px;}
+.playmat-signin{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+  padding:10px 14px;border:1px dashed var(--border);border-radius:10px;font-size:13px;color:var(--text-dim);}
+.playmat-empty{padding:40px 12px;text-align:center;font-size:13px;line-height:1.5;}
+.playmat-note{font-size:11.5px;line-height:1.45;margin:-4px 0 10px;}
+/* A section split by tier (the Challenge: Top Prize / Prize Wall) — one quieter
+   heading per grid, under the section's own Cinzel title. */
+.playmat-tier + .playmat-tier{margin-top:14px;}
+.playmat-subhead{display:flex;align-items:baseline;gap:8px;margin:0 0 8px;font-size:11px;font-weight:700;
+  letter-spacing:0.5px;text-transform:uppercase;color:var(--text-dim);}
+.playmat-subhead .muted{font-weight:600;letter-spacing:0;}
+/* The asterisk on the value, and the line it points at. */
+.playmat-ast{font-size:0.6em;vertical-align:super;margin-left:1px;color:var(--text-muted);font-weight:700;}
+.playmat-value-note{margin:-6px 2px 0;font-size:11.5px;line-height:1.45;}
+.playmat-value-note span{font-weight:700;}
+/* Under a header stat: what else the number holds (the Sealed tab's total
+   includes owned playmats). */
+.gc-stat .gc-stat-sub{font-size:10.5px;margin-top:3px;color:var(--text-muted);font-weight:600;}
+.gc-stat .gc-stat-sub a{color:inherit;text-decoration:underline;text-decoration-color:var(--border);text-underline-offset:2px;}
+.gc-stat .gc-stat-sub a:hover{color:var(--accent);}
+/* The detail modal: a mat's photo is landscape, so its slot is 16:9 and wide
+   rather than the box square beside a sealed product. */
+.sealed-detail--playmat .sealed-detail-img-wrap{flex:0 0 300px;}
+.sealed-detail--playmat span.sealed-detail-img{width:300px;height:auto;aspect-ratio:16/9;}
+.sealed-detail--playmat span.sealed-detail-img .prod-photo,
+.sealed-detail--playmat span.sealed-detail-img .prod-photo-wrap:not(.on-white) .prod-photo{
+  inset:0;width:100%;height:100%;object-fit:cover;}
+/* Says where a mat's chart line breaks: a hole in our record, not a crash. */
+.sealed-detail-gapnote{font-size:11px;line-height:1.4;margin-top:6px;}
+@media (max-width:640px){
+  .sealed-coll.playmat-coll .gc-set-grid.playmat-grid{grid-template-columns:repeat(2, minmax(0,1fr));}
+  /* ⚠ flex:none, not just align-self. The head stacks into a COLUMN here, so
+     the desktop flex-basis of 300px became a 300px HEIGHT: 165px of photo and
+     135px of nothing under it. */
+  .sealed-detail--playmat .sealed-detail-img-wrap{flex:none;align-self:stretch;}
+  .sealed-detail--playmat span.sealed-detail-img{width:100%;height:auto;}
+}
 /* (Duplicate .gc-card-owned rule on line ~1179 removed — canonical rule
    lives just below at .gc-card.gc-card-owned to win on specificity.) */
 /* Optional "amount paid + acquired date" inputs on owned rows. Rendered
