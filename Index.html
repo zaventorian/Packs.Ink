@@ -299,7 +299,7 @@
      the scanner on any given visit. Both scripts only attach globals used when
      the scan modal opens, long after DOMContentLoaded. The heavy parts (OpenCV,
      the ONNX OCR models) load later still, inside the workers. -->
-<script src="scanner.js?v=301" defer></script>
+<script src="scanner.js?v=488" defer></script>
 <script src="scanner-cv.js?v=253" defer></script>
 <script>
 
@@ -16954,7 +16954,7 @@ const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id 
 // decoding it in full: two per QA row, un-virtualised, plus one live Image per
 // distinct card in the label cache. The display sizes never justified it.
 const SCAN_THUMB_SMALL = (id) => "https://cards.lorcast.io/card/digital/small/" + id + ".avif";
-const SCAN_WORKER_URL = "scanner-worker.js?v=274";
+const SCAN_WORKER_URL = "scanner-worker.js?v=488";
 // PP-OCRv3 text reader runs in its OWN worker (onnxruntime-web, WASM single-thread
 // + SIMD, NO WebGPU — WebGPU crashes iOS Safari) so a slow number read never
 // stalls the live hover loop. Replaces Tesseract.js: printed text reads the same
@@ -17509,7 +17509,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       const w = new Worker(SCAN_WORKER_URL);
       w.onmessage = (e) => {
         const d = e.data;
-        if(d.type === "ready"){ if(!cancelled) setWorkerReady(true); trc("cv-ready"); return; }
+        if(d.type === "ready"){ if(!cancelled) setWorkerReady(true); trc("cv-ready", { src: /^https?:/.test(d.src || "") ? "cdn" : "local" }); return; }
         if(d.type === "failed"){ if(!cancelled) setWorkerFailed(true); return; }   // stay on the fallback path
         const cb = pendingRef.current.get(d.id);
         if(cb){ pendingRef.current.delete(d.id); cb(d); }

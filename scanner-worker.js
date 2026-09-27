@@ -19,19 +19,28 @@
 let cv = null, ready = false;
 const CARD_ASPECT = 5 / 7;
 
-try {
-  importScripts("https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js");
-} catch (e) {
-  postMessage({ type: "failed", error: "importScripts: " + (e && e.message) });
+// OpenCV is VENDORED same-origin (vendor/opencv/opencv.js, 2026-09-26): it was the
+// scanner's last CDN dependency, so a jsDelivr outage took detection down with it,
+// and a cross-origin copy can't sit in the service worker's deploy-surviving
+// scanner cache. The file is the npm tarball, byte-identical to the jsDelivr copy
+// below. jsDelivr stays as the FALLBACK only, for a build that ships without the
+// vendored file (an older native bundle) — `src` says which one loaded.
+let cvSrc = null;
+for (const src of [
+  "vendor/opencv/opencv.js",
+  "https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js",
+]) {
+  try { importScripts(src); cvSrc = src; break; } catch (e) { cvSrc = null; }
 }
+if (!cvSrc) postMessage({ type: "failed", error: "importScripts: opencv.js unreachable (vendored + CDN)" });
 
 (function initCv() {
   const c = self.cv;
-  const done = () => { cv = self.cv; ready = true; postMessage({ type: "ready" }); };
+  const done = () => { cv = self.cv; ready = true; postMessage({ type: "ready", src: cvSrc }); };
   if (c instanceof Promise) { c.then((m) => { self.cv = m; done(); }, (e) => postMessage({ type: "failed", error: "cv promise: " + e })); }
   else if (c && c.Mat) { done(); }
   else if (c) { c.onRuntimeInitialized = done; }
-  else { postMessage({ type: "failed", error: "cv undefined after importScripts" }); }
+  else if (cvSrc) { postMessage({ type: "failed", error: "cv undefined after importScripts" }); }
 })();
 
 function bitmapToMat(bitmap) {

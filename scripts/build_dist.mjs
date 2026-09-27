@@ -80,8 +80,8 @@ const DIRS = [
   // "Logo on Black.png" is the old footer wordmark: nothing has referenced it
   // since the footer logo was removed (2026-08-21), and it is 941 KB.
   ["Logos", { excludeExt: [".ai", ".pdf"], exclude: ["Logo on Black.png"] }],
-  ["vendor", {}],   // react/react-dom/htm/supabase/html2canvas + ort WASM
-  ["scanner", {}],  // ONNX weights, admin-gated but must be fetchable
+  ["vendor", {}],   // react/react-dom/htm/supabase/html2canvas + ort WASM + opencv
+  ["scanner", {}],  // ONNX weights + card indexes (sw.js keeps both in SCAN_CACHE)
 ];
 
 // Guard: the worker's proxy routes and the paths baked into Index.html + sw.js

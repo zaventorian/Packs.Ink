@@ -55,8 +55,9 @@
 # Origins below were enumerated from Index.html + sw.js (2026-06-27 audit):
 #   script:  self (vendored libs) + sentry loader (js.sentry-cdn.com) + the SDK
 #            bundle the loader pulls (browser.sentry-cdn.com) + cdnjs (artist-
-#            poster html2canvas) + jsdelivr (scanner workers importScripts
-#            opencv.js + onnxruntime) + 'wasm-unsafe-eval' (scanner WASM)
+#            poster html2canvas) + jsdelivr (the scanner worker's FALLBACK copy of
+#            opencv.js — it is vendored same-origin since 2026-09-26, and
+#            onnxruntime since 2026-06-27) + 'wasm-unsafe-eval' (scanner WASM)
 #            + static.cloudflareinsights.com — Cloudflare injects its Web
 #            Analytics beacon into every response since the 2026-08-04 cutover,
 #            so it is ours by deployment even though no repo file references it.
@@ -166,8 +167,10 @@
 # script response (CSP3 "Workers"), not the page's, so the relaxation is
 # confined to this one file — the page and the OCR worker (vendor/ort has no
 # eval) keep the strict policy. Minimal on purpose: the worker only imports
-# opencv from jsdelivr, decodes the embedded base64 wasm (Emscripten fetches a
-# data: URI for it, hence data: in connect-src) and talks over postMessage.
+# opencv — the vendored same-origin copy ('self', since 2026-09-26), with
+# jsdelivr kept as its fallback — decodes the embedded base64 wasm (Emscripten
+# fetches a data: URI for it, hence data: in connect-src) and talks over
+# postMessage.
 # The path match ignores the ?v= the page appends.
 # Verified 2026-09-05 under wrangler dev + Playwright (opencv served from the
 # npm tarball, headers real): with this block the worker posts {type:'ready'}

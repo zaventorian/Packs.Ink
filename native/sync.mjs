@@ -9,8 +9,6 @@
 // Deliberately EXCLUDED from the bundle:
 //   sw.js            — native builds must not register the service worker
 //                      (assets are on-device; Index.html also guards this).
-//   scanner/ models  — ~16 MB of ONNX weights for an admin-gated feature.
-//   vendor/ort/      — onnxruntime WASM, only the scanner workers load it.
 //   _redirects/_headers, og-image, robots, sitemap — Netlify/crawler-only.
 import { cpSync, mkdirSync, rmSync, readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -40,10 +38,12 @@ const FILES = [
   "apple-touch-icon.png",
 ];
 const DIRS = [
-  // vendor/ort (onnxruntime WASM) + scanner/ (ONNX weights) are bundled so the
-  // camera scanner runs natively — ~27 MB. The scanner is admin-gated, so this
-  // weight only matters for signed-in admins, but the files must be on-device
-  // for getUserMedia + model inference to work at the app's local origin.
+  // vendor/ort (onnxruntime WASM), vendor/opencv (the detector) and scanner/
+  // (ONNX weights + card indexes) are bundled so the camera scanner runs
+  // natively and offline — ~37 MB. The scanner is public (beta since
+  // 2026-08-04), and the files must be on-device for getUserMedia + model
+  // inference to work at the app's local origin. An older bundle without
+  // vendor/opencv still works: the worker falls back to jsDelivr's copy.
   ["vendor", {}],
   ["scanner", {}],
   ["Logos", {}],
