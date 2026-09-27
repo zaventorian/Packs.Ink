@@ -5785,6 +5785,34 @@ async function fetchCollectionPriceHistory(productIds, sinceDate, opts){
   }
 }
 
+// The sealed value history, playmats included. A mat's record has a HOLE
+// (2026-05-12 .. 09-25: TCGCSV's archive went offline before we fetched the
+// group), so inside a short window its first price can be the day after the
+// hole — and the rollup counts an item only from its first in-window price, so
+// the chart drew owned mats arriving out of nowhere: "+324% past 3M" on a
+// collection that had not moved. Each owned mat is therefore SEEDED with its
+// newest price from before the window, dated to the window's first day, which
+// is exactly what forward-fill would have carried had the window reached back.
+// Only the mats: every other sealed product has daily prices, so its first
+// in-window row already sits at the window's start. `matPids` are TCGplayer ids.
+async function fetchSealedValueHistory(pids, sinceDate, matPids){
+  const rows = await fetchCollectionPriceHistory(pids, sinceDate);
+  const want = new Set(pids.map(Number));
+  const mats = [...new Set((matPids || []).map(Number))].filter(p => want.has(p));
+  if(!mats.length) return rows;
+  const seeds = await Promise.all(mats.map(pid =>
+    sbClient.from("prices_daily").select("tcgplayer_product_id,printing,date,low_price")
+      .eq("source", "tcgcsv").eq("grade", "raw").eq("printing", "Normal")
+      .eq("tcgplayer_product_id", pid).lt("date", sinceDate)
+      .not("low_price", "is", null)
+      .order("date", {ascending: false}).limit(1)
+      .then(r => (r && !r.error && r.data && r.data[0]) ? {...r.data[0], date: sinceDate} : null,
+            () => null)));
+  // Seeds go FIRST: the rollup groups rows per product in array order and walks
+  // them oldest to newest.
+  return [...seeds.filter(Boolean), ...rows];
+}
+
 // djb2-style hash for the (sorted) owned-products string. The full key
 // would be ~15 KB for a 1500-card collection — fine in memory but wasteful
 // as a localStorage key. The hash collapses it to ~8 chars.
@@ -16517,7 +16545,7 @@ const useProductCutUrl = (src) => {
 // native builds — because a canvas cannot read a pixel off the bare CDN.
 // `.is-cut` on the <img> is what tells the surrounding CSS to drop its white
 // well; until it lands, the original renders exactly as it did before.
-const ProductPhoto = ({src, glyph, size}) => {
+const ProductPhoto = ({src, glyph, size, noCut}) => {
   // ⚠ crossOrigin="anonymous" is only safe on a URL we actually proxy. Asking a
   // host that sends no ACAO for a CORS image fails the request outright and the
   // photo goes blank — which is exactly what it did to the Ravensburger puzzle
@@ -16550,22 +16578,25 @@ const ProductPhoto = ({src, glyph, size}) => {
   // the handler, in which case onLoad never fires at all and the effect's
   // `complete` check is the only thing that runs. That silent half is how a
   // returning visitor would have kept seeing white boxes.
+  // `noCut`: a photo we cropped ourselves (a playmat under Logos/playmats/) is
+  // already just its subject, and the flood fill would eat a light one's art.
+  const canCut = !!(photo && photo.cors && !noCut);
   const tryCut = useCallback((el) => {
-    if(!proxied || !photo.cors || !el || !el.complete || !el.naturalWidth) return null;
+    if(!proxied || !canCut || !el || !el.complete || !el.naturalWidth) return null;
     return productCutUrl(proxied, el);
-  }, [proxied, photo]);
+  }, [proxied, canCut]);
   useEffect(() => {
     setCut(null);
-    setWhite(!!(photo && photo.cors));
+    setWhite(canCut);
     if(!proxied) return;
     let live = true;
     const apply = (r) => { if(!live || !r) return; setCut(r.url); setWhite(r.white); };
     // An already-resolved promise means another tile cut this product earlier —
     // adopt it without ever painting the white version.
-    const p = _productCuts.get(proxied) || tryCut(imgRef.current);
+    const p = (canCut && _productCuts.get(proxied)) || tryCut(imgRef.current);
     if(p) p.then(apply);
     return () => { live = false; };
-  }, [proxied, photo, tryCut]);
+  }, [proxied, photo, canCut, tryCut]);
   const onLoad = useCallback((e) => {
     // Fires again when the cut swaps in; without the guard that second load
     // would try to cut an already-cut image.
@@ -24878,12 +24909,14 @@ const SealedValueChart = ({sealedCollection, sealedPrices, rangeKey, setRangeKey
 
   // owned Map keyed as `pid|Normal` so it matches computeCollectionValueHistory's
   // expected shape (the helper reads "<pid>|<printing>"). Sealed entries are
-  // always Normal printing.
+  // always Normal printing. Keyed by the PRICE id, so owned playmats count
+  // toward the sealed portfolio (sealedPricePid).
   const owned = useMemo(() => {
     const map = new Map();
     for(const [pid, qty] of Object.entries(sealedCollection || {})){
       if(qty <= 0) continue;
-      map.set(pid + "|Normal", qty);
+      const k = sealedPricePid(pid) + "|Normal";
+      map.set(k, (map.get(k) || 0) + qty);
     }
     return map;
   }, [sealedCollection]);
@@ -24895,9 +24928,10 @@ const SealedValueChart = ({sealedCollection, sealedPrices, rangeKey, setRangeKey
     const days = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
     const since = new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10);
     const pids = Array.from(new Set(Array.from(owned.keys()).map(k => parseInt(k.split("|")[0],10))));
+    const matPids = Object.keys(sealedCollection || {}).filter(isPlaymatPid).map(sealedPricePid);
     let cancelled = false;
     setState({loading: true, error: null});
-    fetchCollectionPriceHistory(pids, since)
+    fetchSealedValueHistory(pids, since, matPids)
       .then(rows => { if(!cancelled){ setHistoryRows(rows); setState({loading:false, error:null}); } })
       .catch(e => { if(!cancelled) setState({loading:false, error: String(e?.message || e)}); });
     return () => { cancelled = true; };
@@ -25259,7 +25293,8 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
       <div class="sealed-detail-head">
         <div class="sealed-detail-img-wrap">
           ${product.image_url
-            ? html`<span class="sealed-detail-img"><${ProductPhoto} src=${product.image_url} glyph=${mat ? "mat" : "box"} size=${44}/></span>`
+            ? html`<span class="sealed-detail-img"><${ProductPhoto} src=${product.image_url} glyph=${mat ? "mat" : "box"} size=${44}
+                noCut=${!!product.own_photo}/></span>`
             : html`<div class="sealed-detail-img-fallback">${product.name||"Sealed product"}</div>`}
         </div>
         <div class="sealed-detail-info">
@@ -25373,7 +25408,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
   </div>`;
 };
 
-function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySealed, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, packArts, updatePackArt, onSignIn, readOnly, compareMode, viewerOwnSealedCollection, onOpenPins, pinsHref}){
+function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySealed, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, packArts, updatePackArt, onSignIn, readOnly, compareMode, viewerOwnSealedCollection, onOpenPins, pinsHref, onOpenPlaymats, playmatsHref}){
   sealedMeta = sealedMeta || {};
   updateSealedMeta = updateSealedMeta || (()=>{});
   packArts = packArts || {};
@@ -25577,25 +25612,35 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
   }, [tileHistory]);
 
   // Totals: number of sealed items owned + their combined market value.
+  // Owned playmats count toward the VALUE (Zaven, 2026-09-27: "add playmats
+  // value to collection value as part of sealed") but not the counts — this
+  // tab doesn't show them, and "incl. $X in playmats" under the total says so.
+  const matPrices = useOwnedPlaymatPrices(sealedCollection);
   const totals = useMemo(()=>{
-    let units = 0, distinct = 0, value = 0;
-    if(!sealedPrices) return {units, distinct, value};
+    let units = 0, distinct = 0, value = 0, matValue = 0;
     const priceByPid = {};
-    for(const p of sealedPrices){
+    for(const p of sealedPrices || []){
       if(p.printing !== "Normal") continue;
       priceByPid[p.tcgplayer_product_id] = parseFloat(p[priceField]);
     }
     for(const [pid, qty] of Object.entries(sealedCollection)){
+      if(qty <= 0) continue;
+      if(isPlaymatPid(pid)){
+        const r = matPrices.get(sealedPricePid(pid));
+        const p = r ? parseFloat(r[priceField]) : NaN;
+        if(p && !isNaN(p)) matValue += p * qty;
+        continue;
+      }
       // Pins, lore counters and playmats live on their own tabs; counting them
       // here inflated Units owned / Distinct SKUs with things this tab doesn't show.
-      if(qty <= 0 || isOwnTabPid(pid)) continue;
+      if(isOwnTabPid(pid)) continue;
       distinct++;
       units += qty;
       const p = priceByPid[pid];
       if(p && !isNaN(p)) value += p * qty;
     }
-    return {units, distinct, value};
-  }, [sealedCollection, sealedPrices, priceField]);
+    return {units, distinct, value: value + matValue, matValue};
+  }, [sealedCollection, sealedPrices, priceField, matPrices]);
 
   if(!user){
     return html`<div class="sealed-coll-empty">
@@ -25609,7 +25654,12 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
       <div class="graded-collection-totals">
         <div class="gc-stat"><div class="gc-stat-val">${totals.units.toLocaleString()}</div><div class="gc-stat-lbl">Units owned</div></div>
         <div class="gc-stat"><div class="gc-stat-val">${totals.distinct.toLocaleString()}</div><div class="gc-stat-lbl">Distinct SKUs</div></div>
-        <div class="gc-stat"><div class="gc-stat-val green">${fmt(totals.value)}</div><div class="gc-stat-lbl">Est. value (${useMarket?"NM Market":"Low"})</div></div>
+        <div class="gc-stat"><div class="gc-stat-val green">${fmt(totals.value)}</div><div class="gc-stat-lbl">Est. value (${useMarket?"NM Market":"Low"})</div>
+          ${totals.matValue > 0 && html`<div class="gc-stat-sub">incl. ${onOpenPlaymats
+            ? html`<a href=${playmatsHref || collectionSectionHref("playmats", null)} onClick=${navHandler(onOpenPlaymats)}
+                title="Your playmats count toward sealed value">${fmt(totals.matValue)} in playmats</a>`
+            : html`${fmt(totals.matValue)} in playmats`}</div>`}
+        </div>
       </div>
       <div class="graded-collection-header-actions">
         <div class="seg-toggle" title="Group sections by set or by product type">
@@ -25850,11 +25900,8 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
 const isCollectiblePid = (pid) => { const n = Number(pid); return n >= 950000000 && n < 970000000; };
 // An owned PLAYMAT is a sealed_collection_items row under 980000000 + its
 // TCGplayer product id — the pins' trick again, and for the same reason: every
-// sealed count, value and chart keys off that table, and a band is what lets
-// them all say "not mine" with a pure function instead of a catalog lookup.
-// It also keeps a mat out of the sealed portfolio value BY CONSTRUCTION: no
-// price row exists at the band id, so it contributes $0 there exactly as a pin
-// does, rather than being in the history and missing from the headline total.
+// sealed count keys off that table, and a band is what lets them all say "not
+// mine" with a pure function instead of a catalog lookup.
 // ⚠ The REAL id stays the price key (history, TCGplayer link) — only ownership
 // uses the band. Clear of puzzles (900M+SKU), exclusives (930M+n) and pins /
 // counters (950-970M); 10M of room is decades of TCGplayer ids.
@@ -25862,8 +25909,14 @@ const PLAYMAT_PID_BASE = 980000000;
 const isPlaymatPid = (pid) => { const n = Number(pid); return n >= PLAYMAT_PID_BASE && n < PLAYMAT_PID_BASE + 10000000; };
 const playmatOwnPid = (tcgPid) => PLAYMAT_PID_BASE + Number(tcgPid);
 // Pins, counters and playmats each have their own Collection tab, so none of
-// them is a SEALED product for the Sealed tab's counts.
+// them is a SEALED product for the Sealed tab's COUNTS.
 const isOwnTabPid = (pid) => isCollectiblePid(pid) || isPlaymatPid(pid);
+// But a playmat's VALUE counts as sealed (Zaven, 2026-09-27: "add playmats value
+// to collection value as part of sealed"). Owned under the band, priced under
+// the TCGplayer id — so everything that turns the sealed collection into money
+// goes through this, or an owned mat silently adds $0. A pin passes through
+// unchanged and simply finds no price, which is right: nobody sells them.
+const sealedPricePid = (pid) => isPlaymatPid(pid) ? Number(pid) - PLAYMAT_PID_BASE : Number(pid);
 const cbClamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const COLLECTIBLE_BOARD_BGS = [
   {key: "cork",     label: "Cork"},
@@ -26718,21 +26771,34 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
 // REAL id; only the stepper uses the band.
 // ⚠ The section KEYS are the loader's SECTIONS and migration 170's CHECK —
 // scripts/test_playmats.py pins all three together.
+// `shop` is the source every mat in the section shares, so a tile there does not
+// repeat what the header already says; a mat from anywhere else (the D23 one in
+// Disney) still names its source. `tiers` splits a section into labelled grids.
+const PLAYMAT_DLC_TIERS = ["Top Prize", "Prize Wall"];
 const PLAYMAT_SECTIONS = [
-  {key: "retail",    label: "Retail",                   note: "Sold in stores and online, usually two designs a set."},
-  {key: "set_champ", label: "Set Championship",         note: "Prizes at each set's Set Championships: Champion for the winner, Participant for the field."},
-  {key: "dlc",       label: "Disney Lorcana Challenge", note: "Given out at Disney Lorcana Challenge weekends."},
-  {key: "event",     label: "Events",                   note: "Conventions and one-off event exclusives."},
-  {key: "other",     label: "Other",                    note: null},
+  {key: "retail",       label: "Retail",                   note: "Sold in stores and online, usually two designs a set."},
+  {key: "disney",       label: "Disney Exclusives",        note: "Sold only at Disney locations, plus Disney's D23 event mat.", shop: "Disney locations"},
+  {key: "ravensburger", label: "Ravensburger Store",       note: "Sold only on Ravensburger's online store.", shop: "Ravensburger online store"},
+  {key: "set_champ",    label: "Set Championship",         note: "Prizes at each set's Set Championships: Champion for the winner, Participant for the field."},
+  {key: "dlc",          label: "Disney Lorcana Challenge", note: "Prizes from Disney Lorcana Challenge weekends.", tiers: PLAYMAT_DLC_TIERS},
+  {key: "event",        label: "Events",                   note: "Conventions, qualifier prizes and other one-off event exclusives."},
+  {key: "other",        label: "Other",                    note: null},
 ];
 const PLAYMAT_SECTION_LABEL = Object.fromEntries(PLAYMAT_SECTIONS.map(s => [s.key, s.label]));
+const PLAYMAT_SECTION_BY_KEY = new Map(PLAYMAT_SECTIONS.map(s => [s.key, s]));
+// Sections ordered by their set, newest first. The D23 mat has no set, so it
+// falls back to its own date (an override) and still sorts where it happened.
+const PLAYMAT_SET_SECTIONS = new Set(["retail", "disney", "ravensburger", "set_champ"]);
+const playmatWhen = (r) => String(r.set_released_at || r.released_on || "");
 // Same shape as the Sealed tab's own key: a collection-value preference, so it
 // persists. The detail modal reads it too, so the value it quotes and the tab's
 // total are on one basis.
 const PLAYMAT_MODE_KEY = "packsink:playmats:priceMode";
 // Price-derived, so it lives under AUX_EVICTABLE_PREFIXES and is wiped when a
-// newer price snapshot lands.
-const PLAYMAT_CACHE_KEY = "packsink:playmatPrices:v1";
+// newer price snapshot lands. v3: the section split (disney / ravensburger, the
+// Challenge tiers) and the Logos/playmats/ photos must not replay a row cached
+// before them.
+const PLAYMAT_CACHE_KEY = "packsink:playmatPrices:v3";
 const PLAYMAT_CACHE_TTL = 12 * 3600 * 1000;
 let _playmatFetch = null;
 // → {rows} | {rows, stale} | {rows: [], unavailable: true}. `unavailable` is a
@@ -26756,6 +26822,28 @@ const fetchPlaymats = (force) => {
     .finally(() => { _playmatFetch = null; });
   return _playmatFetch;
 };
+// Current prices for the mats a sealed collection holds, as TCGplayer id -> row,
+// for the surfaces that count them into sealed value. A collection with no mat
+// in it never fetches — most don't — and one that has one rides fetchPlaymats'
+// own cache: one small request a session at most.
+const useOwnedPlaymatPrices = (sealedCollection) => {
+  const ownsMat = useMemo(() => Object.entries(sealedCollection || {})
+    .some(([pid, q]) => q > 0 && isPlaymatPid(pid)), [sealedCollection]);
+  const [rows, setRows] = useState(null);
+  useEffect(() => {
+    if(!ownsMat){ setRows(null); return; }
+    let live = true;
+    fetchPlaymats(false)
+      .then(r => { if(live) setRows(r.rows || []); })
+      .catch(() => { if(live) setRows([]); });
+    return () => { live = false; };
+  }, [ownsMat]);
+  return useMemo(() => {
+    const m = new Map();
+    for(const r of rows || []) m.set(Number(r.tcgplayer_product_id), r);
+    return m;
+  }, [rows]);
+};
 const _pmNum = (v) => { if(v == null || v === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
 // "2026-03-07" read as a UTC calendar date, so it never shows a day early west
 // of Greenwich (the calendar's standing rule).
@@ -26765,15 +26853,17 @@ const _pmDate = (ymd) => {
     ? new Date(t).toLocaleDateString(undefined, {month: "short", day: "numeric", year: "numeric", timeZone: "UTC"})
     : "";
 };
-// What tells two mats in one section apart: the tier on a Set Championship
-// mat, the finish, and the shop an exclusive came from. A year only where the
-// section is the kind of thing that recurs by year and the source does not
-// already say it ("2024 conventions").
-const playmatDetails = (r) => {
+// What tells two mats in one section apart: the tier on a prize mat, the
+// finish, and the shop an exclusive came from. A year only where the section is
+// the kind of thing that recurs by year and the source does not already say it
+// ("2024 conventions"). On a TILE the section header has already said two of
+// those: a shop section's shared shop, and the tier a split section groups by.
+const playmatDetails = (r, onTile) => {
+  const sec = PLAYMAT_SECTION_BY_KEY.get(r.section);
   const out = [];
-  if(r.tier) out.push(r.tier);
+  if(r.tier && !(onTile && sec && sec.tiers && sec.tiers.includes(r.tier))) out.push(r.tier);
   if(r.finish) out.push(r.finish);
-  if(r.source) out.push(r.section === "retail" ? r.source + " exclusive" : r.source);
+  if(r.source && !(onTile && sec && sec.shop === r.source)) out.push(r.source);
   if(r.year && (r.section === "dlc" || r.section === "event" || r.section === "set_champ")
      && !String(r.source || "").includes(String(r.year))) out.push(String(r.year));
   return out;
@@ -26782,12 +26872,21 @@ const playmatDetails = (r) => {
 // set: most sets have one Championship mat and two retail ones, and a heading
 // each left a column of single tiles beside an empty row.
 const playmatSubline = (r) => {
-  const d = playmatDetails(r);
-  const withSet = (r.section === "retail" || r.section === "set_champ") && r.set_name
-    ? [r.set_name, ...d] : d;
+  const d = playmatDetails(r, true);
+  const withSet = PLAYMAT_SET_SECTIONS.has(r.section) && r.set_name ? [r.set_name, ...d] : d;
   if(withSet.length) return withSet.join(" · ");
   return r.section === "retail" ? "Standard" : r.section === "dlc" ? "Challenge prize"
     : r.section === "event" ? "Event exclusive" : "";
+};
+// A mat's photo. TCGplayer's is the default, sized per surface; ours (an
+// override under Logos/playmats/) wins where TCGplayer's shows the box instead
+// of the mat — a tall tube that a wide tile crops to a sliver. `own` tells the
+// tile not to run the white-sweep cut on it: it is already cropped to the mat,
+// and a light mat (the Rapunzel one) would lose its art to the flood fill.
+const playmatPhoto = (r, px) => {
+  const u = String(r.image_url || "");
+  if(u && !/^https?:\/\//i.test(u)) return {src: u, own: true};
+  return {src: tcgProductImg(r.tcgplayer_product_id, px), own: false};
 };
 // A plain retail mat is on the shelf; a prize or an exclusive is not, and an
 // Amazon search for one lands on resellers' lots. Only the former gets a link.
@@ -26795,37 +26894,52 @@ const playmatAmazonQuery = (r) =>
   r.section === "retail" && !r.source ? `Disney Lorcana ${r.name} playmat` : null;
 // The product row SealedDetailModal takes: priced + linked under the real id,
 // owned under the band id.
-const playmatProduct = (r) => ({
-  tcgplayer_product_id: r.tcgplayer_product_id,
-  own_pid: playmatOwnPid(r.tcgplayer_product_id),
-  is_playmat: true,
-  printing: "Normal",
-  name: r.name,
-  image_url: tcgProductImg(r.tcgplayer_product_id, 1000),
-  low_price: r.low_price, market_price: r.market_price,
-  meta_parts: [PLAYMAT_SECTION_LABEL[r.section] || null, r.set_name || null, ...playmatDetails(r)],
-  amazon_q: playmatAmazonQuery(r),
-});
+const playmatProduct = (r) => {
+  const photo = playmatPhoto(r, 1000);
+  return {
+    tcgplayer_product_id: r.tcgplayer_product_id,
+    own_pid: playmatOwnPid(r.tcgplayer_product_id),
+    is_playmat: true,
+    printing: "Normal",
+    name: r.name,
+    image_url: photo.src,
+    own_photo: photo.own,
+    low_price: r.low_price, market_price: r.market_price,
+    meta_parts: [PLAYMAT_SECTION_LABEL[r.section] || null, r.set_name || null, ...playmatDetails(r)],
+    amazon_q: playmatAmazonQuery(r),
+  };
+};
 // Order within a section: newest set first, then the order a collector reads a
-// set's mats in — the regular retail pair before the exclusives, the Champion
-// mat before the Participant one. Sections with no set run newest year first.
+// set's mats in — the regular retail pair before the foil one, the Champion mat
+// before the Participant one. Sections with no set run newest year first.
 const playmatSort = (sectionKey, rows) => {
   const byName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""));
-  if(sectionKey === "retail" || sectionKey === "set_champ"){
+  if(PLAYMAT_SET_SECTIONS.has(sectionKey)){
     const tierRank = (r) => r.tier === "Champion" ? 0 : r.tier === "Participant" ? 1 : 2;
     return rows.slice().sort((a, b) =>
-      (!a.set_released_at) - (!b.set_released_at)
-      || String(b.set_released_at || "").localeCompare(String(a.set_released_at || ""))
+      (!playmatWhen(a)) - (!playmatWhen(b))
+      || playmatWhen(b).localeCompare(playmatWhen(a))
       || String(a.set_name || "").localeCompare(String(b.set_name || ""))
       || (sectionKey === "set_champ"
         ? tierRank(a) - tierRank(b)
-        : ((a.source ? 1 : 0) - (b.source ? 1 : 0))
-          || ((a.finish ? 1 : 0) - (b.finish ? 1 : 0))
+        : ((a.finish ? 1 : 0) - (b.finish ? 1 : 0))
           || String(a.released_on || "").localeCompare(String(b.released_on || "")))
       || byName(a, b));
   }
   return rows.slice().sort((a, b) =>
     (b.year || 0) - (a.year || 0) || (b.tcgplayer_product_id - a.tcgplayer_product_id));
+};
+// A section with `tiers` renders one labelled grid per tier, in the order the
+// section lists them. A tier nobody has ruled on yet (a new Challenge mat
+// arrives with none) still renders, last, rather than vanishing.
+const playmatTierGroups = (section, rows) => {
+  if(!section.tiers) return [{tier: null, rows}];
+  const by = new Map(section.tiers.map(t => [t, []]));
+  const rest = [];
+  for(const r of rows) (by.get(r.tier) || rest).push(r);
+  const out = section.tiers.map(t => ({tier: t, rows: by.get(t)})).filter(g => g.rows.length);
+  if(rest.length) out.push({tier: "Not sorted yet", rows: rest});
+  return out;
 };
 
 const PlaymatsView = ({user, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, readOnly, onSignIn}) => {
@@ -26920,13 +27034,14 @@ const PlaymatsView = ({user, sealedCollection, sealedMeta, updateSealedQty, upda
     const px = priceOf(r);
     const stale = !!(r.price_date && staleBefore && r.price_date < staleBefore);
     const url = tcgUrl(pid);
+    const photo = playmatPhoto(r, 400);
     const bump = (d) => { const next = Math.max(0, Math.min(99, qty + d)); if(next !== qty) updateSealedQty(own, next); };
     const open = () => setDetail(playmatProduct(r));
     return html`<div key=${pid} class=${"gc-card gc-card-clickable playmat-card" + (qty > 0 ? " gc-card-owned" : "")}
         tabIndex=${0} onClick=${open} title="Price history and details"
         onKeyDown=${e => { if(e.target === e.currentTarget && e.key === "Enter"){ e.preventDefault(); open(); } }}>
       <span class="playmat-card-photo">
-        <${ProductPhoto} src=${tcgProductImg(pid, 400)} glyph="mat" size=${28}/>
+        <${ProductPhoto} src=${photo.src} glyph="mat" size=${28} noCut=${photo.own}/>
         ${r.presale && html`<span class="playmat-badge">Pre-order</span>`}
       </span>
       <div class="gc-card-body">
@@ -26991,7 +27106,17 @@ const PlaymatsView = ({user, sealedCollection, sealedMeta, updateSealedQty, upda
         </div>
         ${!isCollapsed && html`<${React.Fragment}>
           ${s.note && html`<div class="playmat-note muted">${s.note}</div>`}
-          <div class="gc-set-grid playmat-grid">${vis.map(r => tile(r))}</div>
+          ${s.tiers
+            ? playmatTierGroups(s, s.rows).map(g => {
+                const gVis = g.rows.filter(shown);
+                if(!gVis.length) return null;
+                return html`<div key=${g.tier} class="playmat-tier">
+                  <div class="playmat-subhead">${g.tier}
+                    <span class="muted">${g.rows.filter(r => qtyOf(r) > 0).length} / ${g.rows.length}</span></div>
+                  <div class="gc-set-grid playmat-grid">${gVis.map(r => tile(r))}</div>
+                </div>`;
+              })
+            : html`<div class="gc-set-grid playmat-grid">${vis.map(r => tile(r))}</div>`}
         <//>`}
       </div>`;
     }).filter(Boolean);
@@ -27006,7 +27131,7 @@ const PlaymatsView = ({user, sealedCollection, sealedMeta, updateSealedQty, upda
       <div class="graded-collection-totals">
         <div class="gc-stat"><div class="gc-stat-val">${totals.owned} <span class="playmat-of">/ ${totals.total}</span></div><div class="gc-stat-lbl">Playmats owned</div></div>
         ${totals.units !== totals.owned && html`<div class="gc-stat"><div class="gc-stat-val">${totals.units}</div><div class="gc-stat-lbl">Total copies</div></div>`}
-        <div class="gc-stat"><div class="gc-stat-val green">${fmt(totals.value)}</div><div class="gc-stat-lbl">Est. value (${priceMode === "market" ? "NM Market" : "Low"})</div></div>
+        <div class="gc-stat"><div class="gc-stat-val green">${fmt(totals.value)}<span class="playmat-ast" aria-hidden="true">*</span></div><div class="gc-stat-lbl">Est. value (${priceMode === "market" ? "NM Market" : "Low"})</div></div>
       </div>
       <div class="graded-collection-header-actions">
         <div class="seg-toggle" role="group" aria-label="Show">
@@ -27024,6 +27149,8 @@ const PlaymatsView = ({user, sealedCollection, sealedMeta, updateSealedQty, upda
         </label>`}
       </div>
     </div>
+    <p class="playmat-value-note muted"><span aria-hidden="true">*</span> Playmats count toward sealed value:
+      they're included in the Sealed tab's total and in the Sealed line of the home page's collection value.</p>
     <div class="playmat-toolbar">
       <input class="playmat-search" type="search" value=${q} onInput=${e => setQ(e.target.value)}
         placeholder="Search playmats — a name, a set, a shop…" aria-label="Search playmats"/>
@@ -30782,7 +30909,9 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           compareMode=${canCompare ? compareMode : "all"}
           viewerOwnSealedCollection=${viewerOwnSealedCollection || null}
           onOpenPins=${()=>setSection("pins")}
-          pinsHref=${collectionSectionHref("pins", isViewerMode ? viewerContext : null)}/>`
+          pinsHref=${collectionSectionHref("pins", isViewerMode ? viewerContext : null)}
+          onOpenPlaymats=${()=>setSection("playmats")}
+          playmatsHref=${collectionSectionHref("playmats", isViewerMode ? viewerContext : null)}/>`
       : effectiveSection === "pins"
       ? html`<${CollectiblesView} user=${user}
           sealedCollection=${sealedCollection} sealedMeta=${sealedMeta || {}}
@@ -41971,23 +42100,27 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   // ── Sealed series ────────────────────────────────────────────────────
   // Mirrors the card pipeline: build owned map → fetch prices_daily → roll
   // up via computeCollectionValueHistory. Sealed entries are always Normal
-  // printing so the map keys all end in "|Normal".
+  // printing so the map keys all end in "|Normal". Keyed by the PRICE id, so a
+  // playmat (owned under its band id) is valued as sealed — see sealedPricePid.
+  const matPrices = useOwnedPlaymatPrices(sealedCollection);
   const sealedOwned = useMemo(() => {
     const map = new Map();
     if(!user || !sealedCollection) return map;
     for(const [pid, qty] of Object.entries(sealedCollection)){
       if(qty <= 0) continue;
-      map.set(pid + "|Normal", qty);
+      const k = sealedPricePid(pid) + "|Normal";
+      map.set(k, (map.get(k) || 0) + qty);
     }
     return map;
   }, [sealedCollection, user]);
   const sealedCurrentValue = useMemo(() => {
-    if(!sealedPrices || !sealedOwned.size) return 0;
+    if(!sealedOwned.size) return 0;
     const priceByPid = {};
-    for(const p of sealedPrices){
+    for(const p of sealedPrices || []){
       if(p.printing !== "Normal") continue;
       priceByPid[p.tcgplayer_product_id] = parseFloat(p.low_price ?? p.market_price);
     }
+    for(const [pid, r] of matPrices) priceByPid[pid] = parseFloat(r.low_price ?? r.market_price);
     let v = 0;
     for(const [k, qty] of sealedOwned){
       const pid = parseInt(k.split("|")[0],10);
@@ -41995,7 +42128,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
       if(px && !isNaN(px)) v += px * qty;
     }
     return v;
-  }, [sealedPrices, sealedOwned]);
+  }, [sealedPrices, sealedOwned, matPrices]);
   const [sealedHistoryRows, setSealedHistoryRows] = useState(null);
   const sealedOwnedKey = useMemo(() => Array.from(sealedOwned.keys()).sort().join(","), [sealedOwned]);
   useEffect(() => {
@@ -42003,8 +42136,9 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     const days = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
     const since = new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10);
     const pids = Array.from(new Set(Array.from(sealedOwned.keys()).map(k => parseInt(k.split("|")[0],10))));
+    const matPids = Object.keys(sealedCollection || {}).filter(isPlaymatPid).map(sealedPricePid);
     let cancelled = false;
-    fetchCollectionPriceHistory(pids, since)
+    fetchSealedValueHistory(pids, since, matPids)
       .then(rows => { if(!cancelled) setSealedHistoryRows(rows); })
       .catch(() => { if(!cancelled) setSealedHistoryRows([]); });
     return () => { cancelled = true; };
@@ -42014,7 +42148,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   const sealedAcquired = useMemo(() => {
     const m = new Map();
     for(const [pid, meta] of Object.entries(sealedMeta || {})){
-      if(meta && meta.acquired_date) m.set(pid + "|Normal", meta.acquired_date);
+      if(meta && meta.acquired_date) m.set(sealedPricePid(pid) + "|Normal", meta.acquired_date);
     }
     return m;
   }, [sealedMeta]);

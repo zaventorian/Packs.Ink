@@ -8,13 +8,17 @@ that group from TCGCSV, sorts each mat into a SECTION, and upserts the catalog.
 Prices are not this script's job: the daily ETL writes them to prices_daily
 (tcgcsv_common.EXTRA_PRICE_GROUPS) and the playmat_prices_latest view joins them.
 
-Sections (Zaven, 2026-09-27: "retail, set champ, dlc, event, etc"):
-    retail     sold in stores, one or two per set - including the Ravensburger
-               online-store and Disney-location exclusives, which are still bought
-    set_champ  Set Championship prizes, Champion / Participant
-    dlc        Disney Lorcana Challenge prizes
-    event      conventions and one-off event exclusives
-    other      nothing matched - reported by the catalog watch, never guessed
+Sections (Zaven, 2026-09-27: "retail, set champ, dlc, event, etc", then the
+same day: the Disney-location mats and the Ravensburger-store mats get headers
+of their own, and the Challenge prizes split into Top Prize and Prize Wall):
+    retail        sold in stores, one or two per set
+    disney        Disney-location exclusives, plus the D23 2026 mat (an override)
+    ravensburger  Ravensburger online-store exclusives
+    set_champ     Set Championship prizes, tier Champion / Participant
+    dlc           Disney Lorcana Challenge prizes, tier Top Prize / Prize Wall -
+                  TCGplayer never says which, so every one is an override
+    event         conventions, qualifier prizes, one-off event exclusives
+    other         nothing matched - reported by the catalog watch, never guessed
 
 Almost everything is decided by what TCGplayer itself wrote: the "(Champion)" /
 "(Disney Lorcana Challenge)" suffixes, the Set Championship description that
@@ -49,7 +53,10 @@ from tcgcsv_common import PLAYMATS_CATEGORY_ID, PLAYMATS_GROUP_ID, TCGCSV_BASE
 
 USER_AGENT = "PacksInk/1.0 (+https://packs.ink) python-requests playmat-loader"
 OVERRIDES_PATH = Path(__file__).parent / "playmat_overrides.json"
-SECTIONS = ("retail", "set_champ", "dlc", "event", "other")
+SECTIONS = ("retail", "disney", "ravensburger", "set_champ", "dlc", "event", "other")
+# The tiers a Challenge mat can carry. A new Challenge mat arrives with none
+# (TCGplayer does not say) and is reported until somebody rules on it.
+DLC_TIERS = ("Top Prize", "Prize Wall")
 
 # A retail mat ships a week or two after its set's LGS date (every release since
 # Archazia's Island has run +7 days; Ursula's Return ran +14). 45 days is room
@@ -159,7 +166,7 @@ def classify(product: dict, sets: list[dict]) -> dict:
     """One TCGCSV product -> the catalog fields this script decides.
 
     Returns {name, finish, section, tier, set_id, source, year, released_on,
-    presale}. Pure: the test runs it over a frozen copy of the group.
+    presale, image}. Pure: the test runs it over a frozen copy of the group.
     """
     tcg_name = (product.get("name") or "").strip()
     desc = clean_description(_ext(product, "Description"))
@@ -170,6 +177,7 @@ def classify(product: dict, sets: list[dict]) -> dict:
         "name": name, "finish": finish, "section": "other", "tier": None,
         "set_id": None, "source": None, "year": None,
         "released_on": released_on, "presale": bool(presale.get("isPresale")),
+        "image": None,
     }
     tier = _TIER_RE.search(tcg_name)
     conv = _CONVENTION_RE.search(tcg_name)
@@ -190,14 +198,14 @@ def classify(product: dict, sets: list[dict]) -> dict:
         out["year"] = int(conv.group(1))
         out["source"] = f"{conv.group(1)} conventions"
     else:
-        # Everything else TCGplayer lists here has been a mat you could BUY. An
-        # online-store or Disney-location exclusive is still a purchase, so it
-        # files under retail with its shop named, beside its set's other mats.
+        # Everything else TCGplayer lists here has been a mat you could BUY. The
+        # shop exclusives get a section of their own (Zaven, 2026-09-27) and keep
+        # their set, which is what orders them within it.
         out["section"] = "retail"
         if _EXCL_ONLINE_RE.search(desc):
-            out["source"] = "Ravensburger online store"
+            out["section"], out["source"] = "ravensburger", "Ravensburger online store"
         elif _EXCL_DISNEY_RE.search(desc):
-            out["source"] = "Disney locations"
+            out["section"], out["source"] = "disney", "Disney locations"
         out["set_id"] = set_by_release(released_on, sets)
     return out
 
@@ -217,7 +225,7 @@ def apply_override(row: dict, entry: dict | None, sets: list[dict]) -> dict:
     if not entry:
         return row
     row = dict(row)
-    for k in ("section", "tier", "finish", "source", "year", "name"):
+    for k in ("section", "tier", "finish", "source", "year", "name", "released_on", "image"):
         if k in entry:
             row[k] = entry[k]
     if "set" in entry:
@@ -258,7 +266,9 @@ def build_rows(products: list[dict], sets: list[dict], overrides: dict[int, dict
             "year": c["year"],
             "released_on": c["released_on"],
             "description": clean_description(_ext(p, "Description")) or None,
-            "image_url": p.get("imageUrl") or None,
+            # An override photo is ours (Logos/playmats/...) and the client
+            # prefers it; otherwise TCGplayer's own, which the client resizes.
+            "image_url": c.get("image") or p.get("imageUrl") or None,
             "tcgplayer_url": p.get("url") or None,
             "presale": c["presale"],
             "modified_on": p.get("modifiedOn") or None,
@@ -314,7 +324,7 @@ def main() -> int:
         by_section[r["section"]] = by_section.get(r["section"], 0) + 1
         bits = [x for x in (set_name.get(r["set_id"]), r["tier"], r["finish"], r["source"],
                             str(r["year"]) if r["year"] else None) if x]
-        print(f"  [{r['section']:<9}] {r['tcgplayer_product_id']:>7}  {r['name']}"
+        print(f"  [{r['section']:<12}] {r['tcgplayer_product_id']:>7}  {r['name']}"
               + (f"  ({' / '.join(bits)})" if bits else ""))
     print("  " + ", ".join(f"{k}: {v}" for k, v in by_section.items()))
     unplaced = [r for r in rows if r["section"] == "other"
@@ -322,6 +332,12 @@ def main() -> int:
     if unplaced:
         print(f"\n{len(unplaced)} not placed in a set - add a playmat_overrides.json entry:")
         for r in unplaced:
+            print(f"  {r['tcgplayer_product_id']}  {r['tcg_name']}")
+    untiered = [r for r in rows if r["section"] == "dlc" and r["tier"] not in DLC_TIERS]
+    if untiered:
+        print(f"\n{len(untiered)} Challenge mat(s) with no Top Prize / Prize Wall ruling - they"
+              " list at the end of the section until playmat_overrides.json says which:")
+        for r in untiered:
             print(f"  {r['tcgplayer_product_id']}  {r['tcg_name']}")
 
     if args.dry_run:
@@ -332,6 +348,10 @@ def main() -> int:
     except Exception as e:
         if _table_missing(e):
             print("\nplaymats table missing - apply supabase/170_playmats.sql first. Nothing written.")
+            return 0
+        if "playmats_section_chk" in str(e) or "23514" in str(e):
+            print("\nA section the database does not accept yet - apply"
+                  " supabase/171_playmat_sections.sql first. Nothing written.")
             return 0
         raise
     print(f"\nUpserted {len(rows)} playmats.")
