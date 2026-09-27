@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=486">
+<link rel="stylesheet" href="styles.css?v=487">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -886,7 +886,7 @@ async function fetchRawSales(){
     // class stays auditable and reversible — plotting them would put a $16,406
     // PSA 10 and an $8 pin on the same chart as the card's real sales.
     sbFetchAll("raw_sales", {
-      select: "card_id,printing,sold_date,sale_price,quantity_sold,title,listing_url",
+      select: "item_id,card_id,printing,sold_date,sale_price,quantity_sold,title,listing_url,image_url,listing_type",
       excluded: "is.false", card_id: "not.is.null", order: "sold_date.asc",
     }),
   ]).then(([roll, sales]) => {
@@ -8594,7 +8594,7 @@ const ScatterChart = ({series, height=260, width=920, onSelect, selectedId, show
       ${hp.image_url && html`<img class="scatter-tip-img" src=${hp.image_url} alt="" loading="lazy"/>`}
       <div class="scatter-tip-body">
         <div class="scatter-tip-grade" style=${{color: hpColor}}>
-          ${(hp.grader||"").toUpperCase()} ${hp.grade || "—"}</div>
+          ${hp.tipLabel || ((hp.grader||"").toUpperCase() + " " + (hp.grade || "—"))}</div>
         <div class="scatter-tip-price">$${Number(hp.y).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
         <div class="scatter-tip-meta">${fmtTooltipDate(hp.x)}${hp.listing_type==="auction"?" · auction":hp.listing_type==="fixed_price"?" · fixed":""}</div>
         <div class="scatter-tip-hint">click for links</div>
@@ -8901,6 +8901,211 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
   </div>`;
 };
 
+
+// The RAW-eBay twin of GradedSalesTab, for the ~24 promos TCGplayer cannot
+// price (2026-09-26, Zaven: "use the last sold/avg 5 as the main metric. have
+// the sales graph be more like the one for graded"). On these cards the eBay
+// sales ARE the market and TCGplayer's Low/Market is the fossil, so the page
+// is built the graded way round: Last Sold + Avg of last N lead, every sale is
+// a dot, every sale is a row with its listing, and TCGplayer is an OPTIONAL
+// overlay line (off by default) -- a bonus reference, not the headline.
+//
+// ⚠ Buckets are the rollup's own (graded_sale_pkey), resolved against the
+// printings the open card actually HAS -- the same rule rawPointsFor and
+// rawSaleMatch follow. A Challenge card's Top Prize foil ($16,406) and Prize
+// Wall non-foil ($122) are two markets; on one axis the cheaper one is a flat
+// line of dots at the bottom, so each is its own chip, one shown at a time
+// unless you Ctrl/Cmd-click to overlay. The 'Unknown' bucket is never shown as
+// either printing, for the same reason it is never priced as one.
+// ⚠ Headline numbers come from the ROLLUP row, not recomputed here, so the
+// card page and every other surface that reads raw_sales_rollup cannot
+// disagree about what "avg of last 5" is.
+const RAW_BUCKET_COLORS = [RAW_SALE_COLOR, "#0e9f9a"];
+const RawSalesPanel = ({raw, cardId, printings, setName, tcgNormal, tcgFoil}) => {
+  const printKey = printings.join("|");
+  const buckets = useMemo(() => {
+    const roll = (raw && raw.rollup.get(cardId)) || [];
+    const all  = (raw && raw.sales.get(cardId)) || [];
+    if(!roll.length) return [];
+    if(roll.length === 1 && !roll[0].printing){
+      return [{key:"", label:null, roll:roll[0], sales:all, color:RAW_SALE_COLOR,
+        tcg: (tcgNormal && tcgNormal.length) ? tcgNormal : (tcgFoil || null)}];
+    }
+    const out = [], seen = new Set();
+    for(const p of printings){
+      const b = gradedSlotBucket(p);
+      if(!b || seen.has(b)) continue;
+      const r = roll.find(x => x.printing === b);
+      if(!r) continue;
+      seen.add(b);
+      out.push({key:b, label: gradedVariantLabel(b, setName) || b, roll:r,
+        sales: all.filter(x => gradedSlotBucket(x.printing) === b),
+        tcg: b === "Foil" ? tcgFoil : tcgNormal});
+    }
+    return out.map((x, i) => ({...x, color: RAW_BUCKET_COLORS[i % RAW_BUCKET_COLORS.length]}));
+  }, [raw, cardId, printKey, setName, tcgNormal, tcgFoil]);
+  const [selected, setSelected] = useState(() => new Set());
+  const [focusKey, setFocusKey] = useState(null);
+  const [showTrend, setShowTrend] = useState(false);
+  const [overlay, setOverlay] = useState({low:false, market:false});
+  const [sel, setSel] = useState(null);
+  const [hoverImg, setHoverImg] = useState(null);
+  const firstKey = buckets[0] ? buckets[0].key : null;
+  useEffect(() => {
+    setSel(null); setShowTrend(false); setOverlay({low:false, market:false});
+    setSelected(new Set(firstKey != null ? [firstKey] : []));
+    setFocusKey(firstKey);
+  }, [cardId, firstKey]);
+  if(!buckets.length) return null;
+
+  const focus = buckets.find(b => b.key === focusKey) || buckets[0];
+  let vis = buckets.filter(b => selected.has(b.key));
+  if(!vis.length) vis = [focus];
+  const onChip = (key, additive) => {
+    if(!additive){ setSelected(new Set([key])); setFocusKey(key); return; }
+    const n = new Set(selected);
+    if(n.has(key)){ if(n.size > 1) n.delete(key); }
+    else n.add(key);
+    setSelected(n); setFocusKey(key);
+  };
+  const series = vis.map(b => ({key:b.key, color:b.color, shape:"circle",
+    points: b.sales.map(x => ({...x, _bucketLabel:b.label, id:x.item_id,
+        x:Date.parse((x.sold_date||"") + "T00:00:00Z"), y:Number(x.sale_price),
+        tipLabel: "Raw" + (b.label ? " · " + b.label : "")
+          + ((x.quantity_sold || 1) > 1 ? " · ×" + x.quantity_sold : "")}))
+      .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y))}));
+  // TCGplayer lines follow the FOCUSED printing -- overlaying the other side's
+  // line would put a foil price under a non-foil's dots.
+  const tcgRows = focus.tcg || [];
+  const lines = [];
+  if(overlay.low)    lines.push({color:"#1d8d4a", dash:"",    points: tcgRows.map(r => ({x:Date.parse(r.date), y:r.low_price    != null ? parseFloat(r.low_price)    : null}))});
+  if(overlay.market) lines.push({color:"#3b82f6", dash:"5,4", points: tcgRows.map(r => ({x:Date.parse(r.date), y:r.market_price != null ? parseFloat(r.market_price) : null}))});
+  const tableSales = vis.flatMap(b => b.sales.map(x => ({...x, _bucketLabel:b.label, _color:b.color})))
+    .sort((a, b) => (b.sold_date||"").localeCompare(a.sold_date||""));
+  const money = (v) => v == null ? "—" : "$" + Number(v).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+  const dstr  = (d) => d ? fmtTooltipDate(Date.parse(d + "T00:00:00Z")) : "—";
+  const r = focus.roll;
+  const showBucketCol = vis.length > 1;
+  const qty = (x) => x.quantity_sold || 1;
+
+  return html`<div class="graded-sales-tab raw-sales-tab">
+    ${/* No Last Sold / Avg headline here: the Price changes row directly
+         above already leads with exactly those two numbers for this card, and
+         the same pair twice on one screen reads as two different prices. The
+         range + span is what this panel adds. */""}
+    <div class="raw-sales-summary">
+      <span class="raw-sales-summary-lbl" style=${{color: focus.color}}>${focus.label ? "Raw · " + focus.label : "Raw eBay sales"}</span>
+      <span>${r.sale_count + (r.sale_count === 1 ? " sale" : " sales")}</span>
+      ${r.sale_count > 1 && html`<span>${money(r.min_price) + " – " + money(r.max_price)}</span>`}
+      <span class="muted">${r.sale_count > 1 ? dstr(r.first_sold_date) + " → " + dstr(r.last_sold_date) : dstr(r.last_sold_date)}</span>
+    </div>
+    <div class="graded-tab-explain">
+      Every <strong>raw (ungraded)</strong> sale of this card we've recorded from eBay sold
+      listings. Each dot is one sale. TCGplayer rarely or never lists this promo, so these
+      sales are the market; TCGplayer's Low / Market can be overlaid for reference. Click a
+      dot or a row for the listing.
+    </div>
+
+    ${buckets.length > 1 && html`<div class="gs-summary-wrap">
+      <table class="gs-summary">
+        <thead><tr><th>Printing</th><th class="num">Last Sold</th><th class="num">Avg Last 5</th><th class="num">Sales</th></tr></thead>
+        <tbody>
+          ${buckets.map(b => html`<tr key=${b.key}
+            class=${"gs-summary-row" + (b.key === focus.key ? " active" : "")}
+            title="Click to show this printing on the chart below"
+            onClick=${() => { setSelected(new Set([b.key])); setFocusKey(b.key); }}>
+            <td><span class="gs-summary-grader" style=${{color:b.color}}>${b.label}</span></td>
+            <td class="num gs-summary-last">${money(b.roll.last_sold_price)}</td>
+            <td class="num">${money(b.roll.avg_last_5)}</td>
+            <td class="num muted">${b.roll.sale_count}</td>
+          </tr>`)}
+        </tbody>
+      </table>
+    </div>`}
+
+    <div class="gs-combo-chips">
+      ${buckets.length > 1 && buckets.map(b => {
+        const on = selected.has(b.key);
+        return html`<button key=${b.key} type="button"
+          class=${"gs-combo-chip" + (on ? " active" : "") + (b.key === focus.key ? " focus" : "")}
+          style=${on ? {borderColor:b.color, color:b.color} : null}
+          title="Click to show only this printing · Ctrl/⌘-click to overlay both"
+          onClick=${(e) => onChip(b.key, e.metaKey || e.ctrlKey || e.shiftKey)}>
+          <span class="raw-chip-dot" style=${{background:b.color}}></span>${b.label}
+          <span class="gs-chip-count">${b.roll.sale_count}</span>
+        </button>`;
+      })}
+      <button type="button" class=${"gs-combo-chip gs-trend-toggle" + (showTrend ? " active" : "")}
+        onClick=${() => setShowTrend(v => !v)} title="Toggle a least-squares trendline through the sales">∿ Trendline</button>
+      ${tcgRows.length > 0 && html`<button type="button"
+        class=${"gs-combo-chip gs-raw-toggle" + (overlay.low ? " active" : "")}
+        style=${overlay.low ? {borderColor:"#1d8d4a", color:"#1d8d4a"} : null}
+        onClick=${() => setOverlay(o => ({...o, low:!o.low}))}
+        title="Overlay TCGplayer's published Low price history -- a reference, not a sale">━ TCGplayer Low</button>`}
+      ${tcgRows.length > 0 && html`<button type="button"
+        class=${"gs-combo-chip gs-raw-toggle" + (overlay.market ? " active" : "")}
+        style=${overlay.market ? {borderColor:"#3b82f6", color:"#3b82f6"} : null}
+        onClick=${() => setOverlay(o => ({...o, market:!o.market}))}
+        title="Overlay TCGplayer's NM Market price history -- a reference, not a sale">┅ TCGplayer Mkt</button>`}
+    </div>
+
+    <div class="gs-chart">
+      <${ScatterChart} series=${series} height=${260} showTrend=${showTrend} lines=${lines}
+        selectedId=${sel?.item_id} onSelect=${(p) => setSel(p)}/>
+    </div>
+
+    ${sel && html`<div class="gs-sale-pop-backdrop" onClick=${() => setSel(null)}>
+      <div class="gs-sale-detail gs-sale-detail--pop" onClick=${e => e.stopPropagation()}>
+      ${safeHttpUrl(sel.image_url) && html`<a href=${safeHttpUrl(sel.image_url)} target="_blank" rel="noopener nofollow" class="gs-sale-detail-imgwrap">
+        <img src=${safeHttpUrl(sel.image_url)} alt="" class="gs-sale-detail-img"/></a>`}
+      <div class="gs-sale-detail-body">
+        <div class="gs-sale-detail-title">${sel.title || "eBay raw sale"}</div>
+        <div class="gs-sale-detail-line">
+          <span class="gs-sale-detail-grade" style=${{color: RAW_SALE_COLOR}}>${"Raw" + (sel._bucketLabel ? " · " + sel._bucketLabel : "")}</span>
+          <span class="gs-sale-detail-price">${money(sel.sale_price)}</span>
+          ${qty(sel) > 1 ? html`<span class="muted">${"×" + qty(sel) + " sold · per-card average"}</span>` : null}
+          <span class="muted">${dstr(sel.sold_date)}</span>
+          ${sel.listing_type ? html`<span class="muted">${sel.listing_type === "auction" ? "auction" : "fixed price"}</span>` : null}
+        </div>
+        <div class="gs-sale-detail-links">
+          ${safeHttpUrl(sel.listing_url) && html`<a href=${safeHttpUrl(sel.listing_url)} target="_blank" rel="noopener nofollow">View eBay listing ↗</a>`}
+          ${safeHttpUrl(sel.image_url) && html`<a href=${safeHttpUrl(sel.image_url)} target="_blank" rel="noopener nofollow">Open image ↗</a>`}
+        </div>
+      </div>
+      <button class="gs-sale-detail-close" type="button" onClick=${() => setSel(null)} aria-label="Close detail">×</button>
+      </div>
+    </div>`}
+
+    <div class="gs-table-wrap">
+      <table class="gs-table raw-sales-table">
+        <thead><tr><th>Date</th><th>Listing</th>${showBucketCol && html`<th>Printing</th>`}<th class="num">Qty</th><th class="num">Price</th><th class="raw-col-type">Type</th><th></th></tr></thead>
+        <tbody>
+          ${tableSales.slice(0, 200).map(x => html`<tr key=${x.item_id}
+            class=${"gs-table-row" + (sel?.item_id === x.item_id ? " sel" : "")}
+            onClick=${() => setSel({...x})}
+            onPointerEnter=${mouseHoverOnly(e => safeHttpUrl(x.image_url) && setHoverImg({src:safeHttpUrl(x.image_url), x:e.clientX, y:e.clientY}))}
+            onPointerMove=${mouseHoverOnly(e => setHoverImg(p => p ? {...p, x:e.clientX, y:e.clientY} : p))}
+            onPointerLeave=${() => setHoverImg(null)}>
+            <td>${dstr(x.sold_date)}</td>
+            <td class="gs-table-title" title=${x.title || ""}>${x.title || ""}</td>
+            ${showBucketCol && html`<td style=${{color:x._color}}>${x._bucketLabel}</td>`}
+            <td class="num muted" title=${qty(x) > 1 ? "Several copies sold in one listing -- the price is the per-card average" : ""}>${qty(x) > 1 ? "×" + qty(x) : "1"}</td>
+            <td class="num">${money(x.sale_price)}</td>
+            <td class="muted raw-col-type">${x.listing_type === "auction" ? "auction" : x.listing_type === "fixed_price" ? "fixed" : "—"}</td>
+            <td>${safeHttpUrl(x.listing_url)
+              ? html`<a href=${safeHttpUrl(x.listing_url)} target="_blank" rel="noopener nofollow" onClick=${e => e.stopPropagation()} title="View on eBay">↗</a>`
+              : ""}</td>
+          </tr>`)}
+        </tbody>
+      </table>
+      ${tableSales.length > 200 && html`<div class="muted gs-table-more">${"Showing 200 most recent of " + tableSales.length + " sales."}</div>`}
+    </div>
+    ${hoverImg && html`<img class="gs-hover-img" src=${hoverImg.src} alt="" style=${{
+      left: Math.min(window.innerWidth - 230, hoverImg.x + 18) + "px",
+      top:  Math.min(window.innerHeight - 320, hoverImg.y + 18) + "px",
+    }}/>`}
+  </div>`;
+};
 
 // User-facing "report this sale" modal — flags a graded_sales row for admin
 // review with an optional comment (report_graded_sale RPC, migration 74).
@@ -9218,6 +9423,9 @@ const GradedPopPanel = ({group}) => {
 
 const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, standing, rawSale}) => {
   const buyUrl = tcgUrl(productId, printing);
+  // On a raw-priced row TCGplayer's six-window % grid is a secondary stat: it
+  // measures movement in a price nobody is paying. Folded away by default.
+  const [showTcgGrid, setShowTcgGrid] = useState(false);
   // A raw eBay sold price, for the handful of promos TCGplayer cannot price.
   // ⚠ It must never read as a TCGplayer number, so it says "eBay raw" and it
   // carries its own DATE: several of these cards last traded in 2023, and a
@@ -9240,7 +9448,7 @@ const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, 
       <span class="cd-stat-name">${label}${rawSale ? html`<span class="raw-star"
         title="Priced from real eBay sales, not TCGplayer — see the note below.">*</span>` : null}</span>
       ${sub ? html`<span class="cd-stat-sub">${sub}</span>` : null}
-      ${standing && html`<span class=${"price-standing price-standing--" + standing.tone}
+      ${standing && !rawSale && html`<span class=${"price-standing price-standing--" + standing.tone}
         title=${"Today's NM Market price sits in the " + Math.round(standing.pct * 100)
           + "th percentile of the last " + standing.window.replace("-", " ") + " ("
           + standing.n + " daily prices). Market, not Low — Low is a published aggregate that a single listing can move."}>
@@ -9250,24 +9458,36 @@ const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, 
         Buy on TCGplayer
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>
       </a>`}
-      ${rawSale ? html`
-        <span class="cd-stat-px cd-stat-px--raw" title=${rawTip}>
-          Last sold <b>${fmt(rawSale.last_sold_price)}</b>
-          ${rawSale.last_5_count > 1 && html`<${React.Fragment}
-            ><span class="cd-stat-pxsep"> · </span>Avg ${rawSale.last_5_count} <b>${fmt(rawSale.avg_last_5)}</b></>`}
-          ${/* ⚠ One expression, not text split across lines: htm collapses the
-                newline between a word and a ${} and "raw" + "sales" rendered as
-                "rawsales". Same trap as the calendar's Started-ago chip. */ ""}
-          <span class="cd-stat-rawmeta">${rawSale.sale_count + (rawSale.sale_count === 1 ? " raw sale" : " raw sales")
-            + " · latest " + rawSale.last_sold_date}</span>
-        </span>
-        <span class="cd-stat-px cd-stat-px--tcg">TCGplayer Low <b>${fmt(low.now)}</b
-          ><span class="cd-stat-pxsep"> · </span>Mkt <b>${fmt(market.now)}</b></span>
-      ` : html`
+      ${!rawSale && html`
         <span class="cd-stat-px">Low <b>${fmt(low.now)}</b><span class="cd-stat-pxsep"> · </span>Mkt <b>${fmt(market.now)}</b></span>
       `}
     </div>
-    <div class="cd-stat-grid">
+    ${/* A raw-priced row leads with the eBay numbers, graded-style: Last Sold
+         and Avg of last N are the headline, TCGplayer is one small line under
+         them (2026-09-26, Zaven: "tcgplayer low/market is more like a bonus
+         stat, not the main one").
+         ⚠ Every number carries its DATE: several of these cards last traded in
+         2023, and a bare price beside a live Low/Mkt would imply it is current.
+         ⚠ One expression per text run: htm collapses the newline between a
+         word and a ${} and "raw" + "sales" rendered as "rawsales". */ ""}
+    ${rawSale && html`<div class="cd-raw-head" title=${rawTip}>
+      <div class="cd-raw-stat">
+        <span class="cd-raw-stat-lbl">Last sold</span>
+        <span class="cd-raw-stat-val">${fmt(rawSale.last_sold_price)}</span>
+        <span class="cd-raw-stat-sub">${fmtTooltipDate(Date.parse(rawSale.last_sold_date + "T00:00:00Z"))}</span>
+      </div>
+      <div class="cd-raw-stat">
+        <span class="cd-raw-stat-lbl">${"Avg of last " + (rawSale.last_5_count || 1)}</span>
+        <span class="cd-raw-stat-val">${fmt(rawSale.avg_last_5)}</span>
+        <span class="cd-raw-stat-sub">${rawSale.sale_count + (rawSale.sale_count === 1 ? " eBay sale" : " eBay sales") + " recorded"}</span>
+      </div>
+    </div>
+    <div class="cd-raw-tcg">
+      <span>TCGplayer Low <b>${fmt(low.now)}</b><span class="cd-stat-pxsep"> · </span>Mkt <b>${fmt(market.now)}</b></span>
+      <button type="button" class="cd-raw-tcg-toggle" aria-expanded=${showTcgGrid}
+        onClick=${() => setShowTcgGrid(v => !v)}>${showTcgGrid ? "Hide TCGplayer changes ▴" : "TCGplayer changes ▾"}</button>
+    </div>`}
+    ${(!rawSale || showTcgGrid) && html`<div class="cd-stat-grid">
       <span></span>
       ${CARD_DELTA_WINDOWS.map(w => html`<span key=${"h"+w.key} class="cd-stat-h">${w.label}</span>`)}
       <span class="cd-stat-metric">LOW</span>
@@ -9276,7 +9496,7 @@ const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, 
       <span class="cd-stat-metric">MKT</span>
       ${CARD_DELTA_WINDOWS.map(w => html`<span key=${"m"+w.key} class="cd-stat-v"
         style=${{color: pctColor(market.byWin[w.key])}}>${fmtPct(market.byWin[w.key])}</span>`)}
-    </div>
+    </div>`}
   </div>`;
 };
 
@@ -9569,6 +9789,11 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       setShowLow(true); setShowMarket(false);        // back to the site default
     }
   }, [rawMap, group?.card_id]);
+  // Which view the price-history section opens on for a raw-priced card: the
+  // eBay sales (the market) or TCGplayer's daily lines (the reference). Reset
+  // to eBay on every card, because the modal does not remount between cards.
+  const [rawView, setRawView] = useState("ebay");
+  useEffect(() => { setRawView("ebay"); }, [group?.card_id]);
   // Swipe-to-navigate (touch). _swipeSuppressUntil (module scope — onNavigate
   // remounts this component via key=cardNavKey, so an instance ref would reset
   // before the leftover click lands) suppresses the click-to-enlarge that would
@@ -9736,6 +9961,13 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   // always renders. The toggle UI is hidden in the same scenario (see the
   // checkbox guard below) to avoid offering a control that does nothing.
   const hasBothPrintings = !!(group.normal && group.foil);
+  // A card we price from raw eBay sales (raw_sales_rollup has a row for it).
+  const isRawCard = !!(rawMap && rawMap.rollup.get(group.card_id));
+  const rawPrintings = [
+    ...(group.normal ? [group.normal.tcg_printing || "Normal"] : []),
+    ...(group.foil ? [group.foil.tcg_printing || "Foil"] : []),
+  ];
+  const rawSaleCount = isRawCard ? ((rawMap.sales.get(group.card_id) || []).length) : 0;
   const effectiveShowFoil = hasBothPrintings ? showFoil : true;
   // Raw eBay sales for this card, plotted as dots on the price history.
   // ⚠ Only the printings this card actually HAS, never a defaulted "Normal".
@@ -10138,8 +10370,8 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       ${statRows.some(r => r.rawSale) && html`<div class="cd-raw-note">
         <span class="raw-star">*</span> Priced from real <b>eBay sold listings</b> for the
         ungraded card. TCGplayer rarely or never lists this promo, so its Low and Market are
-        an asking price or a frozen one — they are shown underneath for reference.
-        Individual sales are the amber dots on the price history below.
+        an asking price or a frozen one — they are shown underneath, smaller, for reference.
+        Every sale is listed under <b>eBay sales</b> below.
       </div>`}
     </div>`}
 
@@ -10150,7 +10382,17 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
         <button class=${"card-detail-tab"+(detailTab==="graded"?" active":"")}
           onClick=${()=>setDetailTab("graded")}>Graded</button>
       </div>`}
-      ${detailTab === "history" && html`<div>
+      ${detailTab === "history" && isRawCard && html`<div class="raw-view-toggle seg-toggle" role="group" aria-label="Raw eBay sales or TCGplayer history">
+        <button class=${rawView === "ebay" ? "active" : ""} onClick=${() => setRawView("ebay")}
+          title="Every raw eBay sale of this card — the real market for it">eBay sales<span class="card-detail-tab-count">${rawSaleCount}</span></button>
+        <button class=${rawView === "tcg" ? "active" : ""} onClick=${() => setRawView("tcg")}
+          title="TCGplayer's daily Low / NM Market lines — a reference; it rarely or never lists this promo">TCGplayer history</button>
+      </div>`}
+      ${detailTab === "history" && isRawCard && rawView === "ebay" && html`<${RawSalesPanel}
+        raw=${rawMap} cardId=${group.card_id} setName=${group.Set}
+        printings=${rawPrintings}
+        tcgNormal=${history.normal} tcgFoil=${history.foil}/>`}
+      ${detailTab === "history" && (!isRawCard || rawView === "tcg") && html`<div>
         <div class="card-detail-history-head">
           ${hasAnyHistory && html`<div class="card-detail-history-legend">
             ${history.normal && history.normal.length > 0 && html`<span><span class="legend-swatch" style=${{background:"#1d8d4a"}}/>Non-Foil</span>`}
@@ -15237,7 +15479,7 @@ function EVView({raw, sets, avgs, nc, setNc,
           <div class="ev-row-val"><span class="ev-row-val-lbl">per pack</span></div>
         </div>
         ${anyBoxData && html`<div class="ev-row-box">
-          <div class="ev-row-val"><span class="ev-row-val-lbl">box price</span></div>
+          <div class="ev-row-val"><span class="ev-row-val-lbl" title="Booster box price on TCGplayer — the price links there">box · TCGplayer</span></div>
           <div class="ev-row-val"><span class="ev-row-val-lbl">EV − box</span></div>
         </div>`}
         <div class="ev-row-deltas-wrap">
@@ -15266,11 +15508,11 @@ function EVView({raw, sets, avgs, nc, setNc,
         ${anyBoxData && html`<div class="ev-row-box">
           ${box
             ? html`<div class="ev-row-val">
-                <span class="ev-row-val-lbl-inline">box price</span>
+                <span class="ev-row-val-lbl-inline">box · TCGplayer</span>
                 ${box.url
                   ? html`<a href=${box.url} target="_blank" rel="noopener nofollow sponsored"
                       onClick=${e=>e.stopPropagation()}
-                      class="ev-box-link" title=${box.name}>${fmt(box.price)}<span class="ev-box-link-ext">↗</span></a>`
+                      class="ev-box-link" title=${box.name + " on TCGplayer (affiliate link)"}>${fmt(box.price)}<span class="ev-box-link-ext">↗</span></a>`
                   : fmt(box.price)}
                 ${(() => {
                   const az = amazonForSealed(box.product, setName);
@@ -15278,10 +15520,7 @@ function EVView({raw, sets, avgs, nc, setNc,
                   // displayed price only when it is fetched live, and this
                   // column is a TCGplayer number. The link is an alternative
                   // place to buy, not a second quote to compare against.
-                  return az && html`<a class="ev-box-amzn" href=${az.url} target="_blank"
-                    rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}
-                    title=${az.exact ? "Buy this box on Amazon (affiliate link)"
-                                     : "Search Amazon for this box (affiliate link)"}>Amazon ↗</a>`;
+                  return amazonPill(az, {cls: "ev-box-amzn", stop: true});
                 })()}
               </div>
               ${(() => {
@@ -15292,7 +15531,7 @@ function EVView({raw, sets, avgs, nc, setNc,
                   <span class="ev-row-val-lbl-inline">EV − box</span>${sign}${fmt(diffVsBox)}
                 </div>`;
               })()}`
-            : html`<div class="ev-row-val ev-row-val-dim"><span class="ev-row-val-lbl-inline">box price</span>—</div>
+            : html`<div class="ev-row-val ev-row-val-dim"><span class="ev-row-val-lbl-inline">box · TCGplayer</span>—</div>
               <div class="ev-box-diff ev-box-diff-none"><span class="ev-row-val-lbl-inline">EV − box</span>—</div>`}
         </div>`}
         <div class="ev-row-deltas">
@@ -15927,8 +16166,25 @@ const AmazonBuyLink = ({product, setName, cls}) => {
     title=${a.exact
       ? "Buy this on Amazon (affiliate link)"
       : "Search Amazon for this product (affiliate link)"}>
-    ${a.exact ? "Amazon" : "Find on Amazon"} ↗</a>`;
+    ${uiIcon("cart", 13)} ${a.exact ? "Buy on Amazon" : "Find on Amazon"} ↗</a>`;
 };
+
+// The small Amazon BUTTON that sits beside a TCGplayer price (2026-09-26,
+// Zaven). It used to be a muted text link reading "Amazon" under a price,
+// which read as a label ON that price — as if the $ above were Amazon's. So it
+// is a pill now: a cart, the word, an amber tint that belongs to no price on
+// the site, and a border that makes it look pressable. It carries NO number,
+// by design — Amazon's terms allow a displayed price only when fetched live,
+// and a pill with a number in it is exactly the misreading this exists to stop.
+// `az` is an amazonForSealed() result; `stop` is for pills inside a clickable row.
+const amazonPill = (az, {cls = "", stop = false, label} = {}) => az && az.url
+  ? html`<a class=${"amz-btn" + (cls ? " " + cls : "")} href=${az.url} target="_blank"
+      rel="noopener nofollow sponsored"
+      onClick=${stop ? (e => e.stopPropagation()) : undefined}
+      title=${az.exact ? "Buy this on Amazon — opens Amazon (affiliate link)"
+                       : "Search Amazon for this — opens Amazon (affiliate link)"}>
+      ${uiIcon("cart", 11)}<span>${label || "Amazon"}</span><span class="amz-btn-ext" aria-hidden="true">↗</span></a>`
+  : null;
 
 // ── Sealed product on Amazon, with TCGplayer's photo and price ─────────────
 // Every sealed row the resolver can place on Amazon, keyed by the Amazon URL it
@@ -24859,11 +25115,8 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
                                 ? (amzn ? "Buy this puzzle on Amazon (affiliate link)" : "View on Ravensburger")
                                 : item.is_exclusive
                                 ? "Search Amazon for this bundle (affiliate link)"
-                                : "Buy on TCGplayer (affiliate link)"}>${isUnpricedSealed(item) ? "Buy" : "TCG"} ↗</a>`}
-                          ${amzn && !item.is_puzzle && !item.is_exclusive && html`<a class="gc-card-buy gc-card-buy--amazon" href=${amzn.url} target="_blank"
-                              rel="noopener nofollow sponsored"
-                              onClick=${e=>e.stopPropagation()}
-                              title=${amzn.exact ? "Buy this on Amazon (affiliate link)" : "Search Amazon for this product (affiliate link)"}>Amazon ↗</a>`}
+                                : "Buy on TCGplayer (affiliate link)"}>${isUnpricedSealed(item) ? "Buy" : "TCGplayer"} ↗</a>`}
+                          ${!item.is_puzzle && !item.is_exclusive && amazonPill(amzn, {cls: "gc-card-amzn", stop: true})}
                         </div>
                         ${dRow && html`<div class="gc-card-deltas">
                           <span class="gc-card-delta-cell"><span class="gc-card-delta-lbl">1D</span>
@@ -41028,8 +41281,9 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav
       <div class="home-ev-strip-row home-ev-strip-head-row">
         <div>Set</div>
         <div class="num">EV / box</div>
-        <div class="num">Box</div>
+        <div class="num" title="Booster box price on TCGplayer — the price links there">Box · TCGplayer</div>
         <div class="num" title="EV per box against the box price: positive means the cards inside are worth more than the sealed box.">vs box</div>
+        <div class="home-ev-strip-amzn-cell"></div>
       </div>
       ${lastFour.map(setName => {
         const ev = calcEV(avgs, setName, nc, excludeSet, "low");
@@ -41045,15 +41299,17 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav
           <div class="num home-ev-strip-box">
             ${box
               ? (box.url
-                  ? html`<a href=${box.url} target="_blank" rel="noopener nofollow sponsored" class="home-ev-strip-box-link" title="Booster box on TCGplayer (affiliate link)">${fmt(box.price)}</a>`
+                  ? html`<a href=${box.url} target="_blank" rel="noopener nofollow sponsored" class="home-ev-strip-box-link" title="Booster box on TCGplayer (affiliate link)">${fmt(box.price)}<span class="home-ev-strip-box-ext" aria-hidden="true">↗</span></a>`
                   : fmt(box.price))
               : html`<span class="muted">—</span>`}
-            ${az && html`<a class="home-ev-strip-amzn" href=${az.url} target="_blank" rel="noopener nofollow sponsored"
-                title=${az.exact ? "Buy this box on Amazon (affiliate link)" : "Search Amazon for this box (affiliate link)"}>Amazon</a>`}
           </div>
           <div class=${"num home-ev-strip-diff " + (diff == null ? "muted" : diff >= 0 ? "green" : "red")}>
             ${diff == null ? "—" : `${diff >= 0 ? "+" : "−"}${Math.abs(diff).toFixed(0)}%`}
           </div>
+          ${/* ⚠ Its OWN column, after "vs box" — not beside the price. Sat
+               beside the number it read as a caption on it, i.e. as if the $
+               were Amazon's price, which is exactly what it must not say. */""}
+          <div class="home-ev-strip-amzn-cell">${amazonPill(az, {cls: "home-ev-strip-amzn"})}</div>
         </div>`;
       })}
     </div>
@@ -43841,8 +44097,7 @@ const calProductLinks = (row, setName) => {
   return html`<span class="cal-buy">
     ${tcg && html`<a class="cal-buy-link" href=${tcg} target="_blank"
       rel="noopener nofollow sponsored">TCGplayer ↗</a>`}
-    ${az && az.url && html`<a class="cal-buy-link cal-buy-link--amzn" href=${az.url} target="_blank"
-      rel="noopener nofollow sponsored">${az.exact ? "Amazon ↗" : "Find on Amazon ↗"}</a>`}
+    ${amazonPill(az, {cls: "cal-buy-amzn", label: az && az.exact ? "Amazon" : "Find on Amazon"})}
   </span>`;
 };
 function useSetProducts(setName, enabled){
@@ -48236,24 +48491,23 @@ function GearView({sealedPrices, setsMeta}){
   </div>`;
 }
 const HOME_TOOLS = [
-  {k:"dice",   label:"Dice Tray"},
-  {k:"lore",   label:"Lore Tracker"},
   {k:"ev",     label:"Expected Value"},
   {k:"trade",  label:"Trade Compare"},
   {k:"avg",    label:"Set Breakdown"},
   {k:"setval", label:"Playset Cost"},
-  // Swiss Odds is NOT here (removed 2026-09-24, Zaven: "I only want 6 in the
-  // toolbox") — six chips fill three even rows of the two-column grid, and a
-  // seventh left one chip alone on a fourth. It stays an Analytics tab.
-  // Simulator is NOT here (removed 2026-08-27, Zaven) — it still lives in the
-  // Analytics tab bar and in the Overview. The toolbox is a shortcut strip on
-  // the home page, not a mirror of the tab bar, so it holds the tools you open
-  // cold; a pack sim is somewhere you arrive from an EV row's "Sim" chip.
-  // The Stream Ticker chip was here and was removed 2026-08-24 (Zaven), and it
-  // stays removed now that the ticker is an Analytics TAB (2026-09-15): the
-  // toolbox is the calculators an ordinary visitor opens cold, and an OBS
-  // overlay is a tool for the handful of people who stream. Same rule that
-  // keeps Simulator out — a tab entry is not a toolbox entry.
+  {k:"swiss",  label:"Swiss Odds"},
+  {k:"sim",    label:"Simulator"},
+  // Six chips, always: three even rows of the two-column grid (Zaven,
+  // 2026-09-24: "I only want 6 in the toolbox"). A seventh leaves one chip
+  // alone on a fourth row.
+  // Dice Tray + Lore Tracker came OUT 2026-09-26 (Zaven) and Swiss Odds +
+  // Simulator went in. The two at-the-table tools already have their own
+  // bubbles in the movers toolbar's corner on phones (the fixed `dice` / `lore`
+  // HOME_PANELS entries), which is where somebody mid-game reaches for them;
+  // as toolbox chips they were a second copy of those. Both are still
+  // Analytics tabs.
+  // The Stream Ticker stays out: it is an OBS overlay for the handful of people
+  // who stream, and a tab entry is not a toolbox entry.
 ];
 const HomeToolboxPanel = ({onOpenTool, panelNav}) => {
   const [collapsed, setCollapsed] = useState(() => {
