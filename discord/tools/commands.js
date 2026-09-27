@@ -28,6 +28,11 @@ export const COMMANDS = [
     options: [nameOpt, { type: 3, name: "range", description: "Chart range (default 3 months)", choices: rangeChoices }, privOpt],
   },
   {
+    name: "deck", type: 1, ...EVERYWHERE,
+    description: "Price a decklist — paste it into the box that opens",
+    options: [privOpt],
+  },
+  {
     name: "movers", type: 1, ...EVERYWHERE,
     description: "Biggest price gains or drops",
     options: [

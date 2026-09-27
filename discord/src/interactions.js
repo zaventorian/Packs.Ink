@@ -6,9 +6,10 @@
 // things that are pure and local — autocomplete, /help — answer directly.
 import * as E from "./embeds.js";
 import * as D from "./data.js";
+import { parseDeckList, looksLikeDeck, priceDeck } from "./deck.js";
 
-export const T = { PING: 1, COMMAND: 2, COMPONENT: 3, AUTOCOMPLETE: 4 };
-export const R_ = { PONG: 1, MESSAGE: 4, DEFERRED: 5, DEFERRED_UPDATE: 6, AUTOCOMPLETE: 8 };
+export const T = { PING: 1, COMMAND: 2, COMPONENT: 3, AUTOCOMPLETE: 4, MODAL_SUBMIT: 5 };
+export const R_ = { PONG: 1, MESSAGE: 4, DEFERRED: 5, DEFERRED_UPDATE: 6, AUTOCOMPLETE: 8, MODAL: 9 };
 const EPHEMERAL = 64;
 const MANAGE_GUILD = 1n << 5n;
 export const DISCORD_API = "https://discord.com/api/v10";
@@ -24,6 +25,7 @@ export async function handleInteraction(it, deps) {
   if (it.type === T.AUTOCOMPLETE) return autocomplete(it, deps);
   if (it.type === T.COMMAND) return command(it, deps);
   if (it.type === T.COMPONENT) return component(it, deps);
+  if (it.type === T.MODAL_SUBMIT) return modalSubmit(it, deps);
   return { type: R_.MESSAGE, data: { content: "Unsupported interaction.", flags: EPHEMERAL } };
 }
 
@@ -49,6 +51,9 @@ function command(it, deps) {
     case "events": return deferred(it, deps, priv, () => events(o, deps));
     case "calendar": return deferred(it, deps, priv, () => calendar(deps));
     case "help": return { type: R_.MESSAGE, data: { ...E.helpMessage(), flags: EPHEMERAL, allowed_mentions: QUIET } };
+    // A decklist has line breaks, which a slash-command option cannot hold —
+    // so /deck opens a text box instead.
+    case "deck": return { type: R_.MODAL, data: E.deckModal(priv) };
     case "reports": return deferred(it, deps, true, () => reports(it, deps));
     default: return { type: R_.MESSAGE, data: { content: "Unknown command.", flags: EPHEMERAL } };
   }
@@ -147,6 +152,10 @@ async function priceCheck(it, deps) {
   const msg = it.data.resolved && it.data.resolved.messages && it.data.resolved.messages[it.data.target_id];
   const text = [msg && msg.content, ...((msg && msg.embeds) || []).map((e) => [e.title, e.description].filter(Boolean).join(" "))]
     .filter(Boolean).join("\n");
+  // A posted decklist is priced as a DECK, not as the first three names in it.
+  if (looksLikeDeck(text)) {
+    return E.deckMessage({ result: priceDeck(deps.R, parseDeckList(text)), priceDate: deps.index.priceDate });
+  }
   const found = deps.R.findInText(text, 3).filter((r) => r.kind === "card" || r.kind === "sealed");
   if (!found.length) {
     return { content: "No Lorcana cards in that message that I can recognise. Try `/price` with the name.", embeds: [], components: [] };
@@ -170,6 +179,22 @@ async function priceCheck(it, deps) {
     embeds,
     components: [{ type: 1, components: [{ type: 3, custom_id: E.pickId("chart", D.DEFAULT_RANGE), placeholder: "Open one with its price chart", options }] }],
   };
+}
+
+// ── /deck's text box ─────────────────────────────────────────────────────
+// Everything it needs is in the card index, so it answers at once.
+function modalSubmit(it, deps) {
+  const m = /^deck\|([p-])$/.exec(it.data.custom_id || "");
+  if (!m) return { type: R_.MESSAGE, data: { content: "That form has expired.", flags: EPHEMERAL } };
+  // Rows come back as sent (action rows); a Label wrapper holds one `component`.
+  const input = (it.data.components || []).flatMap((r) => r.components || (r.component ? [r.component] : [])).find((c) => c.custom_id === "list");
+  const entries = parseDeckList(input ? input.value : "");
+  if (!entries.length) {
+    return { type: R_.MESSAGE, data: { flags: EPHEMERAL, allowed_mentions: QUIET,
+      content: "That doesn't look like a decklist — one card per line with its count, like `4 Mowgli - Man Cub`." } };
+  }
+  const msg = E.deckMessage({ result: priceDeck(deps.R, entries), priceDate: deps.index.priceDate });
+  return { type: R_.MESSAGE, data: { ...msg, allowed_mentions: QUIET, ...(m[1] === "p" ? { flags: EPHEMERAL } : {}) } };
 }
 
 // ── buttons + menus ──────────────────────────────────────────────────────

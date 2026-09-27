@@ -239,6 +239,63 @@ const D = await mod("discord/src/data.js");
   checkMessage({ embeds: three.map((res) => E.compactCardEmbed({ R, res, price, inkColors: index.inkColors })) }, "price check");
 }
 
+// ── decklists ────────────────────────────────────────────────────────────
+{
+  const { parseDeckList, looksLikeDeck, priceDeck } = await mod("discord/src/deck.js");
+  const list = [
+    "Characters (12)", "4 Mowgli - Man Cub", "4x Elsa - Spirit of Winter (1-42)", "2 × Stitch - Rock Star",
+    "# a comment", "", "2 Be Prepared", "1 Mowgli - Man Cub", "3 Totally Not A Card",
+  ].join("\n");
+  const e = parseDeckList(list);
+  eq(e.length, 6, "parseDeckList keeps card lines, drops headers, comments and blanks");
+  ok(e.some((x) => x.name === "Elsa - Spirit of Winter" && x.qty === 4), "a (set-number) hint and 'x' are stripped");
+  ok(looksLikeDeck(list), "a posted decklist is recognised as one");
+  ok(!looksLikeDeck("anyone got a mowgli\n4 of them would be nice"), "a chat message is not a decklist");
+  const r = priceDeck(R, e);
+  const mow = r.rows.find((x) => x.card.c === "Mowgli");
+  ok(mow && mow.qty === 5, "the same card on two lines is counted once, 4 + 1");
+  eq(r.unmatched.length, 1, "an unknown card is reported, not guessed");
+  eq(r.count, 16, "the card count includes what couldn't be priced");
+  const want = r.rows.reduce((s2, x) => s2 + (x.mkt != null ? x.mkt * x.qty : 0), 0);
+  ok(Math.abs(r.totalMarket - want) < 1e-9 && r.totalMarket > 0, "the total is the sum of qty × cheapest market price");
+  for (const x of r.rows) {
+    const all = x.card.p.flatMap((p) => p.f.filter((f) => !f[6]).map((f) => f[5])).filter((v) => v != null);
+    if (all.length) ok(x.mkt === Math.min(...all), `${x.card.n}: priced at its cheapest printing`);
+  }
+  checkMessage(E.deckMessage({ result: r, priceDate: "2026-09-27" }), "deck price");
+
+  // Misspelled lines: a full name one letter off, and a bare typo'd name.
+  const typo = priceDeck(R, parseDeckList(`2 Be Prepard
+4 Mowgli - Man Cub
+4x mogli`));
+  const bp = typo.rows.find((x) => x.card.n === "Be Prepared");
+  ok(bp && bp.guessed && bp.qty === 2, "a full name with a typo in it is priced, marked as a guess");
+  const mw = typo.rows.find((x) => x.card.c === "Mowgli");
+  ok(mw && mw.qty === 8 && mw.guessed, "a typo'd line merges into the card it means, and the merged row says it holds a guess");
+  eq(typo.unmatched.length, 0, "no typo'd line is dropped");
+
+  // Near-miss tier: close to TWO cards means neither; the resolver is capped.
+  const { MAX_GUESSES } = await mod("discord/src/deck.js");
+  let calls = 0;
+  const fakeR = {
+    cards: [{ n: "Aaaaa Bbbbb - Cccccc", p: [] }, { n: "Aaaaa Bbbbb - Ccccce", p: [] }],
+    resolve: () => { calls++; return { kind: "none" }; },
+  };
+  const tie = priceDeck(fakeR, parseDeckList("1 Aaaaa Bbbbb - Cccccd"));
+  eq(tie.rows.length, 0, "a name one letter from two different cards is not guessed at");
+  calls = 0;
+  priceDeck(fakeR, parseDeckList(Array.from({ length: 30 }, (_, i) => `1 Nothing ${i}`).join(`
+`)));
+  eq(calls, MAX_GUESSES, `the slow resolver runs exactly ${MAX_GUESSES} times on a list of 30 unknown lines`);
+
+  // More lines than the embed lists: the tail is summed, never described by a wrong bound.
+  const many = { rows: Array.from({ length: 20 }, (_, i) => ({ qty: i % 3 + 1, mkt: 20 - i, low: 19 - i, card: { n: "Card " + i, p: [{ id: "c" + i }] }, mktAt: { p: { id: "c" + i } } })),
+    unmatched: [], count: 60, totalMarket: 1, totalLow: 1, unpricedMarket: 0 };
+  const mm = E.deckMessage({ result: many, priceDate: "2026-09-27" }).embeds[0].description;
+  const restWant = many.rows.slice(15).reduce((s2, x) => s2 + x.mkt * x.qty, 0);
+  ok(mm.includes(`worth $${restWant.toFixed(2)} together`), "the rows past the first 15 are summed in one line");
+}
+
 // ── commands ─────────────────────────────────────────────────────────────
 {
   const { COMMANDS } = await mod("discord/tools/commands.js");
@@ -336,6 +393,27 @@ const D = await mod("discord/src/data.js");
   eq(b.type, 6, "a button defers an UPDATE, not a new message");
   await Promise.all(pending.splice(0));
   ok(patches[0] && /\/1y\.png/.test(patches[0].body.embeds[0].image.url), "the 1Y button redraws the chart at 1Y");
+
+  // /deck opens a text box; submitting it prices the list at once
+  const md = await handleInteraction({ type: 2, token: "t5", application_id: "123", data: { type: 1, name: "deck", options: [] } }, deps);
+  ok(md.type === 9 && md.data.custom_id.length <= 100 && md.data.components[0].components[0].type === 4, "/deck answers with a text box");
+  const sub = await handleInteraction({ type: 5, token: "t6", application_id: "123",
+    data: { custom_id: md.data.custom_id, components: [{ type: 1, components: [{ type: 4, custom_id: "list", value: "4 Mowgli - Man Cub\n2 Be Prepared" }] }] } }, deps);
+  ok(sub.type === 4 && /at NM Market/.test(sub.data.embeds[0].description), "submitting the box prices the deck");
+  ok(sub.data.allowed_mentions && !sub.data.allowed_mentions.parse.length, "the deck reply pings nobody");
+  const junk = await handleInteraction({ type: 5, token: "t7", application_id: "123",
+    data: { custom_id: md.data.custom_id, components: [{ type: 1, components: [{ type: 4, custom_id: "list", value: "hello there" }] }] } }, deps);
+  ok(junk.type === 4 && junk.data.flags === 64 && /doesn't look like a decklist/.test(junk.data.content), "a box without a decklist gets a private hint");
+
+  // Price check on a posted decklist totals the deck instead of listing three cards
+  patches.length = 0;
+  const deckText = ["4 Mowgli - Man Cub", "4 Elsa - Spirit of Winter", "4 Stitch - Rock Star", "4 Be Prepared", "2 Mowgli - Man Cub"].join(`
+`);
+  const pc = await handleInteraction({ type: 2, token: "t8", application_id: "123",
+    data: { type: 3, name: "Price check", target_id: "m1", resolved: { messages: { m1: { id: "m1", content: deckText } } } } }, deps);
+  eq(pc.type, 5, "Price check defers");
+  await Promise.all(pending.splice(0));
+  ok(patches[0] && patches[0].body.embeds && patches[0].body.embeds[0].title === "Deck price", "Price check on a decklist prices the deck");
 
   // reports refuses someone who can't manage the server
   patches.length = 0;

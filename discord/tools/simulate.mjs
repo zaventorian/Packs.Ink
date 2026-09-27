@@ -7,7 +7,7 @@
 // It generates a throwaway Ed25519 key pair, starts `wrangler dev` with that
 // public key and DISCORD_API_BASE pointed at a local capture server, then
 // signs each request exactly the way Discord does. Nothing reaches Discord.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import { webcrypto as crypto } from "node:crypto";
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -50,14 +50,20 @@ const wr = WIN
   ? spawn("npx.cmd " + wrArgs.join(" "), { cwd: new URL("..", import.meta.url), shell: true })
   : spawn("npx", wrArgs, { cwd: new URL("..", import.meta.url), detached: true });
 // Kill the whole tree: on Windows wr is a shell, and killing it leaves
-// wrangler — and its workerd — running.
+// wrangler — and its workerd — running. SYNCHRONOUS, because it also runs from
+// the exit handler, where an async spawn never gets to start.
+let stopped = false;
 const stopWorker = () => {
+  if (stopped) return;
+  stopped = true;
   try {
-    if (WIN) spawn("taskkill", ["/pid", String(wr.pid), "/T", "/F"], { stdio: "ignore" });
+    if (WIN) spawnSync("taskkill", ["/pid", String(wr.pid), "/T", "/F"], { stdio: "ignore" });
     else process.kill(-wr.pid, "SIGTERM");
   } catch {}
 };
 process.on("exit", stopWorker);
+process.on("uncaughtException", (e) => { console.error(e); stopWorker(); process.exit(1); });
+process.on("unhandledRejection", (e) => { console.error(e); stopWorker(); process.exit(1); });
 let log = "";
 wr.stdout.on("data", (d) => (log += d));
 wr.stderr.on("data", (d) => (log += d));
@@ -91,7 +97,9 @@ const base_ = () => ({ id: "sim" + (++seq), application_id: "1234567890", token:
 const cmd = (name, options = []) => ({ ...base_(), type: 2, data: { id: "c", name, type: 1, options } });
 
 function parseLine(line) {
-  const m = /^\/(\w+)\s*(.*)$/.exec(line.trim());
+  // Git Bash rewrites a leading "/help" into "C:/Program Files/Git/help"; undo it.
+  line = line.trim().replace(/^[A-Za-z]:[\\/].*?[\\/]Git[\\/](?=\w)/, "/");
+  const m = /^\/(\w+)\s*(.*)$/.exec(line);
   if (!m) throw new Error("say it like: /price mowgli");
   const [, name, rest] = m;
   if (name === "price" || name === "card") return cmd(name, [{ type: 3, name: "name", value: rest }]);
@@ -120,7 +128,8 @@ console.log("autocomplete 'mogli' ->", ac.json && ac.json.data ? (ac.json.data.c
 for (const line of script) {
   const before = captured.length;
   const r = await send(parseLine(line));
-  let out = r.json;
+  // An immediate reply (type 4) carries its message in .data, like a follow-up's body.
+  let out = r.json && r.json.type === 4 ? r.json.data : r.json;
   if (r.json && (r.json.type === 5 || r.json.type === 6)) {
     const fu = await waitFollowUp(before + 1);
     out = fu ? fu.body : { error: "no follow-up within 20s" };
@@ -164,6 +173,22 @@ if (!process.argv.slice(2).length) {
   const fu = await waitFollowUp(before + 1);
   console.log(`\nPrice check on a chat message  [initial type ${pc.json && pc.json.type}]`);
   for (const e of (fu && fu.body.embeds) || []) console.log("  -", e.title, "|", String(e.description).split("\n").join(" | "));
+
+  // /deck: the text box, then what submitting it returns
+  const dm = await send(cmd("deck", []));
+  console.log(`\n/deck  [initial type ${dm.json && dm.json.type}] -> "${dm.json && dm.json.data && dm.json.data.title}"`);
+  const deckList = `4 Mowgli - Man Cub
+4x mogli
+4 Elsa - Spirit of Winter
+2 Be Prepard
+3 Tinker Bel - Giant Fairy
+2 Totally Not A Card`;
+  const ds = await send({ ...base_(), type: 5, data: { custom_id: dm.json.data.custom_id,
+    components: [{ type: 1, components: [{ type: 4, custom_id: "list", value: deckList }] }] } });
+  const de = ds.json && ds.json.data && ds.json.data.embeds && ds.json.data.embeds[0];
+  console.log(`submit the box  [initial type ${ds.json && ds.json.type}]`);
+  if (de) console.log("  " + de.title + "\n  " + String(de.description).split("\n").join("\n  ") + "\n  " + de.footer.text);
+  writeFileSync(new URL("deck.json", OUT), JSON.stringify(ds.json, null, 2));
 
   const img = first && first.body.embeds[0].image && first.body.embeds[0].image.url;
   if (img) {

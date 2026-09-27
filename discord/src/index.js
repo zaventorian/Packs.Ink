@@ -11,6 +11,7 @@
 // for the lookup itself.
 import indexText from "./card-index.json";
 import { createResolver } from "./resolver.js";
+import { prepareDeckIndex } from "./deck.js";
 import { handleInteraction } from "./interactions.js";
 import { verifyDiscordRequest } from "./verify.js";
 import { makeDb } from "./db.js";
@@ -18,6 +19,7 @@ import { chartResponse } from "./charts.js";
 
 const INDEX = typeof indexText === "string" ? JSON.parse(indexText) : indexText;
 const R = createResolver(INDEX);
+prepareDeckIndex(R);
 
 // View Channel + Send Messages + Embed Links: what posting a report needs.
 // Replies to commands need no permissions at all.

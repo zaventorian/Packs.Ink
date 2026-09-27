@@ -407,13 +407,59 @@ export function helpMessage() {
       "**/price** `name` — prices, changes and a price chart.",
       "Type it however you say it: `mowgli`, `enchanted elsa`, `elsa psa 10`, `stich`, `azurite sea box`. With no subtitle you get the version people actually play; pick another from the menu under the reply.",
       "",
+      "**/deck** — paste a decklist and see what it costs to build.",
       "**/movers** — today's biggest gains and drops.",
       "**/events** `zip or town` — Lorcana events near you.",
       "**/calendar** — set releases, Challenges and qualifiers coming up.",
-      "Right-click any message → **Apps → Price check** to price every card it mentions.",
+      "Right-click any message → **Apps → Price check** to price every card it mentions, or a whole posted decklist.",
       "",
       "**/reports** (server managers) — a daily or weekly movers report in a channel.",
     ].join("\n"),
     footer: { text: "Prices from TCGplayer, graded and raw sales from eBay · packs.ink" },
   }] };
+}
+
+// ── a whole decklist ─────────────────────────────────────────────────────
+export function deckMessage({ result, priceDate }) {
+  const r = result;
+  const lines = [
+    `**${money(r.totalMarket) || "$0.00"}** at NM Market · ${money(r.totalLow) || "$0.00"} at Low`,
+    `*${r.count} cards, each at its cheapest printing.*`,
+  ];
+  if (r.count !== 60) lines.push(`Note: that's ${r.count} cards — a Lorcana deck is 60.`);
+  lines.push("");
+  const shown = r.rows.slice(0, 15);
+  for (const x of shown) {
+    const id = x.mktAt ? x.mktAt.p.id : x.card.p[0].id;
+    const each = x.mkt != null ? money(x.mkt) : "no price";
+    const tot = x.mkt != null ? ` · **${money(x.mkt * x.qty)}**` : "";
+    lines.push(`\`${String(x.qty).padStart(2)}×\` [${clip(x.card.n, 48)}](${cardPageUrl(id)}) — ${each} ea${tot}${x.guessed ? " *(closest match)*" : ""}`);
+  }
+  if (r.rows.length > shown.length) {
+    const rest = r.rows.slice(shown.length);
+    const restTotal = rest.reduce((s, x) => s + (x.mkt != null ? x.mkt * x.qty : 0), 0);
+    const restCount = rest.reduce((s, x) => s + x.qty, 0);
+    lines.push(`…and ${restCount} more card${restCount === 1 ? "" : "s"} (${rest.length} line${rest.length === 1 ? "" : "s"}) worth ${money(restTotal) || "$0.00"} together.`);
+  }
+  if (r.unmatched.length) {
+    lines.push("", "Couldn't find: " + r.unmatched.slice(0, 8).map((e) => `“${clip(e.name, 40)}”`).join(", ") +
+      (r.unmatched.length > 8 ? ` and ${r.unmatched.length - 8} more` : "") + " — not counted.");
+  }
+  if (r.unpricedMarket) lines.push(`${r.unpricedMarket} card${r.unpricedMarket === 1 ? " has" : "s have"} no NM Market price and count as $0.`);
+  return { embeds: [{
+    title: "Deck price", color: BRAND_COLOR, description: clip(lines.join("\n"), 4000),
+    footer: { text: `TCGplayer prices as of ${shortDate(priceDate)} · cheapest printing of each card · packs.ink` },
+  }], components: [] };
+}
+
+export const DECK_MODAL_ID = (priv) => `deck|${priv ? "p" : "-"}`;
+export function deckModal(priv) {
+  return {
+    custom_id: DECK_MODAL_ID(priv), title: "Price a decklist",
+    components: [{ type: 1, components: [{
+      type: 4, custom_id: "list", style: 2, label: "Paste the decklist", required: true,
+      min_length: 3, max_length: 4000,
+      placeholder: "4 Mowgli - Man Cub\n4 Elsa - Spirit of Winter\n2 Be Prepared\n…",
+    }] }],
+  };
 }

@@ -4692,9 +4692,9 @@ Zaven's ask: call a card in Discord and get its picture and price history, plus
 trend reports, with **plain-English, typo-tolerant lookup as the main
 requirement** — "people will say mowgli and not know the subtitle, but there is
 one main one that is played, or spell mowgli slightly wrong". `/card`, `/price`,
-`/movers`, `/events`, `/calendar`, `/help`, `/reports` and a **Price check**
-message menu. Setup (the steps only Zaven can do) is `discord/README.md`.
-Guarded by `node scripts/test_discord_bot.mjs` (~700 checks) and
+`/deck`, `/movers`, `/events`, `/calendar`, `/help`, `/reports` and a **Price
+check** message menu. Setup (the steps only Zaven can do) is `discord/README.md`.
+Guarded by `node scripts/test_discord_bot.mjs` (~800 checks) and
 `python scripts/test_discord_reports.py`.
 
 - **A SEPARATE Worker, `packs-ink-discord`, on workers.dev.** Deploying it
@@ -4747,6 +4747,25 @@ Guarded by `node scripts/test_discord_bot.mjs` (~700 checks) and
   change after its listing disappears, so a mover only counts when
   `prices_daily` holds the same price for it on the newest date (`fetchMovers`).
   The window floor is on the STARTING price, the home banners' rule.
+- **On a promo TCGplayer cannot price, eBay leads** — the site's raw-sales
+  rule (see "Raw eBay sales"): Last sold + Avg of last N come first, TCGplayer
+  Low / Mkt second, and the chart draws each eBay sale as a DOT over the Market
+  line with Low left off (`/chart/p/...?r=<card>&rb=<bucket>`), or the sales
+  alone (`/chart/r/...`) for a card with no TCGplayer product. The split bucket
+  goes through `gradedSlotBucket` / `rawSaleMatch`, copied from the site, so a
+  Challenge card's Top Prize and Prize Wall sales never share a chart.
+- **`/deck` opens a text box** (a modal, type 9) because a slash-command option
+  cannot hold line breaks, and **Price check on a message that is mostly
+  `N Name` lines totals it as a deck** (`looksLikeDeck`: ≥5 card lines and ≥60%
+  of the lines). Each card is priced at its CHEAPEST printing, NM Market and Low.
+  Three matching tiers, cheapest first: the exact normalized name; a full name
+  within 1–2 letters of exactly ONE card (`Be Prepard`, `Tinker Bel - Giant
+  Fairy`; close to two cards means neither); then the resolver, only when it is
+  unambiguous and sure (score ≥ 0.9, or a corrected typo ≥ 0.75). A guessed row
+  says `(closest match)`; an unknown line is listed as not counted, never
+  guessed. **⚠ The resolver runs at most `MAX_GUESSES` (8) times a list** — it is
+  ~1 ms a call, a real exported list needs none, and the Worker has a small CPU
+  budget. The name index is built at startup (`prepareDeckIndex`), not per request.
 - **`/reports`** stores (server, channel, cadence) in
   `discord_report_subscriptions` (**migration 172, STAGED**) through the service
   key; `scripts/discord_reports.py` posts the **digest's own embed** (built by

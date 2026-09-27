@@ -13,10 +13,11 @@ on workers.dev), so deploying it can never touch packs.ink.
 | `/price mowgli` | The same, as a price chart (1M / 3M / 1Y / All buttons), card art as a thumbnail. |
 | `/price elsa psa 10` | Graded: every grade's last sale and average of the last 5, and a chart of the PSA 10 sales. |
 | `/price azurite sea box` | Sealed product: price, changes, chart, TCGplayer + Amazon links. |
+| `/deck` | Opens a box: paste a decklist, get what it costs to build (each card at its cheapest printing, NM Market and Low). |
 | `/movers` | Biggest gains or drops over 1D–1Y, by rarity group, NM Market or Low. |
 | `/events 60614` | Upcoming events near a postal code or town (the site's own event finder). |
 | `/calendar` | Set releases, Challenges and qualifiers coming up. |
-| **Apps → Price check** | Right-click any message: prices every card it mentions. |
+| **Apps → Price check** | Right-click any message: prices every card it mentions, or totals it as a deck when the message is a decklist. |
 | `/reports daily` | (Server managers) the daily movers report, posted into a channel. |
 
 **Names are forgiving by design.** `mowgli`, `mogli`, `moglie`, `how much is
