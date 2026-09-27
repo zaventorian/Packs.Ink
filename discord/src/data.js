@@ -105,6 +105,17 @@ export async function rawRollup(db, cardId) {
 }
 export const rawRowFor = (rows, printingStr) => rawSaleMatch(rows, printingStr);
 
+// ⚠ excluded=is.false is not optional: the table KEEPS every row it rejected
+// (a slab, a pin, a poster), and plotting them would put a $16,406 PSA 10 and
+// an $8 pin on one card's chart. Same filter as the site's fetchRawSales.
+export async function rawSales(db, cardId) {
+  return db.all("raw_sales", {
+    select: "sold_date,sale_price,printing",
+    card_id: "eq." + cardId, excluded: "is.false",
+    order: "sold_date.asc,item_id.asc",
+  });
+}
+
 // ── movers ───────────────────────────────────────────────────────────────
 export const MOVER_WINDOWS = {
   "1d": { col: "1d", prior: "prev", label: "1D" }, "1w": { col: "7d", prior: "7d", label: "1W" },

@@ -115,6 +115,7 @@ export async function cardPayload(res, { view, range, query }, deps) {
     p.raw ? settle(D.rawRollup(db, gt.cardId)) : null,
   ]);
   const single = (gradedAll || []).some((r) => !r.printing);
+  const rawSingle = (rawRows || []).some((r) => !r.printing);
   const forPrinting = D.gradedRowsFor(gradedAll || [], gt.bucket);
   let graded = D.topGradedTiers(forPrinting, 6);
   let grade = null;
@@ -130,6 +131,7 @@ export async function cardPayload(res, { view, range, query }, deps) {
   return E.cardMessage({
     R, res, price, graded, view: grade && view === "chart" ? "graded" : view, range, query,
     raw: D.rawRowFor(rawRows || [], printingStr),
+    rawTarget: { cardId: gt.cardId, bucket: rawSingle ? "" : gt.bucket },
     grade, gradedTarget: { cardId: gt.cardId, bucket: single ? "" : gt.bucket },
     origin: deps.origin, inkColors: deps.index.inkColors,
   });

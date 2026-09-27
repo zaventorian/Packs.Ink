@@ -94,7 +94,18 @@ export function cardMessage(ctx) {
 
   const mkt = price ? price.market : (f ? f[5] : null);
   const low = price ? price.low : (f ? f[4] : null);
-  if (noListing) {
+  // A promo TCGplayer can't price (the raw eBay watchlist) inverts the order,
+  // as the site's card page does: eBay's last sale and average lead, and
+  // TCGplayer's number — the fossil on exactly these cards — follows, plain.
+  const rawLead = !!(ctx.raw && ctx.raw.last_sold_price != null);
+  if (rawLead) {
+    const n = ctx.raw.last_5_count || 0;
+    lines.push(`**${money(ctx.raw.last_sold_price)}** last sold on eBay (${shortDate(ctx.raw.last_sold_date)})` +
+      (ctx.raw.avg_last_5 != null && n > 1 ? ` · avg of last ${n} ${money(ctx.raw.avg_last_5)}` : ""));
+    lines.push(`${ctx.raw.sale_count} raw sale${ctx.raw.sale_count === 1 ? "" : "s"} on record`);
+    const tcg = [mkt != null ? `${money(mkt)} NM Market` : null, low != null ? `${money(low)} Low` : null].filter(Boolean);
+    lines.push("TCGplayer: " + (noListing || !tcg.length ? "no price" : tcg.join(" · ")));
+  } else if (noListing) {
     lines.push("No TCGplayer listing of its own — TCGplayer files it with the regular printing.");
   } else if (mkt != null || low != null) {
     const bits = [];
@@ -104,7 +115,9 @@ export function cardMessage(ctx) {
   } else {
     lines.push("No TCGplayer price yet.");
   }
-  if (price && !noListing) {
+  // The change line and the "Cheapest in 12 months" note are judgements ON
+  // TCGplayer's price, so they are left off where that price isn't the market.
+  if (price && !noListing && !rawLead) {
     const d = price.market != null ? price.mktDelta : price.lowDelta;
     const ch = [["1d", "1D"], ["1w", "1W"], ["1m", "1M"], ["1y", "1Y"]]
       .map(([k, l]) => (d && d[k] != null ? `${l} ${pct(d[k])}` : null)).filter(Boolean);
@@ -113,18 +126,6 @@ export function cardMessage(ctx) {
   }
 
   const fields = [];
-  if (ctx.raw && ctx.raw.last_sold_price != null) {
-    const n = ctx.raw.last_5_count || 0;
-    fields.push({
-      name: "eBay sold (raw)",
-      value: [
-        `Last **${money(ctx.raw.last_sold_price)}** (${shortDate(ctx.raw.last_sold_date)})`,
-        ctx.raw.avg_last_5 != null && n > 1 ? `Avg of ${n}: ${money(ctx.raw.avg_last_5)}` : null,
-        `${ctx.raw.sale_count} sale${ctx.raw.sale_count === 1 ? "" : "s"} on record`,
-      ].filter(Boolean).join("\n"),
-      inline: false,
-    });
-  }
   for (const g of ctx.graded || []) {
     fields.push({
       name: `${g.grader} ${g.grade}`,
@@ -148,14 +149,18 @@ export function cardMessage(ctx) {
   };
   const date = ctx.chartDate || (price && price.date) || "";
   const graded = view === "graded" && ctx.grade;
-  const canChart = graded || (pid && !noListing);
+  const rt = rawLead && ctx.rawTarget ? ctx.rawTarget : null;
+  const canChart = graded || (pid && !noListing) || !!rt;
   if (view === "card" || !canChart) {
     if (img) embed.image = { url: img };
   } else {
     if (img) embed.thumbnail = { url: img };
+    const rawQ = rt ? `r=${encodeURIComponent(rt.cardId)}&rb=${encodeURIComponent(rt.bucket || "")}&` : "";
     embed.image = { url: graded
       ? `${origin}/chart/g/${encodeURIComponent(ctx.gradedTarget.cardId)}/${encodeURIComponent(ctx.grade.grader)}/${encodeURIComponent(ctx.grade.grade)}/${range}.png?b=${encodeURIComponent(ctx.gradedTarget.bucket || "")}&d=${date}`
-      : `${origin}/chart/p/${pid}/${f[0]}/${range}.png?d=${date}` };
+      : pid && !noListing
+        ? `${origin}/chart/p/${pid}/${f[0]}/${range}.png?${rawQ}d=${date}`
+        : `${origin}/chart/r/${encodeURIComponent(rt.cardId)}/${range}.png?rb=${encodeURIComponent(rt.bucket || "")}&d=${date}` };
   }
 
   const components = [];

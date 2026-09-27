@@ -211,6 +211,20 @@ const D = await mod("discord/src/data.js");
       checkMessage(m, `card "${q}" ${view}`);
     }
   }
+  // A raw-watchlist promo: eBay leads, TCGplayer follows plain, no change line
+  // or standing (they judge TCGplayer's price), and the chart overlays sales.
+  {
+    const res = R.resolve("mowgli");
+    const raw = { last_sold_price: 1950, last_sold_date: "2026-09-26", avg_last_5: 1204, last_5_count: 5, sale_count: 109, printing: "" };
+    const m = E.cardMessage({ R, res, price: { ...price, standing: { tone: "low", label: "Cheapest in 12 months" } }, graded: [], raw,
+      rawTarget: { cardId: "crd_x", bucket: "" }, view: "chart", range: "all", origin: "https://bot.example", inkColors: index.inkColors,
+      gradedTarget: { cardId: "crd_x", bucket: "" } });
+    const d = m.embeds[0].description;
+    ok(/\*\*\$1,950\*\* last sold on eBay/.test(d) && d.indexOf("eBay") < d.indexOf("TCGplayer"), "raw card: eBay's last sale leads");
+    ok(!/Cheapest in 12 months/.test(d) && !/1W /.test(d), "raw card: no TCGplayer change line or standing");
+    ok(/[?&]r=crd_x&rb=&/.test(m.embeds[0].image.url), `raw card: chart overlays the eBay sales (${m.embeds[0].image.url})`);
+    checkMessage(m, "raw card");
+  }
   const sealed = R.resolve("azurite sea box");
   checkMessage(E.sealedMessage({ R, res: sealed, price, view: "chart", range: "1y", origin: "https://bot.example" }), "sealed");
   checkMessage(E.notFoundMessage(R, R.resolve("mogl elza"), "mogl elza"), "not found");
