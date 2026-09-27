@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=488">
+<link rel="stylesheet" href="styles.css?v=489">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -798,6 +798,36 @@ const gradedPopPick = (rows, printing) => {
   return {row, label: gradedPopBucket(row.variety) || row.variety || null};
 };
 
+// The Screener's RAW-mode pop columns (asked for from the Screener, 2026-09-27:
+// "should be able to add columns for PSA stuff in raw section"). All start
+// hidden; the gear turns them on. No "Pop @ Grade" — a raw row has no grade.
+const RAW_POP_COL_KEYS = ["poptot", "pop10", "popgem", "pop95", "pop9", "pop8", "pop7", "popq"];
+// Which PSA row describes a RAW Screener row. Stricter than gradedPopPick, and
+// deliberately: a raw row IS one printing, so on a card the catalog holds in
+// both finishes (the _printBadge index knows) only that printing's row will do.
+// gradedPopPick's largest-row fallback would put a mainline card's non-foil
+// population on its Cold Foil row — and a C1 Prize Wall row would read the Top
+// Prize count — so where the finish can't be matched this answers null ("—").
+// A one-printing card (every Enchanted, most promos) takes the largest row:
+// there PSA's Variety names the rarity or the provenance, not a finish.
+const rawPopPick = (rows, printing, cardId) => {
+  const list = rows || [];
+  if(!list.length) return null;
+  const byTotal = (a, b) => (b.total || 0) - (a.total || 0);
+  if(_printBadge.has(cardId + "|Foil")){
+    const want = gradedFoilBucket(printing);
+    return list.filter(r => gradedPopBucket(r.variety) === want).sort(byTotal)[0] || null;
+  }
+  return list.length === 1 ? list[0] : list.slice().sort(byTotal)[0];
+};
+// Is this column switched on in a mode's saved prefs? Mirrors the Screener's
+// colHidden rule (below): a column the prefs have never KNOWN takes its default,
+// which for every raw pop column is hidden. Used to decide whether Raw mode
+// should fetch the population at all.
+const screenerColOn = (pref, key) =>
+  !!(pref && Array.isArray(pref.known) && pref.known.includes(key)
+     && Array.isArray(pref.hidden) && !pref.hidden.includes(key));
+
 // One PSA row's numbers, plus the reads that make them mean something.
 //  * gemRate is the share of graded copies that came back a 10 — the closest
 //    thing to "how hard is this card to grade". Low rate + high price is a
@@ -1092,6 +1122,7 @@ const AUX_EVICTABLE_PREFIXES = [
                                // moversMode, followingExpanded, valuableMode, …) which are
                                // user state, as is packsink:homePanels (section visibility).
   "packsink:following:",
+  "packsink:playmatPrices:",   // the Playmats tab's catalog + latest prices
 ];
 const isPriceDerivedAuxKey = (k) =>
   typeof k === "string" && AUX_EVICTABLE_PREFIXES.some(p => k.startsWith(p));
@@ -1556,8 +1587,10 @@ const SCREENER_MODES = ["raw","graded","sealed"];
 // "pins" (2026-09-11) is the pins + lore counters tab. Its data still lives in
 // sealed_collection_items, so it shares the SEALED visibility axis everywhere a
 // viewer's access is decided — see effectiveSection in CollectionView.
-const COLLECTION_SECTIONS = ["cards","sealed","graded","pins"];
-const COLLECTION_SECTION_LABELS = {cards:"Cards", sealed:"Sealed", graded:"Graded", pins:"Pins & Counters"};
+// "playmats" (2026-09-27) is the same shape again — owned mats are rows under
+// PLAYMAT_PID_BASE in sealed_collection_items — so it shares that axis too.
+const COLLECTION_SECTIONS = ["cards","sealed","graded","pins","playmats"];
+const COLLECTION_SECTION_LABELS = {cards:"Cards", sealed:"Sealed", graded:"Graded", pins:"Pins & Counters", playmats:"Playmats"};
 // Human names for the toast. Deliberately separate from the nav labels: this
 // reads as a sentence ("Link to Decks · Tournaments copied"), not a chip.
 const VIEW_SHARE_LABELS = {
@@ -5632,8 +5665,16 @@ const portfolioFallbackDates = (days) => [
 // has no foil duality). Output rows carry low_today / market_today plus
 // pct_* (Low-driven) and mkt_pct_* (Market-driven) for 1D / 1W / 1M / 3M /
 // 6M / 1Y. Null when N-days-ago data is missing.
-function computeSealedDeltas(history){
+// opts.maxLagDays(windowDays) → how far BEFORE a window's cut the stand-in
+// snapshot may sit before the window reads null instead. OFF by default: sealed
+// rows are daily, and a missing day falling back to the one before it is the
+// documented rule (test_sealed_movers pins it). The playmats turn it on because
+// their record has a months-long hole (TCGCSV's archive went offline before
+// the backfill could reach 2026-05-12..09-25), and without it every window up
+// to 3M compared today's price with the far side of that hole.
+function computeSealedDeltas(history, opts){
   if(!history || !history.length) return [];
+  const maxLag = opts && typeof opts.maxLagDays === "function" ? opts.maxLagDays : null;
   const byPid = new Map();
   for(const h of history){
     const k = h.tcgplayer_product_id;
@@ -5650,7 +5691,7 @@ function computeSealedDeltas(history){
   // -100% crash against the prior real price.
   const lowOf = (r) => { const v = r.low_price_smoothed ?? r.low_price; return v == null ? NaN : Number(v); };
   const mktOf = (r) => { const v = r.market_price; return v == null ? NaN : Number(v); };
-  const priceAtOrBefore = (pts, cutMs, fieldOf) => {
+  const priceAtOrBefore = (pts, cutMs, fieldOf, days) => {
     let best = null, bestMs = -Infinity;
     for(const p of pts){
       const v = fieldOf(p);
@@ -5658,6 +5699,7 @@ function computeSealedDeltas(history){
       const t = new Date(p.date + "T00:00:00Z").getTime();
       if(t <= cutMs && t > bestMs){ best = v; bestMs = t; }
     }
+    if(best != null && maxLag && cutMs - bestMs > maxLag(days) * DAY) return null;
     return best;
   };
   const out = [];
@@ -5686,8 +5728,8 @@ function computeSealedDeltas(history){
       low_prev: null, market_prev: null,
     };
     for(const [k, days] of WINDOWS){
-      const lowPast = priceAtOrBefore(pts, latestMs - days * DAY, lowOf);
-      const mktPast = priceAtOrBefore(pts, latestMs - days * DAY, mktOf);
+      const lowPast = priceAtOrBefore(pts, latestMs - days * DAY, lowOf, days);
+      const mktPast = priceAtOrBefore(pts, latestMs - days * DAY, mktOf, days);
       row[k]                           = (Number.isFinite(lowPast) && lowPast > 0 && Number.isFinite(lowToday))
         ? ((lowToday - lowPast) / lowPast * 100) : null;
       row[k.replace("pct_", "mkt_pct_")] = (Number.isFinite(mktPast) && mktPast > 0 && Number.isFinite(mktToday))
@@ -6033,6 +6075,25 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
         if(s.scatter) return html`<g key=${"s"+i}>${valid.map((p,j) => html`<circle
           key=${j} cx=${xScale(p.x).toFixed(1)} cy=${yScale(p.y).toFixed(1)}
           r="3.2" fill=${s.color} stroke="var(--bg-solid)" stroke-width="1.1"/>`)}</g>`;
+        // Opt-in: a series with a known hole in its record breaks the line there
+        // instead of drawing a straight "trend" across months with no data. Only
+        // a series that sets `breakGapMs` changes; every other chart is as before.
+        if(s.breakGapMs){
+          const runs = [];
+          let cur = [];
+          for(const p of valid){
+            if(cur.length && p.x - cur[cur.length - 1].x > s.breakGapMs){ runs.push(cur); cur = []; }
+            cur.push(p);
+          }
+          if(cur.length) runs.push(cur);
+          return html`<g key=${"s"+i}>${runs.map((run, j) => run.length === 1
+            ? html`<circle key=${j} cx=${xScale(run[0].x).toFixed(1)} cy=${yScale(run[0].y).toFixed(1)}
+                r="3" fill=${s.color} stroke="var(--bg-solid)" stroke-width="1.1"/>`
+            : html`<polyline key=${j} fill="none" stroke=${s.color} stroke-width="1.6"
+                stroke-linejoin="round" stroke-linecap="round"
+                stroke-dasharray=${s.dash || (s.dashed?"5,3":"0")}
+                points=${run.map(p => `${xScale(p.x).toFixed(1)},${yScale(p.y).toFixed(1)}`).join(" ")}/>`)}</g>`;
+        }
         // A polyline of one vertex draws nothing. Render the lone point as a
         // dot so a single-sale graded tier is visible instead of invisible.
         if(valid.length === 1) return html`<circle key=${"s"+i}
@@ -24993,11 +25054,15 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
   // already has loaded; we re-derive Δ% windows from the fresh history
   // fetch via computeSealedDeltas (one-row map) so the pill colors / nulls
   // agree with everywhere else.
+  // A playmat's record has a months-long hole (see computeSealedDeltas), so its
+  // windows may not reach across it and its chart line breaks at it. Sealed
+  // product keeps the documented fall-back-to-the-day-before behaviour.
+  const isMat = !!product?.is_playmat;
   const deltaRow = useMemo(() => {
     if(!history || !history.length) return null;
     const rows = history.map(r => ({...r, tcgplayer_product_id: product.tcgplayer_product_id}));
-    return computeSealedDeltas(rows)[0] || null;
-  }, [history, product?.tcgplayer_product_id]);
+    return computeSealedDeltas(rows, isMat ? {maxLagDays: (d) => Math.max(14, d / 2)} : undefined)[0] || null;
+  }, [history, product?.tcgplayer_product_id, isMat]);
   // Chart series — Low + NM Market overlaid on one chart. We use the same
   // LineChart component the rest of the site uses.
   const chartSeries = useMemo(() => {
@@ -25010,11 +25075,24 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
       if(Number.isFinite(lo)) lowData.push({x: t, y: lo});
       if(Number.isFinite(mk)) mktData.push({x: t, y: mk});
     }
+    const breakGapMs = isMat ? 14 * 86400000 : undefined;
     const out = [];
-    if(lowData.length) out.push({label: "Low",       color: "var(--accent)", dashed:false, data: lowData});
-    if(mktData.length) out.push({label: "NM Market", color: "#7e54c4",      dashed:false, data: mktData});
+    if(lowData.length) out.push({label: "Low",       color: "var(--accent)", dashed:false, data: lowData, breakGapMs});
+    if(mktData.length) out.push({label: "NM Market", color: "#7e54c4",      dashed:false, data: mktData, breakGapMs});
     return out;
-  }, [history]);
+  }, [history, isMat]);
+  // The longest stretch with no snapshot at all, for the caption under a mat's
+  // chart. A break in a line needs saying out loud, or it reads as a glitch.
+  const recordGap = useMemo(() => {
+    if(!isMat || !history || history.length < 2) return null;
+    const days = [...new Set(history.map(r => r.date))].sort();
+    let best = null;
+    for(let k = 1; k < days.length; k++){
+      const span = (Date.parse(days[k] + "T00:00:00Z") - Date.parse(days[k - 1] + "T00:00:00Z")) / 86400000;
+      if(span > 14 && (!best || span > best.span)) best = {from: days[k - 1], to: days[k], span};
+    }
+    return best;
+  }, [history, isMat]);
   if(!product) return null;
   // Pins and lore counters are prizes, not products — no SKU, no price, nothing
   // to link to. The modal exists for the one thing a collector wants beyond the
@@ -25148,35 +25226,49 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
     </div>`;
   }
   const pid = product.tcgplayer_product_id;
-  const qty = sealedCollection?.[pid] || 0;
-  const dtype = deriveSealedDisplayType(product);
+  // A PLAYMAT prices and links under its real TCGplayer id but is OWNED under
+  // its band id (PLAYMAT_PID_BASE), so the two keys part company here. Every
+  // other product owns under the id it prices under.
+  const mat = !!product.is_playmat;
+  const own = product.own_pid != null ? product.own_pid : pid;
+  const qty = sealedCollection?.[own] || 0;
+  const dtype = mat ? null : deriveSealedDisplayType(product);
   const url = tcgUrl(pid);
-  // A plain call, deliberately NOT useMemo — the static-product branch above
-  // early-returns, so any hook added here would sit after a conditional return
-  // and break hook order. It is a couple of passes over at most ~600 rows.
-  const standing = priceStanding(history);
   const bump = (delta) => {
     const next = Math.max(0, Math.min(99, qty + delta));
-    if(next !== qty) updateSealedQty(pid, next);
+    if(next !== qty) updateSealedQty(own, next);
   };
   const lowToday    = product.low_price != null ? Number(product.low_price) : null;
   const marketToday = product.market_price != null ? Number(product.market_price) : null;
+  // A plain call, deliberately NOT useMemo — the static-product branch above
+  // early-returns, so any hook added here would sit after a conditional return
+  // and break hook order. It is a couple of passes over at most ~600 rows.
+  // ⚠ Only when TODAY carries an NM Market price. priceStanding judges the
+  // newest row that HAS one, and on a thinly-traded product that can be months
+  // old (most playmats) — the chip then said "near its 12-month high" about a
+  // price nobody could see, beside a Low that said otherwise.
+  const standing = marketToday != null ? priceStanding(history) : null;
   const WINS = [["pct_1d","1D"],["pct_7d","1W"],["pct_30d","1M"],["pct_90d","3M"],["pct_180d","6M"],["pct_365d","1Y"]];
+  // A mat's meta line is the caller's (section · set · tier · shop), and a mat
+  // is a wide thing, so its photo slot is landscape rather than the box square.
+  const metaParts = mat ? (product.meta_parts || []).filter(Boolean)
+    : [setName, dtype].filter(Boolean);
   return html`<div class="card-detail-overlay" ref=${sdOverlayRef} ...${backdropClose(onClose)}>
-    <div class="card-detail card-detail--price-first sealed-detail" onClick=${e=>e.stopPropagation()}>
+    <div class=${"card-detail card-detail--price-first sealed-detail" + (mat ? " sealed-detail--playmat" : "")} onClick=${e=>e.stopPropagation()}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <div class="sealed-detail-head">
         <div class="sealed-detail-img-wrap">
           ${product.image_url
-            ? html`<span class="sealed-detail-img"><${ProductPhoto} src=${product.image_url} glyph="box" size=${44}/></span>`
+            ? html`<span class="sealed-detail-img"><${ProductPhoto} src=${product.image_url} glyph=${mat ? "mat" : "box"} size=${44}/></span>`
             : html`<div class="sealed-detail-img-fallback">${product.name||"Sealed product"}</div>`}
         </div>
         <div class="sealed-detail-info">
-          <h2 class="sealed-detail-name">${cleanSealedName(product.name||"Sealed product")}</h2>
+          <h2 class="sealed-detail-name">${mat ? product.name : cleanSealedName(product.name||"Sealed product")}</h2>
           <div class="sealed-detail-meta muted">
-            ${setName ? html`<span>${setName}</span>` : ""}
-            ${setName && dtype ? html`<span class="sealed-detail-sep">·</span>` : ""}
-            ${dtype ? html`<span>${dtype}</span>` : ""}
+            ${metaParts.flatMap((m, i) => [
+              i > 0 ? html`<span key=${"s" + i} class="sealed-detail-sep">·</span>` : null,
+              html`<span key=${"m" + i}>${m}</span>`,
+            ])}
           </div>
           <div class="sealed-detail-prices">
             ${lowToday != null && html`<div class="sealed-detail-price-cell">
@@ -25193,11 +25285,19 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
                 + standing.n + " daily prices)."}>${standing.label}</span>`}
             ${url && html`<a class="sealed-detail-buy" href=${url} target="_blank"
               rel="noopener nofollow sponsored" title="Buy on TCGplayer (affiliate link)">Buy on TCGplayer ↗</a>`}
-            <${AmazonBuyLink} product=${product} setName=${setName}/>
+            ${mat
+              // A prize mat is not sold anywhere new, and an Amazon search for
+              // one lands on resellers' lots — so only a plain retail mat gets
+              // the link, and as a search it says "Find", never "Buy".
+              ? (product.amazon_q && html`<a class="sealed-detail-buy sealed-detail-buy--amazon"
+                  href=${amazonSearchUrl(product.amazon_q)} target="_blank" rel="noopener nofollow sponsored"
+                  title="Search Amazon for this playmat (affiliate link)">${uiIcon("cart", 13)} Find on Amazon ↗</a>`)
+              : html`<${AmazonBuyLink} product=${product} setName=${setName}/>`}
           </div>
           <div class="sealed-detail-affiliate muted">
-            Buy links are affiliate links — we may earn a commission at no extra
-            cost to you. As an Amazon Associate I earn from qualifying purchases.
+            ${mat && !product.amazon_q
+              ? "Buy links are affiliate links — we may earn a commission at no extra cost to you."
+              : "Buy links are affiliate links — we may earn a commission at no extra cost to you. As an Amazon Associate I earn from qualifying purchases."}
           </div>
           ${!readOnly && html`<div class="sealed-detail-owncounter">
             <span class="sealed-detail-owncounter-lbl">Owned</span>
@@ -25205,11 +25305,12 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
             <span class=${"sealed-coll-counter-qty"+(qty>0?" has":"")}>${qty}</span>
             <button onClick=${()=>bump(+1)} disabled=${qty>=99} aria-label="Increase quantity">+</button>
             ${qty > 0 && (lowToday != null || marketToday != null) && (() => {
-              // The SAME basis the Sealed tab totals with (its Low / NM Market
-              // toggle, Low by default) — this said Market while the tab said
-              // Low, so one box had two values a click apart. Labelled.
+              // The SAME basis the tab totals with (its Low / NM Market toggle,
+              // Low by default) — this said Market while the tab said Low, so
+              // one box had two values a click apart. Labelled. Playmats keep
+              // their own toggle, so they read their own key.
               let useMkt = false;
-              try { useMkt = localStorage.getItem("packsink:sealedColl:priceMode") === "market"; } catch {}
+              try { useMkt = localStorage.getItem(mat ? PLAYMAT_MODE_KEY : "packsink:sealedColl:priceMode") === "market"; } catch {}
               const unit = useMkt ? (marketToday ?? lowToday) : (lowToday ?? marketToday);
               return html`<span class="sealed-detail-owned-value muted">
                 Value at ${useMkt ? "NM Market" : "Low"}: <strong>${fmt((unit || 0) * qty)}</strong>
@@ -25217,9 +25318,9 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
             })()}
           </div>`}
           ${!readOnly && qty > 0 && html`<${CostDateInputs}
-            currentPaid=${sealedMeta?.[pid]?.amount_paid ?? null}
-            currentDate=${sealedMeta?.[pid]?.acquired_date || null}
-            onCommit=${patch => updateSealedMeta(pid, patch)}/>`}
+            currentPaid=${sealedMeta?.[own]?.amount_paid ?? null}
+            currentDate=${sealedMeta?.[own]?.acquired_date || null}
+            onCommit=${patch => updateSealedMeta(own, patch)}/>`}
         </div>
       </div>
       <div class="sealed-detail-deltas">
@@ -25258,9 +25359,15 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
           if(historyState.error) return html`<div style=${{padding:"40px 0",textAlign:"center",color:"var(--red)",fontSize:12}}>${historyState.error}</div>`;
           if(chartSeries.length === 0) return html`<div class="muted" style=${{padding:"40px 0",textAlign:"center",fontSize:12}}>No price history yet for this product.</div>`;
           if(visible.length === 0) return html`<div class="muted" style=${{padding:"40px 0",textAlign:"center",fontSize:12}}>Pick a line to show (Low or NM Market).</div>`;
+          // One day on record draws a lone dot over an axis with no range (three
+          // identical tick labels). Say it instead — a newly listed product.
+          if(new Set(visible.flatMap(s => s.data.map(p => p.x))).size < 2)
+            return html`<div class="muted" style=${{padding:"40px 0",textAlign:"center",fontSize:12}}>Only one day of prices on record so far — the chart fills in as the daily prices land.</div>`;
           return html`<${LineChart} series=${visible} width=720 height=240
             padding=${{top:8,right:12,bottom:24,left:60}}/>`;
         })()}
+        ${recordGap && !historyState.loading && html`<div class="sealed-detail-gapnote muted">
+          Gap in our price record: ${_pmDate(recordGap.from)} – ${_pmDate(recordGap.to)}.</div>`}
       </div>
     </div>
   </div>`;
@@ -25440,7 +25547,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
   // Owned sealed pids — driver for the optional Δ% history fetch.
   const ownedSealedPids = useMemo(() =>
     Object.entries(sealedCollection || {})
-      .filter(([pid, q]) => q > 0 && !isCollectiblePid(pid))
+      .filter(([pid, q]) => q > 0 && !isOwnTabPid(pid))
       .map(([pid]) => parseInt(pid, 10))
       .filter(Number.isFinite),
     [sealedCollection]);
@@ -25479,9 +25586,9 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
       priceByPid[p.tcgplayer_product_id] = parseFloat(p[priceField]);
     }
     for(const [pid, qty] of Object.entries(sealedCollection)){
-      // Pins and lore counters live on their own tab now; counting them here
-      // inflated Units owned / Distinct SKUs with things this tab doesn't show.
-      if(qty <= 0 || isCollectiblePid(pid)) continue;
+      // Pins, lore counters and playmats live on their own tabs; counting them
+      // here inflated Units owned / Distinct SKUs with things this tab doesn't show.
+      if(qty <= 0 || isOwnTabPid(pid)) continue;
       distinct++;
       units += qty;
       const p = priceByPid[pid];
@@ -25741,6 +25848,22 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
 // Ownership is unchanged: a row in sealed_collection_items under the synthetic
 // pid (see LORCANA_PINS). Only the ARRANGEMENT is new — supabase/139.
 const isCollectiblePid = (pid) => { const n = Number(pid); return n >= 950000000 && n < 970000000; };
+// An owned PLAYMAT is a sealed_collection_items row under 980000000 + its
+// TCGplayer product id — the pins' trick again, and for the same reason: every
+// sealed count, value and chart keys off that table, and a band is what lets
+// them all say "not mine" with a pure function instead of a catalog lookup.
+// It also keeps a mat out of the sealed portfolio value BY CONSTRUCTION: no
+// price row exists at the band id, so it contributes $0 there exactly as a pin
+// does, rather than being in the history and missing from the headline total.
+// ⚠ The REAL id stays the price key (history, TCGplayer link) — only ownership
+// uses the band. Clear of puzzles (900M+SKU), exclusives (930M+n) and pins /
+// counters (950-970M); 10M of room is decades of TCGplayer ids.
+const PLAYMAT_PID_BASE = 980000000;
+const isPlaymatPid = (pid) => { const n = Number(pid); return n >= PLAYMAT_PID_BASE && n < PLAYMAT_PID_BASE + 10000000; };
+const playmatOwnPid = (tcgPid) => PLAYMAT_PID_BASE + Number(tcgPid);
+// Pins, counters and playmats each have their own Collection tab, so none of
+// them is a SEALED product for the Sealed tab's counts.
+const isOwnTabPid = (pid) => isCollectiblePid(pid) || isPlaymatPid(pid);
 const cbClamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const COLLECTIBLE_BOARD_BGS = [
   {key: "cork",     label: "Cork"},
@@ -26579,6 +26702,347 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
       sealedCollection=${owned} sealedMeta=${sealedMeta || {}}
       updateSealedQty=${updateSealedQty || (() => {})} updateSealedMeta=${updateSealedMeta || (() => {})}
       readOnly=${!!readOnly} onClose=${() => setDetail(null)}/>`}
+  </div>`;
+};
+
+// ── Playmats (Collection » Playmats, 2026-09-27) ────────────────────────────
+// Asked for from the beta: "I have all the prize wall and set champion mats and
+// would love to log them." Every Lorcana playmat TCGplayer lists — ~63 of them,
+// in their OWN TCGplayer category (Playmats, 35), which is why the card ETL
+// never saw them — loaded into `playmats` by scripts/load_playmats.py and priced
+// by the daily ETL (tcgcsv_common.EXTRA_PRICE_GROUPS). History back to
+// 2024-02-08 comes from scripts/backfill_playmat_prices.py.
+//
+// Ownership is a sealed_collection_items row under PLAYMAT_PID_BASE + the
+// TCGplayer id (see there). Prices, history and the TCGplayer link key off the
+// REAL id; only the stepper uses the band.
+// ⚠ The section KEYS are the loader's SECTIONS and migration 170's CHECK —
+// scripts/test_playmats.py pins all three together.
+const PLAYMAT_SECTIONS = [
+  {key: "retail",    label: "Retail",                   note: "Sold in stores and online, usually two designs a set."},
+  {key: "set_champ", label: "Set Championship",         note: "Prizes at each set's Set Championships: Champion for the winner, Participant for the field."},
+  {key: "dlc",       label: "Disney Lorcana Challenge", note: "Given out at Disney Lorcana Challenge weekends."},
+  {key: "event",     label: "Events",                   note: "Conventions and one-off event exclusives."},
+  {key: "other",     label: "Other",                    note: null},
+];
+const PLAYMAT_SECTION_LABEL = Object.fromEntries(PLAYMAT_SECTIONS.map(s => [s.key, s.label]));
+// Same shape as the Sealed tab's own key: a collection-value preference, so it
+// persists. The detail modal reads it too, so the value it quotes and the tab's
+// total are on one basis.
+const PLAYMAT_MODE_KEY = "packsink:playmats:priceMode";
+// Price-derived, so it lives under AUX_EVICTABLE_PREFIXES and is wiped when a
+// newer price snapshot lands.
+const PLAYMAT_CACHE_KEY = "packsink:playmatPrices:v1";
+const PLAYMAT_CACHE_TTL = 12 * 3600 * 1000;
+let _playmatFetch = null;
+// → {rows} | {rows, stale} | {rows: [], unavailable: true}. `unavailable` is a
+// database without migration 170 — the tab says so instead of throwing.
+const fetchPlaymats = (force) => {
+  if(!force){
+    const hit = readJsonCache(PLAYMAT_CACHE_KEY, PLAYMAT_CACHE_TTL);
+    if(hit && !hit.stale && Array.isArray(hit.data) && hit.data.length) return Promise.resolve({rows: hit.data});
+  }
+  if(_playmatFetch) return _playmatFetch;
+  _playmatFetch = sbFetchAll("playmat_prices_latest", {select: "*", order: "tcgplayer_product_id.asc"})
+    .then(rows => { writeJsonCache(PLAYMAT_CACHE_KEY, rows || []); return {rows: rows || []}; })
+    .catch(e => {
+      const msg = String(e?.message || e);
+      if(/Supabase 404|PGRST205|42P01/.test(msg)) return {rows: [], unavailable: true};
+      // Offline, or a hiccup: an expired copy beats a blank tab.
+      const old = readJsonCache(PLAYMAT_CACHE_KEY, Infinity);
+      if(old && Array.isArray(old.data) && old.data.length) return {rows: old.data, stale: true};
+      throw e;
+    })
+    .finally(() => { _playmatFetch = null; });
+  return _playmatFetch;
+};
+const _pmNum = (v) => { if(v == null || v === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
+// "2026-03-07" read as a UTC calendar date, so it never shows a day early west
+// of Greenwich (the calendar's standing rule).
+const _pmDate = (ymd) => {
+  const t = Date.parse(String(ymd || "") + "T00:00:00Z");
+  return Number.isFinite(t)
+    ? new Date(t).toLocaleDateString(undefined, {month: "short", day: "numeric", year: "numeric", timeZone: "UTC"})
+    : "";
+};
+// What tells two mats in one section apart: the tier on a Set Championship
+// mat, the finish, and the shop an exclusive came from. A year only where the
+// section is the kind of thing that recurs by year and the source does not
+// already say it ("2024 conventions").
+const playmatDetails = (r) => {
+  const out = [];
+  if(r.tier) out.push(r.tier);
+  if(r.finish) out.push(r.finish);
+  if(r.source) out.push(r.section === "retail" ? r.source + " exclusive" : r.source);
+  if(r.year && (r.section === "dlc" || r.section === "event" || r.section === "set_champ")
+     && !String(r.source || "").includes(String(r.year))) out.push(String(r.year));
+  return out;
+};
+// A section is ONE grid, so the set rides on the tile rather than a heading per
+// set: most sets have one Championship mat and two retail ones, and a heading
+// each left a column of single tiles beside an empty row.
+const playmatSubline = (r) => {
+  const d = playmatDetails(r);
+  const withSet = (r.section === "retail" || r.section === "set_champ") && r.set_name
+    ? [r.set_name, ...d] : d;
+  if(withSet.length) return withSet.join(" · ");
+  return r.section === "retail" ? "Standard" : r.section === "dlc" ? "Challenge prize"
+    : r.section === "event" ? "Event exclusive" : "";
+};
+// A plain retail mat is on the shelf; a prize or an exclusive is not, and an
+// Amazon search for one lands on resellers' lots. Only the former gets a link.
+const playmatAmazonQuery = (r) =>
+  r.section === "retail" && !r.source ? `Disney Lorcana ${r.name} playmat` : null;
+// The product row SealedDetailModal takes: priced + linked under the real id,
+// owned under the band id.
+const playmatProduct = (r) => ({
+  tcgplayer_product_id: r.tcgplayer_product_id,
+  own_pid: playmatOwnPid(r.tcgplayer_product_id),
+  is_playmat: true,
+  printing: "Normal",
+  name: r.name,
+  image_url: tcgProductImg(r.tcgplayer_product_id, 1000),
+  low_price: r.low_price, market_price: r.market_price,
+  meta_parts: [PLAYMAT_SECTION_LABEL[r.section] || null, r.set_name || null, ...playmatDetails(r)],
+  amazon_q: playmatAmazonQuery(r),
+});
+// Order within a section: newest set first, then the order a collector reads a
+// set's mats in — the regular retail pair before the exclusives, the Champion
+// mat before the Participant one. Sections with no set run newest year first.
+const playmatSort = (sectionKey, rows) => {
+  const byName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""));
+  if(sectionKey === "retail" || sectionKey === "set_champ"){
+    const tierRank = (r) => r.tier === "Champion" ? 0 : r.tier === "Participant" ? 1 : 2;
+    return rows.slice().sort((a, b) =>
+      (!a.set_released_at) - (!b.set_released_at)
+      || String(b.set_released_at || "").localeCompare(String(a.set_released_at || ""))
+      || String(a.set_name || "").localeCompare(String(b.set_name || ""))
+      || (sectionKey === "set_champ"
+        ? tierRank(a) - tierRank(b)
+        : ((a.source ? 1 : 0) - (b.source ? 1 : 0))
+          || ((a.finish ? 1 : 0) - (b.finish ? 1 : 0))
+          || String(a.released_on || "").localeCompare(String(b.released_on || "")))
+      || byName(a, b));
+  }
+  return rows.slice().sort((a, b) =>
+    (b.year || 0) - (a.year || 0) || (b.tcgplayer_product_id - a.tcgplayer_product_id));
+};
+
+const PlaymatsView = ({user, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, readOnly, onSignIn}) => {
+  sealedCollection = sealedCollection || {};
+  sealedMeta = sealedMeta || {};
+  const [load, setLoad] = useState({rows: null, error: null, unavailable: false, stale: false});
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let live = true;
+    fetchPlaymats(attempt > 0)
+      .then(r => { if(live) setLoad({rows: r.rows, error: null, unavailable: !!r.unavailable, stale: !!r.stale}); })
+      .catch(e => { if(live) setLoad(s => ({...s, rows: s.rows, error: String(e?.message || e)})); });
+    return () => { live = false; };
+  }, [attempt]);
+  // Viewing someone else's collection, what they HAVE is the question.
+  const [filter, setFilter] = useState(() => {
+    if(readOnly) return "owned";
+    try { const v = localStorage.getItem("packsink:playmats:filter"); return ["all", "owned", "missing"].includes(v) ? v : "all"; }
+    catch { return "all"; }
+  });
+  useEffect(() => { if(readOnly) return; try { localStorage.setItem("packsink:playmats:filter", filter); } catch {} }, [filter, readOnly]);
+  const [priceMode, setPriceMode] = useState(() => {
+    try { return localStorage.getItem(PLAYMAT_MODE_KEY) === "market" ? "market" : "low"; } catch { return "low"; }
+  });
+  useEffect(() => { try { localStorage.setItem(PLAYMAT_MODE_KEY, priceMode); } catch {} }, [priceMode]);
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("packsink:playmats:collapsed") || "[]")); } catch { return new Set(); }
+  });
+  const toggleCollapsed = (k) => {
+    const n = new Set(collapsed);
+    if(n.has(k)) n.delete(k); else n.add(k);
+    setCollapsed(n);
+    try { localStorage.setItem("packsink:playmats:collapsed", JSON.stringify([...n])); } catch {}
+  };
+  const [trackCosts, setTrackCosts] = useState(() => {
+    try { return localStorage.getItem("packsink:playmats:trackCosts") === "1"; } catch { return false; }
+  });
+  useEffect(() => { try { localStorage.setItem("packsink:playmats:trackCosts", trackCosts ? "1" : "0"); } catch {} }, [trackCosts]);
+  const [q, setQ] = useState("");
+  const [detail, setDetail] = useState(null);
+
+  const rows = load.rows || [];
+  const canEdit = !readOnly && !!user;
+  const qtyOf = (r) => sealedCollection[playmatOwnPid(r.tcgplayer_product_id)] || 0;
+  const priceOf = (r) => {
+    const lo = _pmNum(r.low_price), mk = _pmNum(r.market_price);
+    return priceMode === "market" ? (mk ?? lo) : (lo ?? mk);
+  };
+  // The newest snapshot any mat carries. A mat whose own price is a week older
+  // than that is showing an OLD price, and the tile says which day it is from.
+  // ("Last listed" would overclaim: our record has a hole, 2026-05-12..09-25,
+  // and a mat may well have been listed inside it.)
+  const latestDate = useMemo(() =>
+    rows.reduce((m, r) => (r.price_date && r.price_date > m ? r.price_date : m), ""), [rows]);
+  const staleBefore = useMemo(() => {
+    const t = Date.parse(latestDate + "T00:00:00Z");
+    return Number.isFinite(t) ? new Date(t - 7 * 86400000).toISOString().slice(0, 10) : "";
+  }, [latestDate]);
+  const totals = useMemo(() => {
+    let owned = 0, units = 0, value = 0;
+    for(const r of rows){
+      const n = sealedCollection[playmatOwnPid(r.tcgplayer_product_id)] || 0;
+      if(n <= 0) continue;
+      owned++; units += n;
+      const lo = _pmNum(r.low_price), mk = _pmNum(r.market_price);
+      value += ((priceMode === "market" ? (mk ?? lo) : (lo ?? mk)) || 0) * n;
+    }
+    return {owned, units, value, total: rows.length};
+  }, [rows, sealedCollection, priceMode]);
+  const sections = useMemo(() => {
+    const by = new Map(PLAYMAT_SECTIONS.map(s => [s.key, []]));
+    for(const r of rows) (by.get(r.section) || by.get("other")).push(r);
+    return PLAYMAT_SECTIONS.filter(s => by.get(s.key).length)
+      .map(s => ({...s, rows: playmatSort(s.key, by.get(s.key))}));
+  }, [rows]);
+  const needle = searchNorm(q.trim()).toLowerCase();
+  const shown = (r) => {
+    const own = qtyOf(r) > 0;
+    if(filter === "owned" && !own) return false;
+    if(filter === "missing" && own) return false;
+    if(!needle) return true;
+    const hay = searchNorm([r.name, r.tcg_name, r.set_name, r.source, r.tier, r.finish, r.year,
+      PLAYMAT_SECTION_LABEL[r.section]].filter(Boolean).join(" ")).toLowerCase();
+    return needle.split(/\s+/).every(t => hay.includes(t));
+  };
+
+  const tile = (r) => {
+    const pid = r.tcgplayer_product_id;
+    const own = playmatOwnPid(pid);
+    const qty = qtyOf(r);
+    const lo = _pmNum(r.low_price), mk = _pmNum(r.market_price);
+    const px = priceOf(r);
+    const stale = !!(r.price_date && staleBefore && r.price_date < staleBefore);
+    const url = tcgUrl(pid);
+    const bump = (d) => { const next = Math.max(0, Math.min(99, qty + d)); if(next !== qty) updateSealedQty(own, next); };
+    const open = () => setDetail(playmatProduct(r));
+    return html`<div key=${pid} class=${"gc-card gc-card-clickable playmat-card" + (qty > 0 ? " gc-card-owned" : "")}
+        tabIndex=${0} onClick=${open} title="Price history and details"
+        onKeyDown=${e => { if(e.target === e.currentTarget && e.key === "Enter"){ e.preventDefault(); open(); } }}>
+      <span class="playmat-card-photo">
+        <${ProductPhoto} src=${tcgProductImg(pid, 400)} glyph="mat" size=${28}/>
+        ${r.presale && html`<span class="playmat-badge">Pre-order</span>`}
+      </span>
+      <div class="gc-card-body">
+        <div class="gc-card-name" title=${r.tcg_name || r.name}>${r.name}</div>
+        <div class="gc-card-sub muted">${playmatSubline(r)}</div>
+        <div class="gc-card-raw">
+          ${lo == null && mk == null
+            ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">No TCGplayer price yet</span>`
+            : html`${lo != null && html`<span class="gc-card-raw-px"><span class="gc-card-raw-px-lbl">Low</span> ${fmt(lo)}</span>`}
+                ${mk != null && html`<span class="gc-card-raw-px gc-card-raw-px-secondary"><span class="gc-card-raw-px-lbl">Mkt</span> ${fmt(mk)}</span>`}`}
+          ${url && html`<a class="gc-card-buy" href=${url} target="_blank" rel="noopener nofollow sponsored"
+            onClick=${e => e.stopPropagation()} title="Buy on TCGplayer (affiliate link)">TCGplayer ↗</a>`}
+        </div>
+        ${stale && html`<div class="playmat-stale muted"
+          title="The newest price we hold for this mat. TCGplayer has shown none since, or it falls in a gap in our record.">Price as of ${_pmDate(r.price_date)}</div>`}
+        <div class="gc-card-foot">
+          <div class="gc-card-foot-meta">
+            ${qty > 0 && px != null && html`<span class="gc-card-foot-val" title="Owned value">${fmt(px * qty)}</span>`}
+          </div>
+          ${readOnly
+            ? (qty > 0 && html`<div class="sealed-coll-counter sealed-coll-counter-readonly">
+                <span class="sealed-coll-counter-qty has">×${qty}</span></div>`)
+            : canEdit && html`<div class="sealed-coll-counter" onClick=${e => e.stopPropagation()}>
+                <button type="button" onClick=${e => { e.stopPropagation(); bump(-1); }} disabled=${qty <= 0} aria-label=${"One fewer " + r.name}>−</button>
+                <span class=${"sealed-coll-counter-qty" + (qty > 0 ? " has" : "")}>${qty}</span>
+                <button type="button" onClick=${e => { e.stopPropagation(); bump(+1); }} disabled=${qty >= 99} aria-label=${"One more " + r.name}>+</button>
+              </div>`}
+        </div>
+        ${canEdit && trackCosts && qty > 0 && html`<div onClick=${e => e.stopPropagation()}><${CostDateInputs}
+          currentPaid=${sealedMeta[own]?.amount_paid ?? null}
+          currentDate=${sealedMeta[own]?.acquired_date || null}
+          onCommit=${patch => updateSealedMeta(own, patch)}/></div>`}
+      </div>
+    </div>`;
+  };
+
+  let body;
+  if(load.unavailable){
+    body = html`<div class="muted playmat-empty">Playmats aren't switched on for this site yet.</div>`;
+  } else if(load.rows === null){
+    body = load.error
+      ? html`<div class="load-fail">
+          <div>Couldn't load playmats.</div>
+          <div class="load-fail-detail muted">Check your connection — nothing in your collection has changed.</div>
+          <button type="button" class="load-fail-retry" onClick=${() => setAttempt(a => a + 1)}>Try again</button>
+        </div>`
+      : html`<div class="muted playmat-empty">Loading playmats…</div>`;
+  } else {
+    const blocks = sections.map(s => {
+      const ownedIn = s.rows.filter(r => qtyOf(r) > 0).length;
+      const vis = s.rows.filter(shown);
+      if(!vis.length && (filter !== "all" || needle)) return null;
+      const isCollapsed = collapsed.has(s.key);
+      return html`<div key=${s.key} class="gc-set-block playmat-section">
+        <div class="gc-set-title gc-set-title-clickable" role="button" tabIndex=${0}
+            aria-expanded=${!isCollapsed}
+            onClick=${() => toggleCollapsed(s.key)}
+            onKeyDown=${e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); toggleCollapsed(s.key); } }}>
+          <span class="gc-set-caret">${isCollapsed ? "▸" : "▾"}</span>
+          ${s.label}
+          <span class="muted">${ownedIn} / ${s.rows.length}</span>
+        </div>
+        ${!isCollapsed && html`<${React.Fragment}>
+          ${s.note && html`<div class="playmat-note muted">${s.note}</div>`}
+          <div class="gc-set-grid playmat-grid">${vis.map(r => tile(r))}</div>
+        <//>`}
+      </div>`;
+    }).filter(Boolean);
+    body = blocks.length ? blocks : html`<div class="muted playmat-empty">${
+      needle ? "No playmats match that search."
+      : filter === "owned" ? (readOnly ? "No playmats in this collection yet." : "You haven't checked off any playmats yet — switch to All to browse them.")
+      : "You own every playmat on the list."}</div>`;
+  }
+
+  return html`<div class="graded-collection sealed-coll playmat-coll">
+    <div class="graded-collection-header">
+      <div class="graded-collection-totals">
+        <div class="gc-stat"><div class="gc-stat-val">${totals.owned} <span class="playmat-of">/ ${totals.total}</span></div><div class="gc-stat-lbl">Playmats owned</div></div>
+        ${totals.units !== totals.owned && html`<div class="gc-stat"><div class="gc-stat-val">${totals.units}</div><div class="gc-stat-lbl">Total copies</div></div>`}
+        <div class="gc-stat"><div class="gc-stat-val green">${fmt(totals.value)}</div><div class="gc-stat-lbl">Est. value (${priceMode === "market" ? "NM Market" : "Low"})</div></div>
+      </div>
+      <div class="graded-collection-header-actions">
+        <div class="seg-toggle" role="group" aria-label="Show">
+          <button type="button" class=${filter === "all" ? "active" : ""} onClick=${() => setFilter("all")}>All</button>
+          <button type="button" class=${filter === "owned" ? "active" : ""} onClick=${() => setFilter("owned")}>Owned</button>
+          <button type="button" class=${filter === "missing" ? "active" : ""} onClick=${() => setFilter("missing")}>Missing</button>
+        </div>
+        <div class="market-sim-kind" role="group" aria-label="Price source">
+          <button type="button" class=${priceMode === "low" ? "active" : ""} onClick=${() => setPriceMode("low")}>Low</button>
+          <button type="button" class=${priceMode === "market" ? "active" : ""} onClick=${() => setPriceMode("market")}>NM Market</button>
+        </div>
+        ${canEdit && html`<label class="sealed-coll-flag" title="Show optional 'amount paid' and 'date acquired' inputs on each playmat you own.">
+          <input type="checkbox" checked=${trackCosts} onChange=${e => setTrackCosts(e.target.checked)}/>
+          <span>Track cost & date</span>
+        </label>`}
+      </div>
+    </div>
+    <div class="playmat-toolbar">
+      <input class="playmat-search" type="search" value=${q} onInput=${e => setQ(e.target.value)}
+        placeholder="Search playmats — a name, a set, a shop…" aria-label="Search playmats"/>
+      ${load.stale && html`<span class="muted playmat-stalenote">Showing saved prices — couldn't reach the latest.</span>`}
+    </div>
+    ${!readOnly && !user && html`<div class="playmat-signin">
+      <span>Sign in with Google to check off the playmats you own.</span>
+      <button type="button" class="settings-action primary" onClick=${onSignIn}>Sign in with Google</button>
+    </div>`}
+    <div class="graded-collection-main">${body}</div>
+    ${detail && html`<${SealedDetailModal} product=${detail}
+      sealedCollection=${sealedCollection} sealedMeta=${sealedMeta}
+      updateSealedQty=${updateSealedQty || (() => {})} updateSealedMeta=${updateSealedMeta || (() => {})}
+      readOnly=${!canEdit} onClose=${() => setDetail(null)}/>`}
+    <p class="sealed-coll-affiliate muted">
+      Prices are TCGplayer's, updated daily. TCGplayer links are affiliate links, and
+      so are the Amazon links on retail mats — we may earn a commission at no extra
+      cost to you. As an Amazon Associate I earn from qualifying purchases.
+    </p>
   </div>`;
 };
 
@@ -30192,8 +30656,9 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     if(section === "cards"  && viewerVis.raw)    return "cards";
     if(section === "sealed" && viewerVis.sealed) return "sealed";
     if(section === "graded" && viewerVis.graded) return "graded";
-    // Pins & Counters read sealed_collection_items, so they share sealed's axis.
+    // Pins & Counters and Playmats read sealed_collection_items, so they share sealed's axis.
     if(section === "pins"   && viewerVis.sealed) return "pins";
+    if(section === "playmats" && viewerVis.sealed) return "playmats";
     if(viewerVis.raw)    return "cards";
     if(viewerVis.sealed) return "sealed";
     if(viewerVis.graded) return "graded";
@@ -30253,8 +30718,8 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       let theirSealed = 0, sharedSealed = 0;
       if(sealedCollection && viewerOwnSealedCollection){
         for(const [pid, q] of Object.entries(sealedCollection)){
-          // "Sealed" means the Sealed tab's products — pins and counters have their own tab.
-          if(q <= 0 || isCollectiblePid(pid)) continue;
+          // "Sealed" means the Sealed tab's products — pins, counters and playmats have their own tabs.
+          if(q <= 0 || isOwnTabPid(pid)) continue;
           theirSealed += 1;
           if((viewerOwnSealedCollection[pid] || 0) > 0) sharedSealed += 1;
         }
@@ -30284,7 +30749,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     <div class="collection-section-tabs">
       ${COLLECTION_SECTIONS.map(k => {
         const vis = k === "cards" ? viewerVis.raw
-          : (k === "sealed" || k === "pins") ? viewerVis.sealed : viewerVis.graded;
+          : (k === "sealed" || k === "pins" || k === "playmats") ? viewerVis.sealed : viewerVis.graded;
         if(isViewerMode && !vis) return null;
         return html`<a key=${k}
           class=${"collection-section-tab"+(effectiveSection===k?" active":"")}
@@ -30324,6 +30789,12 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           updateSealedQty=${updateSealedQty} updateSealedMeta=${updateSealedMeta || (()=>{})}
           readOnly=${isViewerMode}
           viewerContext=${isViewerMode ? viewerContext : null}
+          onSignIn=${onSignIn}/>`
+      : effectiveSection === "playmats"
+      ? html`<${PlaymatsView} user=${user}
+          sealedCollection=${sealedCollection} sealedMeta=${sealedMeta || {}}
+          updateSealedQty=${updateSealedQty} updateSealedMeta=${updateSealedMeta || (()=>{})}
+          readOnly=${isViewerMode}
           onSignIn=${onSignIn}/>`
       : effectiveSection === "graded"
       ? html`<${GradedCollectionView} raw=${raw} user=${user} onSignIn=${onSignIn} theme=${theme}
@@ -36284,7 +36755,37 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       }
       return true;
     };
-    const out = rows.filter(passes);
+    let out = rows.filter(passes);
+    // Raw mode's PSA columns. Same flat fields the graded synth attaches (so the
+    // shared sort and popCol renderers need nothing new), but onto COPIES: raw
+    // rows are the shared price_movers objects, and writing pop fields onto them
+    // would leak into every other consumer of those rows. After the filter so
+    // only shown rows pay; before the sort so the pop columns order.
+    if(!showGraded && !showSealed && gradedPop){
+      const popCache = new Map();
+      out = out.map(r => {
+        const ck = r.card_id + "|" + (r.printing || "");
+        let st = popCache.get(ck);
+        if(st === undefined){
+          const cat = catalogByCardId.get(r.card_id);
+          const prows = cat ? (gradedPop.byCard.get(
+            popCardKey(cat.Set, cat["Product Name"], cat.Number)) || []) : [];
+          const picked = rawPopPick(prows, r.printing, r.card_id);
+          st = picked ? gradedPopStats(picked) : null;
+          popCache.set(ck, st);
+        }
+        const o = {...r, _pop: st,
+          pop_total: st ? st.total : null,
+          pop_ten:   st ? st.ten : null,
+          pop_gem:   (st && st.total > 0) ? st.ten / st.total : null,
+          pop_qual:  st ? st.qualified : null};
+        for(const gk of ["10","9.5","9","8","7"]){
+          const hit = st && st.breakdown.find(b => b.key === gk);
+          o["pop_g" + gk.replace(".", "_")] = st ? (hit ? hit.n : 0) : null;
+        }
+        return o;
+      });
+    }
     // Sort always follows the user's last column click. Presets that imply
     // a sort (Gainers / Losers) update sortKey/sortDesc via a useEffect
     // instead of overriding here, so subsequent column clicks work.
@@ -36574,6 +37075,22 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // Customizable-columns state (hooks — must be before the early returns).
   const [colPrefs, setColPrefs] = useState(()=>{ try { return JSON.parse(localStorage.getItem("packsink:screener:colprefs:v1")||"{}"); } catch { return {}; } });
   useEffect(()=>{ try { localStorage.setItem("packsink:screener:colprefs:v1", JSON.stringify(colPrefs)); } catch {} }, [colPrefs]);
+  // Raw mode fetches the PSA population only when it will be SHOWN — a pop
+  // column switched on in the gear, or a pop sort from a saved view or link.
+  // It is the whole pop report, and a Raw Screener nobody asked pop numbers of
+  // should not pay for it. Graded mode keeps its own fetch (above).
+  // ⚠ Declared here, below colPrefs, because its deps read colPrefs: a deps
+  // array is evaluated at its own declaration point, and above this line that
+  // is a TDZ ReferenceError into the error boundary.
+  const rawPopWanted = !showGraded && !showSealed && (
+    RAW_POP_COL_KEYS.includes(sortKey) || RAW_POP_COL_KEYS.includes(sortKey2)
+    || RAW_POP_COL_KEYS.some(k => screenerColOn(colPrefs.raw, k)));
+  useEffect(() => {
+    if(!rawPopWanted || gradedPop != null) return;
+    let cancelled = false;
+    fetchGradedPop().then(p => { if(!cancelled) setGradedPop(p); });
+    return () => { cancelled = true; };
+  }, [rawPopWanted, gradedPop]);
 
   // ── Draggable column widths (hooks — must be before the early returns) ──
   // Persisted alongside order/hidden in colPrefs, so ⚙ Columns → Reset clears
@@ -36894,6 +37411,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     th:()=>html`<th key=${key} class="sortable th-num" title=${tip}
       onClick=${(e)=>onSort(key, e)}>${label}${arrow(key)}</th>`,
     td:(r)=>html`<td key=${key} class="td-num">${popNum(r[field])}</td>`});
+  const gemCol = (label, hidden) => ({key:"popgem", label, defaultHidden: !!hidden,
+    th:()=>html`<th key="popgem" class="sortable th-num" title="Share of PSA-graded copies that came back a straight 10 — how hard the card is to grade. A low rate beside a high price is a genuinely scarce 10." onClick=${(e)=>onSort("popgem", e)}>${label}${arrow("popgem")}</th>`,
+    td:(r)=>html`<td key="popgem" class="td-num">${r.pop_gem == null ? "—" : (Math.round(1000 * r.pop_gem) / 10) + "%"}</td>`});
 
   const colDefs = (() => {
     const setCol = {key:"set", label:"Set",
@@ -36978,9 +37498,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         "Total copies PSA has graded of this card and printing, at every grade. PSA only — no CGC, BGS, SGC or TAG."),
       popCol("pop10", "PSA 10s", "pop_ten",
         "Copies PSA has graded a straight 10. Half grades and qualified grades are not counted."),
-      {key:"popgem", label:"Gem %",
-        th:()=>html`<th key="popgem" class="sortable th-num" title="Share of graded copies that came back a straight 10 — how hard the card is to grade. A low rate beside a high price is a genuinely scarce 10." onClick=${(e)=>onSort("popgem", e)}>Gem %${arrow("popgem")}</th>`,
-        td:(r)=>html`<td key="popgem" class="td-num">${r.pop_gem == null ? "—" : (Math.round(1000 * r.pop_gem) / 10) + "%"}</td>`},
+      gemCol("Gem %"),
       // ⚠ THIS row's own grade, and only on PSA rows. On a BGS 9.5 row the
       // PSA ladder says nothing about how many BGS 9.5s exist, so it dashes
       // rather than borrowing PSA's number for another grader's grade.
@@ -37008,10 +37526,26 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       td:(r)=>{ const sd = lowStaleDays(r);
         return html`<td key="low" class="td-num">${fmtMoney(r.low_today)}${sd != null ? html`<span class="td-low-stale"
           title=${"Low unchanged for "+sd+" days — not fresh signal"}>⏱</span>` : null}</td>`; }};
+    // Raw mode's PSA columns: the population of THIS printing (rawPopPick), all
+    // hidden until the gear turns them on. Every one says PSA, for the reason
+    // the graded headers do — graded_pop holds no CGC, BGS, SGC or TAG counts.
+    const rawPopCols = (showGraded || showSealed) ? [] : [
+      popCol("poptot", "PSA Pop", "pop_total",
+        "Total copies PSA has graded of this card and printing, at every grade.", true),
+      popCol("pop10", "PSA 10s", "pop_ten",
+        "Copies PSA has graded a straight 10. Half grades and qualified grades are not counted.", true),
+      gemCol("PSA Gem %", true),
+      popCol("pop95", "PSA 9.5", "pop_g9_5", "Copies PSA has graded 9.5", true),
+      popCol("pop9",  "PSA 9s",  "pop_g9",   "Copies PSA has graded a straight 9", true),
+      popCol("pop8",  "PSA 8s",  "pop_g8",   "Copies PSA has graded a straight 8", true),
+      popCol("pop7",  "PSA 7s",  "pop_g7",   "Copies PSA has graded a straight 7", true),
+      popCol("popq",  "PSA Qualified", "pop_qual",
+        "Copies PSA graded with a qualifier (OC, ST, MK, PD) — a named flaw that trades at a discount to a clean copy of the same grade.", true),
+    ];
     return [setCol, rarityCol,
       lowCol,
       money("market","NM Market","market","market_today","TCGplayer NM Market — smoothed average of recent Near Mint sales"),
-      ...winCols, ...(benchmarkReady && !showSealed ? [vsMktCol] : []), signalsCol];
+      ...winCols, ...(benchmarkReady && !showSealed ? [vsMktCol] : []), ...rawPopCols, signalsCol];
   })();
   // Full ordered column list (incl. hidden) for the popover; visible subset for the table.
   const allColsOrdered = (()=>{
@@ -37025,11 +37559,28 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   })();
   // No saved pref → start from each column's defaultHidden; once the user toggles
   // anything, the explicit list is persisted (even []).
-  const _savedHidden = (colPrefs[colModeKey]||{}).hidden;
-  const colHidden = new Set(_savedHidden !== undefined ? _savedHidden : colDefs.filter(c=>c.defaultHidden).map(c=>c.key));
+  // ⚠ `known` is what keeps a NEW column from appearing for everyone who ever
+  // customised their columns. The saved list says which columns are HIDDEN, so a
+  // column added since was, by omission, "shown" — and the eight Raw PSA columns
+  // would all have landed at once. A column the prefs have not seen takes its own
+  // default instead. Prefs saved before `known` existed get it reconstructed for
+  // Raw (every column today except the pop ones, which is what the Raw columns
+  // were); other modes keep the old rule, having gained no new columns.
+  const _modePref = colPrefs[colModeKey] || {};
+  const _savedHidden = _modePref.hidden;
+  const _known = Array.isArray(_modePref.known) ? new Set(_modePref.known)
+    : colModeKey === "raw" ? new Set(colDefs.map(c=>c.key).filter(k=>!RAW_POP_COL_KEYS.includes(k)))
+    : null;
+  const colHidden = new Set(_savedHidden !== undefined
+    ? [..._savedHidden, ...(_known ? colDefs.filter(c=>c.defaultHidden && !_known.has(c.key)).map(c=>c.key) : [])]
+    : colDefs.filter(c=>c.defaultHidden).map(c=>c.key));
   const orderedCols = allColsOrdered.filter(c=>!colHidden.has(c.key));
   const setModePref = (patch)=> setColPrefs(prev=>({...prev, [colModeKey]: {...(prev[colModeKey]||{}), ...patch}}));
-  const toggleCol = (key)=>{ const h=new Set(colHidden); h.has(key)?h.delete(key):h.add(key); setModePref({hidden:[...h]}); };
+  // Writes `known` with the list: every column on screen now has an explicit
+  // answer, and one that is only absent for the moment (vs Market, while the
+  // benchmark loads) keeps the answer it had.
+  const toggleCol = (key)=>{ const h=new Set(colHidden); h.has(key)?h.delete(key):h.add(key);
+    setModePref({hidden:[...h], known:[...new Set([...(_modePref.known||[]), ...colDefs.map(c=>c.key)])]}); };
   const moveCol = (key, dir)=>{ const ord = allColsOrdered.map(c=>c.key); const i=ord.indexOf(key); const j=i+dir; if(i<0||j<0||j>=ord.length) return; [ord[i],ord[j]]=[ord[j],ord[i]]; setModePref({order:ord}); };
   const resetCols = ()=> setColPrefs(prev=>{ const n={...prev}; delete n[colModeKey]; return n; });
 
