@@ -39,12 +39,12 @@ const parts = [
 
 const mod = new Function(parts.join("\n\n") + `
   return {checkDeckLegality, COCONUT_CARDS, coconutDeckLimit, getCoconutCard,
-          COCONUT_INK_LIMIT, computeCoreSets, getDeckLimit,
+          COCONUT_INK_LIMIT, computeCoreSets, getDeckLimit, cardFamilyKey,
           coconutFreshCards, coconutRowId, COCONUT_REVEAL_NEWS_DAYS,
           COCONUT_REVEAL_MAX_THUMBS, coconutInks, coconutInkLabel};
 `)();
 
-const {checkDeckLegality, COCONUT_CARDS, coconutDeckLimit, getCoconutCard,
+const {checkDeckLegality, COCONUT_CARDS, coconutDeckLimit, getCoconutCard, cardFamilyKey,
        coconutFreshCards, coconutRowId, COCONUT_REVEAL_NEWS_DAYS,
        COCONUT_REVEAL_MAX_THUMBS, coconutInks, coconutInkLabel} = mod;
 
@@ -56,7 +56,7 @@ let idc = 0;
 function card(productName, ink, set = "Wilds Unknown"){
   const id = `c${++idc}`;
   catalog[id] = [{"Product Name": productName, ink, inks: null, Set: set}];
-  (setsByProductName[productName] ||= new Set()).add(set);
+  (setsByProductName[cardFamilyKey(productName)] ||= new Set()).add(set);
   return id;
 }
 // A distinct 1-of filler generator so decks reach 60 legally.
@@ -83,7 +83,7 @@ console.log("\n== data integrity ==");
 // +2 Amber (Woody&Buzz, Madrigal), +2 Amethyst (Peter Pan&Tinker Bell,
 // Aladdin&Genie), +1 Ruby (Belle&Beast), +1 Sapphire (Darkwing&Launchpad).
 const COCONUT_INKS = ["Amber","Amethyst","Emerald","Ruby","Sapphire","Steel"];
-check("25 Coconut cards", COCONUT_CARDS.length, 25);
+check("26 Coconut cards", COCONUT_CARDS.length, 26);
 // The durable half of the old "3 per ink" check. A typo'd ink ("Steal") would
 // leave the card out of CoconutLeaderPicker entirely — it renders one group per
 // canonical ink — and nothing else would notice.
@@ -97,10 +97,10 @@ check("every dual leader's second ink is canonical",
 check("every ink has a leader",
   COCONUT_INKS.every(i => COCONUT_CARDS.some(c => c.ink === i)), true);
 check("per-ink counts (primary ink)", COCONUT_INKS.map(
-  i => COCONUT_CARDS.filter(c=>c.ink===i).length), [5,5,3,4,4,4]);
-check("slugs unique", new Set(COCONUT_CARDS.map(c=>c.slug)).size, 25);
-check("collector numbers 1..25", COCONUT_CARDS.map(c=>c.cn).sort((a,b)=>a-b),
-  Array.from({length:25},(_,i)=>i+1));
+  i => COCONUT_CARDS.filter(c=>c.ink===i).length), [5,5,4,4,4,4]);
+check("slugs unique", new Set(COCONUT_CARDS.map(c=>c.slug)).size, 26);
+check("collector numbers 1..26", COCONUT_CARDS.map(c=>c.cn).sort((a,b)=>a-b),
+  Array.from({length:26},(_,i)=>i+1));
 check("every associated name is '<name> - <version>'",
   COCONUT_CARDS.every(c => c.associated === `${c.name} - ${c.version}`), true);
 
@@ -293,6 +293,24 @@ check("no leader -> coconut is null", r.coconut, null);
 // Core/Infinity keep collapsing to "invalid" — warn-only is scoped to the
 // declared format, where the leader gives the deck an identity to preserve.
 check("no leader -> broken deck still 'invalid'", r.format, "invalid");
+
+// Lorcast spells some cards differently across printings — "HeiHei" / "Heihei",
+// a curly apostrophe on one and a straight one on the next (12 cards live,
+// 2026-09-26). They are one card: the 4-of cap is shared, and a rotated
+// printing is Core-legal through a reprint however the reprint is spelled.
+console.log("\n== one card, two spellings ==");
+check("family key folds case", cardFamilyKey("HeiHei - Bumbling Rooster"), cardFamilyKey("Heihei - Bumbling Rooster"));
+check("family key folds curly apostrophes", cardFamilyKey("Ursula\u2019s Lair - Eye of the Storm"),
+  cardFamilyKey("Ursula's Lair - Eye of the Storm"));
+check("family key keeps different cards apart", cardFamilyKey("HeiHei - Boat Snack") === cardFamilyKey("HeiHei - Bumbling Rooster"), false);
+const heiOld = card("HeiHei - Bumbling Rooster", "Amber", "The First Chapter");
+const heiNew = card("Heihei - Bumbling Rooster", "Amber", "Wilds Unknown");
+r = checkDeckLegality({cards:[{card_id:heiOld, quantity:4}, {card_id:heiNew, quantity:1}, ...filler(55,"Amber","Wilds Unknown")]},
+  catalog, setsByProductName);
+check("4 + 1 across two spellings is 5 copies", r.issues.some(s=>/^5× HeiHei - Bumbling Rooster — limit is 4$/.test(s)), true);
+r = checkDeckLegality({cards:[{card_id:heiOld, quantity:4}, ...filler(56,"Amber","Wilds Unknown")]},
+  catalog, setsByProductName);
+check("rotated printing is Core through a differently-spelled reprint", r.format, "core");
 
 // ── the reveal tile's card art ────────────────────────────────────────
 // The tile pictures the card it announces. Every failure here is SILENT —

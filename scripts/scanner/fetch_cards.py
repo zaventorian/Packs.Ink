@@ -12,11 +12,14 @@ rather than penalising a foil/non-foil mismatch.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from urllib.parse import unquote_to_bytes
 
 import requests
 from dotenv import load_dotenv
@@ -27,22 +30,26 @@ IMGDIR = DATA / "img"
 
 sys.path.insert(0, str(HERE.parent))
 from supabase_client import Supabase  # noqa: E402
+import scanner_scope  # noqa: E402
 
 
 def pull_catalog() -> list[dict]:
     sb = Supabase()
+    bad_sets = scanner_scope.excluded_set_ids(sb.select("sets", columns="id,code"))
+    bad_ids = scanner_scope.suppressed_card_ids()
     rows = sb.select(
         "cards",
-        columns="id,name,version,set_id,rarity,card_type,image_normal",
-        filters={"image_normal": "not.is.null"},
+        columns="id,name,version,set_id,rarity,card_type," + ",".join(scanner_scope.IMAGE_COLUMNS),
     )
     out = []
     for r in rows:
-        url = r.get("image_normal")
-        if not url:
+        url = scanner_scope.card_image(r)
+        if not url or not scanner_scope.in_scope(r["id"], r.get("set_id"), bad_sets, bad_ids):
             continue
-        # art_key = filename without the ?ts cache-buster
-        art_key = url.split("/")[-1].split("?")[0]
+        # art_key = filename without the ?ts cache-buster (a data: URI has no
+        # filename, so it is keyed on its own content instead)
+        art_key = ("data-" + hashlib.sha1(url.encode()).hexdigest()[:16]) if url.startswith("data:") \
+            else url.split("/")[-1].split("?")[0]
         out.append({
             "id": r["id"],
             "name": r.get("name"),
@@ -59,15 +66,33 @@ def pull_catalog() -> list[dict]:
     return out
 
 
+REPO = HERE.parent.parent
+
+
+def fetch_bytes(url: str) -> bytes:
+    # image_normal is not always an https URL: a hand-staged promo's art can be a
+    # data: URI or a repo-relative path (Logos/cards/...), and requests.get fails on
+    # both, which silently left those cards out of the index.
+    if url.startswith("data:"):
+        head, _, body = url.partition(",")
+        return base64.b64decode(body) if ";base64" in head else unquote_to_bytes(body)
+    if not url.startswith(("http://", "https://")):
+        return (REPO / url.lstrip("/")).read_bytes()
+    r = requests.get(url, timeout=30, headers={"User-Agent": "packs.ink scanner index"})
+    if r.status_code != 200:
+        raise OSError(f"http {r.status_code}")
+    return r.content
+
+
 def download_one(card: dict) -> tuple[str, bool, str]:
     dest = IMGDIR / f"{card['id']}.avif"
     if dest.exists() and dest.stat().st_size > 500:
         return card["id"], True, "cached"
     try:
-        r = requests.get(card["url"], timeout=30)
-        if r.status_code != 200 or len(r.content) < 500:
-            return card["id"], False, f"http {r.status_code} len {len(r.content)}"
-        dest.write_bytes(r.content)
+        data = fetch_bytes(card["url"])
+        if len(data) < 500:
+            return card["id"], False, f"len {len(data)}"
+        dest.write_bytes(data)
         return card["id"], True, "downloaded"
     except Exception as e:  # noqa: BLE001
         return card["id"], False, f"{type(e).__name__}: {e}"

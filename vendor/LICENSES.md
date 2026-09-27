@@ -2,8 +2,9 @@
 
 Packs.Ink ships these libraries from `/vendor/` (same-origin, so a CDN outage
 can never blank the site). Each is used unmodified except for the version
-header comment. All are MIT licensed; the license text is reproduced once at
-the bottom, and each copyright line below applies to it.
+header comment. All are MIT licensed except OpenCV (Apache-2.0, noted in its row); the MIT
+license text is reproduced once at the bottom, and each copyright line below
+applies to it.
 
 | File | Package | Version | Copyright |
 |---|---|---|---|
@@ -14,9 +15,11 @@ the bottom, and each copyright line below applies to it.
 | `html2canvas.min.js` | html2canvas | 1.4.1 | Copyright (c) 2022 Niklas von Hertzen |
 | `qrcode.js` | qrcode-generator | 2.0.4 | Copyright (c) 2009 Kazuhiko Arase. "QR Code" is a registered trademark of DENSO WAVE INCORPORATED. |
 | `ort/ort.wasm.min.js`, `ort/ort-wasm-simd-threaded.{mjs,wasm}` | onnxruntime-web | 1.20.1 | Copyright (c) Microsoft Corporation |
+| `opencv/opencv.js` | @techstark/opencv-js | 4.10.0-release.1 | OpenCV contributors — **Apache-2.0**, not MIT; its license text is `opencv/LICENSE` |
 
-The card scanner additionally loads `@techstark/opencv-js` 4.10.0 from jsDelivr
-inside a worker (Apache-2.0, OpenCV contributors), and the PP-OCRv3 models under
+`opencv/opencv.js` is the card scanner's detector, loaded inside a worker. It
+was jsDelivr's copy until 2026-09-26; the vendored file is the npm registry's
+tarball, byte-identical to it (sha256 19b46167…c048d). The PP-OCRv3 models under
 `/scanner/` are from PaddleOCR (Apache-2.0, PaddlePaddle authors).
 
 ## MIT License

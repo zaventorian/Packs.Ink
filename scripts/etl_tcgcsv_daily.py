@@ -1,6 +1,7 @@
 """
-etl_tcgcsv_daily.py — fetches today's TCGCSV prices for Lorcana and writes
-one row per (product, printing) into prices_daily.
+etl_tcgcsv_daily.py — fetches today's TCGCSV prices for Lorcana (plus the
+Lorcana playmats, which TCGplayer files in a separate category — see
+EXTRA_PRICE_GROUPS) and writes one row per (product, printing) into prices_daily.
 
 Idempotent on PK (tcgplayer_product_id, date, printing, source, grade): re-running
 the same day overwrites that day's prices rather than duplicating.
@@ -23,6 +24,7 @@ from dotenv import load_dotenv
 
 from supabase_client import Supabase
 from tcgcsv_common import (
+    EXTRA_PRICE_GROUPS,
     LORCANA_CATEGORY_ID,
     TCGCSV_BASE,
     group_name_candidates,
@@ -290,6 +292,19 @@ def main() -> None:
         prices = fetch_group_prices(LORCANA_CATEGORY_ID, gid)
         rows = transform_price_rows(prices, snapshot)
         print(f"  {gname}: {len(prices)} entries -> {len(rows)} price rows")
+        all_rows.extend(rows)
+
+    # Groups outside the Lorcana category (the playmats). A failure here is a
+    # WARNING, never a reason to lose the day's card prices: a playmat price a
+    # day late costs one tile, a failed card ETL costs the whole site.
+    for cat_id, gid, label in EXTRA_PRICE_GROUPS:
+        try:
+            prices = fetch_group_prices(cat_id, gid)
+        except Exception as e:
+            print(f"  WARN: {label} prices unavailable, skipping this run: {e}")
+            continue
+        rows = transform_price_rows(prices, snapshot)
+        print(f"  {label} (category {cat_id}): {len(prices)} entries -> {len(rows)} price rows")
         all_rows.extend(rows)
 
     print(f"\nTotal price rows to upsert: {len(all_rows)}")

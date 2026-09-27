@@ -10,6 +10,23 @@ from typing import Iterable
 TCGCSV_BASE = "https://tcgcsv.com/tcgplayer"
 LORCANA_CATEGORY_ID = 71
 
+# Lorcana PLAYMATS are not in the Lorcana category. TCGplayer files every
+# official mat - retail, Set Championship, Disney Lorcana Challenge, convention
+# - under its separate Playmats category, in one "Ravensburger Playmats" group.
+# That is why no playmat ever reached sealed_products and prices_daily held no
+# history for one: nothing ever asked for this group. TCGCSV's daily archives
+# carry it back to 2024-02-08 (scripts/backfill_playmat_prices.py).
+PLAYMATS_CATEGORY_ID = 35
+PLAYMATS_GROUP_ID = 23280
+
+# Groups OUTSIDE category 71 whose prices the daily ETL also writes to
+# prices_daily. (category, group, label). Their pids are in neither `cards` nor
+# `sealed_products`, so every price matview ignores them by construction; only
+# what reads them by pid (the playmat view, a playmat's history) sees them.
+EXTRA_PRICE_GROUPS: tuple[tuple[int, int, str], ...] = (
+    (PLAYMATS_CATEGORY_ID, PLAYMATS_GROUP_ID, "Ravensburger Playmats"),
+)
+
 # TCGCSV group names usually differ from Lorcast set names only by the
 # "Disney Lorcana: " prefix, so the post-colon form is enough to match them.
 # A handful of promo groups are named nothing like the set they hold, and the

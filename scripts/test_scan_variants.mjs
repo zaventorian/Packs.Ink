@@ -35,11 +35,13 @@ const moduleSrc = [
   grab("const normalizeRarity = r => {", NL + "};"),
   grabLine("const CARDS_RARITIES = "),
   grabLine("let _setRankById"),
+  grab("const MAINLINE_SETS = [", "];"),
+  grab("const DREAMBORN_CN_SUFFIX_SETS = {", "};"),
   grab("const SCAN_VARIANT_MAX = 4;", 'const scanVariantFamilyKey = (productName) => String(productName || "").toLowerCase();'),
-  "export {SCAN_VARIANT_MAX, CARDS_RARITIES, scanVariantLabel, scanVariantsFor, scanVariantChipsOk, scanVariantTitle, scanVariantFamilyKey, _setRankById};",
+  "export {SCAN_VARIANT_MAX, CARDS_RARITIES, scanVariantLabel, scanVariantsFor, scanVariantChips, scanSetShort, scanVariantChipsOk, scanVariantTitle, scanVariantFamilyKey, _setRankById};",
 ].join(NL);
 
-const { SCAN_VARIANT_MAX, CARDS_RARITIES, scanVariantsFor, scanVariantChipsOk, scanVariantTitle,
+const { SCAN_VARIANT_MAX, CARDS_RARITIES, scanVariantsFor, scanVariantChips, scanSetShort, scanVariantChipsOk, scanVariantTitle,
   scanVariantFamilyKey, _setRankById } =
   await import("data:text/javascript," + encodeURIComponent(moduleSrc));
 
@@ -85,7 +87,10 @@ const reprint = scanVariantsFor([
   row({ n: "b", Rarity: "Common", Set: "Fabled" }),
 ]);
 check("reprint: both versions reach the editor", reprint.length, 2);
-check("reprint: chips refuse a duplicate label", scanVariantChipsOk(reprint), false);
+// A shared rarity is no longer a refusal: those chips are labelled by SET,
+// which is printed on the card (2026-09-25 — a Fabled reprint scanned as its
+// Ursula's Return original and the fix was only reachable through edit).
+check("reprint: colliding rarity → set chips", scanVariantChips(reprint).map((v) => v.short).sort(), ["Set 1", "Set 9"]);
 
 // Same shape one level deeper: only ONE pair collides in a three-way family.
 const ursula = scanVariantsFor([
@@ -93,7 +98,12 @@ const ursula = scanVariantsFor([
   row({ n: "b", Rarity: "Uncommon", Set: "Fabled" }),
   row({ n: "c", Rarity: "Promo", Set: "Promo Set 2" }),
 ]);
-check("one collision poisons the whole chip row", scanVariantChipsOk(ursula), false);
+check("only the colliding pair switches to sets", scanVariantChips(ursula).map((v) => v.short).sort(), ["Promo", "Set 3", "Set 9"]);
+check("same set AND same rarity still refuses", scanVariantChipsOk(scanVariantsFor([
+  row({ n: "a", Rarity: "Common", Set: "Into the Inklands", Number: "4a" }),
+  row({ n: "b", Rarity: "Common", Set: "Into the Inklands", Number: "4e" }),
+])), false);
+check("promo sets use their printed suffix", scanSetShort("Promo Set 2"), "P2");
 check("...but all three still list", ursula.length, 3);
 
 // ── 4. A named variant is named by its label, not its rarity ────────────────
@@ -207,7 +217,7 @@ for (const rows of fams.values()) {
   const ok = scanVariantChipsOk(vars);
   if (ok) {
     chipped++;
-    if (new Set(vars.map((v) => v.label)).size !== vars.length) dupLabel++;
+    if (new Set(scanVariantChips(vars).map((v) => v.short)).size !== vars.length) dupLabel++;
     if (vars.length > SCAN_VARIANT_MAX) overCap++;
     const ranks = vars.map((v) => CARDS_RARITIES.indexOf(v.rarity));
     for (let i = 1; i < ranks.length; i++) if (ranks[i] < ranks[i - 1]) misordered++;
@@ -217,6 +227,9 @@ check("no chip row ever carries a duplicate label", dupLabel, 0);
 check("no chip row exceeds the cap", overCap, 0);
 check("every chip row reads base-rarity-first", misordered, 0);
 check("every version of every card survives the pass", multi, fams.size - [...fams.values()].filter((v) => v.length < 2).length);
+// ⚠ The index carries set IDS, not names, so offline every set chip reads the
+// same and this undercounts (418). Measured with live set names 2026-09-25:
+// 568 of 623 get chips once a shared rarity falls back to the set.
 console.log("      " + chipped + " of " + multi + " multi-version cards get inline chips; the rest go to the editor's list");
 
 console.log(failed ? NL + failed + " FAILED" : NL + "all passed");

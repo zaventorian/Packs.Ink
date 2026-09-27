@@ -51,6 +51,13 @@ var DET_SIDE = 736; // limit_side_len, limit_type='min'
 // so it must not be cut hard — and only the pathological cn ROI-2 clamped, 0.69x,
 // where 72px digits were oversampled and 50px is PP-OCR's sweet spot.
 var DET_MAX_PX = 2.4e6;
+// The NAME read dets the upper 0.74 at max-side 544 (2026-09-26 audit, 150 field
+// crops scored through the real identify()): 0.28 Mpx instead of ~1.0, 162ms vs
+// 343ms on a desktop, and MORE accurate — char accuracy 92.7% vs 89.3%, and 93%
+// of reads land "high" at 99.3% precision vs 86% at 98.4%. 'min' 736 only ever
+// upscaled, handing the detector soft, oversized glyphs. The subtitle band and
+// the cn ROIs keep DET_SIDE: their upscales are what make small text legible.
+var NAME_DET_SIDE = 544;
 var DET_THRESH = 0.3; // DBPostProcess.thresh
 var DET_BOX_THRESH = 0.5; // DBPostProcess.box_thresh
 
@@ -59,6 +66,7 @@ var det = null, rec = null, DICT = null, ready = false;
 self.onmessage = function (e) {
   var d = e.data;
   if (d.type === "ocr") { handleOcr(d); }
+  else if (d.type === "rec") { handleRec(d); }
 };
 
 function fail(err) {
@@ -314,7 +322,7 @@ function handleOcr(d) {
   // while still carrying the smaller VERSION subtitle for same-named disambiguation.
   var t0 = Date.now(), tName = 0;
   var namePromise = doName
-    ? ocrRegion(card, 0, 0, W, Math.round(H * 0.74), "min", DET_SIDE).then(function (lines) {
+    ? ocrRegion(card, 0, 0, W, Math.round(H * 0.74), "max", NAME_DET_SIDE).then(function (lines) {
         var cand = lines.filter(function (l) {
           return l.text.trim().length >= 2 && /[A-Za-z]/.test(l.text);
         }).sort(function (a, b) { return b.h - a.h; });
@@ -363,6 +371,34 @@ function handleOcr(d) {
   }).catch(function (err) {
     release(s);
     self.postMessage({ type: "result", id: d.id, lines: [], cnNum: null, cnSet: null, error: String(err && err.message || err) });
+  });
+}
+
+// REC-ONLY: recognise the text in each given box of an image, with NO detector.
+// The registered collector-number read (2026-09-26) warps the card onto its
+// reference frame first, so the number line sits at a known spot and a det pass
+// (the slow half, and the half that loses the tiny digits) buys nothing: direct
+// rec of that strip read the number right 51% of the time vs 10% for the det
+// path, in 21ms vs 1.4s on a desktop. Boxes run one at a time (memory flat), and
+// the caller sends a few vertically offset windows because a registration error
+// of a couple of pixels is the difference between a clean line and half of one.
+function handleRec(d) {
+  if (!ready) { self.postMessage({ type: "rec", id: d.id, texts: [], ms: 0 }); return; }
+  var t0 = Date.now();
+  var s = scratch(d.w, d.h);
+  s.ctx.putImageData(new ImageData(new Uint8ClampedArray(d.buffer), d.w, d.h), 0, 0);
+  var boxes = d.boxes && d.boxes.length ? d.boxes : [[0, 0, d.w, d.h]];
+  var texts = [];
+  boxes.reduce(function (chain, b) {
+    return chain.then(function () {
+      return recOne(s.c, b[0], b[1], b[2], b[3]).then(function (txt) { texts.push(txt || ""); });
+    });
+  }, Promise.resolve()).then(function () {
+    release(s);
+    self.postMessage({ type: "rec", id: d.id, texts: texts, ms: Date.now() - t0 });
+  }).catch(function (err) {
+    release(s);
+    self.postMessage({ type: "rec", id: d.id, texts: texts, ms: Date.now() - t0, error: String(err && err.message || err) });
   });
 }
 

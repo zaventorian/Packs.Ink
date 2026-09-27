@@ -34,13 +34,19 @@ const rows = all
   })); // `user` and `pred` are deliberately dropped - not needed to judge, and `user` is an account id
 
 const CS = loadScanner(REPO, path.join(REPO, "scanner.js"));
-await CS.loadText();
+// Every read was recorded on or before today, so a set released after today could
+// not have been in the scanner's hand. The guard replays at this same date. LOCAL
+// date, the same rule scanner.js applies in the browser: the UTC day is already
+// tomorrow on a US evening, which would count a set out on its release eve.
+const _d = new Date(), _p = (n) => String(n).padStart(2, "0");
+const frozenAt = `${_d.getFullYear()}-${_p(_d.getMonth() + 1)}-${_p(_d.getDate())}`;
+await CS.loadText({ asOf: frozenAt });
 try { await CS.load(); } catch (e) { console.error("colour index load failed:", e.message); }
 const { idOk, idN, nvOk, nvN, passIds } = scoreRows(CS, rows, REPO);
 
 fs.writeFileSync(OUT, JSON.stringify({
   note: "Frozen by scripts/scanner/freeze_replay_baseline.mjs. Guarded by scripts/test_scanner_matcher.mjs.",
-  frozen_at: new Date().toISOString().slice(0, 10),
+  frozen_at: frozenAt,
   scanner_build: (fs.readFileSync(path.join(REPO, "Index.html"), "utf8").match(/SCANNER_BUILD\s*=\s*"([^"]+)"/) || [])[1] || "?",
   counts: { card_id_exact: idOk, card_id_total: idN, name_version: nvOk, name_version_total: nvN },
   pass_ids: passIds.sort(),

@@ -154,7 +154,7 @@ check("a bogus analytics tool is ignored", at("/analytics", "?a=nonsense"), "Ana
 
 // Every section the app can actually be in needs a label — a missing one
 // silently degrades to the bare view name, which reads as a bug in the toast.
-const EXPECTED = { cards: "Cards", sealed: "Sealed", graded: "Graded", pins: "Pins & Counters" };
+const EXPECTED = { cards: "Cards", sealed: "Sealed", graded: "Graded", pins: "Pins & Counters", playmats: "Playmats" };
 for (const k of mod.COLLECTION_SECTIONS) {
   check('collection section "' + k + '" has a label',
     at("/collection", "?c=" + k), "your Collection · " + EXPECTED[k]);

@@ -24,7 +24,7 @@ This does NOT weaken the rule above: without the word, still commit and stop. It
 
 ## Stack
 
-- **Frontend**: `Index.html` + `styles.css` + `logo.js`, React via `htm` template literals, no build step. Served by `python scripts/dev_server.py` (port 8766 — AnkiConnect squats 8765). CSS extraction is deliberate for caching + editor sanity — do NOT inline CSS back into Index.html.
+- **Frontend**: `Index.html` + `styles.css` + `logo.js`, React via `htm` template literals, no build step. Served by `python scripts/dev_server.py` (port 8766 — AnkiConnect squats 8765; it 404s any path with a dot-segment, because it used to serve the repo-root `.env` — the service key — to anything on loopback, 2026-09-27). CSS extraction is deliberate for caching + editor sanity — do NOT inline CSS back into Index.html.
 - **Prod is the Cloudflare Worker** (`packs-ink`), not Netlify — cutover 2026-08-04. Netlify still exists only to serve `www`'s 301 → apex; see `scripts/CLOUDFLARE_MIGRATION.md`. **Netlify no longer builds anything**: `netlify.toml` carries `[build] ignore = "exit 0"` (2026-09-05) because every push and PR was still running a full metered build + Deploy Preview (whose `_headers` check fails on the Cloudflare-only `!` lines). The last Netlify deploy stays live for the www redirect. Delete the file to build on Netlify again.
 
 ### ⚠️ Deploying — a git push does NOT ship the site
@@ -48,7 +48,7 @@ node scripts/build_dist.mjs && npx wrangler@4 deploy
 - It also warns (never blocks) when the `Index.html` / `sw.js CORE_ASSETS` / `CACHE_VERSION` trio fall out of lockstep.
 - **⚠ The verify step is blind to a version that never moved, and on 2026-09-08 two shells shipped as `v377`.** PR #31 and PR #32 each branched from a main at v376 and each bumped to 377; #31 deployed, then #32 merged and deployed, and its verify compared the served `styles.css?v=377` against the built `377` and passed — against the *previous* PR's HTML. Nothing was broken for users (Workers Assets is content-addressed, so wrangler re-uploaded the three changed files, and `Index.html` / `styles.css` / `logo.js` are network-first anyway), but the run proved nothing and the number now names two different shells. **When two PRs are in flight, the second one to merge must bump PAST the version, not to it.** The workflow now records what the edge serves BEFORE deploying and warns when new `Index.html` bytes ship under a version that was already live — the one signal that separates a genuine collision from an innocent redeploy is wrangler's own `+ /index.html` line, which only appears when the bytes actually differ. It stays a warning: by the time it can be known the deploy has already happened and is fine, and it is the label that is ambiguous, not the code.
 - **DB**: Supabase (Postgres + PostgREST).
-  - **Catalog**: `cards`, `sets`, `prices_daily`, `sealed_products`, `graded_prices_daily`.
+  - **Catalog**: `cards`, `sets`, `prices_daily`, `sealed_products`, `graded_prices_daily`, `playmats` (+ view `playmat_prices_latest`; see "Playmats").
   - **User**: `profiles` (carries collection-sharing visibility + share_token cols), `collection_items`, `sealed_collection_items`, `graded_collection_items`, `graded_collection_goals`, `decks`, `deck_cards`, `deck_favorites`, `user_follows`, `deck_views`, `screener_views`.
   - **Tournament**: `tournaments`, `tournament_decks`, `tournament_admins`, view `tournament_results_v` (security_invoker on).
   - **Events (RPH)**: `lorcana_events` (migration 113) — EVERY upcoming Ravensburger Play Lorcana event (~17k), `kind` ∈ `sc|prerelease|other`. What the site's "Near me" event finder reads. `set_championships` is the SC subset kept in lockstep for the Elo pipeline only. `prerelease_events` was DROPPED 2026-08-22 (migration 123). See "Upcoming-events finder".
@@ -74,16 +74,163 @@ Android/iOS shell around the SAME zero-build web app. **Read `native/README.md` 
 
 ## Card scanner — PUBLIC BETA 2026-08-04
 
-Camera → identify → review → save. **Identification is 100% on-device**: `scanner.js` + `scanner-cv.js` (OpenCV in `scanner-worker.js`) + PP-OCRv3 ONNX in `scanner-ocr-worker.js`, matched against index files the browser downloads once. No frame is ever sent anywhere to be read — say this plainly in any user-facing copy, it's the feature's best property and it's true.
+Camera → identify → review → save. **Identification is 100% on-device**: `scanner.js` (the matcher) + OpenCV in `scanner-worker.js` (detect, rectify, and the ORB version check) + PP-OCRv3 ONNX in `scanner-ocr-worker.js`, matched against index files the browser downloads once. (`scanner-cv.js` was a dead main-thread copy of the worker's job and is gone, 2026-09-27.) No frame is ever sent anywhere to be read — say this plainly in any user-facing copy, it's the feature's best property and it's true.
 
 Accuracy work (round-by-round history, replay harness, the miss taxonomy) lives in the **`project-scanner-spec` memory** — read its NEW-SESSION HANDOFF before touching the matcher. This section is only the shipping/consent surface.
 
 ### Gating
 
-- **`canScan = true`** in App — everyone gets the 📷 button. It was `isGradedAdmin || isScannerTester`; the client-side `is_scanner_tester()` probe is GONE (it fired on every sign-in to answer a question no longer asked).
+- **`canScan = true`** in App — everyone gets the 📷 button, **and since 2026-09-27 a signed-out visitor can actually SCAN** (see "Scanning signed out" below); an account is asked for only to save. It was `isGradedAdmin || isScannerTester`; the client-side `is_scanner_tester()` probe is GONE (it fired on every sign-in to answer a question no longer asked).
 - **`scanner_testers` + `is_scanner_tester()` still gate the WRITE path in the repo's own migrations — and that is the open question of the 2026-09-04 audit.** Migration 98 requires `is_scanner_tester() OR is_graded_admin()` on `scan_samples` INSERT/UPDATE and on the `scan-samples` storage INSERT (the READ policy is 91's owner-or-graded-admin and never mentions testers). No later migration drops that clause, so either every non-allowlisted user's uploads have been failing silently since the public beta (`uploadSample` swallows every error) or the live policy was changed outside the repo. **`supabase/132_scan_samples_public_beta.sql` — APPLIED 2026-09-05 by Zaven** — drops the tester clause and adds a per-user rolling-24h storage-object cap (3000 = 1000 rows × 3 objects), so public uploads work from that day whichever way the history went. Whether `scanner_testers` / `is_scanner_tester()` still have any referrer is a question for §1 of `supabase/diagnostics/public_release_live_checks.sql`; don't drop them without running it.
 - **`SCANNER_QA_ONLY` stays `true` — PERMANENTLY, as of 2026-08-23.** Zaven's call: *"I don't want auto-add to collection; let the user confirm the list after running a session."* Review-before-save is the shipping UX, so the ≥95% precision bar gates nothing any more; flipping this to false restores the Stack-scan / Single auto-add flow and needs a new product decision, not a metric.
   - **The bar was measured anyway that day, the honest way** (photo-verify a random sample of UNREVIEWED shown-✓ rows — labelled rows cannot tell you, per round 11): 170 v16 samples judged against official art in two disjoint seeded rounds → **167 correct = 98.2%, one-sided 95% lower bound 95.7%. It clears.** Retired pre-v16 builds: 83.3% (25/30); the gap is real (Fisher exact p=0.009), so v16's matcher work is what moved it. All 3 v16 misses were name/art collisions between distinct cards (Minnie *Curious Adventurer* vs *Drum Major*; *Genie - Hard to Grasp* read as *Gene - Niceland Resident*; one red-panda song read as another) — exactly the class review catches. Method, if it ever needs re-running: pull `scan_samples` where `reviewed=false AND corrected=false AND debug->>conf='high'`, seeded-sample per build, compose side-by-side sheets of the stored scan crop vs the claimed card's `image_normal`, judge each pair, then Wilson-interval the result.
+
+### Scanning signed out (2026-09-27)
+
+The 2026-09-26 audit's headline: 13 consents ever, **0 cards saved** through the scanner
+since the beta, and a consent screen whose only button was "Sign in to scan". A guest
+can scan now; an account is asked for only to SAVE. Guarded by
+`node scripts/test_scanner_guest.mjs`, which pins every point below at source (every
+way this breaks is silent) and checks the three copy places agree.
+
+- **Nothing is uploaded while signed out — no photo, no label, no session telemetry.**
+  That is a different promise from the upload notice, so it is a different notice
+  (`guestPanel`) accepted under its own key (`SCAN_GUEST_OK_KEY`). Signing in still
+  shows the upload notice; a guest's acceptance never carries into an account.
+- **⚠ The upload gate is the SNAP's flag (`job.guest`), never `user`.** The native
+  app signs in without leaving the page, so a guest's snap still queued when the
+  account arrives would otherwise upload under it. Rows carry `guest: true` too, and
+  `labelSample` bails on it. Session telemetry belongs to whoever STARTED the camera
+  (`sessionUser`), not whoever is signed in when it stops.
+- **⚠ The account's consent effect sets `consentOk` EITHER way** (`setConsentOk(local)`,
+  not `if(local) setConsentOk(true)`), or the camera keeps running on the guest's
+  acceptance until the account's record comes back.
+- **Saving:** "Sign in to add N" (`qaSignInToSave`) **awaits** the IDB write of the list
+  under `scanSession:guest` (the persist effect's 600ms debounce would lose it on the
+  way out), leaves a resume flag (`SCAN_RESUME_KEY`, 30 min), then signs in. App reopens
+  the scanner once `user` arrives (that effect sits BELOW `user`'s declaration — above
+  it, its deps array is a TDZ ReferenceError); the scanner consumes the flag and lands
+  on the review screen; the restore moves the guest list into the account (written
+  under the account BEFORE the guest copy is deleted).
+- **A returning guest reaches the review screen before the upload notice**
+  (`reviewOnly`): saving opens no camera and uploads nothing. "← Camera" shows the
+  notice.
+- **A dead camera no longer takes the list with it.** The error screen (blocked /
+  no camera / camera error) offers "Review N scans" whenever there are rows, and the
+  review screen renders over the dead stage. Before this, a phone with the camera
+  blocked could never reach its own scanned list.
+- **`/scan` is a real route** (`PATH_TO_VIEW`, `LANDED_ON_SCAN`): it rewrites the address
+  to `/` and opens the scanner, so the Scan tab is an `<a href="/scan">` like every other
+  nav target, and `manifest.json` carries a **"Scan a card" app shortcut** (long-press the
+  installed icon).
+  - **⚠ A `/scan` landing opens the modal BEFORE the deferred `scanner.js` has run**, so
+    the mount effect waits for `window.CardScanner` (up to 20s) instead of reading it once.
+    Read once, anyone who had already accepted the notice got "Scanner unavailable" on
+    exactly the link this route exists for.
+
+### Which PRINTING: the ORB version check (2026-09-26)
+
+The name read settles WHICH CHARACTER well and WHICH PRINTING badly, and colour carries
+no signal on a camera photo (41% right version on 860 field crops). After the name read,
+`verifyIdentity` asks the detector worker to match ORB keypoints of the snap against each
+candidate printing's own catalog art and count RANSAC homography inliers — **97–98% right
+version** on human-reviewed crops, and it works on a bad rectify because a homography does
+not care where the card sits in the crop. `scanner-worker.js` only MEASURES; the pure
+functions in Index.html's "ORB version verification" block DECIDE. Guarded by
+`node scripts/test_scanner_verify.mjs`.
+
+- **Confident = the winner has ≥ 20 inliers AND ≥ 1.6× the best non-twin**
+  (`SCAN_ORB`). Candidates: the pick, identify's alternates, then the character's other
+  printings (`scannerFamilyOf`, case-folded like the version chips), capped at 8.
+- **ART TWINS (an Epic and its base, a reprint across sets) are a TIE with the winner**,
+  not the runner-up it must beat (thumbnail NCC > 0.97). A tie goes to the **registered
+  collector-number read**: the homography warps the full-resolution photo onto the
+  winner's canonical frame, the number line then sits at a known spot (y .952–.992,
+  x .015–.34), and rec (no detector) reads it at three vertical offsets. `scanCnPick`
+  matches that ONLY against the tied cards' own numbers — every offset that reads must
+  agree, an exact number whose set clearly disagrees abstains, and a one-glyph miss is
+  accepted only when every other tied card is two edits further. Unread, the row keeps
+  its ≈ and stays within the tied group.
+- **A confident ORB result may change the VERSION of the character the name read found,
+  but when a DECISIVE name read and the art disagree about the CHARACTER the row shows
+  both (≈) rather than siding with either.**
+- **The old look (second OCR pass) runs only when ORB was not confident** (`orbDecided`).
+  Its name re-read could only flip ORB's version back to a text guess.
+- **⚠ A NOT-confident ORB winner does not replace the read's pick** — measured, not assumed:
+  on the 60 field rows where ORB ran but fell short of the margin, its winner was right 32
+  times and the read's pick 34. The row keeps the read's pick and shows ≈ with the rest.
+- **The family fill is ranked by the version text the read found** (`scanFamilyByText`),
+  because a third of the index sits in a family bigger than the 8-candidate cap (Mickey
+  Mouse 61, Minnie 36) and index order let the right printing of a popular character go
+  unchecked.
+  - **Measured and NOT shipped: sending a non-decisive read's OTHER-character candidates to
+    the art check.** On all 275 field crops it changed exactly one answer, and
+    made it worse: a glare-washed *Winifred - Exasperated Elephant* that the read called
+    *Swordplay* at low confidence (honestly unsure, no ✓) came back as *Starkey - Devious
+    Pirate* with 26 inliers and a ✓. It also cost ~0.35s on the uncertain scans it touched.
+    **⚠ When the right card is not among the candidates, ORB still finds 20+ inliers on some
+    other card's art** — Winifred was never checked. Widening the candidates across
+    characters buys spurious matches, not answers; a future change there needs a higher
+    inlier bar for a character switch than for a version switch.
+- **⚠ References go to the shared detector worker ONE PER MESSAGE** (`verify-ref`). The
+  live loop waits on every detect reply, and one message carrying a cold family's eight
+  ORB extractions froze the live badge for all of them.
+- The snap path's primary read **dets the name at max-side 544** (`NAME_DET_SIDE`; 162 vs
+  343ms desktop and MORE accurate — char 92.7% vs 89.3%) and **skips the subtitle band**
+  (2–3× the name read's cost, and ORB answers the question it existed for).
+- **`window.__scanBench(canvas, opts)`** runs exactly this pipeline on a canvas —
+  `{rect:true}` skips capture, `{band:true, verify:false}` is the pre-ORB path. The field
+  set lives in `scripts/scanner/data/field_eval/` (gitignored; README inside), served by the
+  dev server. It is defined INSIDE the scanner modal, so open the scanner first (`/scan`
+  does it); the Browser pane cannot fetch other localhost ports, so serve the crops from the
+  same dev server the page is on.
+  **⚠ Persist a long bench's results as it goes** (localStorage): the scanner reloads its
+  tab whenever a new service worker takes control, so opening the site in another tab
+  after an `sw.js` edit wipes an in-memory run.
+- **Measured 2026-09-27 on the 275 human-reviewed field crops** (`{rect:true}`): exact card
+  **82.9%**, right name+version **87.6%**, a ✓ on **74.2%** of rows at 97.5% name+version
+  precision by label — and **every ✓ that disagreed with its label was a MISLABEL on
+  inspection** (the printed `N/204 · EN · set` line settles it), so judge a ✓ by eye, never by
+  the label. Against the pre-ORB path on the first 110 rows: ✓ shown 49.1% → 76.4%,
+  name+version 84.5% → 87.3%, median 7.3s → 2.8s (desktop).
+- **Perfect framing is worth ~4 points, not a rewrite.** The same frames warped by their
+  SIFT-registered true quads (`truerect/`) score exact 86.1% / name+version 92.3% / ✓ 79.2%
+  on 274 rows, against 83.2% / 88.0% / 74.1% on the field crops. Some field frames never held
+  the whole card (a close-up of the text box), which no detector can frame — so asking people
+  to fit the whole card in view may be worth as much as detector work. A thinner-edge
+  detector variant raised correct framing 19% → 37% but put the quad INSIDE the card 25% of
+  the time, cutting the name off: measured and not shipped.
+
+### The index follows the catalog; its assets survive deploys (2026-09-26)
+
+- **The catalog supplement.** `scanner/text.json` + `index.json` are built by hand and ship
+  with a deploy, so a card Lorcast indexed after the last build could not be scanned until
+  somebody rebuilt AND redeployed. When the scanner opens, the page hands it every catalog
+  card its index lacks (`scannerExtraRows` → `CardScanner.addCards`); name matching and the
+  review rows work the day a card reaches the catalog. Colour stays build-only (it carries
+  no signal on camera photos anyway). The review paths resolve ids through ONE lookup,
+  `scannerMetaMap()`. Guarded by `node scripts/test_scanner_extra.mjs`.
+- **One image rule for both index builders** (`scanner_scope.card_image`: normal, then large,
+  then small); `test_scanner_scope.py` pins text ⊆ index. Unreleased cards carry `d` (release
+  date) in text.json and lose `UNRELEASED_PENALTY` on a one-line name read until release day
+  (`test_scanner_unreleased.mjs`).
+- **`packsink-scan-v1`** (`SCAN_CACHE` in sw.js) keeps the scanner's ~37 MB — PP-OCR models,
+  onnxruntime wasm, OpenCV, the indexes — ACROSS deploys, like `packsink-img-v1`. Before it,
+  every deploy made every returning scanner user download all of it again. Served cache-first
+  by exact URL; a new `?v=` evicts the old entry for that path.
+  - **⚠ A persistent cache turns a forgotten version bump into stale bytes FOREVER.**
+    `node scripts/test_scanner_asset_cache.mjs` fails when a cached file's bytes change while
+    its version stays put, and `--update` refuses to record it. Hashing folds CRLF→LF, so a
+    Windows checkout and CI agree.
+  - The scanner's JS (`scanner.js`, both workers) is NOT in it — those stay network-first
+    with the app shell, so code always updates.
+  - **⚠ But bump a worker's `?v=` whenever its bytes change** (`SCAN_WORKER_URL`,
+    `OCR_WORKER_URL`, the `scanner.js` tag, all in Index.html): network-first in the SW does
+    not stop an HTTP cache in between from answering for the exact URL. The OCR worker
+    changed on 2026-09-26 while `OCR_WORKER_URL` still said `?v=299`; caught at the bump.
+- **OpenCV is vendored** (`vendor/opencv/opencv.js`, byte-identical to the jsDelivr build
+  prod loaded; jsDelivr is the worker's fallback only). Apache-2.0 notice in
+  `vendor/LICENSES.md`.
 
 ### Version chips in the review row (2026-09-12)
 
@@ -162,6 +309,11 @@ it failed silently: an empty list reads exactly like a card that isn't in the ca
 - **⚠ A bare `154` / `154/204` is still a COLLECTOR-NUMBER lookup and must stay ahead of the
   parser**, which would read a lone number as name text. The tester is holding the card and
   that line is the fastest thing to read off it.
+- **It returns EVERY printing with that number, oldest set first** (2026-09-25), capped at 40
+  rather than the name search's 12. Fourteen printings share #154, and stopping at 12 in
+  catalog order left two of them unreachable by number. `/204` narrows only on a row whose
+  `Number` carries its own total; most catalog rows carry a bare number, and dropping those
+  would empty the list, so they stay in. Each row shows its `#N`, and Enter picks the top one.
 
 Guarded by `node scripts/test_scanner_edit_search.mjs`, which rewrites only the memo's hook
 wrapper and replays the real body over the shipped index.
@@ -186,9 +338,31 @@ just as silently.
 
 - **`scanner_consents(user_id pk, version, accepted_at, uploads_enabled, updated_at)`** — owner-only RLS on select/insert/update, no admin read branch. One row per user, updated in place: we need the CURRENT preference on every scan, not an audit trail.
 - **`SCAN_BETA_VERSION`** (next to `SCANNER_BUILD`) is the accepted-notice version. **Bump ONLY when the substance changes** — what's uploaded, why, retention, who sees it. It re-prompts everyone; re-prompting for typo fixes trains users to click through the one screen that has to be read.
-- **The gate blocks the camera, not just the view.** The `// mount: index + camera + worker` effect early-returns on `!consentOk` and its deps are `[consentOk]`, so `getUserMedia` cannot fire before acceptance. Verified: no `<video>` in the DOM pre-accept. Don't "simplify" this into a render-only overlay.
+- **The gate blocks the camera, not just the view.** The `// mount: index + camera + worker` effect early-returns on `!consentOk`, so `getUserMedia` cannot fire before acceptance. Verified: no `<video>` in the DOM pre-accept. Don't "simplify" this into a render-only overlay. Its deps are `[consentOk, camAttempt]` since 2026-09-25: `camAttempt` is bumped by the error screen's **Try again**, which re-runs the whole mount. The early return still comes first, so a retry can never reach the camera before consent either.
 - **The opt-out reads `uploadsOnRef`, never the state.** `uploadSample`, `labelSample`, and the end-of-session telemetry insert all run from queue tails and deferred looks holding pre-toggle closures. All three bail when off — including the photoless session row, deliberately: "I turned that off" has to mean all of it.
 - Reachable twice: the first-run notice, and a checkbox in the review screen (`.scanner-qa-privacy`).
+
+### The overlay is a DIALOG, and Back closes it (2026-09-25)
+
+A full-screen takeover with the camera on has to leave the way people expect. Before this,
+Esc did nothing, Tab walked the page hidden behind it, and on a phone Back went to the page
+UNDER the scanner while the scanner stayed open with the camera still running.
+
+- **Every render branch's root is `role="dialog" aria-modal="true"` on one `scanRootRef`**,
+  and `useModalFocus` keeps focus inside. Once consent is given, focus lands on the close
+  button.
+- **Esc steps out ONE layer: the card editor, then the review screen, then the scanner.** A
+  search box with text in it gets the first Esc to itself (it clears the text); the next one
+  leaves. It reads a ref, so the listener is added once and never sees stale state.
+- **Opening pushes a history entry** (`openScan` in App); Back pops it and closes, which also
+  stops the camera. **`closeScan(navigatingAway)`** is the one close path. With × it calls
+  `history.back()` to take its own entry off. When the caller is about to push a page of its
+  own (open a deck, a card, the admin review), it only strips the marker with `replaceState`,
+  because a `back()` would race that push.
+- **The camera error screen has Try again** (see the consent gate above). "Camera in use"
+  (`NotReadableError`) now says so: close the video call or camera app, then retry.
+- **A detector worker that fails says so** rather than reading "Loading detector…" forever:
+  live detection is off, the shutter still identifies.
 
 ### Retention — a promise with a cron behind it
 
@@ -209,7 +383,7 @@ just as silently.
 
 ### Where the user-facing copy lives
 
-Three places, keep them consistent: the in-scanner notice (`consentPanel`), **privacy.html `#scanner`**, and the Help page's "Card scanner (beta)" section. `Permissions-Policy: camera=(self)` in `_headers` already allows the camera — don't tighten it.
+Three places, keep them consistent: the in-scanner notice (`consentPanel` — and `guestPanel`, the signed-out version it returns when there is no account), **privacy.html `#scanner`**, and the Help page's "Card scanner (beta)" section. `test_scanner_guest.mjs` checks all three still say nothing is uploaded while signed out. `Permissions-Policy: camera=(self)` in `_headers` already allows the camera — don't tighten it.
 
 ## Deck import from a PICTURE of a deck (2026-09-08)
 
@@ -664,6 +838,117 @@ the Graded collection in Index.html), with three views: **Pin board · Counter b
 - The Sealed tab carries a one-line pointer to the new tab, for everyone who remembers the pins
   living there.
 
+## Playmats — a Collection tab of its own (2026-09-27)
+
+From the beta: *"I have all the prize wall and set champion mats and would love to log them."*
+Zaven's spec: TCGplayer listings, price history, and sections — retail, Set Championship, DLC,
+events. `/collection?c=playmats` → `PlaymatsView` (just above the Graded collection in
+Index.html). Guarded by `python scripts/test_playmats.py` (offline, over a frozen copy of the
+group in `scripts/fixtures/`).
+
+**Sections** (`SECTIONS` in the loader = `PLAYMAT_SECTIONS` keys in Index.html, same order —
+the test pins both, plus the newest migration's CHECK): **Retail** · **Disney Exclusives**
+(`disney`: the Disney-location mats plus the D23 2026 Hunny Wizard, by Zaven's ruling) ·
+**Ravensburger Store** (`ravensburger`: online-store exclusives) · **Set Championship**
+(Champion / Participant) · **Disney Lorcana Challenge**, split into **Top Prize** and **Prize
+Wall** sub-grids (`tiers` on the section; `PLAYMAT_DLC_TIERS` = the loader's `DLC_TIERS`) ·
+**Events** (conventions, and Mother Knows Best — the Season 3 CCQ Top 32 prize, though TCGplayer
+lists it as a Challenge mat) · Other. Adding a section value needs a migration: 171 widened the
+CHECK for disney / ravensburger.
+
+- **⚠ TCGplayer never says Top Prize or Prize Wall.** Every Challenge mat's tier is a ruling in
+  the overrides file (Zaven, 2026-09-27: Cinderella, Simba and Mulan are Prize Wall; the rest Top
+  Prize). A new Challenge mat arrives with none — the loader reports it and the tab lists it in a
+  trailing "Not sorted yet" group rather than dropping it.
+- **A shop section doesn't repeat itself on the tile**: `shop` on the section hides the source
+  every mat there shares, so only the D23 mat names its source in Disney Exclusives. A tier the
+  section groups by is hidden on the tile the same way; the detail modal still carries both.
+
+- **TCGplayer files every Lorcana mat in a DIFFERENT category** — Playmats (35), group
+  "Ravensburger Playmats" (23280) — not Lorcana (71), which is why no mat ever reached
+  `sealed_products` or `prices_daily`. `tcgcsv_common.EXTRA_PRICE_GROUPS` makes the daily ETL
+  fetch the group too; a failure there is a WARNING and never costs the day's card prices.
+- **Its own table, `playmats` (migration 170), deliberately NOT `sealed_products`.** Every sealed
+  surface reads sealed_products, and so does the market index's `sealed` scope (130 admits every
+  product_type but Promo Single) — a mat filed there would silently join the sealed benchmark,
+  the Sealed tab, the sealed Screener and Sealed Movers. `playmat_prices_latest` is a plain
+  `security_invoker` VIEW (the newest priced row per mat, ~60 lookups on
+  `prices_daily_tcgcsv_raw_idx`), so there is no refresh step for anything to forget.
+- **`scripts/load_playmats.py`** (daily, in etl.yml's sealed job, `continue-on-error`) classifies
+  the group off TCGplayer's own copy: `(Champion)` / `(Participant)` → Set Championship, with the
+  set and year read from the description (it copes with TCGplayer's `Archazia�s` mojibake and its
+  `Reign of Jafarl` typo); `(Disney Lorcana Challenge)` → DLC; `YYYY Convention Playmat` → event;
+  "exclusively available on the Ravensburger Online Store" / "at Disney locations" → that shop's
+  section; a retail mat's set from its street date (within 45 days after a set's release). What
+  the rules cannot know lives in **`scripts/playmat_overrides.json`, every entry with a `why`** —
+  the Challenge tiers, the D23 2026 mat, several exclusives, a replacement photo, TCGplayer's
+  pre-order "Stitch - Miguel Rivera" (a Miguel Rivera mat). `--dry-run` prints the whole placement.
+- **Ownership = `sealed_collection_items` under `PLAYMAT_PID_BASE` (980000000) + the TCGplayer
+  id** — the pins' band trick. `isOwnTabPid` keeps mats out of the Sealed tab's COUNTS. ⚠ The REAL
+  id stays the price, history and TCGplayer-link key; only the stepper uses the band, and
+  `SealedDetailModal` carries both (`own_pid`, `is_playmat`).
+- **A mat's VALUE counts as sealed** (Zaven, 2026-09-27: *"add playmats value to collection value
+  as part of sealed"*). Every surface that turns the sealed collection into money keys it through
+  **`sealedPricePid(pid)`** (band id → TCGplayer id) and takes today's mat prices from
+  **`useOwnedPlaymatPrices`** (one cached `fetchPlaymats`, only when a mat is owned): the home
+  Collection panel's Sealed line and headline, the Sealed tab's Est. value (with **"incl. $X in
+  playmats"** under it — the units and SKU counts still exclude them), and the Sealed portfolio
+  chart. The Playmats tab's value carries an asterisk and a one-line note saying where it is
+  counted. ⚠ Miss `sealedPricePid` on a new money surface and an owned mat silently adds $0 again;
+  the test pins all three at source. Measured: one box + three mats read $2,016.99 on all three.
+- **⚠ Both sealed value charts go through `fetchSealedValueHistory`, not the plain history
+  fetch.** The rollup counts an item only from its first IN-WINDOW price, and a mat's first price
+  inside a short window is the day after the hole — so the 3M chart drew owned mats arriving from
+  nothing, **"+324% past 3M"** on a collection that hadn't moved. Each owned mat is seeded with its
+  newest price from BEFORE the window, re-dated to the window's first day (what forward-fill would
+  have carried): the same collection now reads +52%, the mats' real move across the hole. Mats
+  only — every other sealed product has daily prices.
+- **Sharing rides the SEALED visibility axis**, like Pins & Counters.
+- **One grid per section, the set named on each tile.** A heading per set left a column of single
+  tiles (most sets have one Championship mat and two retail ones). Newest set first; the regular
+  retail pair before the exclusives; Champion before Participant. Rows STRETCH so the steppers
+  line up.
+- **Photos are 16:9 with `object-fit:cover`.** TCGplayer ships some mats as a 16:9 shot and some
+  as a 400x400 with the mat in a white band across the middle; cover crops that band to the mat
+  in both cases, where contain drew the square ones at half the tile's width.
+- **Two of TCGplayer's photos are the BOX, not the mat** (Ursula's Return Tinker Bell 543891 and
+  Rapunzel - Gifted Artist 543892: a tall tube, which the wide tile crops to a sliver that reads as
+  "no image" — reported by Zaven 2026-09-27; the other 61 are real mat shots, checked on a contact
+  sheet of all 63). An `image` override points at our own photo under **`Logos/playmats/`** (the
+  loader writes it to `image_url`; `playmatPhoto(r, px)` prefers any non-http `image_url` over the
+  TCGplayer CDN). Ravensburger's product shot, cropped to the mat's 16:9 frame, the white outside
+  its rounded corners cut to transparency, saved as WebP. **⚠ It is passed `noCut`**: it's already
+  just the mat, and `cutProductWhiteBg`'s flood fill would eat the light Rapunzel art. The test
+  checks every override photo exists on disk — a missing one renders the glyph with no error.
+- **`PLAYMAT_CACHE_KEY` is v3**: the section split and the photos landed after browsers had
+  cached rows, and a replayed row files a mat under its old section for up to 12h.
+- **Amazon only on a plain retail mat** (a search — "Find on Amazon"). A prize or an exclusive is
+  not on a shelf, and a search for one lands on resellers' lots.
+- **⚠ The history has a HOLE: 2026-05-12 .. 2026-09-25**, because TCGCSV's archive went offline
+  (see the TCGCSV notes). `scripts/backfill_playmat_prices.py` filled 2024-02-08..2026-05-11 from
+  the local cache (21,570 rows) and `--live` loaded the 2026-09-26 publish. Four things keep the
+  hole from lying (the fourth is the value-chart seed above), all opt-in so no other product
+  changes:
+  - `computeSealedDeltas(history, {maxLagDays})` — a window whose stand-in snapshot sits more than
+    max(14, window/2) days before its cut reads "—" instead of comparing across the hole. Only
+    the mat modal passes it; sealed keeps the documented fall-back-to-the-day-before.
+  - `LineChart` series `breakGapMs` breaks the line at the hole, and the modal names it in a
+    caption ("Gap in our price record: …").
+  - A tile whose newest price is more than a week behind the newest mat's says **"Price as of
+    <date>"** — never "last listed", which would overclaim: it may well have been listed inside
+    the hole.
+- **The price-standing chip is hidden whenever TODAY has no NM Market price** (the sealed modal,
+  every product). `priceStanding` judges the newest row that HAS one, which on a thin product is
+  months old — it said "Near its 12-month high" about a price nobody could see, beside a Low that
+  said otherwise.
+- **⚠ Until this ships, the ETL (which runs from `main`) does not fetch the mats**, so every day
+  before the deploy extends the hole. `python scripts/backfill_playmat_prices.py --live` loads the
+  current publish by hand, and **refuses until that day's CARD prices are loaded**: the ETL's
+  idempotency probe asks "is there any tcgcsv/raw row for today, written after the publish
+  window?", so a mat row written first would make it skip the whole day's card prices.
+- Mats TCGplayer doesn't list (demo and youth mats, older one-offs) are out of scope; adding one
+  would mean a static entry, the `SEALED_EXCLUSIVES` shape.
+
 ## Official Lorcana brand art (2026-09-12)
 
 Ravensburger distributes a **"Complete Bundle"** of brand assets — 890 files, 313 MB: all 13 set
@@ -879,7 +1164,7 @@ a card out, not reading it. Click through and it's landscape.
 
 Icons live in `NAV_ICONS` (Index.html) — hand-coded inline SVG (Tabler/Lucide-style line glyphs), `stroke="currentColor"` so they inherit theme color. To add/swap an icon: edit the `path` for that key in NAV_ICONS, no asset file needed.
 
-- **Scan** (added 2026-08-04, gated on `canScan`) is the one tab rendered as a `<button>`, not an `<a href>` — the scanner is a modal with no route, so there's no URL for a modifier-click to open. Everything else in the nav must stay an `<a>` (see "SPA navigation"). It went in **row 1, not row 2**: both rows are 217px wide at the mobile sizing, so a 4th chip on row 2's longer labels (PRICE GRAPHING / ANALYTICS) is what pushed ANALYTICS off the edge on ≤420px phones before. It carries a `.nav-tab-beta` "BETA" flag, absolutely positioned over the icon so it costs no layout width — `.tabs` is a horizontal scroller on mobile, and because `overflow-x:auto` forces the cross axis to clip too, a badge hanging outside the chip would be cut off rather than drawn.
+- **Scan** (added 2026-08-04, gated on `canScan`) is an `<a href="/scan">` + `navHandler` like every other tab since 2026-09-27, when `/scan` became a route (it opens the scanner and rewrites the address to `/`). It was the one `<button>` in the nav because the scanner had no URL for a modifier-click to open. Everything in the nav must stay an `<a>` (see "SPA navigation"). It went in **row 1, not row 2**: both rows are 217px wide at the mobile sizing, so a 4th chip on row 2's longer labels (PRICE GRAPHING / ANALYTICS) is what pushed ANALYTICS off the edge on ≤420px phones before. It carries a `.nav-tab-beta` "BETA" flag, absolutely positioned over the icon so it costs no layout width — `.tabs` is a horizontal scroller on mobile, and because `overflow-x:auto` forces the cross axis to clip too, a badge hanging outside the chip would be cut off rather than drawn.
 - **The top-bar 📷 bubble is GONE** (2026-08-10, user request). It predated the Scan tab and was kept as a second entry point; once the tab shipped it was a redundant control competing for the crowded right cluster. `.tabs-grid` carries `padding-right:8px` on mobile so the last chip in a row isn't flush against the scroller's right edge (which read as clipping). That gutter belongs on the scrolled CHILD, not on `.tabs` — padding on a scroll *container* is dropped at the end of the scroll range in several engines.
 
 - **Screener** = sortable financial-database table (price_movers + filters + signals). Top-level since cards-as-instruments is the north-star surface. Has a prominent **Raw Prices / Graded mode toggle** (segmented buttons) above the preset chips — flips the table between TCGCSV raw + graded data.
@@ -941,7 +1226,7 @@ The PWA works offline after one online visit. Layers:
 - **Shell**: SW precaches Index.html + vendored libs + styles; navigations fall back to cached Index.html. (Pre-existing.)
 - **Catalog**: IndexedDB (see "Client cache rules") — Cards browse, search (incl. body text), and cached prices render offline. Boot-error screen shows an offline-specific message (`isOnline` in App) when there's no catalog at all.
 - **User data mirrors**: every successful fetch of collection / sealed(+meta) / pack-arts / graded items+goals / graded_prices_latest / own decks (incl. `deck_cards`, decoded) writes an IDB mirror (`offlineMirrorWrite("<what>:<uid>")`); the same fetch's failure path hydrates from the mirror. Decks mirror at `refreshDecks` covers both the list and opening a deck (DeckEditor reads from `decks` state). Offline is READ-ONLY: mutators fail → existing rollback + an offline-aware toast. Screener graded ownership + home portfolio chart intentionally NOT mirrored (market surfaces, online-only).
-- **Images**: SW caches every `destination === "image"` request (plus lorcast.io) into **`packsink-img-v1`** — a cache that SURVIVES deploys (activate purge keeps it). Two critical gotchas fixed 2026-07: (1) opaque (no-cors cross-origin) responses have `res.ok === false` — the old `if (res.ok)` guard meant NO image was ever cached; use `cacheable(res)` (`ok || type === 'opaque'`). (2) The image branch runs BEFORE the data-API skip so Supabase-storage prestaged art is cacheable; PostgREST responses are never destination "image" so data stays uncached. Catalog `img_normal` URLs are same-origin `/img-proxy/...` paths, so cache keys line up between browsing, the downloader, and tile requests.
+- **Images**: SW caches every `destination === "image"` request (plus lorcast.io) into **`packsink-img-v1`** — a cache that SURVIVES deploys (activate purge keeps it; so does **`packsink-scan-v1`**, the scanner's models, wasm and indexes — see the scanner section). Two critical gotchas fixed 2026-07: (1) opaque (no-cors cross-origin) responses have `res.ok === false` — the old `if (res.ok)` guard meant NO image was ever cached; use `cacheable(res)` (`ok || type === 'opaque'`). (2) The image branch runs BEFORE the data-API skip so Supabase-storage prestaged art is cacheable; PostgREST responses are never destination "image" so data stays uncached. Catalog `img_normal` URLs are same-origin `/img-proxy/...` paths, so cache keys line up between browsing, the downloader, and tile requests.
 - **Image pack downloader**: settings popover → "Offline card images". `startOfflineImagePack(urls, scope)` + `OfflineImagesPanel` (Index.html, above App). Module-level task singleton (popover close doesn't abort), 6-worker pool, skips already-cached, no-cors fetches into `packsink-img-v1`, progress/cancel/clear UI, `~45KB/image` estimate, last-run stamp in `localStorage["packsink:offlineImages"]`. Signed-in users also get a "My collection" scope.
 - **Offline UX**: `isOnline` state in App (online/offline listeners; regaining connectivity re-runs `loadFromSupabase`). `.offline-pill` (styles.css) shows "Offline — showing saved data". One-shot `navigator.storage.persist()` request shields IDB + caches from eviction. `fetchCardHistory` serves an expired hist cache entry when the fetch fails (`readCardHistCache(..., ignoreTtl)`).
 - **Testing gotcha**: Chrome defers ALL `loading="lazy"` images while `document.visibilityState === "hidden"` — a backgrounded preview pane shows every tile image "pending" forever. Not an app bug; test with the pane visible or force `img.loading = "eager"`.
@@ -1015,6 +1300,39 @@ The `resolvedTheme` (aliased `theme` for back-compat) is what gets written to `<
 - The light-theme grid + dark-theme grid are ALWAYS visible regardless of current mode — picking one updates that family's pref and changes the toggle pair without changing mode.
 
 **`showTopBarTheme`** pref (`packsink:showTopBarTheme`): toggle to hide the quick theme bubble in the top-nav right cluster. Default ON.
+
+### Text on an accent fill is `--on-accent`, and muted text is sized to 4.5:1 (2026-09-26)
+
+Measured across all seven themes with a pixel-sampling harness (the session's scratch
+`agent_themes/`), two systemic readability gaps, both fixed at the TOKEN so every
+instance moved together:
+
+- **`--on-accent`** — the text colour on the site's one active-chip / primary-button
+  treatment, `background:var(--accent)`. It was a literal `#fff` in ~75 rules, which reads
+  on the light themes' dark gold (#8a6d1b, ~5:1) and FAILS on the dark themes' bright gold
+  (#c8a846 2.3:1, aurora's #e8c850 1.6:1 — "Sign in" among them). `:root` sets `#fff`;
+  aurora / velvet / black override it with dark ink `#1a1022`. **New accent-filled UI takes
+  `color:var(--on-accent)`, never `#fff`** — and never a new token for the same job.
+- **`--text-muted` / `--text-dim` alphas were raised** so muted clears 4.5:1 on each theme's
+  own backgrounds (parchment measured 2.8:1 — nav labels, table headers, chart axes, sub-
+  lines). Parchment/light 0.40→0.55 (dim 0.58→0.68), sunrise/watercolor/daydream
+  0.55→0.66 (dim 0.7→0.8), velvet 0.40→0.50 (dim 0.55→0.65), aurora 0.50→0.56 (dim
+  0.65→0.7), black 0.45→0.50. Muted stays lighter than dim. **Stacking `opacity` on muted
+  text undoes this** (the footer disclosure sat at 2.3:1 that way) — fade the element, not
+  the text, or don't.
+- Also from the same pass: placeholders follow the theme (`input::placeholder` →
+  `--text-muted`, opacity 1 — the browser default #757575 measured 2.6–3.5:1); calendar
+  kind chips keep the pure hue on the BORDER and darken the label toward black on light
+  themes (`--chip-hue` + `color-mix`); the bright Elo top-rank gold becomes `--accent` on
+  light themes; out-of-month / dense-calendar day numbers stay recessive but readable.
+- **Guarded by `node scripts/test_theme_contrast.mjs`**, which parses the theme blocks out of
+  styles.css and does the WCAG arithmetic: muted ≥ 4.5:1 on every theme's `--bg-solid`, dim
+  at least as strong as muted, `--on-accent` ≥ 4.5:1 on `--accent`, and no rule pairing
+  `background:var(--accent)` with a literal white. It fails 16 checks on the pre-fix sheet.
+- **The harness has two known artifacts** worth recognising before "fixing" them: text over a
+  modal that hadn't finished loading (backgrounds of #010101), and positions sampled from a
+  different scroll offset than the screenshot (footer text "on" map tiles). Confirm a
+  low reading with `getComputedStyle` before touching CSS.
 
 ### ⚠ `color-scheme` is declared at the DOCUMENT level — don't scope it off again (2026-09-13)
 
@@ -1310,6 +1628,34 @@ The Screener has parity with the Cards browse filters as of 2026-05-26 via the c
 - Filter chips wrap to multiple rows naturally.
 - **Rarity icon chips fit on one line (2026-05-27):** at ≤720px `.price-db-raritybtns` gap drops to 2px and `.price-db-raritybtn-icon` padding drops to `4px 5px` so all 9 canonical rarity chips fit a single row on a ~375px phone (the 9th, Promo, was wrapping at the desktop `4px 10px`/`3px gap` sizing).
 - **Landscape / short viewport (2026-05-27):** `.price-db-tablewrap` normally caps at `max-height: calc(100vh - 280px)` with an internal scroll. On a landscape phone (~411px tall) that left only ~1.5 rows. At `@media (max-height:600px)` the cap is removed (`max-height:none`) so the table flows into natural page scroll instead of a nested "sub-menu". Tradeoff: the sticky `thead` only pins within its scroll container, so once you scroll past the table top the column headers scroll off with it (pinning headers to viewport while keeping horizontal scroll needs a header/body structural split — deferred). Horizontal scroll on the wrap is preserved (table is wider than the viewport).
+
+### PSA population columns in RAW mode (2026-09-27)
+
+Zaven, from the Screener: *"Should be able to add columns for PSA stuff in raw section."* The
+gear offers eight — PSA Pop, PSA 10s, PSA Gem %, PSA 9.5 / 9s / 8s / 7s, PSA Qualified — all
+hidden by default (no Pop @ Grade: a raw row has no grade). Every header says PSA, for the reason
+the graded ones do: `graded_pop` holds no CGC, BGS, SGC or TAG counts. Guarded by section 9 of
+`node scripts/test_graded_pop.mjs`.
+
+- **⚠ `rawPopPick`, not `gradedPopPick`.** A raw row IS one printing, so on a card the catalog
+  holds in both finishes (the `_printBadge` index) only that printing's PSA row counts, and no
+  match reads "—". gradedPopPick's largest-row fallback put a card's non-foil population on its
+  Cold Foil row (and a C1 Prize Wall row would have read the Top Prize count). A one-printing
+  card — every Enchanted, most promos — takes the largest row, since PSA's Variety names the
+  rarity or the provenance there, not a finish.
+- **The pop fields land on COPIES of the filtered rows** — after the filter so only shown rows
+  pay, before the sort so the columns order. Raw rows are the shared `price_movers` objects;
+  writing onto them would leak pop fields into every other consumer.
+- **Fetched only when shown**: a pop column switched on, or a pop sort arriving in a saved view or
+  a `?v=` link (`rawPopWanted`). ⚠ It is declared BELOW `colPrefs` because its deps read it — a
+  deps array is evaluated at its own declaration point, and above that line it is a TDZ crash.
+- **⚠ `colPrefs[mode].known` — why eight new columns didn't appear for everybody.** The saved
+  prefs list the HIDDEN columns, so a column added later is "shown" by omission: everyone who had
+  ever customised the Raw table would have got all eight PSA columns at once. A column the prefs
+  have not KNOWN now takes its own default, and toggling any column writes `known`. Raw prefs
+  saved before `known` get it reconstructed WITHOUT the pop keys. **Other modes' legacy prefs
+  keep the old rule** (they gained no columns), so a future column added to Graded or Sealed
+  wants the same reconstruct line, or it will pop up for every legacy user until their next toggle.
 
 ## Screener saved views
 
@@ -2088,6 +2434,9 @@ The FAQ ("Tracking your collection" section, Help bubble `?`) explains this user
 `MARKET_SUBS` = overview / ev / trade / avg ("Set Breakdown") / setval / sim / swiss / lore / dice / ticker (+ elo, hidden unless pinned). The consolidation:
 
 - **Swiss Odds (`swiss`, added 2026-08-20)** embeds the standalone `swiss.html` page as `<iframe src="/swiss?embed=1">` (canonical path is `/swiss` — Workers Assets pretty-URL handling 307s `/swiss.html` and the worker's legacy `/lab/swiss` route to it, DROPPING the query, so never point the iframe at `/lab/swiss`) — the sim stays a separate file on purpose (its Monte Carlo engine is a hot loop ordinary visitors shouldn't download inside Index.html; see the commit that added it). `?embed=1` sets `data-embed` on the page root pre-paint, hiding its own brand/flag/theme chrome, then strips the param via replaceState so the page's Copy-link never leaks `embed=1`. The header's "Open full page ↗" escape hatch was removed 2026-08-21 (user call — redundant once the embed worked; `/swiss` stays reachable by URL and the embed's own Copy-link shares it). swiss.html links `/styles.css` UNVERSIONED (network-first SW keeps it fresh; a `?v=` there would drift from the bump-cache lockstep, which doesn't know about this file).
+  - **Below 960px the Swiss tab is an AUTO-HEIGHT frame** (`SwissEmbed`, 2026-09-26): there the simulator stacks into one column and stops being a sticky-sidebar tool, so a fixed ~600px box made it a window you scrolled inside while the page scrolled past it to the footer. swiss.html carries the same content-measuring height reporter as ticker.html, and its embed CSS sets `body{min-height:0}` (100vh inside a frame sized FROM the content is a growth loop). Wide, it keeps the fixed frame. The embed also hides its own title (`.sw-titles`) — the tab header already names it — and the "Internal preview" pill is gone.
+  - **Both embeds follow the site's theme toggle** (`syncFrameTheme`): their pages read the theme once at load, so a toggle left them the other colour until reload, and a system-mode override (never persisted) never reached them. The host copies its own `data-theme`/`data-mode` in on the frame's load and on every change.
+  - **Swiss Copy link describes the run ON SCREEN** (`LAST_RUN`), not the live form — typing a record used to rewrite the link from settings nobody had run. The link carries the cut the person PICKED (`cutChoice`), never the field-clamped one: `c=12` from a 12-player Top 16 is a value the menu lacks, and reopened as "No cut" (older links now snap to the smallest offered cut at or above it).
 
 - **Stream Ticker (`ticker`, added 2026-09-15)** embeds `ticker.html` the same way —
   `<iframe class="market-embed-frame" src="/ticker?embed=1">` — and for the same reason: the
@@ -2132,11 +2481,13 @@ The FAQ ("Tracking your collection" section, Help bubble `?`) explains this user
   states a COST and which number that cost is built from has to be readable off the screen on
   arrival. The old key is orphaned, which is what stops a stale `market` resurfacing; it needs
   no migration.
-- **The home Toolbox is NOT a mirror of this tab bar.** `HOME_TOOLS` deliberately omits
-  **Simulator** (removed 2026-08-27, Zaven) as it omits the Stream Ticker: the toolbox is the
-  short list of tools an ordinary visitor opens cold, and a pack sim is somewhere you arrive from
-  an EV row's ⚄ Sim chip. Simulator still lives in the tab bar and in Overview — dropping a chip
-  from `HOME_TOOLS` must never drop the tool.
+- **The home Toolbox is NOT a mirror of this tab bar, and it holds exactly SIX chips** (three
+  even rows of the two-column grid). As of 2026-09-26 (Zaven): Expected Value · Trade Compare ·
+  Set Breakdown · Playset Cost · Swiss Odds · Simulator. **Dice Tray and Lore Tracker came out**
+  — on phones they already have their own bubbles in the movers toolbar's corner (the fixed
+  `dice` / `lore` HOME_PANELS entries), which is where someone mid-game reaches for them. The
+  Stream Ticker stays out (an OBS overlay is not a cold-open tool). Dropping a chip from
+  `HOME_TOOLS` must never drop the tool — every one of them is still an Analytics tab.
 - **The Lore Tracker's glyph IS `LORE_PIP_PATH`** — `HOME_TOOL_ICONS.lore` references the same
   const the tracker's own `LoreDiamond` draws, so the two can never drift. A tall diamond whose
   four sides bow INWARD by 13%: the waist is the whole difference between "lore" and "a diamond",
@@ -2144,7 +2495,7 @@ The FAQ ("Tracking your collection" section, Help bubble `?`) explains this user
   by eye at 17px. The pip is the WHOLE glyph — it sat over a rising-tick baseline until
   2026-08-27, which cost it a third of the box for detail invisible at chip size.
 - **`HOME_TOOLS` order is the render order of a two-column grid**, so the first pair is the top
-  row — Dice Tray then Lore Tracker, the two you reach for mid-game. Chips carry a label and no
+  row. Chips carry a label and no
   subtitle (dropped 2026-08-27): the second line doubled every chip's height, and what each tool
   answers is what Analytics » Overview is for.
 - **The Dice Tray hands off to it with a corner bubble**, not the row that used to sit under the
@@ -2153,6 +2504,11 @@ The FAQ ("Tracking your collection" section, Help bubble `?`) explains this user
   top-right (`.dice-stage` carries the `position:relative` and a 48px top pad so a full row of
   type chips can never wrap under it), and stays an `<a href="/analytics?a=lore">` + `navHandler`
   so modifier-click still opens a tab — the Lore Tracker has a real route, unlike the Scan tab.
+- **The Dice Tray reads a TOTAL and never names a winner** (Zaven, 2026-09-26). It used to say
+  "Player 2 goes first with 4", light up that die, and offer "Reroll the tie" with a roll-off mode
+  behind it. All of that is gone: players read their own dice, and tapping one rerolls just that
+  one. The per-seat "Player N" labels stay, because they only say whose die is whose. Don't bring
+  back a verdict line or a highlight.
 - **The tab bar also renders a right-aligned "Sealed ↗" pointer chip** (`.market-subtab-ext`) — a muscle-memory bridge to the Screener's Sealed mode. It and the `?a=sealed` redirect share App's `openScreenerSealed` callback (writes the two screener localStorage flags, then `setView("screener")` — must run before the Screener mounts, since its mode flags are read in `useState` initializers).
 - **Coachmark fixes that shipped with this work** (tour infra, not Analytics-specific): an open auto-tour now DISMISSES on top-nav view change instead of following the user into a view where its selectors match nothing (context-free floating card; dismissal does NOT stamp `sectionTourSeen` — abort semantics). And the tip re-measures on a slow keepalive for its whole life instead of stopping 1.1s after mount, so async data reflowing the page can't strand the spotlight.
 - Dead code cleaned with it: the unused v1 `CompareView` (absorbed into Card Averages long ago), `.trade-intro`, `.card-avg-chip-reset`, `.sim-kind-*` CSS.
@@ -2508,6 +2864,8 @@ The orphaned `.tournament-result-*` and `.tr-*` rule clusters were already gone 
 
 Every `CardTileImpl` — browse mode AND deck-builder card browser — has a tiny `.tile-magnify-btn` (22×22, inline Lucide-style SVG circle+line) in the bottom-left of the image wrap. Opens `openEnlargedCard(group)` directly, skipping the detail-modal popup. Hover-only on desktop (`opacity:0; pointer-events:none` resting → `opacity:0.9; pointer-events:auto` on `.card-tile:hover` / `:focus-within`); always-visible on touch via `@media (hover:none)`. In deck mode where the `⤢` expand button is also at `bottom:6px; left:6px`, the `.card-tile:has(.tile-expand-btn) .tile-magnify-btn{bottom:42px}` rule lifts the magnifier above it so both are tappable. **Don't re-gate the magnify on `openModal` truthy** — the initial implementation gated it that way assuming deck mode didn't pass `openModal`, but it does (the expand button needs it), so the gate was a no-op AND a stale-comment trap. Current code unconditionally wires `onMagnify` and the JSX `${onMagnify && ...}` is the always-truthy presence check.
 
+**The select checkbox (`.card-tile-check`, top-right, Cards tab only) is ALWAYS on screen — faint (opacity 0.4) at rest, full on hover, keyboard focus or once selected** (Zaven, 2026-09-26). It used to be opacity 0 until hover, which on a touch screen made it invisible but still tappable: tapping that corner of a card selected it instead of opening it. Two consequences: the owned badge now sits permanently just below it on selectable tiles (`top:42px`; it used to jump down on every hover), and the hover rule is wrapped in `@media (hover:hover)`, because a touch screen keeps `:hover` on the last tile tapped.
+
 **Don't re-introduce the double-click path.** Pre-fix the same intent was wired as `onDoubleClick` on the tile, with a `packsink:close-card-detail` window event the detail modal listened for to dismiss itself. Unreliable because the SINGLE-click that fires first opens the detail modal — on slow devices the modal flashes and the dblclick lands on a freshly-rendered tile underneath. The magnify-button affordance avoids the race.
 
 **Enlarged image must scale UP**. `.enlarged-card-img` now sizes via `width: min(92vw, calc(92vh * 5 / 7), 720px); height: auto; max-height: 92vh`. The pre-fix `max-width: min(92vw, 720px)` left the image at the source's natural ~488×681 (Lorcast `image_normal`), so the "enlarged" view wasn't actually enlarged. The `calc(92vh * 5 / 7)` is the 5:7 card aspect ratio derived width — keeps the image inside the viewport on tall screens.
@@ -2604,7 +2962,7 @@ Decks' sections and the Screener's mode were localStorage-only, so every one of 
 - **`/decks?s=<section>`** — `yours|favorites|following|discover|tournaments` (`DECK_SECTION_KEYS`).
 - **`/decks?f=<format>`** — `core|infinity|coconut`; implies Discover, so `/decks?f=coconut` alone is the short share link.
 - **`/screener?m=<mode>`** — `raw|graded|sealed` (`SCREENER_MODES`).
-- **`/collection?c=<section>`** — `cards|sealed|graded|pins` (`COLLECTION_SECTIONS`, added 2026-08-24; `pins` = Pins & Counters, 2026-09-11). Same rules as the rest; `cards` is the default so it's omitted. In viewer mode the tab hrefs keep `?collection=`+`?token=` (`collectionSectionHref`) — drop the token and you hand someone a link that dead-ends on "this collection is private", which the owner can never reproduce.
+- **`/collection?c=<section>`** — `cards|sealed|graded|pins|playmats` (`COLLECTION_SECTIONS`, added 2026-08-24; `pins` = Pins & Counters, 2026-09-11; `playmats`, 2026-09-27). Same rules as the rest; `cards` is the default so it's omitted. In viewer mode the tab hrefs keep `?collection=`+`?token=` (`collectionSectionHref`) — drop the token and you hand someone a link that dead-ends on "this collection is private", which the owner can never reproduce.
 
 Rules that keep this from fighting the rest of the URL machinery:
 
@@ -2907,6 +3265,45 @@ Name scoring (when no exact-pid hint):
 - `-20` if any variant_label
 Highest wins, tiebreak by iteration order.
 
+### The decklist round trip (2026-09-26)
+
+`deckToText` (the Decklist button, both tile copies) and `parseDeckText` (Import + every
+tournament upload) have to agree, and every way they disagree is silent. Guarded by
+`node scripts/test_deck_text.mjs`, which replays the real functions.
+
+- **A Coconut deck's leader is exported as `# Coconut leader: <Name - Version>`** and read back
+  (and applied via `onUpdateMeta`). The leader sits OUTSIDE the 60, so it is not in
+  `deck.cards`, and the export used to drop the one card that defines the deck. A comment, so a
+  tool that doesn't know Coconut skips it.
+- **One line per CARD, not per printing** — a base + its Enchanted exported as two lines with
+  the same name, which a tool that doesn't sum duplicate lines reads as half the copies. A card
+  missing from the catalog is a `# N × <card_id>` comment, never `N crd_…`.
+- **Import folds accents** (a third key, `foldCardName`, after the normalized and squashed ones),
+  so "Te Ka" finds "Te Kā".
+- **A `(set-cn)` wins over the name only when it names a printing OF that card** (its job:
+  picking the Enchanted), or when the name alone matches nothing. When the two name different
+  cards the NAME wins and the line is reported (`mismatched`) — a list numbered by another site's
+  scheme, or one typo, otherwise imported a different card silently.
+- **Over the copy limit is trimmed AND reported** (`trimmed`, summed across lines) in the
+  import confirm, beside the unmatched lines.
+- **Not done, and a decision for Zaven:** exporting a non-default printing WITH a `(set-cn)`
+  suffix would make the Enchanted survive our own round trip, but some other tools choke on the
+  suffix. Today a mixed base + Enchanted exports as one plain line and re-imports as the base.
+
+### One card, however it's spelled — `cardFamilyKey` (2026-09-26)
+
+Lorcast's Product Name is not stable across printings: 12 cards on the live catalog differ by
+case ("HeiHei" / "Heihei", "Down In" / "Down in") or by a curly vs straight apostrophe. Keyed on
+the raw string, a deck could hold 4 of each spelling and pass, and a rotated printing whose
+reprint is spelled differently read as Infinity instead of Core. **`cardFamilyKey(name)`**
+(beside `getDeckLimit`: diacritics folded, curly quotes straightened, whitespace collapsed,
+lower-cased) is what every "is this the same card" question groups by: the 4-of cap in
+`checkDeckLegality`, DecksView's `setsByProductName` (**its keys ARE family keys now** — look it
+up through `cardFamilyKey`, never the raw name), the editor's `deckQtyByName` / +/− caps,
+`deckReprintNotes`, `cardPrintingsFor` and `deckToText`. It lives inside the span
+`test_coconut_legality.mjs` slices, and `test_reprints.mjs` grabs it by name; both pin a split
+spelling in each direction.
+
 ## Deck poster export
 
 `DeckPosterModal` renders the poster as live HTML, snapshots via html2canvas on Copy/Save.
@@ -3201,7 +3598,7 @@ and a chip per row: **3274px, 4.0 screens, calendar at 1.6**.
   quietly move the banner order. An explicit pick still wins: a heuristic may choose for
   you, never over you.
 
-### The news/poll box collapses, and un-collapses itself (2026-09-20)
+### The news box collapses, and un-collapses itself (2026-09-20)
 
 591px → 45px, desktop and mobile. **⚠ The stored value is not a boolean — it is the
 CONTENT SIGNATURE that was on screen when you minimised it** (`NEWS_COLLAPSE_LS`). If what
@@ -3210,19 +3607,36 @@ posted" (Zaven). That shape is what makes it safe to forget — a box collapsed 
 cannot swallow a set announcement in June, which a plain boolean would.
 
 - Signature = tile **keys** (not count: a new tile replacing an old one is news and the
-  count would not move) + the poll's **`poll_id`**. ⚠ There is no `id` on that row — the
-  first cut read one, the signature ended `::undefined`, never moved, and a brand-new poll
-  could not have reopened anything. It fails silently in exactly one direction.
-- **⚠ Nothing volatile may enter it.** `my_choice`/`pct` change when YOU vote, which would
-  pop the box open at the moment you finished with it; a countdown would reopen it on a
-  timer and make the minimise a lie.
+  count would not move) + each fresh Coconut reveal's slug + the reveal counter's
+  **count** — its tile key is the constant `news` all season, so the key alone never
+  moves as cards land. It fails silently in exactly one direction: the box just never
+  reopens.
+- **⚠ Nothing volatile may enter it.** A countdown would reopen it on a timer and make the
+  minimise a lie; anything that changes when YOU act would pop it open at the moment you
+  finished with it.
+- **⚠ Renaming a token reopens every collapsed box once**, because the stored signature no
+  longer contains it. Fine when the box is changing anyway (the poll removal below did
+  exactly that); don't rename one for tidiness.
 - The comparison is at RENDER, not in an effect, so new content paints open with no
-  expanded-then-collapsed flash. The poll sits inside the collapse — it is ~200px of the
-  578 and a collapse that left it standing would not be one.
+  expanded-then-collapsed flash.
 - **⚠ `contain:size` has to be released** on the `.rl-news-row` copy, which takes its
   height from the banner beside it: without that, collapsing leaves a full-height empty
   rectangle.
 - Guarded by the signature section of `node scripts/test_home_layout.mjs`.
+
+**The home poll is GONE (2026-09-27, Zaven: "remove the poll from news").** It sat at the
+top of this box, above the News title, from 2026-09-18 (commits `4e8c8eb` and `af34a13`;
+migrations 161 / 162 / 167). The client went with it — `useHomePoll`, `HomePollBox`,
+`.home-poll*` — and so did the `lead` slot, which existed only to lift the reveal counter
+ABOVE the poll; the counter is the first tile in the list again, under the title.
+`test_home_layout.mjs` fails if the poll comes back, because a long-lived branch merging in
+can resurrect it without a conflict.
+
+- **The database side was left alone**: `polls`, `poll_votes`, `get_active_poll()` and
+  `vote_poll()` are still live, now called by nothing. Dropping them is a human paste —
+  and it deletes every vote ever cast — so it waits for an explicit ask.
+- Bringing a poll back means restoring those two commits' code, not a rewrite; the next
+  poll was always meant to be an INSERT, not a deploy.
 
 ## Mobile top-nav
 
@@ -3394,6 +3808,15 @@ SELECT public.refresh_graded_prices_latest();
 - **Lorcast's API key for inkable is `inkwell`**, not `inkable`. Our column is `inkable`; loader translates.
 - **The legacy graded feed (retired 2026-06-30) capped `/history` at ~1 year and was very sparse for low-liquidity cards** — which is why the graded value chart needs its backward-fill. Kept only to explain that backward-fill's existence; the API and the tables are gone (see "Legacy graded deletion").
 - **Image sizes**: small (200w), normal (400w), large (734w). Use `img_normal` for tiles ≤200px; `img_large` for hover/modal/poster; `img_small` ≤80px thumbs. `img_large` NOT in catalog cache (stripped); fallback to img_normal.
+- **⚠ TCGCSV took its public price ARCHIVE offline (found 2026-09-27).** Every
+  `/archive/tcgplayer/prices-<date>.ppmd.7z` now answers 403 with a notice from its operator
+  ("temporarily removed due to rising server costs"; he asks for per-group requests and for no
+  file to be fetched twice in 24 hours). The live `/tcgplayer/<category>/<group>/prices`
+  endpoints still work — the daily ETL is unaffected. **`scripts/backfill_cache/` (825
+  archives, 2024-02-08..2026-05-11) is therefore the only copy of those days anywhere we can
+  reach: don't delete it, and it is worth a backup off OneDrive.** Any backfill of a category we
+  never pulled (the playmats were the first) can reach that range and no further;
+  `backfill_playmat_prices.py` reports the missing days as "archive offline", not as failures.
 
 ## Raw eBay sales — the ~24 promos TCGplayer cannot price (2026-09-20)
 
@@ -3574,13 +3997,56 @@ the fossil and the eBay sales are the market, so the card page says so:
   today. **⚠ `RAW_SALE_COLOR` is a literal hex, not `var(--accent)`** — these
   series are consumed by the canvas poster, which cannot resolve a CSS variable.
 
-### Running it
+### Running it — DAILY since 2026-09-26
 
 `powershell -File scripts\graded_run.ps1 -Raw [-Deep]` — the SAME driver as the
 graded scrape, because stages 1a–1c hold the stale-Chrome and captcha knowledge
 and a second copy would drift. `-Deep` (first run) pulls each query to
 exhaustion; after that a query is bounded by its own file's max date. It stops at
 the DRY-RUN load: read the review report, then `--commit` yourself.
+
+**⚠ Until 2026-09-26 the raw scrape had NEVER RUN.** `scripts/raw_output/` was
+empty: all 78 raw sales on the site came from the one-time `--backfill-graded`
+on 9/20, and nothing was keeping them current while the graded scrape ran daily
+beside it. It is now **step 5 of the `graded-scrape` scheduled task** (the daily
+Claude task, ~12:11 local), after the graded stages, in the same Chrome:
+`graded_run.ps1 -Raw -SkipLoad`, then `raw_load.py --from-jsonl --commit-if-clean`
+and `raw_load.py --backfill-graded --commit-if-clean`.
+
+- **`--commit-if-clean` is the unattended mode, and it keeps the one judgement
+  the dry-run report was for.** It writes every NEW row except a NEW price
+  outlier, which is HELD (not written) and printed with its item_id for a person
+  to open. Price still never DECIDES identity — a held row is a question, not a
+  rejection; plain `--commit` after a look writes it. Rows already in the table
+  are skipped by the insert-only upsert, so an old outlier nobody ruled on cannot
+  block a day's run forever.
+- The unattended run must never pass plain `--commit` or `--merge`.
+
+### On the card page (reworked 2026-09-26, Zaven: "use the last sold/avg 5 as the main metric. have the sales graph be more like the one for graded")
+
+- **The Price changes row** leads with a graded-style pair — LAST SOLD (with its
+  date) and AVG OF LAST N (with the sale count) — as big accent numbers. TCGplayer
+  Low/Mkt is one small line under it, its six-window % grid folds behind a
+  "TCGplayer changes" toggle, and the `priceStanding` chip is hidden on a raw row
+  (it judges TCGplayer's Market, the price nobody is paying).
+- **The history section opens on "eBay sales"** (`RawSalesPanel`, beside
+  `GradedSalesTab`), with "TCGplayer history" as the other half of a toggle. The
+  panel is the graded tab's shape: a per-sale ScatterChart, a click-to-pin sale
+  detail with the listing + photo, and a sale-rows table (Date / Listing / Qty /
+  Price / Type / ↗). TCGplayer Low and Mkt are OPTIONAL overlay lines, off by
+  default. A split Challenge card's printings are chips (one at a time; Ctrl/⌘
+  to overlay) plus a summary table, and the Unknown bucket is never shown as
+  either printing.
+- **⚠ No Last Sold / Avg headline inside the panel** — the Price changes row right
+  above already shows that pair, and the same two numbers twice on one screen read
+  as two different prices. The panel's summary line is range + date span.
+- **⚠ Headline numbers come from the ROLLUP row**, never recomputed client-side,
+  so the card page cannot disagree with anything else reading `raw_sales_rollup`.
+- The `raw_sales` fetch now also selects `item_id` (ScatterChart selection),
+  `image_url` and `listing_type`. `ScatterChart`'s tooltip takes an optional
+  `tipLabel` so a raw dot says "Raw" instead of an empty grader/grade.
+- `rawView` resets to "ebay" on every card — the modal does not remount between
+  cards, same reason as the Low/Market nudge above it.
 
 ## Price standing — "is this actually a good price?" (2026-09-10)
 
@@ -3988,6 +4454,28 @@ Gear panel both existed it was a third Amazon prompt on one page. The Gear PANEL
 out on 2026-09-12 for the same reason, so the home page's one Amazon surface is now the row,
 whose title leads to `/gear`. Leftover `packsink:gearBarDismissed` / `packsink:home:gearCollapsed`
 keys in someone's browser are harmless.
+
+### The Amazon link is a BUTTON, and it never touches a price (2026-09-26)
+
+Zaven: *"make it more clear it's a button to take you to amazon, and not the same price
+as the $ above which also should imply it's a tcgplayer link."* The Amazon twin used to
+be a muted "Amazon" text link sitting under or beside the box price — which read as a
+caption ON that price, i.e. as though the $ were Amazon's.
+
+- **`amazonPill(az, {cls, stop, label})`** (beside `AmazonBuyLink`) is the one
+  accessor: a cart glyph, the word, a trailing ↗, a border, and an amber tint
+  (`.amz-btn`, rgba(240,163,62)) that no price on the site uses. **It never carries
+  a number.** Used on the home EV strip, the Analytics EV rows, Sealed collection
+  tiles and the calendar's product links; `AmazonBuyLink` (sealed modal) gained the
+  cart and the same amber; the icon-only twins (Screener sealed rows, movers-tile
+  corner) take the amber so a cart is never mistaken for the TCGplayer link.
+- **The price says whose it is.** Column headers read "Box · TCGplayer" (home strip
+  + Analytics EV), the price link carries a small ↗, and the sealed tile's chip reads
+  "TCGplayer ↗" (was "TCG ↗").
+- **⚠ On the home EV strip the pill is its OWN column, after "vs box"** — never in
+  the price cell. Below 640px (and in the 240px left rail) the row stacks: set name +
+  pill on line one, the three numbers on line two; five columns left a phone's set
+  name 17px wide.
 
 ### Disclosure
 
@@ -6880,9 +7368,11 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   `ticker.html` for it through the asset fall-through with the query intact. Do NOT add a worker
   route that fetches `/ticker.html` — the assets layer 307s that to `/ticker` and DROPS the query
   string, and `?bar=1&…` IS the overlay's configuration (this is the same 307 that moved swiss to
-  `/swiss`). Dev route in `dev_server.py`; listed in `build_dist.mjs`; robots-disallowed + noindex
-  (shared by link, not nav-linked). No sw.js involvement — the page never registers it and OBS's
-  browser profile never visits the SPA.
+  `/swiss`). Dev route in `dev_server.py`; listed in `build_dist.mjs`. **Bare `/ticker` (no `bar` /
+  `embed`) is now the SPA's Stream Ticker TAB** (the worker's `tickerIsSpa`), so it is in the
+  sitemap and NOT robots-disallowed (2026-09-26) — `ticker.html` keeps its noindex meta, and a
+  crawler must be allowed to fetch a page to see that, so blocking `/ticker` only hid the tab. No
+  sw.js involvement — the overlay never registers it and OBS's browser profile never visits the SPA.
 - **The reel is SECTIONS, cycling (windows × rarity groups)** — reworked same day on Zaven's
   feedback. `buildTickerPlan(cfg)` emits one section per (time frame × group) in window-major
   canonical order, each introduced by an IN-REEL header ("1D Movers" over the group name) — the
@@ -6891,7 +7381,10 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   Chase (Enchanted/Epic/Iconic) · Rare – Legendary · Promos · All Rarities.
   **Defaults (Zaven, 2026-09-15): 1D + 1W × Chase + Rare–Legendary, direction BOTH, LOW basis,
   20 cards/section**, **$5 floor** (user-settable; keeps 10-cent cards' +300% "moves" out —
-  matches the Screener's default).
+  matches the Screener's default). **⚠ The floor is on the price the card STARTED the window at**
+  (`low_prev` / `low_7d` … `market_365d`, one per `TK_WINDOWS.prior`), the home banners' rule — on
+  TODAY's price a card that climbed from cents to $22 led a live 1Y bar at "549x" (2026-09-26). A
+  gain past +1000% prints as the price MULTIPLE, `1 + p/100` (+1000% is 11x, not 10x).
   ⚠ **A default here is not a free choice: changing one RETARGETS every overlay already in the
   wild that took it.** `cfgToParams` writes only non-default params, so a streamer who accepted
   the defaults is running a bare `?bar=1` and picks up the new ones on their next load. Anyone who
@@ -6912,12 +7405,17 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   post-ETL check, not polling. Intl supplies Chicago's wall clock so DST is handled (CDT/CST both
   covered in the guard test); the initial page load still fetches immediately, and failed fetches
   retry in 60s. Don't turn it back into an interval.
-- **The "powered by packs.ink" credit is REQUIRED** — flush bottom-RIGHT on the bar (a 22%-of-
-  `--tkt` bottom row with NO band or border, right padding `min(24px, 30% of --tkt)` so it hugs
-  the corner at any bar height; the movers row gets the rest as `--tkh`), always rendered, no
-  param, no checkbox; the left cap (PACKS.INK stacked over the logo) is the optional one
-  (`brand=0`). That attribution is the price of a free overlay riding our data — keep it. In
-  transparent mode the credit sits in its own scrim pill.
+- **The "powered by packs.ink" credit is REQUIRED** — it rides the SECTION HEADERS now (the
+  header's third line, `.tk-sec-pow`), not a bottom strip: streamers cropped the strip away for
+  height. `markTickerBrand` places it once per time frame and never more than
+  `TK_BRAND_MAX_GAP` (2) sections apart. No param, no checkbox; the left cap is the optional one
+  (`brand=0`). That attribution is the price of a free overlay riding our data — keep it.
+  **⚠ The credit is placed on the PLAN, before any query runs, so it must be placed AGAIN after
+  empty sections drop** (`tickerKeepFilled`) — dropping them took their credit along, and with
+  `brand=0` a reel could carry no packs.ink anywhere (found 2026-09-26). Guarded.
+- **A light Bar color swaps the accents** (`data-light`, set by `applyBarLook` from the bar
+  colour's WCAG luminance, crossover 0.28): the gold/green/red/blue are tuned for a dark bar and
+  read ~1.9:1 on white; the light set clears 5:1. A transparent bar keeps its dark scrim.
 - **Double-clicking ticker.html from disk works** — that's how Zaven first tested it. Asset URLs
   are RELATIVE (file sits at site root, so they resolve the same at `/ticker` and on `file://`);
   on file:, card art hotlinks cards.lorcast.io directly (no /img-proxy route exists), the Copy URL
@@ -6947,9 +7445,20 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   header text, window/metric → real matview column names, group rarity filters, foil-toggle
   bypass shapes, the rarity-line foil rule, both-mode split, min=0 not-null guard, clamps. Run it
   after touching the config layer.
-- **It is an Analytics tab as of 2026-09-15** — `/analytics?a=ticker`, embedding this page at
+- **It is an Analytics tab as of 2026-09-15** — at `/ticker` (its own path), embedding this page at
   `/ticker?embed=1`. See "Analytics tab" for the embed mechanism and the `_headers` carve-out it
-  needs. `/ticker` stays the canonical page and `?bar=1` is still what goes into OBS.
+  needs. `?bar=1` is still what goes into OBS.
+- **⚠ The tab's settings live in the PAGE's address, not only the frame's (2026-09-26).**
+  `TICKER_PARAM_KEYS` in Index.html is the one list of ticker params: the landing capture
+  (`TICKER_EMBED_PARAMS`), the view-sync — which OWNS them at `/ticker` (so `?g=`/`?m=`, Price
+  Graphing's and the Screener's letters everywhere else, survive there) and strips them anywhere
+  else — and the mirror: the embedded configurator posts `packsink:embed-params` on every change
+  and `AutoHeightFrame mirrorParamsAt="/ticker"` replaceStates them onto the page. Before, a
+  refresh, a bookmark or Copy link reopened the default reel. Add a ticker param there too.
+- **Switching Analytics tools across a PATH change (/ticker ↔ /analytics) is pushed by the
+  view-sync, not the ?a= sync** (`marketPathPushed`). Replacing there rewrote the ticker's own
+  history entry in place, so Back skipped the ticker — and ticker → Expected Value (no `?a=` on
+  either side) got no entry at all.
 - Not built: sealed products (client-computed in the SPA, no matview), per-card deep links from
   the bar, a home-Toolbox chip (deliberate — see the tab's note under "Analytics tab").
 
@@ -7058,9 +7567,19 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
-- ~~`supabase/169_calendar_chattanooga_london_youth.sql`~~ — **APPLIED 2026-09-25 by Zaven; verified
+- ~~`supabase/172_calendar_chattanooga_london_youth.sql`~~ — **APPLIED 2026-09-25 by Zaven; verified
   via REST** (both rows read back: Chattanooga CCQ confirmed Nov 7-8, DLC London carries the Youth
-  Division notes). From two Ravensburger OP graphics.
+  Division notes). From two Ravensburger OP graphics. ⚠ It was applied under the name **169** and
+  renumbered to 172 before merge, because main's `169_tcgplayer_names.sql` took 169 first. Same SQL,
+  and re-running it is safe.
+- ~~`supabase/171_playmat_sections.sql`~~ — **APPLIED 2026-09-27** through the Supabase connector.
+  Widens `playmats_section_chk` to allow `disney` and `ravensburger` (Zaven's own headers for the
+  shop exclusives); nothing else. The catalog was reloaded under it the same day.
+- ~~`supabase/170_playmats.sql`~~ — **APPLIED 2026-09-27** through the Supabase connector (additive:
+  a new table, its read policy and grants, and the `playmat_prices_latest` view). Loaded the same
+  day: 63 mats (`load_playmats.py`), 21,570 prices from the local archive cache plus the
+  2026-09-26 publish (`backfill_playmat_prices.py`). Safe ahead of the client — nothing read it
+  until the Playmats tab shipped.
 - **`supabase/168_curators_cc2.sql`** — **STAGED 2026-09-22, needs a paste.** Creates
   `set_curators_cc2` — "Curator's Collection: Beauty and the Beast" (code **CC2**), the second
   Curator's Collection drop (see 107 for CC1, Heroines). Announced at D23 2026, six premium foil
@@ -7233,7 +7752,11 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
   sit on the Pins & Counters boards: `collectible_boards` (owner-only RLS, grants in the same
   file) + `get_shared_collectible_boards` for viewers. Safe to ship the client first — until it
   lands, boards save on the device and the tab says so. See "Pins & Counters".
-- ~~`supabase/137_amazon_stock_checks.sql`~~ — **APPLIED 2026-09-12 by Zaven.** The manual Amazon stock
+- ~~`supabase/137_amazon_stock_checks.sql`~~ — **FULLY APPLIED 2026-09-26; verified.** Until then it was
+  only half on the live database: `select=msrp` answered `42703 … msrp does not exist`, so the in-place
+  extension below had never reached it, whatever this entry said. Zaven re-pasted the (idempotent) file
+  and the same read with the public key now returns rows with `msrp` and `price_over`. The lesson: an
+  in-place extension of an applied migration needs its own paste and its own probe. Original entry: the manual Amazon stock
   **and price** check: anon-readable, graded-admin writes. **Extended in place 2026-09-12**
   with `msrp` + `price_over` (the 20%-above-MSRP ceiling) rather than followed by a new
   migration — the whole file is idempotent (`create table if not exists`, `add column if not

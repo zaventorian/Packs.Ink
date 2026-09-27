@@ -151,6 +151,41 @@ const entryMap = (report) => {
   check("merge: both wants matched", rep.matchedCards, 2);
 }
 
+// --- 3b. a reprint that kept its NUMBER (found 2026-09-25) ------------------
+// Dewey - Showy Nephew is #139 in Into the Inklands AND in Fabled. The wide
+// path ignored the Set column and took the first catalog row, so Zaven's
+// Into the Inklands playset (4 + 1 foil) landed on the Fabled reprint.
+{
+  const DEWEY = [
+    R("dewey-fab", "Normal", "Dewey - Showy Nephew", "Fabled", "139", "Common"),
+    R("dewey-fab", "Cold Foil", "Dewey - Showy Nephew", "Fabled", "139", "Common"),
+    R("dewey-iti", "Normal", "Dewey - Showy Nephew", "Into the Inklands", "139", "Common"),
+    R("dewey-iti", "Cold Foil", "Dewey - Showy Nephew", "Into the Inklands", "139", "Common"),
+  ];
+  const idx2 = buildImportNameIndex([...CATALOG, ...DEWEY]);
+  const cat2 = [...CATALOG, ...DEWEY];
+  const withSet = parseDreambornCsv([
+    "Normal,Foil,Name,Set,Card Number,Rarity",
+    "4,1,Dewey - Showy Nephew,Into the Inklands,139,Common",
+  ].join("\n"), idx2, cat2);
+  check("reprint: Set column picks the original", entryMap(withSet), {"dewey-iti:Normal": 4, "dewey-iti:Cold Foil": 1});
+  const withSetFab = parseDreambornCsv([
+    "Normal,Foil,Name,Set,Card Number,Rarity",
+    "2,0,Dewey - Showy Nephew,Fabled,139,Common",
+  ].join("\n"), idx2, cat2);
+  check("reprint: Set column picks the reprint", entryMap(withSetFab), {"dewey-fab:Normal": 2});
+  const long = parseDreambornCsv([
+    "Set Number,Card Number,Variant,Count,Name,Color,Rarity",
+    '003,139,normal,4,"Dewey - Showy Nephew",Sapphire,Common',
+  ].join("\n"), idx2, cat2);
+  check("reprint: long format set number picks the original", entryMap(long), {"dewey-iti:Normal": 4});
+  const noSet = parseDreambornCsv([
+    "Normal,Foil,Card Number,Name",
+    "4,1,139,Dewey - Showy Nephew",
+  ].join("\n"), idx2, cat2);
+  check("reprint: no set → not guessed", [noSet.entries.length, noSet.unmatched.length, /Fabled/.test(noSet.unmatched[0]?.reason || "")], [0, 1, true]);
+}
+
 // --- 4. unrecognizable header errors out, naming both shapes ----------------
 {
   const rep = parseDreambornCsv("Foo,Bar\n1,2", index, CATALOG);

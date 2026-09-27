@@ -68,6 +68,10 @@ const moduleSrc = [
   grab("const INK_COLORS = {", 'return items.filter(g => matchesCardFilter(g, f, {...parsed, nameMatchMode: "any"}));' + NL + "};"),
   grab("const emptyFilter = () => ({", NL + "});"),
   grabLine("const QA_EDIT_SCAN_CAP = "),
+  // Release-order sort for collector-number hits. The real map is filled from
+  // the sets table at runtime; here each fixture set "sN" ranks N.
+  grabLine("let _setRankById"),
+  "for (let i = 0; i < 40; i++) _setRankById.set('s' + i, String(i).padStart(4, '0'));",
   memoBody,
   "export { qaEditMatches, parseSearchQuery, QA_EDIT_SCAN_CAP };",
 ].join(NL);
@@ -131,6 +135,25 @@ check("bare dimension, no name", qaEditMatches("amethyst", wide).length, 2);
 const cnPool = [row({ card_id: "n1", Number: "223" }), row({ card_id: "n2", "Product Name": "Mickey Mouse - Brave Little Tailor", Number: "114" })];
 check("collector number", names(qaEditMatches("223", cnPool)), ["Heihei - Created by the Vine (Rare)"]);
 check("collector number N/M", names(qaEditMatches("114/204", cnPool)), ["Mickey Mouse - Brave Little Tailor (Rare)"]);
+// Every printing that shares a number is reachable. Fourteen real printings
+// share #154, and stopping at 12 in catalog order left two of them with no way
+// to be picked by number — the fastest thing a tester can read off the card.
+// They come back oldest set first, which is the order people know sets in.
+const many = Array.from({ length: 16 }, (_, i) =>
+  row({ card_id: "p" + i, "Product Name": "Card " + i, Number: "154", set_id: "s" + (15 - i), Set: "Set " + (15 - i) }));
+const got154 = qaEditMatches("154", many);
+check("every printing sharing a number comes back", got154.length, 16);
+check("in release order, oldest set first", got154.slice(0, 3).map((r) => r.set_id), ["s0", "s1", "s2"]);
+// "/204" is the set's card count — the one thing that separates two #154s — so
+// it narrows on a row that knows its own total, and keeps a row that doesn't
+// (most catalog rows carry a bare number; dropping them would empty the list).
+const tots = [
+  row({ card_id: "a", Number: "154/204", set_id: "s1" }),
+  row({ card_id: "b", Number: "154/216", set_id: "s2" }),
+  row({ card_id: "c", Number: "154", set_id: "s3" }),
+];
+check("N/M narrows on a known total, keeps a bare number", qaEditMatches("154/204", tots).map((r) => r.card_id), ["a", "c"]);
+check("a padded number still matches", qaEditMatches("154", [row({ card_id: "z", Number: "0154", set_id: "s1" })]).length, 1);
 // Plain name search, diacritics and apostrophes folded, still works.
 const folded = [row({ card_id: "t", "Product Name": "Te Kā - Heartless" }), row({ card_id: "m", "Product Name": "Madam Mim - Purple Dragon" })];
 check("diacritics folded", names(qaEditMatches("te ka", folded)), ["Te Kā - Heartless (Rare)"]);

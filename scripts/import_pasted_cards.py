@@ -57,7 +57,7 @@ is optional — omit it when the paste is already just the card:
 
 Usage:
     python scripts/import_pasted_cards.py --manifest cards.json \
-        --images "<session images dir>" --set-id set_hyperia_city --tag set14 \
+        --images "<session images dir>" --set-id set_03ecae5ead004dd5a51cf133b9b224ef --tag set14 \
         --contact sheet.jpg
     # add --commit to upload art + upsert rows (default is a dry run)
 """
