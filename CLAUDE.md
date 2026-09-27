@@ -60,7 +60,7 @@ node scripts/build_dist.mjs && npx wrangler@4 deploy
   3. **RETIRED 2026-06-30 — there is no graded ETL.** The third-party graded feed was discontinued; the legacy client paths were deleted 2026-07-29 and `graded_prices_daily` / `graded_prices_latest` were **DROPPED 2026-08-22** (migration 112; archive on Desktop). All graded value comes from the in-house `graded_sales` scrape (see "Graded pricing: legacy vs current"). `scripts/etl_tcgpricelookup_daily.py`, `scripts/graded_overrides.json`, and the `probe_/backfill_/cleanup_*graded*` scripts remain on disk for reference but are **invoked nowhere and cannot run** (the API is gone). Don't wire them back up; don't chase "graded is stale" alerts.
 - **Card metadata**: Lorcast (`scripts/load_lorcast.py`).
 - **Sealed catalog**: `scripts/load_sealed_products.py`.
-- **MCP**: `.mcp.json` configures Supabase MCP server (`mcp.supabase.com/mcp?project_ref=...`). Loads on session start; gives the agent direct DB query/mutation access without paste-back.
+- **MCP**: Supabase, Sentry and Gmail are **claude.ai account connectors** (claude.ai → Customize → Connectors), so they reach desktop, cloud and phone sessions alike — direct DB query/mutation access without paste-back. The CLI copies (`supabase` in `.mcp.json`, `sentry` in local scope) were removed 2026-09-27: never signed in, they only put "need authorizing" on every session start, and signed in they'd double every tool. ⚠ A terminal `claude` session does not list the connectors (`claude mcp list` shows none), so Supabase from a bare terminal means re-adding the CLI server (the old `.mcp.json` entry is in git history) and signing it in with `/mcp` typed on its own.
 
 ## Native app (Capacitor) — groundwork 2026-07-17
 
