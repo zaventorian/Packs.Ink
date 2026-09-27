@@ -19,8 +19,8 @@
   var GRID = 12;
   var DIMS = GRID * GRID * 3; // 432
   var BASE = "scanner/";
-  var IDXV = "?v=5"; // bump when color.bin/index.json content changes (v5 = Locations rotated upright + 3210 cards, 2026-07-29; v4 = Set 13 REAL Lorcast art)
-  var TXTV = "?v=5"; // bump when text.json content/shape changes (v5 = +rarity code `r` for base-before-chase ordering, 2026-07-23)
+  var IDXV = "?v=6"; // bump when color.bin/index.json content changes (v6 = 3412 cards incl. Hyperia City + CC2, 2026-09-26; v5 = Locations rotated upright + 3210 cards, 2026-07-29; v4 = Set 13 REAL Lorcast art)
+  var TXTV = "?v=6"; // bump when text.json content/shape changes (v6 = 3416 cards incl. Hyperia City, 2026-09-26; v5 = +rarity code `r` for base-before-chase ordering, 2026-07-23)
 
   var state = {
     loaded: false,
@@ -205,9 +205,18 @@
   function tnorm(s) { return (s || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim(); }
   function ttoks(s) { return tnorm(s).split(" ").filter(function (w) { return w.length >= 3; }); }
 
-  function loadText() {
+  // Today as the browser sees it, local calendar date (a set released on the 16th
+  // is out on the 16th wherever you are). opts.asOf pins it — the replay harness
+  // passes the date its reads were frozen, since a read recorded in September was
+  // made before an October set existed.
+  function localYmd() {
+    var d = new Date(), p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+  }
+  function loadText(opts) {
     if (text.loaded) return Promise.resolve(text);
     if (text.loading) return text.loading;
+    var asOf = (opts && opts.asOf) || localYmd();
     text.loading = fetch(BASE + "text.json" + TXTV).then(function (r) { return r.json(); }).then(function (cards) {
       // CANONICAL ORDER — base printing before chase reprints (v16, 2026-07-23).
       // Same-(name,version) groups (base + Enchanted/Iconic/Epic/Promo reprints
@@ -224,13 +233,23 @@
       // rarity code from text.json v5 (missing on a stale cache → no reorder,
       // which is just the old behavior).
       var CHASE_R = { E: 1, I: 1, X: 1, P: 1 };  // Enchanted / Iconic / Epic / Promo
-      var firstAt = Object.create(null), ci;
-      for (ci = 0; ci < cards.length; ci++) {
+      // A card whose set is not out yet (`d` = its release date, text.json v6)
+      // goes behind every card that exists: a group with no released member sorts
+      // after all the others, and inside a group it trails the released printings.
+      // Without it a new set's same-named character wins a name-only read
+      // ("LEXINGTON" answered as Hyperia City's Fearless Flier a month before the
+      // set is in anyone's hand). Demoted, never removed — an early copy still
+      // matches on positive evidence (number, version, body text).
+      var firstAt = Object.create(null), relAt = Object.create(null), ci, NC = cards.length;
+      for (ci = 0; ci < NC; ci++) {
         var cc = cards[ci], gk = (cc.n || "") + "|" + (cc.v || "");
+        cc._unrel = !!(cc.d && cc.d > asOf);
         if (firstAt[gk] == null) firstAt[gk] = ci;
+        if (!cc._unrel && relAt[gk] == null) relAt[gk] = ci;
         cc._gk = gk; cc._i = ci;
-        cc._demote = (CHASE_R[cc.r] ? 2 : 0) + (String(cc.id).lastIndexOf("crd_custom_", 0) === 0 ? 1 : 0);
+        cc._demote = (CHASE_R[cc.r] ? 2 : 0) + (String(cc.id).lastIndexOf("crd_custom_", 0) === 0 ? 1 : 0) + (cc._unrel ? 4 : 0);
       }
+      for (var gkey in firstAt) firstAt[gkey] = relAt[gkey] != null ? relAt[gkey] : NC + firstAt[gkey];
       cards.sort(function (a, b) {
         if (firstAt[a._gk] !== firstAt[b._gk]) return firstAt[a._gk] - firstAt[b._gk];
         if (a._demote !== b._demote) return a._demote - b._demote;
@@ -321,7 +340,7 @@
       var tok = nmTok(nm), tv = nmTok(ver), kk; for(kk in tv) tok[kk]=1;
       var cn = nmCanon(nm), cf = nmCanon(full);
       var cv = nmCanon(ver);
-      var m = { id: c.id, name: nm, version: ver, set: c.s, r: c.r, nName: cn, nFull: cf, nSq: cn.replace(/ /g,""), nFullSq: cf.replace(/ /g,""), nVer: cv, nVerSq: cv.replace(/ /g,""), tok: tok, tri: nmTri(cf) };
+      var m = { id: c.id, name: nm, version: ver, set: c.s, r: c.r, u: !!c._unrel, nName: cn, nFull: cf, nSq: cn.replace(/ /g,""), nFullSq: cf.replace(/ /g,""), nVer: cv, nVerSq: cv.replace(/ /g,""), tok: tok, tri: nmTri(cf) };
       nameDB.meta[i] = m; nameDB.byId[c.id] = m;
       if(c.cn != null){ var num = String(c.cn).replace(/\D/g,""); if(num){
         (nameDB.cnLoose[num] = nameDB.cnLoose[num] || []).push(c.id);
@@ -398,6 +417,17 @@
   var NAME_HALF_FLOOR = 0.20;
   var HALF_LEN_RATIO = 0.6;   // min(len)/max(len) for a half to be considered
   var ATTRIB_PENALTY = 0.55;  // weight for a "—Character" flavour-attribution line
+  // A card whose set is not out yet loses this much of its single-line score. The
+  // order demotion in loadText only settles EXACT ties, and textScore is biased
+  // toward short versions, so a name-only read of a released card could still land
+  // on a new set's namesake: "LEXINGTON" scored Fearless Flier 0.769 against the
+  // card in hand's 0.751. Measured over the 66 unreleased names with a released
+  // sibling (2026-09-26): name-only gaps max out at 0.067 (P.J. Pete), while a
+  // genuine read of the new card's version beats every released sibling by at
+  // least 0.19 on one line. The two-line joint pass below is NOT penalised — a
+  // version subtitle read on its own line is exactly the evidence an early copy
+  // should still win on — so that path keeps its full margin (min 0.108).
+  var UNRELEASED_PENALTY = 0.10;
   // rank cards by (possibly garbled) OCR name candidates. `lines` = array of OCR
   // text strings (e.g. the tallest text lines from the name band). Scores each
   // card against the best line. Returns {top:[{id,name,version,score}], conf,
@@ -421,7 +451,7 @@
     }
     if(!queries.length) return { top: [], conf: "low", score: 0, margin: 0, marginChar: 0 };
     var meta = nameDB.meta, best = new Float32Array(meta.length), i, qi;
-    for(i=0;i<meta.length;i++){ var s=0; for(qi=0;qi<queries.length;qi++){ var q=queries[qi]; var sc=textScore(q.qn, q.qnSq, q.qtok, q.qtri, meta[i]) * q.w; if(sc>s) s=sc; } best[i]=s; }
+    for(i=0;i<meta.length;i++){ var s=0; for(qi=0;qi<queries.length;qi++){ var q=queries[qi]; var sc=textScore(q.qn, q.qnSq, q.qtok, q.qtri, meta[i]) * q.w; if(sc>s) s=sc; } best[i]=meta[i].u ? Math.max(0, s - UNRELEASED_PENALTY) : s; }
     // JOINT re-score, TOP-N ONLY. Computing the two halves for all ~3.2k cards
     // cost +61% on identify() (159→255ms in node, so ~0.5→0.8s on a phone) — and
     // a nameMs blowup is what starved the OCR queue in the batch-6 field flow
@@ -720,7 +750,7 @@
   var COLOUR_TWIN_COS = 0.80;  // above this, colour cannot separate the pair
   function reprintDemote(m){
     if(!m) return 0;
-    return (CHASE_RARITY[m.r] ? 2 : 0) + (String(m.id).lastIndexOf("crd_custom_", 0) === 0 ? 1 : 0);
+    return (CHASE_RARITY[m.r] ? 2 : 0) + (String(m.id).lastIndexOf("crd_custom_", 0) === 0 ? 1 : 0) + (m.u ? 4 : 0);
   }
   // cosine between two REFERENCE colour vectors (both unit-norm * a constant
   // scale, so a plain dot product / scale^2 is the cosine). Index-only, no query

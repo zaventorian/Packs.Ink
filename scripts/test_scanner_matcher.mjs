@@ -31,7 +31,10 @@ const ok = (m) => console.log(`  ok    ${m}`);
 
 const base = JSON.parse(fs.readFileSync(BASE, "utf8"));
 const CS = loadScanner(REPO, path.join(REPO, "scanner.js"));
-await CS.loadText();
+// Replay AS OF the freeze date: no read in the corpus is newer, so a set released
+// since then could not have been what the camera saw. Without the pin this guard
+// would change its verdicts on a set's release day with no code change at all.
+await CS.loadText({ asOf: base.frozen_at });
 try { await CS.load(); } catch (e) { console.error("colour index load failed:", e.message); process.exit(1); }
 
 const res = scoreRows(CS, base.rows, REPO);
