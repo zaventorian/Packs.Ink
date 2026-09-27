@@ -852,7 +852,7 @@ the test pins both, plus the newest migration's CHECK): **Retail** · **Disney E
 **Ravensburger Store** (`ravensburger`: online-store exclusives) · **Set Championship**
 (Champion / Participant) · **Disney Lorcana Challenge**, split into **Top Prize** and **Prize
 Wall** sub-grids (`tiers` on the section; `PLAYMAT_DLC_TIERS` = the loader's `DLC_TIERS`) ·
-**Events** (conventions, and Mother Knows Best — the Season 3 CCQ Top 32 prize, though TCGplayer
+**Events** (conventions, and Mother Knows Best — the Season 3 CCQ Top 8 prize, though TCGplayer
 lists it as a Challenge mat) · Other. Adding a section value needs a migration: 171 widened the
 CHECK for disney / ravensburger.
 
@@ -949,6 +949,26 @@ CHECK for disney / ravensburger.
 - Mats TCGplayer doesn't list (demo and youth mats, older one-offs) are out of scope; adding one
   would mean a static entry, the `SEALED_EXCLUSIVES` shape.
 
+## Collection's section strip is a SHELF — one row at every width (2026-09-27)
+
+Zaven, off his phone: *"make these options all fit on one shelf. Move pins to end. Also, stylize
+them, looks too sterile."* The fifth tab had pushed Playmats onto a second line beside Share, and
+the tabs were bare text.
+
+- **Order is `COLLECTION_SECTIONS`' order**: Cards · Sealed · Graded · Playmats · Pins & Counters.
+  Pins sits last by that ruling.
+- **One tray (`.cst-shelf`), a cubby per section**: a glyph over a Cinzel label
+  (`COLLECTION_SECTION_TABS` carries the glyph: `cards` / `box` / `slab` / `mat` / `pin`), and a
+  gold plate with a short gold lip under the tab you're on. Share is a cubby of its own at the far
+  end. Same face as the nav chips, but boxed in a tray so it doesn't read as a third nav row.
+- **⚠ It must not wrap.** Below 720px each cubby takes its label's width plus an even share of
+  what's left (`flex:1 1 auto`). Equal grid columns clipped "Playmats" at 360px while "Pins" had
+  room to spare. Measured with no clipping and no sideways scroll at 320, 360, 390 and 730px.
+- **Pins & Counters shows `short` ("Pins") on phones.** The full name wants ~90px and a cell there
+  has ~45. `aria-label` and `title` carry the full name, so the visible word is contained in the
+  accessible name.
+- The tour step (`.collection-section-tabs`) and the Help page say five sections now.
+
 ## Official Lorcana brand art (2026-09-12)
 
 Ravensburger distributes a **"Complete Bundle"** of brand assets — 890 files, 313 MB: all 13 set
@@ -1044,11 +1064,30 @@ text beside them**, which is why icon+label buttons never sat straight.
   the single global rule that makes inline glyphs sit on the cap height and never shrink in a
   tight button. Every icon in the set carries `focusable="false"`; nothing else does. It is inert
   inside flex/grid parents, so `NAV_ICONS` and the deck-action rows are unaffected.
-- **Typographic marks stay**: `✓ ✕ ★ ☆ ✦ ≡ ⚑ → ↴`. Those read as type, not as pictures.
-  `⚠` survives in exactly one place, the Coconut legality badge text, where it is a character in
-  a string rather than a rendered control.
+- **Typographic marks stay**: `✓ ✕ ★ ☆ ✦ ≡ ⚑ → ↴ ▸ ▾`. Those read as type, not as
+  pictures, and none of them is emoji-CAPABLE, which is the real test (next bullet).
+- **⚠ "No emoji" means no emoji-CAPABLE code point, not just the ones that look like one**
+  (2026-09-27). `↗` (the arrow after every outbound link), `↩`, `▶`, `⏱`, `⤴` and `⚠` all read
+  as plain type in the source, but Unicode marks them emoji-capable and the page font (Nunito Sans,
+  latin subset) carries none of them. So the browser falls back to another font, and on an iPhone
+  that font is Apple Color Emoji: "Buy on TCGplayer" ended in a blue sticker tile, 52 times across
+  the site, while every desktop drew a clean arrow. Reported off a Discord screenshot of the
+  Playmats modal.
+  - **`extIcon()`** draws the outbound-link arrow: the `ext` glyph at `1em`, so it takes the size of
+    whatever small type it trails (8px on a price badge, 14px on a printing row), and
+    `svg.ico-ext` lifts it to sit where the character did. The rest went to `undo` / `play` /
+    `clock` / `warn`, and the Playset Cost row toggle to `▸` / `▾`.
+  - **The Coconut badge's `⚠` is gone too.** It used to be the one documented exception here,
+    and it was an emoji tile on every iPhone.
+  - Guarded by `node scripts/test_no_emoji.mjs`: any Emoji / Extended_Pictographic code point outside
+    a comment in a served file fails it, except `© ® ™`, which ARE in the font. **It strips
+    comments in ONE left-to-right pass**: stripping block comments first read the `/*` inside a line
+    comment (`// proxied to /img-proxy/*`) as an opener and hid 1,900 lines of Index.html, two real
+    emoji included. It checks itself against planted samples, so a broken stripper goes red.
+  - Player names and other DATA keep whatever a person typed. This is about the site's own chrome.
 - **Two documents can't reach `uiIcon`** and hold literal SVG instead: the Artist Alley poster
-  (`window.open`) and the `/swiss` + `/ticker` standalone pages. In the poster the icon is a
+  (`window.open`) and the `/swiss` + `/ticker` standalone pages. `/picks` has its own `ICONS` map
+  and `glyph()` builder, and its arrow comes from there. In the poster the icon is a
   sibling of a `<span>` label, and the mid-render `textContent` swaps target the span — setting
   `btn.textContent` would wipe the glyph.
 - **Comments and CLAUDE.md still use emoji freely.** They are documentation, not UI.

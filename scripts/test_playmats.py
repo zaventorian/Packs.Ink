@@ -97,8 +97,8 @@ expect(705523, section="set_champ", set="Attack of the Vine!", name="If I Didn't
 expect(712028, section="dlc", finish="Foil", year=2026, tier="Top Prize", name="Down in New Orleans")
 expect(555944, section="dlc", finish="Foil", year=None, tier="Top Prize", name="Rapunzel - Gifted with Healing")
 expect(555946, section="dlc", tier="Prize Wall", name="Cinderella - Stouthearted")
-# Listed by TCGplayer as a Challenge mat; it is the Season 3 CCQ Top 32 prize.
-expect(711521, section="event", finish=None, tier="Top 32 prize", source="Season 3 CCQ",
+# Listed by TCGplayer as a Challenge mat; it is the Season 3 CCQ Top 8 prize.
+expect(711521, section="event", finish=None, tier="Top 8 prize", source="Season 3 CCQ",
        name="Mother Knows Best")
 # Conventions.
 expect(555950, section="event", year=2024, source="2024 conventions", name="2024 Convention")
