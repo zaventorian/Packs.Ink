@@ -80,6 +80,11 @@ const RANGE_WORDS = {
 
 const NEW_WORDS = ["new", "newest", "latest", "recent", "upcoming"];
 
+// Words in a variant label that do not identify it: "Two Swords Variant" is
+// named by "two swords", "Japanese Exclusive" by "japanese".
+const GENERIC_VAR = new Set(["variant", "version", "exclusive", "edition", "serial", "numbered"]);
+const varWords = (label) => tokens(label).filter((t) => !STOP.has(t) && !GENERIC_VAR.has(t));
+
 // A name word matched in each part of a card's name. "A" = the version's
 // initials ("sow" for Spirit of Winter, "blt" for Brave Little Tailor), which
 // only ever match exactly.
@@ -92,55 +97,68 @@ export function createResolver(index) {
   const N = Math.max(1, cards.length);
 
   // ── vocabulary ─────────────────────────────────────────────────────────
+  // Built once per isolate, so it is written for speed: postings are deduped
+  // per card with a Set (a scan of every posting for "mickey" was quadratic),
+  // and document frequency is counted as the postings arrive.
   const vocab = new Map();                // token -> [{i, f}]
-  const add = (tok, i, f) => {
-    if (!tok) return;
-    let arr = vocab.get(tok);
-    if (!arr) { arr = []; vocab.set(tok, arr); }
-    if (!arr.some((p) => p.i === i && p.f === f)) arr.push({ i, f });
-  };
-  const meta = cards.map((c, i) => {
+  const df = new Map();                   // token -> cards whose NAME has it
+  const nameVocab = new Set();            // tokens that occur in some card name
+  const meta = new Array(cards.length);
+  for (let i = 0; i < cards.length; i++) {
+    const c = cards[i];
+    const seen = new Set();
+    const counted = new Set();
+    const add = (tok, f) => {
+      if (!tok) return;
+      const k = f + tok;
+      if (seen.has(k)) return;
+      seen.add(k);
+      let arr = vocab.get(tok);
+      if (!arr) { arr = []; vocab.set(tok, arr); }
+      arr.push({ i, f });
+      if (f !== "X") {
+        if (!counted.has(tok)) { counted.add(tok); df.set(tok, (df.get(tok) || 0) + 1); }
+        if (f !== "A") nameVocab.add(tok);
+      }
+    };
     const ct = tokens(c.c);
     const vt = tokens(c.v);
-    for (const t of ct) add(t, i, "C");
-    if (ct.length > 1) add(ct.join(""), i, "J");
-    for (const t of vt) add(t, i, "V");
-    if (vt.length > 1) add(vt.join(""), i, "V");
+    for (const t of ct) add(t, "C");
+    if (ct.length > 1) add(ct.join(""), "J");
+    for (const t of vt) add(t, "V");
+    if (vt.length > 1) add(vt.join(""), "V");
     const sigV = vt.filter((t) => !STOP.has(t));
     // Initials, with and without the little words: Spirit of Winter -> "sow"
     // and "sw"; Brave Little Tailor -> "blt". Three letters minimum, or two
     // letters of initials collide with every short word in English.
     for (const src of [vt, sigV]) {
-      if (src.length >= 2) { const ini = src.map((t) => t[0]).join(""); if (ini.length >= 3) add(ini, i, "A"); }
+      if (src.length >= 2) { const ini = src.map((t) => t[0]).join(""); if (ini.length >= 3) add(ini, "A"); }
     }
     // Variant labels ("Text Error", "Two Swords") are how people name those
     // printings, so they rank with the version words.
-    const varToks = new Set();
-    for (const p of c.p || []) for (const t of tokens(p.var)) varToks.add(t);
-    for (const t of varToks) add(t, i, "V");
-    for (const k of [...(c.k || []), ...(c.w || []), c.t || ""]) for (const t of tokens(k)) add(t, i, "X");
+    const rar = new Set(), setsOf = new Set(), nums = new Set();
+    for (const p of c.p || []) {
+      rar.add(p.r); setsOf.add(p.s); nums.add(numKey(p.no));
+      if (p.var) for (const t of tokens(p.var)) add(t, "V");
+    }
+    for (const k of c.k || []) for (const t of tokens(k)) add(t, "X");
+    for (const k of c.w || []) for (const t of tokens(k)) add(t, "X");
+    for (const t of tokens(c.t)) add(t, "X");
     const charSig = ct.filter((t) => !STOP.has(t));
-    return {
+    meta[i] = {
       ct, vt, charSig: charSig.length ? charSig : ct, verSig: sigV,
-      nameN: norm(c.n),
-      rar: new Set((c.p || []).map((p) => p.r)),
-      sets: new Set((c.p || []).map((p) => p.s)),
-      inks: new Set(c.i || []),
-      nums: new Set((c.p || []).map((p) => numKey(p.no))),
+      nameN: norm(c.n), rar, sets: setsOf, inks: new Set(c.i || []), nums,
     };
-  });
-  const df = new Map();
-  for (const [tok, posts] of vocab) df.set(tok, new Set(posts.filter((p) => p.f !== "X").map((p) => p.i)).size || 1);
+  }
   const idf = (tok) => Math.log(1 + N / (df.get(tok) || 1));
-  const nameVocab = new Set();
-  for (const [tok, posts] of vocab) if (posts.some((p) => p.f !== "X" && p.f !== "A")) nameVocab.add(tok);
 
   // Fast candidate lookup: tokens sorted for prefix ranges, bucketed by length
   // for edit distance. Initials are exact-only, so they stay out of both.
-  const fuzzToks = [...vocab.keys()].filter((t) => vocab.get(t).some((p) => p.f !== "A"));
-  const sorted = [...fuzzToks].sort();
+  const fuzzToks = [];
+  for (const [t, posts] of vocab) if (posts.some((p) => p.f !== "A")) fuzzToks.push(t);
+  const sorted = fuzzToks.sort();
   const byLen = new Map();
-  for (const t of fuzzToks) { if (!byLen.has(t.length)) byLen.set(t.length, []); byLen.get(t.length).push(t); }
+  for (const t of sorted) { let b = byLen.get(t.length); if (!b) { b = []; byLen.set(t.length, b); } b.push(t); }
   const lowerBound = (s) => { let lo = 0, hi = sorted.length; while (lo < hi) { const m = (lo + hi) >> 1; if (sorted[m] < s) lo = m + 1; else hi = m; } return lo; };
 
   const maxPl = Math.max(1, ...cards.map((c) => c.pl || 0));
@@ -315,11 +333,13 @@ export function createResolver(index) {
       const m = meta[i];
       let got = 0;
       const charHit = new Set(), verHit = new Set();
-      let fuzzy = false;
+      let fuzzy = false, looseShort = false;
       a.forEach((b, wi) => {
         if (!b) return;
         got += W[wi] * b.s;
-        if (b.q < 1) fuzzy = true;
+        // A short word matched loosely ("good" for Food, "deck" for Duck) is
+        // how ordinary chat turns into a card; findInText refuses those.
+        if (b.q < 1) { fuzzy = true; if (words[wi].length < 6) looseShort = true; }
         if (b.f === "C") charHit.add(b.tok);
         else if (b.f === "J") for (const ct of m.ct) charHit.add(ct);
         else if (b.f === "V" || b.f === "A") {
@@ -333,7 +353,7 @@ export function createResolver(index) {
       const verCov = m.verSig.length ? m.verSig.filter((t) => verHit.has(t)).length / m.verSig.length : 0;
       let score = coverage * (0.72 + 0.28 * charCov) + 0.1 * verCov;
       if (m.nameN === joined) score += 0.08;
-      res.push({ i, score, coverage, charCov, verCov, fuzzy });
+      res.push({ i, score, coverage, charCov, verCov, fuzzy, looseShort });
     }
     return res;
   }
@@ -358,7 +378,7 @@ export function createResolver(index) {
     if (dims.rarity) narrow((p) => p.r === dims.rarity, `No ${dims.rarity} version of ${c.n}.`);
     // A variant named in the query ("text error", "two swords") picks it.
     const wordSet = new Set(words);
-    const varHit = (p) => p.var && tokens(p.var).filter((t) => !STOP.has(t)).every((t) => wordSet.has(t));
+    const varHit = (p) => { if (!p.var) return false; const w = varWords(p.var); return w.length > 0 && w.every((t) => wordSet.has(t)); };
     const collector = isCollector(dims);
     const rank = (p) => {
       let r = 0;
@@ -402,10 +422,12 @@ export function createResolver(index) {
       const f = out.filter(pred);
       if (f.length) out = f; else { failed++; if (note) notes.push(note); }
     };
-    if (dims.number != null) tryFilter((r) => meta[r.i].nums.has(dims.number), `No card numbered #${dims.number} matches.`);
-    if (dims.set != null) tryFilter((r) => meta[r.i].sets.has(dims.set), `Nothing by that name in ${sets[dims.set]?.n}.`);
-    if (dims.rarity) tryFilter((r) => meta[r.i].rar.has(dims.rarity), `No ${dims.rarity} version of that card.`);
-    if (dims.ink) tryFilter((r) => meta[r.i].inks.has(dims.ink), null);
+    // No notes here: when a filter matches nothing, pickPrinting says so about
+    // the card actually shown, which is the sentence worth reading.
+    if (dims.number != null) tryFilter((r) => meta[r.i].nums.has(dims.number));
+    if (dims.set != null) tryFilter((r) => meta[r.i].sets.has(dims.set));
+    if (dims.rarity) tryFilter((r) => meta[r.i].rar.has(dims.rarity));
+    if (dims.ink) tryFilter((r) => meta[r.i].inks.has(dims.ink), `No ${dims.ink} card by that name.`);
     return { list: out, failed };
   }
 
@@ -483,10 +505,17 @@ export function createResolver(index) {
     const { A, B } = parse(q);
     const cache = new Map();
     const a = evaluate(A, cache);
-    const b = B ? evaluate(B, cache) : null;
+    let b = B ? evaluate(B, cache) : null;
+    // "enchanted" or "foil" on its own is a filter with nothing to filter. The
+    // name reading ("Mrs. Potts - Enchanted Teapot") only wins it if it is a
+    // genuinely good match, not a one-word brush against a longer name.
+    const aWords = A.name.filter((t) => !FILLER.has(t) && !STOP.has(t));
+    if (b && !a && !aWords.length && b.kind === "card" && b.r.score < 0.9) b = null;
     const pick = (b && (!a || b.q > a.q + 0.02)) ? b : a;
-    if (!pick || (pick.kind === "card" && pick.r.score < 0.45)) {
-      return { kind: "none", dims: (pick || A).dims, notes: [], query: q, suggestions: suggest(q, 5) };
+    const onlyStop = [...A.name, ...(B ? B.name : [])].every((t) => STOP.has(t) || FILLER.has(t));
+    if (!pick || (pick.kind === "card" && (pick.r.score < 0.45 || (onlyStop && pick.r.score < 1.05)))) {
+      const dimsOnly = !aWords.length && (A.dims.rarity || A.dims.finish || A.dims.grade || A.dims.ink || A.dims.number != null);
+      return { kind: "none", dims: (pick || A).dims, notes: [], query: q, dimsOnly: !!dimsOnly, suggestions: suggest(q, 5) };
     }
     if (pick.kind === "sealed") {
       const { top, sr } = pick;
@@ -497,6 +526,7 @@ export function createResolver(index) {
     const c = cards[best.i];
     const notes = pick.notes;
     const { printing, fi } = pickPrinting(c, pick.dims, notes, pick.words);
+    for (let k = notes.length - 1; k >= 0; k--) if (notes.indexOf(notes[k]) !== k) notes.splice(k, 1);
     // Other versions of the same character first (by popularity), then other
     // close matches; the card's own other printings are offered separately.
     const sameChar = pick.ranked.filter((r) => r.i !== best.i && norm(cards[r.i].c) === norm(c.c));
@@ -510,8 +540,10 @@ export function createResolver(index) {
     };
   }
 
-  // A value handed back by autocomplete or a component: "c:<card_id>:<fin>" or
-  // "s:<pid>". Exact, no guessing. A pasted packs.ink card link works too.
+  // A value handed back by autocomplete or a component: "c|<card_id>|<fin>" or
+  // "s|<pid>". Exact, no guessing. A pasted packs.ink card link works too.
+  // "|" rather than ":" because card ids carry colons ("extras:647652",
+  // "<base>::variant::text-error").
   const byCardId = new Map();
   cards.forEach((c, i) => c.p.forEach((p) => byCardId.set(p.id, { i, p })));
   const sealedByPid = new Map(sealed.map((p, k) => [String(p.pid), k]));
@@ -520,14 +552,16 @@ export function createResolver(index) {
     return cards.map((x, j) => j).filter((j) => j !== i && norm(cards[j].c) === key)
       .sort((a, b) => (cards[b].pl || 0) - (cards[a].pl || 0) || (cards[b].gs || 0) - (cards[a].gs || 0)).slice(0, 24);
   }
+  const cardKey = (p, fi) => "c|" + p.id + "|" + ((p.f[fi] || p.f[0] || ["N"])[0]);
+  const sealedKey = (it) => "s|" + it.pid;
   function resolveKey(q) {
-    let m = q.match(/^c:([^:\s]+)(?::([NCHF]))?$/);
+    let m = q.match(/^c\|([^|\s]+)(?:\|([NCHF]))?$/);
     if (m && byCardId.has(m[1])) {
       const { i, p } = byCardId.get(m[1]);
       const fi = m[2] ? Math.max(0, p.f.findIndex((f) => f[0] === m[2])) : 0;
       return { kind: "card", card: cards[i], index: i, printing: p, fi, dims: {}, notes: [], score: 1, exact: true, alts: sameCharAlts(i), basis: "play" };
     }
-    m = q.match(/^s:(\d+)$/);
+    m = q.match(/^s\|(\d+)$/);
     if (m && sealedByPid.has(m[1])) {
       const k = sealedByPid.get(m[1]);
       const it = sealed[k];
@@ -535,7 +569,7 @@ export function createResolver(index) {
       return { kind: "sealed", item: it, index: k, dims: {}, notes: [], exact: true, alts };
     }
     m = q.match(/[?&]card=(crd_[0-9a-f]{32})/i);
-    if (m && byCardId.has(m[1])) return resolveKey("c:" + m[1]);
+    if (m && byCardId.has(m[1])) return resolveKey("c|" + m[1]);
     return null;
   }
 
@@ -546,13 +580,13 @@ export function createResolver(index) {
     const seen = new Set();
     const pushCard = (i, p, fi) => {
       const f = p.f[fi] || p.f[0];
-      const key = "c:" + p.id + ":" + f[0];
+      const key = cardKey(p, fi);
       if (seen.has(key)) return;
       seen.add(key);
       out.push({ kind: "card", i, p, fi, value: key, label: cardLabel(cards[i], p, fi) });
     };
     const pushSealed = (x, front) => {
-      const key = "s:" + x.p.pid;
+      const key = sealedKey(x.p);
       if (seen.has(key)) return;
       seen.add(key);
       const item = { kind: "sealed", k: x.k, value: key, label: sealedLabel(x.p) };
@@ -637,7 +671,7 @@ export function createResolver(index) {
         // A lone word has to be a character's whole name and not a word so
         // common in card names that it is probably just English.
         const common = oneWord && (df.get(sig[0]) || 0) > 45;
-        if (!strong || (oneWord && (m.charSig.length !== 1 || common || top.fuzzy))) continue;
+        if (!strong || top.looseShort || (oneWord && (m.charSig.length !== 1 || common || top.fuzzy))) continue;
         hits.push({ s, e: s + len, r: top, score: top.score + len * 0.03 });
       }
     }
@@ -650,9 +684,22 @@ export function createResolver(index) {
       if (taken.length >= max) break;
     }
     taken.sort((a, b) => a.s - b.s);
+    // No clean name in the message. A SHORT message is probably just a name
+    // typed loosely ("moglie?"), so the forgiving resolver gets a turn; a long
+    // one is a sentence, and fuzzy-matching a whole sentence finds some card
+    // in almost anything — a price check naming a card nobody mentioned.
     if (!taken.length) {
+      const words = toks.filter((t) => !FILLER.has(t) && !STOP.has(t));
+      if (words.length > 4) return [];
       const r = resolve(raw);
-      return r.kind === "none" ? [] : [r];
+      if (r.kind === "sealed") return [r];
+      if (r.kind !== "card") return [];
+      // And the whole character name has to be IN the message, typos allowed:
+      // "moglie?" is Mowgli, "pulled 2 enchanteds" is not The Islands I Pulled
+      // From the Sea.
+      const said = (ct) => toks.some((t) => t === ct || (t[0] === ct[0] && dl(t, ct, ct.length >= 6 ? 2 : 1) <= (ct.length >= 6 ? 2 : 1)));
+      const sig = meta[r.index].charSig;
+      return sig.every(said) || (sig.length > 1 && said(sig.join(""))) ? [r] : [];   // "tinkerbel" is Tinker Bell
     }
     return taken.map((h) => {
       const notes = [];
@@ -692,6 +739,6 @@ export function createResolver(index) {
   return {
     resolve, suggest, findInText, parse, cardLabel, sealedLabel, finishLabel, sameCharAlts,
     pickPrinting: (i, dims = {}, words = []) => pickPrinting(cards[i], dims, [], words),
-    cards, sets, sealed, byCardId, sealedByPid, newestMainIdx, meta,
+    cardKey, sealedKey, cards, sets, sealed, byCardId, sealedByPid, newestMainIdx, meta,
   };
 }

@@ -68,7 +68,7 @@ export const FILLER = new Set((
   "sold buy buying bought market mkt avg average about like these those some any ones copy copies " +
   "version ver same guys lol ok okay are was were been have has had got gonna wanna want need needs " +
   "looking trade trading tell me pull pulled open opened hit worthit really actually just still " +
-  "cheapest cheap expensive"
+  "cheapest cheap expensive set sets"
 ).split(/\s+/));
 
 // Words that DO occur in card names but say almost nothing about which card
