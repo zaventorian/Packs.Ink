@@ -18,10 +18,10 @@ if (start < 0 || end < 0) {
 const src = html.slice(start, end);
 const { parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine,
         TK_BRAND_MAX_GAP, tickerSoldAgo, tickerSlabLine, tickerYmdDaysAgo,
-        TK_GRADED_MIN_SALES, TK_GRADED_GROUPS, tickerPromoRef } = new Function(
+        TK_GRADED_MIN_SALES, TK_GRADED_GROUPS, tickerPromoRef, tickerKeepFilled } = new Function(
   src + "\nreturn {parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine, TK_BRAND_MAX_GAP," +
         " tickerSoldAgo, tickerSlabLine, tickerYmdDaysAgo, TK_GRADED_MIN_SALES," +
-        " TK_GRADED_GROUPS, tickerPromoRef};"
+        " TK_GRADED_GROUPS, tickerPromoRef, tickerKeepFilled};"
 )();
 
 let failures = 0;
@@ -49,9 +49,17 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("defaults: basis is Low", q.order, "pct_1d.desc");
   check("defaults: risers request is gainers-only", q.pct_1d, "gt.0");
   check("defaults: fallers request is losers-only", qs(plan[0].requests[1]).pct_1d, "lt.0");
-  check("defaults: price floor $5 on Low", q.low_today, "gte.5");
+  // The floor is on the price the card STARTED the window at (the home
+  // banners' rule). On today's price a 10-cent card that climbed to $22 led a
+  // live 1Y bar at "549x".
+  check("defaults: $5 floor on the start-of-window Low", q.low_prev, "gte.5");
+  check("defaults: today's price is not the floor", "low_today" in q, false);
   check("custom floor respected",
-    qs(buildTickerPlan(parseTickerCfg("?min=1"))[0].requests[0]).low_today, "gte.1");
+    qs(buildTickerPlan(parseTickerCfg("?min=1"))[0].requests[0]).low_prev, "gte.1");
+  check("1W floors on the Low a week ago",
+    qs(buildTickerPlan(parseTickerCfg("?w=1w&g=all&m=low"))[0].requests[0]).low_7d, "gte.5");
+  check("1Y floors on the NM Market a year ago",
+    qs(buildTickerPlan(parseTickerCfg("?w=1y&g=all&m=mkt"))[0].requests[0]).market_365d, "gte.5");
   check("defaults: 20 a section, 10 each way", q.limit, "10");
   check("defaults: chase rarity filter", q.rarity, 'in.("Enchanted","Epic","Iconic")');
   check("defaults: rareleg rarity filter", qs(plan[1].requests[0]).rarity,
@@ -65,7 +73,7 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("low metric + canonical window order", plan.map(s => qs(s.requests[0]).order),
     ["pct_1d.desc", "pct_365d.desc"]);
   check("all group: no rarity filter", "rarity" in qs(plan[0].requests[0]), false);
-  check("low metric price col", qs(plan[0].requests[0]).low_today, "gte.5");
+  check("low metric floors the Low column", qs(plan[0].requests[0]).low_prev, "gte.5");
   check("unknown tokens fall back to defaults",
     buildTickerPlan(parseTickerCfg("?w=2wk&g=mythic")).map(s => s.win + "/" + s.group),
     ["1d/chase", "1d/rareleg", "1w/chase", "1w/rareleg"]);
@@ -232,6 +240,18 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
     /\(TICKER_EMBED_PARAMS \? "&" \+ TICKER_EMBED_PARAMS : ""\)/.test(index), true);
   check("Index.html: ...and only for a direct /ticker landing",
     /TICKER_EMBED_PARAMS[\s\S]{0,600}?!== "\/ticker"\) return ""/.test(index), true);
+  // ...and they must SURVIVE the landing. The view-sync used to strip ?g= and
+  // ?m= right after capturing them, and changes made inside the embedded
+  // configurator never reached the page's own address, so a refresh, a
+  // bookmark or Copy link reopened the default reel.
+  check("Index.html: at /ticker the ticker's params are owned, not stripped",
+    /marketSub === "ticker"\)\s*\?\s*new Set\(\[\.\.\.\(VIEW_OWNED\[view\] \|\| \[\]\), \.\.\.TICKER_PARAM_KEYS\]\)/.test(index), true);
+  check("Index.html: ...and stripped once you leave",
+    /\.\.\.SC_DEEP_PARAMS, \.\.\.TICKER_PARAM_KEYS\]/.test(index), true);
+  check("Index.html: the ticker tab mirrors the configurator onto its address",
+    /mirrorParamsAt="\/ticker"/.test(index) && /"packsink:embed-params"/.test(index), true);
+  check("ticker: the embedded configurator reports its settings to the host",
+    /parent\.postMessage\(\{type: "packsink:embed-params", params: rest\}, location\.origin\)/.test(html), true);
   // The embed reporter must measure CONTENT, not the document: body carries
   // min-height:100vh from styles.css, and inside an auto-height frame 100vh is
   // the frame itself, so scrollHeight feeds a growth loop (measured: 6210px
@@ -435,6 +455,19 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("a promo with no number says nothing", tickerPromoRef("Promo", "P1", null), "");
   check("a promo with no set code says nothing", tickerPromoRef("Promo", null, 3), "");
   check("collector number 0 is still a number", tickerPromoRef("Promo", "P1", 0), "P1 #0");
+}
+
+// The credit is placed on the PLAN before any query runs; dropping an empty
+// section afterwards must place it again, or a reel whose branded sections all
+// came back empty carries no packs.ink credit at all.
+{
+  const plan = buildTickerPlan(parseTickerCfg("?w=1d&g=chase,rareleg,promo"));
+  check("plan: the first section of the window carries the credit", plan.map(s => s.brand), [true, false, false]);
+  const kept = tickerKeepFilled(plan.map((sec, i) => ({sec, rows: i === 0 ? [] : [{card_id: "x"}]})));
+  check("empty branded section dropped: the next one takes the credit",
+    kept.map(s => s.group + ":" + s.brand), ["rareleg:true", "promo:false"]);
+  check("the plan itself is not mutated", plan.map(s => s.brand), [true, false, false]);
+  check("nothing filled: no sections", tickerKeepFilled(plan.map(sec => ({sec, rows: []}))), []);
 }
 
 if (failures) {

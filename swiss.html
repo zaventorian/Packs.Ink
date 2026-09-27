@@ -20,7 +20,7 @@
     el.setAttribute("data-mode", DARK.indexOf(resolved)>=0 ? "dark" : "light");
   }catch(e){}
   /* Embed mode — the Analytics "Swiss Odds" tab renders this page in an
-     iframe at /lab/swiss?embed=1. The host app already shows nav + theme
+     iframe at /swiss?embed=1. The host app already shows nav + theme
      controls, so flag the root to hide the duplicate chrome, then strip the
      param so Copy-link (which copies location.href before the first run
      rebuilds the query) never leaks embed=1 into a shared URL. */
@@ -57,8 +57,11 @@
 .sw-top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
 /* Embedded in the Analytics tab: the host shows nav + theme, so hide the
    duplicate chrome and tighten the page padding to fit the iframe. */
-html[data-embed="1"] .sw-brand,html[data-embed="1"] .sw-flag,html[data-embed="1"] #btnTheme{display:none;}
-html[data-embed="1"] body{padding:8px 14px 18px;}
+html[data-embed="1"] .sw-brand,html[data-embed="1"] #btnTheme,html[data-embed="1"] .sw-titles{display:none;}
+/* min-height:0 because a phone embed grows to the content (AutoHeightFrame in
+   Index.html): styles.css gives body min-height:100vh, and inside a frame
+   sized FROM the content, 100vh is the frame — a growth loop. */
+html[data-embed="1"] body{padding:8px 14px 18px;min-height:0;}
 html[data-embed="1"] .sw-top{margin-bottom:12px;}
 .sw-brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;}
 .sw-brand img{height:34px;width:auto;display:block;}
@@ -85,6 +88,11 @@ html[data-embed="1"] .sw-top{margin-bottom:12px;}
   padding:7px 9px;font-size:13px;background:var(--bg-solid);color:var(--text);
   font-family:'Nunito Sans',sans-serif;}
 .sw-hint{font-size:10.5px;color:var(--text-muted);margin-top:3px;line-height:1.4;}
+/* A checkbox label keeps the site's 14px box (an inline width:auto on it
+   collapsed the styled box to a 2px sliver) and sits beside its text. */
+.sw-field > label.sw-check{display:flex;align-items:center;gap:7px;cursor:pointer;}
+/* A disabled field has to LOOK off, or "16, 32, 64" reads as tiers that are on. */
+.sw-field input:disabled,.sw-field select:disabled{opacity:.45;cursor:not-allowed;border-style:dashed;}
 .sw-row{display:flex;gap:8px;}
 .sw-row > *{flex:1;min-width:0;}
 
@@ -202,13 +210,12 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
   <a class="sw-brand" href="/" title="Back to Packs.Ink">
     <img src="/Logos/packs-ink-logo.png" alt="Packs.Ink">
   </a>
-  <div>
+  <div class="sw-titles">
     <h1 class="sw-h1">Swiss Simulator</h1>
     <p class="sw-sub">Monte Carlo odds for Lorcana Swiss events</p>
   </div>
   <div class="sw-spacer"></div>
-  <span class="sw-flag">Internal preview</span>
-  <button id="btnTheme" title="Toggle light / dark">&#9790;</button>
+  <button id="btnTheme" title="Toggle light / dark" aria-label="Toggle light / dark">&#9790;</button>
   <button id="btnShare" title="Copy a link that reproduces this exact run">Copy link</button>
 </div>
 
@@ -221,18 +228,18 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
 
       <div class="sw-row">
         <div class="sw-field">
-          <label>Players</label>
+          <label for="players">Players</label>
           <input type="number" id="players" min="4" max="2048" step="1" value="64">
         </div>
         <div class="sw-field">
-          <label>Rounds</label>
+          <label for="rounds">Rounds</label>
           <input type="number" id="rounds" min="1" max="15" step="1" value="6">
         </div>
       </div>
       <div class="sw-hint" id="roundsHint"></div>
 
       <div class="sw-field" style="margin-top:11px">
-        <label>Top cut</label>
+        <label for="cut">Top cut</label>
         <select id="cut">
           <option value="0">No cut (Swiss only)</option>
           <option value="2">Top 2</option>
@@ -245,17 +252,17 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
       </div>
 
       <div class="sw-field">
-        <label>Intentional draws</label>
-        <div class="sw-seg" id="idsSeg">
-          <button data-v="1" class="active">Realistic</button>
-          <button data-v="0">Nobody draws</button>
+        <label id="idsLbl">Intentional draws</label>
+        <div class="sw-seg" id="idsSeg" role="group" aria-labelledby="idsLbl">
+          <button data-v="1" class="active" aria-pressed="true">Realistic</button>
+          <button data-v="0" aria-pressed="false">Nobody draws</button>
         </div>
         <div class="sw-hint">Realistic: players take the draw in the last two rounds once it mathematically locks their cut.</div>
       </div>
 
       <div class="sw-field">
-        <label><input type="checkbox" id="tiersOn" style="width:auto;margin-right:6px;vertical-align:-1px">Prize tiers below the cut</label>
-        <input type="text" id="tiers" value="16, 32, 64" disabled>
+        <label class="sw-check"><input type="checkbox" id="tiersOn">Prize tiers below the cut</label>
+        <input type="text" id="tiers" value="16, 32, 64" disabled aria-label="Prize tier placements">
         <div class="sw-hint">Placements that pay out even though they miss the cut. Ties count:
           matching the point total at that placement earns the tier.</div>
       </div>
@@ -266,23 +273,23 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
 
           <div class="sw-row">
             <div class="sw-field">
-              <label>Pts / win</label>
+              <label for="ptsWin">Pts / win</label>
               <input type="number" id="ptsWin" min="1" max="9" value="3">
             </div>
             <div class="sw-field">
-              <label>Pts / draw</label>
+              <label for="ptsDraw">Pts / draw</label>
               <input type="number" id="ptsDraw" min="0" max="9" value="1">
             </div>
           </div>
 
           <div class="sw-field">
-            <label>Unintentional draw rate</label>
+            <label for="drawRate">Unintentional draw rate</label>
             <input type="number" id="drawRate" min="0" max="50" step="0.5" value="1.5">
             <div class="sw-hint">% of matches that time out. Real Lorcana events land near 1&ndash;3%.</div>
           </div>
 
           <div class="sw-field">
-            <label>Players drop at</label>
+            <label for="dropAt">Players drop at</label>
             <select id="dropAt"></select>
             <div class="sw-hint">Modelling attrition shrinks the pool behind every number above, because
               players who leave have no next round. Leave this off unless you specifically want it.</div>
@@ -290,7 +297,7 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
 
           <div class="sw-row">
             <div class="sw-field">
-              <label>Simulations</label>
+              <label for="sims">Simulations</label>
               <select id="sims">
                 <option value="2000">2,000 &mdash; instant</option>
                 <option value="10000" selected>10,000 &mdash; balanced</option>
@@ -299,7 +306,7 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
               </select>
             </div>
             <div class="sw-field">
-              <label>Seed</label>
+              <label for="seed">Seed</label>
               <input type="number" id="seed" min="1" step="1" value="1">
             </div>
           </div>
@@ -761,6 +768,11 @@ const ROUND_STEPS = [[8, 3], [16, 4], [32, 5], [64, 6], [128, 7], [226, 8], [204
 const suggestRounds = (n) => (ROUND_STEPS.find(([t]) => n <= t) || [0, 9])[1];
 
 let RESULT = null;      // last completed accumulator
+// The settings that PRODUCED the results on screen. Typing a record rewrites
+// the link, and it used to read the live form — so changing Players and Top
+// cut without pressing Run, then typing 5-0, shared numbers the sender never
+// saw.
+let LAST_RUN = null;
 let RUNNING = false;
 let PENDING = false;    // a run was requested mid-run; fire once done
 let workerURL = null;
@@ -772,6 +784,10 @@ function readCfg() {
   return {
     players, rounds,
     cut: Math.min(parseInt($("cut").value, 10) || 0, players),
+    // The menu choice itself. `cut` above is clamped to the field, and writing
+    // THAT into the link put "c=12" on a 12-player Top 16 — a value the menu
+    // doesn't have, so the link reopened as "No cut".
+    cutChoice: parseInt($("cut").value, 10) || 0,
     ptsWin: clampInt($("ptsWin").value, 1, 9, 3),
     ptsDraw: clampInt($("ptsDraw").value, 0, 9, 1),
     drawRate: Math.min(0.5, Math.max(0, (parseFloat($("drawRate").value) || 0) / 100)),
@@ -805,7 +821,10 @@ function syncDropOptions() {
 }
 
 function setSeg(id, v) {
-  $(id).querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.v === v));
+  $(id).querySelectorAll("button").forEach(b => {
+    b.classList.toggle("active", b.dataset.v === v);
+    b.setAttribute("aria-pressed", b.dataset.v === v ? "true" : "false");
+  });
 }
 
 function syncHints() {
@@ -856,6 +875,7 @@ function run() {
   const done = (acc) => {
     acc.seedUsed = seed;
     RESULT = acc;
+    LAST_RUN = {cfg, total, seed};
     fill.style.width = "100%";
     render();
     btn.disabled = false; btn.textContent = "Run simulation";
@@ -1359,7 +1379,7 @@ function renderMethod(r) {
 /* ── URL round-trip ───────────────────────────────────────────────────── */
 function pushUrl(cfg, sims, seed) {
   const q = new URLSearchParams({
-    p: cfg.players, r: cfg.rounds, c: cfg.cut, pw: cfg.ptsWin, pd: cfg.ptsDraw,
+    p: cfg.players, r: cfg.rounds, c: cfg.cutChoice != null ? cfg.cutChoice : cfg.cut, pw: cfg.ptsWin, pd: cfg.ptsDraw,
     dw: (cfg.drawRate * 100).toFixed(1), dr: cfg.dropAt,
     id: cfg.allowID ? 1 : 0, n: sims, s: seed
   });
@@ -1375,7 +1395,15 @@ function loadUrl() {
   const set = (k, id) => { if (q.has(k)) $(id).value = q.get(k); };
   set("p", "players"); set("r", "rounds"); set("pw", "ptsWin"); set("pd", "ptsDraw");
   set("dw", "drawRate"); set("n", "sims"); set("s", "seed");
-  if (q.has("c")) $("cut").value = q.get("c");
+  if (q.has("c")) {
+    // An older link can carry a cut the menu doesn't offer (c=12 from a
+    // 12-player Top 16). The run clamps to the field anyway, so the smallest
+    // offered cut at or above it reproduces the same event.
+    const want = parseInt(q.get("c"), 10) || 0;
+    const opts = [...$("cut").options].map(o => parseInt(o.value, 10));
+    const pick = opts.includes(want) ? want : (opts.filter(v => v >= want).sort((a, b) => a - b)[0] ?? 0);
+    $("cut").value = String(pick);
+  }
   if (q.has("id")) setSeg("idsSeg", q.get("id") === "1" ? "1" : "0");
   if (q.has("t")) {
     const t = (q.get("t") || "").split(".").filter(Boolean);
@@ -1415,14 +1443,17 @@ $("btnRun").addEventListener("click", run);
 // Your-record inputs re-read the existing pool, so they never re-simulate.
 ["yw", "yl", "yd"].forEach(id => $(id).addEventListener("input", () => {
   renderYou();
-  if (RESULT) pushUrl(readCfg(), parseInt($("sims").value, 10) || 0, clampInt($("seed").value, 1, 2147483647, 1));
+  if (RESULT && LAST_RUN) pushUrl(LAST_RUN.cfg, LAST_RUN.total, LAST_RUN.seed);
 }));
 
 $("btnShare").addEventListener("click", () => {
   const btn = $("btnShare");
-  navigator.clipboard.writeText(location.href)
+  const href = location.href;
+  const fallback = () => { try { window.prompt("Copy this link:", href); } catch (e) {} };
+  if (!navigator.clipboard || !navigator.clipboard.writeText) { fallback(); return; }
+  navigator.clipboard.writeText(href)
     .then(() => { btn.textContent = "Copied ✓"; setTimeout(() => btn.textContent = "Copy link", 1600); })
-    .catch(() => { btn.textContent = "Press Ctrl+C"; setTimeout(() => btn.textContent = "Copy link", 1600); });
+    .catch(fallback);
 });
 
 $("btnTheme").addEventListener("click", () => {
@@ -1454,6 +1485,39 @@ loadUrl();
 syncDropOptions();
 syncHints();
 run();
+
+/* ── embed height reporter ────────────────────────────────────────────────
+   On a phone the Analytics tab grows this frame to the content
+   (AutoHeightFrame in Index.html, mounted only below 960px). Same reporter as
+   ticker.html: measure the CONTENT rather than scrollHeight (which includes
+   whatever the viewport forces onto body), on a ResizeObserver plus a bounded
+   keepalive, because results land after the first measure. Harmless in the
+   fixed desktop frame, which ignores it. */
+if (document.documentElement.getAttribute("data-embed") === "1") {
+  let lastH = 0;
+  const contentHeight = () => {
+    let bottom = 0;
+    for (const el of document.body.children) {
+      const r = el.getBoundingClientRect();
+      if (r.width || r.height) bottom = Math.max(bottom, r.bottom + window.scrollY);
+    }
+    return bottom + (parseFloat(getComputedStyle(document.body).paddingBottom) || 0);
+  };
+  const reportHeight = () => {
+    const h = Math.ceil(contentHeight());
+    if (!h || Math.abs(h - lastH) < 2) return;
+    lastH = h;
+    try { parent.postMessage({type: "packsink:embed-height", height: h}, location.origin); } catch (e) {}
+  };
+  try {
+    const ro = new ResizeObserver(reportHeight);
+    ro.observe(document.documentElement);
+    if (document.body) ro.observe(document.body);
+  } catch (e) {}
+  window.addEventListener("load", reportHeight);
+  let ticks = 0;
+  const keepalive = setInterval(() => { reportHeight(); if (++ticks >= 20) clearInterval(keepalive); }, 750);
+}
 </script>
 </body>
 </html>

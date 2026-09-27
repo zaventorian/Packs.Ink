@@ -277,7 +277,7 @@ console.log("7. the home handoff parses like the Cards box, not as one phrase");
   // so it is checked at source; the effect is not a pure function.
   const eff = src.slice(src.indexOf("    if(pendingSearch == null) return;"),
                         src.indexOf("}, [pendingSearch, onConsumedPendingSearch]);"));
-  ok(/const split = q && !q\.includes\(":"\) \? smartSplitSuggestion\(q\) : null;/.test(eff),
+  ok(/const split = q && !q\.includes\(":"\) \? smartSplitSuggestion\(q, cardNameIndex\) : null;/.test(eff),
     "the handoff runs the splitter");
   ok(/for\(const c of split\.chips\) addSmartChip\(c\);/.test(eff),
     "…commits its dimension chips");
