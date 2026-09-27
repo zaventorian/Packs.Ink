@@ -1593,14 +1593,15 @@ const SCREENER_MODES = ["raw","graded","sealed"];
 // 2026-09-27), after Playmats.
 const COLLECTION_SECTIONS = ["cards","sealed","graded","playmats","pins"];
 const COLLECTION_SECTION_LABELS = {cards:"Cards", sealed:"Sealed", graded:"Graded", pins:"Pins & Counters", playmats:"Playmats"};
-// The section shelf's glyph per tab, and the name a phone can hold: all five
-// share one row there, and "Pins & Counters" is about twice a cell's width.
+// The section shelf's glyph per tab. `lines` splits a label that is too wide
+// for a phone cell: all five share one row there, and "Pins & Counters" is
+// about twice a cell's width, so on a phone it stacks as two lines.
 const COLLECTION_SECTION_TABS = {
-  cards:    {icon: "cards", short: "Cards"},
-  sealed:   {icon: "box",   short: "Sealed"},
-  graded:   {icon: "slab",  short: "Graded"},
-  playmats: {icon: "mat",   short: "Playmats"},
-  pins:     {icon: "pin",   short: "Pins"},
+  cards:    {icon: "cards"},
+  sealed:   {icon: "box"},
+  graded:   {icon: "slab"},
+  playmats: {icon: "mat"},
+  pins:     {icon: "pin", lines: ["Pins &", "Counters"]},
 };
 // Human names for the toast. Deliberately separate from the nav labels: this
 // reads as a sentence ("Link to Decks · Tournaments copied"), not a chip.
@@ -30907,16 +30908,15 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           : (k === "sealed" || k === "pins" || k === "playmats") ? viewerVis.sealed : viewerVis.graded;
         if(isViewerMode && !vis) return null;
         const label = COLLECTION_SECTION_LABELS[k], tab = COLLECTION_SECTION_TABS[k];
-        const on = effectiveSection === k, abbr = tab.short !== label;
+        const on = effectiveSection === k;
         return html`<a key=${k}
           class=${"collection-section-tab"+(on?" active":"")}
           href=${collectionSectionHref(k, isViewerMode ? viewerContext : null)}
           aria-current=${on ? "page" : undefined}
-          aria-label=${abbr ? label : undefined} title=${abbr ? label : undefined}
           onClick=${navHandler(()=>setSection(k))}>
           <span class="cst-ico">${uiIcon(tab.icon, 18)}</span>
-          ${abbr
-            ? html`<span class="cst-label cst-label--full">${label}</span><span class="cst-label cst-label--short" aria-hidden="true">${tab.short}</span>`
+          ${tab.lines
+            ? html`<span class="cst-label cst-label--lines"><span class="cst-line">${tab.lines[0]}</span> <span class="cst-line">${tab.lines[1]}</span></span>`
             : html`<span class="cst-label">${label}</span>`}
         </a>`;
       })}
@@ -30924,7 +30924,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       ${!isViewerMode && user && ownerProfile && html`<div class="collection-share-wrap" ref=${shareRef}>
         <button class=${"collection-share-btn"+(shareOpen?" open":"")}
           onClick=${()=>setShareOpen(o=>!o)} aria-expanded=${shareOpen ? "true" : "false"}
-          title="Choose who can see each section of your collection">
+          aria-label="Share your collection" title="Choose who can see each section of your collection">
           <span class="cst-ico">${uiIcon("share", 18)}</span>
           <span class="cst-label">Share<span class="cst-caret" aria-hidden="true"> ▾</span></span>
         </button>

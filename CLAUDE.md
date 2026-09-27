@@ -963,10 +963,16 @@ the tabs were bare text.
   end. Same face as the nav chips, but boxed in a tray so it doesn't read as a third nav row.
 - **⚠ It must not wrap.** Below 720px each cubby takes its label's width plus an even share of
   what's left (`flex:1 1 auto`). Equal grid columns clipped "Playmats" at 360px while "Pins" had
-  room to spare. Measured with no clipping and no sideways scroll at 320, 360, 390 and 730px.
-- **Pins & Counters shows `short` ("Pins") on phones.** The full name wants ~90px and a cell there
-  has ~45. `aria-label` and `title` carry the full name, so the visible word is contained in the
-  accessible name.
+  room to spare.
+- **Pins & Counters keeps its full name and stacks as two lines on phones** (`lines` on its
+  `COLLECTION_SECTION_TABS` entry; one line from 721px up). It first shipped as a short "Pins";
+  Zaven asked for the full name. The cubbies top-align on phones so the five glyphs stay level
+  (centred, the two-line tab's glyph rode half a line high), and Share's top padding is the sum
+  that puts its glyph on the same line.
+- **Below 360px** the row is short of the full-size labels (19px short at 320, still 1px at 351),
+  so Share drops its word, the labels go to 9px and the tabs' side padding to 1px. Measured with
+  nothing clipped, the glyphs level and no sideways scroll at 320, 351, 359, 360, 375, 390, 412,
+  480, 719, 721 and 1280px.
 - The tour step (`.collection-section-tabs`) and the Help page say five sections now.
 
 ## Official Lorcana brand art (2026-09-12)
