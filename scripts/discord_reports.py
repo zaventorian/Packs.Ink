@@ -10,10 +10,10 @@ The report IS the daily digest (scripts/discord_digest.py): the same embed,
 built by the same functions, so a server's report and the digest can never
 disagree about a card. What this adds is the delivery: one post per
 subscribed channel, through the bot's own account (DISCORD_BOT_TOKEN), for
-every row in discord_report_subscriptions (migration 172).
+every row in discord_report_subscriptions (migration 173).
 
   * DRY RUN BY DEFAULT, like the digest. `--post` is the deliberate act.
-  * No bot token, or migration 172 not applied: a clean exit 0 that says so —
+  * No bot token, or migration 173 not applied: a clean exit 0 that says so —
     the workflow stays green until the feature is switched on.
   * ⚠ Freshness gate: nothing posts unless the newest price date is today, so
     the retry run cannot post yesterday's numbers as today's. And each row
@@ -50,7 +50,7 @@ WINDOW = {"daily": "1d", "weekly": "7d"}
 
 
 def load_subscriptions(sb):
-    """Rows, or None when migration 172 is not applied yet."""
+    """Rows, or None when migration 173 is not applied yet."""
     try:
         return sb.select(TABLE, columns="guild_id,channel_id,cadence,last_posted_on",
                          order="guild_id.asc,channel_id.asc,cadence.asc")
@@ -128,7 +128,7 @@ def run(args, sb=None, session=requests, today=None):
     sb = sb or Supabase()
     subs = load_subscriptions(sb)
     if subs is None:
-        print(f"{TABLE} does not exist yet (migration 172 not applied). Exiting 0.")
+        print(f"{TABLE} does not exist yet (migration 173 not applied). Exiting 0.")
         return 0
     if not subs:
         print("No servers have asked for reports. Exiting 0.")

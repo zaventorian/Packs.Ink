@@ -1,4 +1,4 @@
--- 172: Discord bot movers-report subscriptions.
+-- 173: Discord bot movers-report subscriptions.
 -- One row per (server, channel, cadence). Written by the Discord bot Worker
 -- (service key) when a server manager runs /reports; read by
 -- scripts/discord_reports.py (service key) to post the report.

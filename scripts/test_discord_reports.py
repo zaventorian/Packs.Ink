@@ -137,7 +137,7 @@ check(not disc4.posts, "yesterday's prices never post as today's")
 
 # 5. table missing / no token -> clean exit 0, nothing posted
 code5, out5 = run(FakeSb([], table_missing=True), FakeDiscord())
-check(code5 == 0 and "migration 172" in out5, "missing table is a clean exit 0")
+check(code5 == 0 and "migration 173" in out5, "missing table is a clean exit 0")
 os.environ["DISCORD_BOT_TOKEN"] = ""
 disc6 = FakeDiscord()
 code6, _ = run(FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}]), disc6)

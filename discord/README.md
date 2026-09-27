@@ -46,7 +46,7 @@ Price check menu cover the same ground.
    - `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN`
    - Optional, only for `/reports`: `DISCORD_BOT_SUPABASE_KEY` (the Supabase
      service key; giving the bot Worker service-role access is a choice, so it
-     has its own secret name). Also apply `supabase/172_discord_reports.sql`.
+     has its own secret name). Also apply `supabase/173_discord_reports.sql`.
    - `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` already exist for the site.
 3. **Cloudflare**: the account needs a workers.dev subdomain (Workers & Pages →
    the subdomain shown on the overview). The first deploy fails and says so if
