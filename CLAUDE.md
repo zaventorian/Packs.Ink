@@ -7353,7 +7353,11 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
   sit on the Pins & Counters boards: `collectible_boards` (owner-only RLS, grants in the same
   file) + `get_shared_collectible_boards` for viewers. Safe to ship the client first — until it
   lands, boards save on the device and the tab says so. See "Pins & Counters".
-- ~~`supabase/137_amazon_stock_checks.sql`~~ — **APPLIED 2026-09-12 by Zaven.** The manual Amazon stock
+- **`supabase/137_amazon_stock_checks.sql`** — **HALF-APPLIED: re-paste it.** Probed 2026-09-26 with the
+  public key: the table exists, but `select=msrp` answers `42703 column amazon_stock_checks.msrp does not
+  exist`, so the in-place extension below never reached the live database. The file is idempotent, so
+  pasting the whole thing again is the upgrade. Until then the checklist's MSRP / Over controls can't
+  save, and stock rulings still work (the client drops the two columns on 42703). Original entry: the manual Amazon stock
   **and price** check: anon-readable, graded-admin writes. **Extended in place 2026-09-12**
   with `msrp` + `price_over` (the 20%-above-MSRP ceiling) rather than followed by a new
   migration — the whole file is idempotent (`create table if not exists`, `add column if not
