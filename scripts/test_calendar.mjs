@@ -2079,8 +2079,12 @@ ok("the graded tile isolates its version badge",
   // "Find on Amazon", because a search cannot promise the page it lands on.
   ok("a search link says so rather than promising the product",
     /az\.exact \? "Amazon/.test(links) && /Find on Amazon/.test(links));
+  // The Amazon half renders through amazonPill (2026-09-26), so the rel lives
+  // there — check both the TCGplayer anchor here and the pill's own anchor.
+  const pill = grab("const amazonPill = (az, ", NL + "  : null;");
   ok("every Amazon link is nofollow sponsored",
-    (links.match(/rel="noopener nofollow sponsored"/g) || []).length >= 2);
+    /rel="noopener nofollow sponsored"/.test(links) && /amazonPill\(az/.test(links)
+      && /rel="noopener nofollow sponsored"/.test(pill));
   ok("the required Associate disclosure sits with the links, not only in the footer",
     (modal.match(/As an Amazon Associate I earn from qualifying purchases\./g) || []).length >= 2);
   // ⚠ ProductPhoto, never a bare <img>: TCGplayer shoots on a WHITE sweep, so

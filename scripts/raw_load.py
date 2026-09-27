@@ -249,7 +249,7 @@ def review_report(rows, label_of, flags, ruled=frozenset()):
                 p = float(r["sale_price"])
                 if p > med * OUTLIER_FACTOR or p < med / OUTLIER_FACTOR:
                     flagged.append((label_of(key[0]), key[1], p, med, r["title"],
-                                    r["item_id"] in ruled))
+                                    r["item_id"] in ruled, r["item_id"]))
         print(line)
 
     multi = [r for r in inc if (r["quantity_sold"] or 1) > 1]
@@ -264,10 +264,11 @@ def review_report(rows, label_of, flags, ruled=frozenset()):
         open_n = sum(1 for f in flagged if not f[5])
         print(f"\n--- {len(flagged)} price outliers (>{OUTLIER_FACTOR:g}x from the card's "
               f"median, >={OUTLIER_MIN_NEIGHBOURS} sales); {open_n} still open ---")
-        for lab, pr, p, med, title, done in sorted(flagged, key=lambda x: -x[2])[:20]:
+        for lab, pr, p, med, title, done, _iid in sorted(flagged, key=lambda x: -x[2])[:20]:
             mark = "[ruled]" if done else "[OPEN] "
             print(f"  {mark} ${p:>11,.2f} vs median ${med:>9,.2f}  {lab} {pr or '-'}"
                   f"\n          {(title or '')[:74]}")
+    return flagged
 
 
 def manual_exclusions():
@@ -309,6 +310,9 @@ def main():
     src.add_argument("--backfill-graded", action="store_true")
     src.add_argument("--from-jsonl", action="store_true")
     ap.add_argument("--commit", action="store_true", help="actually write (default: dry run)")
+    ap.add_argument("--commit-if-clean", action="store_true",
+                    help="the UNATTENDED daily mode: write every NEW row except a new "
+                         "price outlier, which is held back and listed for a person")
     ap.add_argument("--merge", action="store_true",
                     help="UPDATE existing rows too. Clobbers manual fixes -- see the header.")
     args = ap.parse_args()
@@ -345,7 +349,7 @@ def main():
 
     flags = fetch_printing_flags({r["card_id"] for r in out if r["card_id"]})
     ruled = {r["item_id"] for r in manual_exclusions()}
-    review_report(out, lambda cid: label.get(cid, cid or "?"), flags, ruled)
+    flagged = review_report(out, lambda cid: label.get(cid, cid or "?"), flags, ruled)
 
     inc = sum(1 for r in out if not r["excluded"])
     if args.merge:
@@ -359,7 +363,35 @@ def main():
             return 1
 
     print(f"\n{len(out)} rows prepared, {inc} of them counting as raw prices.")
-    if not args.commit:
+
+    # ⚠ --commit-if-clean exists so the DAILY scheduled run can keep these
+    # prices current without a person reading every report, and it keeps the
+    # one judgement that report was for. A price outlier is the only signal this
+    # pipeline has that a sale may be the wrong card (price can never DECIDE
+    # identity -- see raw_match -- but it can raise the question), so a NEW
+    # outlier is HELD BACK, not written, and named for a person to open. Every
+    # other new row goes in: the identity gates in raw_match already fail
+    # closed. Rows already in the table are skipped by the insert-only upsert,
+    # so an old outlier nobody ruled on cannot block a day's run forever.
+    if args.commit_if_clean:
+        existing = {r["item_id"] for r in sb_get_all("raw_sales", "item_id")}
+        new = [r for r in out if r["item_id"] not in existing]
+        hold = {f[6] for f in flagged if not f[5] and f[6] not in existing}
+        write = [r for r in new if r["item_id"] not in hold]
+        print(f"\ncommit-if-clean: {len(new)} new row(s), {len(hold)} held for review, "
+              f"{len(write)} to write.")
+        for r in new:
+            if r["item_id"] in hold:
+                print(f"  HELD {r['item_id']}  ${float(r['sale_price'] or 0):,.2f}  "
+                      f"{(r['title'] or '')[:70]}")
+        if hold:
+            print("  -> open each HELD listing; if it is the card, re-run with --commit; "
+                  "if not, mark it excluded (exclude_reason='manual').")
+        if not write:
+            print("Nothing new to write.")
+            return 0
+        out = write
+    elif not args.commit:
         print("DRY RUN — nothing written. Re-run with --commit.")
         return 0
 

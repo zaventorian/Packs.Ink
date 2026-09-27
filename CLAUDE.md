@@ -2195,11 +2195,13 @@ The FAQ ("Tracking your collection" section, Help bubble `?`) explains this user
   states a COST and which number that cost is built from has to be readable off the screen on
   arrival. The old key is orphaned, which is what stops a stale `market` resurfacing; it needs
   no migration.
-- **The home Toolbox is NOT a mirror of this tab bar.** `HOME_TOOLS` deliberately omits
-  **Simulator** (removed 2026-08-27, Zaven) as it omits the Stream Ticker: the toolbox is the
-  short list of tools an ordinary visitor opens cold, and a pack sim is somewhere you arrive from
-  an EV row's ⚄ Sim chip. Simulator still lives in the tab bar and in Overview — dropping a chip
-  from `HOME_TOOLS` must never drop the tool.
+- **The home Toolbox is NOT a mirror of this tab bar, and it holds exactly SIX chips** (three
+  even rows of the two-column grid). As of 2026-09-26 (Zaven): Expected Value · Trade Compare ·
+  Set Breakdown · Playset Cost · Swiss Odds · Simulator. **Dice Tray and Lore Tracker came out**
+  — on phones they already have their own bubbles in the movers toolbar's corner (the fixed
+  `dice` / `lore` HOME_PANELS entries), which is where someone mid-game reaches for them. The
+  Stream Ticker stays out (an OBS overlay is not a cold-open tool). Dropping a chip from
+  `HOME_TOOLS` must never drop the tool — every one of them is still an Analytics tab.
 - **The Lore Tracker's glyph IS `LORE_PIP_PATH`** — `HOME_TOOL_ICONS.lore` references the same
   const the tracker's own `LoreDiamond` draws, so the two can never drift. A tall diamond whose
   four sides bow INWARD by 13%: the waist is the whole difference between "lore" and "a diamond",
@@ -2207,7 +2209,7 @@ The FAQ ("Tracking your collection" section, Help bubble `?`) explains this user
   by eye at 17px. The pip is the WHOLE glyph — it sat over a rising-tick baseline until
   2026-08-27, which cost it a third of the box for detail invisible at chip size.
 - **`HOME_TOOLS` order is the render order of a two-column grid**, so the first pair is the top
-  row — Dice Tray then Lore Tracker, the two you reach for mid-game. Chips carry a label and no
+  row. Chips carry a label and no
   subtitle (dropped 2026-08-27): the second line doubled every chip's height, and what each tool
   answers is what Analytics » Overview is for.
 - **The Dice Tray hands off to it with a corner bubble**, not the row that used to sit under the
@@ -3683,13 +3685,56 @@ the fossil and the eBay sales are the market, so the card page says so:
   today. **⚠ `RAW_SALE_COLOR` is a literal hex, not `var(--accent)`** — these
   series are consumed by the canvas poster, which cannot resolve a CSS variable.
 
-### Running it
+### Running it — DAILY since 2026-09-26
 
 `powershell -File scripts\graded_run.ps1 -Raw [-Deep]` — the SAME driver as the
 graded scrape, because stages 1a–1c hold the stale-Chrome and captcha knowledge
 and a second copy would drift. `-Deep` (first run) pulls each query to
 exhaustion; after that a query is bounded by its own file's max date. It stops at
 the DRY-RUN load: read the review report, then `--commit` yourself.
+
+**⚠ Until 2026-09-26 the raw scrape had NEVER RUN.** `scripts/raw_output/` was
+empty: all 78 raw sales on the site came from the one-time `--backfill-graded`
+on 9/20, and nothing was keeping them current while the graded scrape ran daily
+beside it. It is now **step 5 of the `graded-scrape` scheduled task** (the daily
+Claude task, ~12:11 local), after the graded stages, in the same Chrome:
+`graded_run.ps1 -Raw -SkipLoad`, then `raw_load.py --from-jsonl --commit-if-clean`
+and `raw_load.py --backfill-graded --commit-if-clean`.
+
+- **`--commit-if-clean` is the unattended mode, and it keeps the one judgement
+  the dry-run report was for.** It writes every NEW row except a NEW price
+  outlier, which is HELD (not written) and printed with its item_id for a person
+  to open. Price still never DECIDES identity — a held row is a question, not a
+  rejection; plain `--commit` after a look writes it. Rows already in the table
+  are skipped by the insert-only upsert, so an old outlier nobody ruled on cannot
+  block a day's run forever.
+- The unattended run must never pass plain `--commit` or `--merge`.
+
+### On the card page (reworked 2026-09-26, Zaven: "use the last sold/avg 5 as the main metric. have the sales graph be more like the one for graded")
+
+- **The Price changes row** leads with a graded-style pair — LAST SOLD (with its
+  date) and AVG OF LAST N (with the sale count) — as big accent numbers. TCGplayer
+  Low/Mkt is one small line under it, its six-window % grid folds behind a
+  "TCGplayer changes" toggle, and the `priceStanding` chip is hidden on a raw row
+  (it judges TCGplayer's Market, the price nobody is paying).
+- **The history section opens on "eBay sales"** (`RawSalesPanel`, beside
+  `GradedSalesTab`), with "TCGplayer history" as the other half of a toggle. The
+  panel is the graded tab's shape: a per-sale ScatterChart, a click-to-pin sale
+  detail with the listing + photo, and a sale-rows table (Date / Listing / Qty /
+  Price / Type / ↗). TCGplayer Low and Mkt are OPTIONAL overlay lines, off by
+  default. A split Challenge card's printings are chips (one at a time; Ctrl/⌘
+  to overlay) plus a summary table, and the Unknown bucket is never shown as
+  either printing.
+- **⚠ No Last Sold / Avg headline inside the panel** — the Price changes row right
+  above already shows that pair, and the same two numbers twice on one screen read
+  as two different prices. The panel's summary line is range + date span.
+- **⚠ Headline numbers come from the ROLLUP row**, never recomputed client-side,
+  so the card page cannot disagree with anything else reading `raw_sales_rollup`.
+- The `raw_sales` fetch now also selects `item_id` (ScatterChart selection),
+  `image_url` and `listing_type`. `ScatterChart`'s tooltip takes an optional
+  `tipLabel` so a raw dot says "Raw" instead of an empty grader/grade.
+- `rawView` resets to "ebay" on every card — the modal does not remount between
+  cards, same reason as the Low/Market nudge above it.
 
 ## Price standing — "is this actually a good price?" (2026-09-10)
 
@@ -4097,6 +4142,28 @@ Gear panel both existed it was a third Amazon prompt on one page. The Gear PANEL
 out on 2026-09-12 for the same reason, so the home page's one Amazon surface is now the row,
 whose title leads to `/gear`. Leftover `packsink:gearBarDismissed` / `packsink:home:gearCollapsed`
 keys in someone's browser are harmless.
+
+### The Amazon link is a BUTTON, and it never touches a price (2026-09-26)
+
+Zaven: *"make it more clear it's a button to take you to amazon, and not the same price
+as the $ above which also should imply it's a tcgplayer link."* The Amazon twin used to
+be a muted "Amazon" text link sitting under or beside the box price — which read as a
+caption ON that price, i.e. as though the $ were Amazon's.
+
+- **`amazonPill(az, {cls, stop, label})`** (beside `AmazonBuyLink`) is the one
+  accessor: a cart glyph, the word, a trailing ↗, a border, and an amber tint
+  (`.amz-btn`, rgba(240,163,62)) that no price on the site uses. **It never carries
+  a number.** Used on the home EV strip, the Analytics EV rows, Sealed collection
+  tiles and the calendar's product links; `AmazonBuyLink` (sealed modal) gained the
+  cart and the same amber; the icon-only twins (Screener sealed rows, movers-tile
+  corner) take the amber so a cart is never mistaken for the TCGplayer link.
+- **The price says whose it is.** Column headers read "Box · TCGplayer" (home strip
+  + Analytics EV), the price link carries a small ↗, and the sealed tile's chip reads
+  "TCGplayer ↗" (was "TCG ↗").
+- **⚠ On the home EV strip the pill is its OWN column, after "vs box"** — never in
+  the price cell. Below 640px (and in the 240px left rail) the row stacks: set name +
+  pill on line one, the three numbers on line two; five columns left a phone's set
+  name 17px wide.
 
 ### Disclosure
 
