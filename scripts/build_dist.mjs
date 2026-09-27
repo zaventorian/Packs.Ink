@@ -34,7 +34,6 @@ const FILES = [
   "logo.js",
   "sw.js",
   "scanner.js",
-  "scanner-cv.js",
   "scanner-worker.js",
   "scanner-ocr-worker.js",
   "manifest.json",

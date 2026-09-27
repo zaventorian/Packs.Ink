@@ -26,7 +26,6 @@ const FILES = [
   // offline. Registered only in native (see the SW-registration script).
   "sw-native-images.js",
   "scanner.js",
-  "scanner-cv.js",
   "scanner-worker.js",
   "scanner-ocr-worker.js",
   "manifest.json",

@@ -51,7 +51,7 @@ check(/k !== SCAN_CACHE/.test(SW), "activate keeps SCAN_CACHE across deploys (or
 check(/caches\.open\(SCAN_CACHE\)/.test(SW) && /SCAN_ASSET_RE\.test\(url\.pathname\)/.test(SW), "the fetch handler serves SCAN_ASSET_RE paths out of SCAN_CACHE");
 check(/text\/html/.test(SW.slice(SW.indexOf("caches.open(SCAN_CACHE)"), SW.indexOf("caches.open(SCAN_CACHE)") + 900)),
   "SCAN_CACHE refuses an HTML body (the SPA fallback for a missing file)");
-for (const p of ["/scanner.js", "/scanner-worker.js", "/scanner-ocr-worker.js", "/scanner-cv.js"])
+for (const p of ["/scanner.js", "/scanner-worker.js", "/scanner-ocr-worker.js"])
   check(!SCAN_ASSET_RE.test(p), `${p} stays OUT of the persistent cache (network-first with Index.html)`);
 
 // ---- every index URL carries its version -----------------------------------

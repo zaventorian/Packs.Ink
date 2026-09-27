@@ -204,7 +204,7 @@ self.addEventListener('fetch', (event) => {
   // a STALE cache-first stylesheet. That skew is what rendered the home page's
   // mover tiles at giant natural-image size after a deploy until the visitor
   // hard-refreshed. Falls back to cache only when the network is unreachable.
-  if (url.origin === self.location.origin && /\/(styles\.css|logo\.js|scanner\.js|scanner-cv\.js|scanner-worker\.js|scanner-ocr-worker\.js)$/.test(url.pathname)) {
+  if (url.origin === self.location.origin && /\/(styles\.css|logo\.js|scanner\.js|scanner-worker\.js|scanner-ocr-worker\.js)$/.test(url.pathname)) {
     event.respondWith(
       fetch(req)
         .then((res) => {

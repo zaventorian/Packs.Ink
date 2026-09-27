@@ -9,6 +9,10 @@
  *   {type:'detect',  id, bitmap}            → {type:'detect',  id, quad|null, w, h}
  *   {type:'rectify', id, bitmap, quad, outW, outH}
  *                                           → {type:'rectify', id, width, height, buffer?} (buffer transferred)
+ *   {type:'verify-ref', id, ref:{id,bitmap}}  → {type:'verify-ref', id, ok}  (caches one reference)
+ *   {type:'verify',  id, query, refs:[{id,bitmap}], cands:[ids], wantStrip}
+ *                                           → {type:'verify', id, scores, ncc, win, strip?}
+ *                                             or {type:'verify', id, missing:[ids]}
  * Emits {type:'ready'} once OpenCV's runtime is initialised, or {type:'failed'}.
  *
  * Uses the single-threaded @techstark/opencv-js build (the threaded build is
@@ -264,6 +268,195 @@ function rectify(mat, quad, outW, outH) {
   }
 }
 
+// ---- VERSION VERIFY: ORB + RANSAC against each candidate printing's own art ----
+// (2026-09-26 audit) The name read is good at WHICH CHARACTER and weak at WHICH
+// PRINTING, and colour is no help on a camera photo (41% right version). Matching
+// ORB keypoints against the candidates' reference art and counting RANSAC
+// homography inliers picks the right version 97% of the time on human-reviewed
+// field crops, and 98% of the time it is confident. It works on a bad rectify too
+// (a homography does not care where the card sits in the crop), which matters
+// because the detector frames the card well only a fifth of the time.
+// This worker only MEASURES: inliers per candidate, how alike each candidate's art
+// is to the winner's (identical art cannot be told apart by keypoints — Epic vs its
+// base, a reprint across sets), and the collector-number strip warped through the
+// winner's homography for the registered read. The page decides (scanOrbVerdict).
+// 1000, measured 2026-09-26 on 40 gold field rows: 1500 = 39/40 right, 395ms warm;
+// 1000 = 37/40, 235ms; 700 = 36/40, 138ms. Brute-force matching costs features
+// squared and a phone runs ~5x a desktop, while precision-when-confident held at
+// 97% at every size — the extra features buy a couple of rows, not certainty.
+const ORB_FEATURES = 1000;
+const VERIFY_QUERY_SIDE = 900;   // the audit's query size; bigger only adds noise keypoints
+const VERIFY_REF_SIDE = 700;     // Lorcast "normal" art is 488x681, i.e. native
+const REF_CACHE_MAX = 48;        // a playset re-scans the same family; features are the cost
+const THUMB_W = 96, THUMB_H = 134;
+// the registered strip: canonical card = 2x the 488x681 reference. The number line
+// sits at y .952-.992, x .015-.34; the strip carries y .930-1.0 so the page can try
+// a few vertical offsets against a registration error.
+const CANON_W = 976, CANON_H = 1362;
+const STRIP_X0 = 0.015, STRIP_X1 = 0.34, STRIP_Y0 = 0.930, STRIP_Y1 = 1.0;
+const refCache = new Map();
+let orbDet = null, bfm = null;
+
+function grayFromBitmap(bitmap, maxSide, keepRgba) {
+  const sc = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+  const w = Math.max(1, Math.round(bitmap.width * sc)), h = Math.max(1, Math.round(bitmap.height * sc));
+  const oc = new OffscreenCanvas(w, h);
+  const ctx = oc.getContext("2d", { willReadFrequently: true });
+  // reference art is transparent outside its rounded corners: composite on white,
+  // as the index builder and the audit did, or the corners read as black edges
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  const rgba = cv.matFromImageData(ctx.getImageData(0, 0, w, h));
+  const gray = new cv.Mat();
+  cv.cvtColor(rgba, gray, cv.COLOR_RGBA2GRAY);
+  oc.width = 1; oc.height = 1;
+  if (!keepRgba) { rgba.delete(); return { gray, w, h, scale: sc }; }
+  return { gray, rgba, w, h, scale: sc };
+}
+
+function featsOf(gray) {
+  if (!orbDet) orbDet = new cv.ORB(ORB_FEATURES);
+  const kp = new cv.KeyPointVector(), desc = new cv.Mat(), none = new cv.Mat();
+  try { orbDet.detectAndCompute(gray, none, kp, desc); }
+  finally { none.delete(); }
+  const n = kp.size(), pts = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) { const p = kp.get(i).pt; pts[2 * i] = p.x; pts[2 * i + 1] = p.y; }
+  kp.delete();
+  return { pts, desc, n };
+}
+
+function thumbOfGray(gray) {
+  const t = new cv.Mat();
+  cv.resize(gray, t, new cv.Size(THUMB_W, THUMB_H), 0, 0, cv.INTER_AREA);
+  const n = THUMB_W * THUMB_H, v = new Float32Array(n);
+  let mean = 0;
+  for (let i = 0; i < n; i++) { v[i] = t.data[i]; mean += v[i]; }
+  t.delete();
+  mean /= n;
+  let norm = 0;
+  for (let i = 0; i < n; i++) { v[i] -= mean; norm += v[i] * v[i]; }
+  norm = Math.sqrt(norm) || 1;
+  for (let i = 0; i < n; i++) v[i] /= norm;
+  return v;
+}
+
+function nccOf(a, b) {
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += a[i] * b[i];
+  return s;
+}
+
+function putRef(id, bitmap) {
+  const g = grayFromBitmap(bitmap, VERIFY_REF_SIDE, false);
+  try {
+    const f = featsOf(g.gray);
+    const old = refCache.get(id);
+    if (old) { old.desc.delete(); refCache.delete(id); }
+    refCache.set(id, { pts: f.pts, desc: f.desc, n: f.n, w: g.w, h: g.h, thumb: thumbOfGray(g.gray) });
+  } finally { g.gray.delete(); }
+  while (refCache.size > REF_CACHE_MAX) {
+    const k = refCache.keys().next().value, v = refCache.get(k);
+    v.desc.delete(); refCache.delete(k);
+  }
+}
+
+// inliers of the query against one reference; H (query-gray -> ref px) when asked
+function matchInliers(q, r, wantH) {
+  if (q.n < 8 || r.n < 8) return { n: 0, H: null };
+  if (!bfm) bfm = new cv.BFMatcher(cv.NORM_HAMMING, false);
+  const mm = new cv.DMatchVectorVector(), src = [], dst = [];
+  try {
+    bfm.knnMatch(q.desc, r.desc, mm, 2);
+    for (let i = 0; i < mm.size(); i++) {
+      const p = mm.get(i);
+      if (p.size() === 2) {
+        const a = p.get(0), b = p.get(1);
+        if (a.distance < 0.8 * b.distance) {
+          src.push(q.pts[2 * a.queryIdx], q.pts[2 * a.queryIdx + 1]);
+          dst.push(r.pts[2 * a.trainIdx], r.pts[2 * a.trainIdx + 1]);
+        }
+      }
+      p.delete();
+    }
+  } finally { mm.delete(); }
+  if (src.length / 2 < 8) return { n: 0, H: null };
+  const s = cv.matFromArray(src.length / 2, 1, cv.CV_32FC2, src);
+  const t = cv.matFromArray(dst.length / 2, 1, cv.CV_32FC2, dst);
+  const mask = new cv.Mat();
+  let n = 0, H = null, Hm = null;
+  try {
+    Hm = cv.findHomography(s, t, cv.RANSAC, 6.0, mask);
+    for (let i = 0; i < mask.rows; i++) n += mask.data[i] ? 1 : 0;
+    if (wantH && Hm && Hm.rows === 3 && Hm.cols === 3) H = Array.from(Hm.data64F);
+  } catch (e) { n = 0; H = null; }
+  finally { s.delete(); t.delete(); mask.delete(); if (Hm) Hm.delete(); }
+  return { n, H };
+}
+
+// warp the full-resolution query onto the winner's canonical frame, keeping only
+// the collector-number strip. M = T(strip origin) . S(ref -> canonical) . H . Q
+function registeredStrip(qRgba, qScale, H, ref) {
+  const sx = CANON_W / ref.w, sy = CANON_H / ref.h;
+  const x0 = STRIP_X0 * CANON_W, y0 = STRIP_Y0 * CANON_H;
+  const sw = Math.round((STRIP_X1 - STRIP_X0) * CANON_W), sh = Math.round((STRIP_Y1 - STRIP_Y0) * CANON_H);
+  const A = [sx, 0, -x0, 0, sy, -y0, 0, 0, 1];          // T . S
+  const Q = [qScale, 0, 0, 0, qScale, 0, 0, 0, 1];      // full-res query -> query-gray
+  const mul = (P, R) => {
+    const o = new Array(9).fill(0);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) for (let k = 0; k < 3; k++) o[3 * i + j] += P[3 * i + k] * R[3 * k + j];
+    return o;
+  };
+  const Mv = mul(mul(A, H), Q);
+  const M = cv.matFromArray(3, 3, cv.CV_64FC1, Mv), out = new cv.Mat();
+  try {
+    cv.warpPerspective(qRgba, out, M, new cv.Size(sw, sh), cv.INTER_CUBIC, cv.BORDER_REPLICATE, new cv.Scalar());
+    return { w: sw, h: sh, buffer: new Uint8ClampedArray(out.data).buffer, lineY0: Math.round((0.952 - STRIP_Y0) * CANON_H), lineY1: Math.round((0.992 - STRIP_Y0) * CANON_H) };
+  } finally { M.delete(); out.delete(); }
+}
+
+function handleVerify(msg) {
+  const t0 = Date.now();
+  const cands = msg.cands || [];
+  for (const r of msg.refs || []) { try { putRef(r.id, r.bitmap); } catch (e) {} finally { if (r.bitmap && r.bitmap.close) r.bitmap.close(); } }
+  const missing = cands.filter((id) => !refCache.has(id));
+  if (missing.length) {
+    if (msg.query && msg.query.close) msg.query.close();
+    postMessage({ type: "verify", id: msg.id, missing });
+    return;
+  }
+  let q = null, qf = null, full = null;
+  try {
+    q = grayFromBitmap(msg.query, VERIFY_QUERY_SIDE, false);
+    qf = featsOf(q.gray);
+    const scores = {}, Hs = {};
+    for (const cid of cands) {
+      const r = refCache.get(cid);
+      refCache.delete(cid); refCache.set(cid, r);   // LRU touch
+      const m = matchInliers(qf, r, true);
+      scores[cid] = m.n; if (m.H) Hs[cid] = m.H;
+    }
+    let win = null;
+    for (const cid of cands) if (win === null || scores[cid] > scores[win]) win = cid;
+    const ncc = {};
+    if (win !== null) { const wt = refCache.get(win).thumb; for (const cid of cands) if (cid !== win) ncc[cid] = Math.round(nccOf(wt, refCache.get(cid).thumb) * 1000) / 1000; }
+    let strip = null;
+    if (msg.wantStrip && win !== null && Hs[win] && scores[win] >= (msg.minStripInliers || 20)) {
+      // the strip needs the full-resolution query: the 900px one leaves the digits ~9px tall
+      full = grayFromBitmap(msg.query, 4096, true);
+      strip = registeredStrip(full.rgba, q.scale / full.scale, Hs[win], refCache.get(win));
+    }
+    const reply = { type: "verify", id: msg.id, scores, ncc, win, nq: qf.n, ms: Date.now() - t0, strip };
+    postMessage(reply, strip ? [strip.buffer] : []);
+  } catch (e) {
+    postMessage({ type: "verify", id: msg.id, error: String((e && e.message) || e), ms: Date.now() - t0 });
+  } finally {
+    if (qf) qf.desc.delete();
+    if (q) q.gray.delete();
+    if (full) { full.gray.delete(); full.rgba.delete(); }
+    if (msg.query && msg.query.close) msg.query.close();
+  }
+}
+
 onmessage = (e) => {
   const msg = e.data;
   if (msg.type === "detect") {
@@ -291,5 +484,21 @@ onmessage = (e) => {
     finally { if (mat) mat.delete(); if (msg.bitmap.close) msg.bitmap.close(); }
     if (out) postMessage({ type: "capture", id: msg.id, width: out.width, height: out.height, detected: true, landscape: det.landscape, conf: det.conf, quad: det.quad, buffer: out.data.buffer }, [out.data.buffer]);
     else postMessage({ type: "capture", id: msg.id, detected: false, conf: det.conf, quad: det.quad, buffer: null });
+  } else if (msg.type === "verify") {
+    if (!ready) {
+      if (msg.query && msg.query.close) msg.query.close();
+      for (const r of msg.refs || []) if (r.bitmap && r.bitmap.close) r.bitmap.close();
+      postMessage({ type: "verify", id: msg.id, error: "cv not ready" });
+      return;
+    }
+    handleVerify(msg);
+  } else if (msg.type === "verify-ref") {
+    // one reference's features per message, so the live loop's detect requests
+    // get the worker between them (the page sends a cold family one at a time)
+    const r = msg.ref || {};
+    let ok = false;
+    if (ready && r.bitmap) { try { putRef(r.id, r.bitmap); ok = refCache.has(r.id); } catch (e) {} }
+    if (r.bitmap && r.bitmap.close) r.bitmap.close();
+    postMessage({ type: "verify-ref", id: msg.id, ok });
   }
 };

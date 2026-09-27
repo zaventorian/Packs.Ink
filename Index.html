@@ -300,7 +300,6 @@
      the scan modal opens, long after DOMContentLoaded. The heavy parts (OpenCV,
      the ONNX OCR models) load later still, inside the workers. -->
 <script src="scanner.js?v=488" defer></script>
-<script src="scanner-cv.js?v=253" defer></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -1816,7 +1815,8 @@ const setSetReleaseDates = (rows) => {
     const parent = SET_PARENT[name];
     fam.set(s.id, (parent && idByName.get(parent)) || s.id);
   }
-  _setReleaseById = rel; _setRankById = rank; _setFamilyById = fam; _setMainlineById = main; _setCodeById = code;
+  _setCodeById = code;
+  _setReleaseById = rel; _setRankById = rank; _setFamilyById = fam; _setMainlineById = main;
 };
 
 // Collapse catalog rows into printings, newest-set last. ONE entry per card_id:
@@ -17070,6 +17070,132 @@ const scannerMetaMap = () => {
   _scanMetaMap = m; _scanMetaKey = key;
   return m;
 };
+// ── ORB version verification (2026-09-26) ─────────────────────────────────
+// The name read settles WHICH CHARACTER well and WHICH PRINTING badly, and colour
+// cannot help on a camera photo (41% right version, audit on 860 field crops).
+// scanner-worker.js therefore matches ORB keypoints against each candidate
+// printing's own art and counts RANSAC homography inliers — 97% right version on
+// human-reviewed field crops, 98% when it is confident — and these pure functions
+// decide what that measurement means. Guarded by scripts/test_scanner_verify.mjs.
+//   - confident = the winner has >= 20 inliers AND >= 1.6x the best other card.
+//   - ART TWINS (the same artwork: an Epic and its base, a reprint across sets)
+//     cannot be told apart by keypoints, so they are a TIE with the winner rather
+//     than the runner-up it must beat. The collector number settles a tie: the
+//     worker registers the photo onto the winner's frame, so the number line sits
+//     at a known spot, and scanCnPick matches what rec read there against the
+//     tied cards' own numbers — never against the whole catalog.
+const SCAN_ORB = { MIN_INLIERS: 20, MARGIN: 1.6, TWIN_NCC: 0.97, MAX_CANDS: 8 };
+const scanOrbVerdict = (scores, ncc) => {
+  const ids = Object.keys(scores || {}).sort((a, b) => (scores[b] || 0) - (scores[a] || 0));
+  if(!ids.length) return null;
+  const win = ids[0], top = scores[win] || 0;
+  const twins = ids.filter(c => c !== win && ((ncc && ncc[c]) || 0) > SCAN_ORB.TWIN_NCC);
+  const rest = ids.filter(c => c !== win && twins.indexOf(c) < 0);
+  const second = rest.length ? (scores[rest[0]] || 0) : 0;
+  return { win, top, second, twins,
+    confident: top >= SCAN_ORB.MIN_INLIERS && top >= SCAN_ORB.MARGIN * Math.max(second, 1) };
+};
+// what rec makes of a digit it half-sees; only ever compared against the tied
+// cards' own numbers, so a generous map cannot invent a card
+const SCAN_CN_GLYPH = { O: "0", o: "0", D: "0", Q: "0", I: "1", l: "1", i: "1", L: "1", "|": "1", "!": "1",
+  Z: "2", z: "2", S: "5", s: "5", B: "8", G: "6", b: "6", g: "9", q: "9" };
+// the collector number: the glyphs just before the first "/" ("147/204·EN·3"),
+// or, with no slash read, the leading run ("198204EN8" is 198, not 982)
+const scanCnLead = (text) => {
+  const t = String(text || "").replace(/\s+/g, "");
+  const map = (x) => { let o = ""; for(const ch of x){ if(/[0-9]/.test(ch)) o += ch; else if(SCAN_CN_GLYPH[ch]) o += SCAN_CN_GLYPH[ch]; } return o; };
+  const cut = t.indexOf("/");
+  if(cut > 0) return map(t.slice(Math.max(0, cut - 4), cut)).slice(-3);
+  const m = t.match(/^[^0-9]{0,2}([0-9][0-9A-Za-z|!]{0,3})/);
+  return m ? map(m[1]).slice(0, 3) : "";
+};
+// the set code, printed after the language token ("…EN·12", "…EN3", "…EN·P1")
+const scanCnSet = (text) => {
+  const m = String(text || "").toUpperCase().match(/EN[^0-9A-Z]{0,3}(CC\d|[CPQ]\d|D23|\d{1,2})/);
+  return m ? m[1].replace(/^0+(?=\d)/, "") : null;
+};
+const scanLev = (a, b) => {
+  a = String(a); b = String(b);
+  const m = a.length, n = b.length;
+  if(!m) return n; if(!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for(let i = 1; i <= m; i++){
+    const cur = [i];
+    for(let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n];
+};
+// texts: rec reads of the registered number line at a few vertical offsets.
+// cands: [{id, cn, s}] — the tied cards. Returns {id, how} or null (abstain).
+// Every offset that reads anything must agree; one that reads garbage abstains.
+const scanCnPick = (texts, cands) => {
+  const picks = [];
+  for(const text of texts || []){
+    const lead = scanCnLead(text);
+    if(!lead) continue;
+    const set = scanCnSet(text);
+    const scored = (cands || []).filter(c => c && c.cn != null && String(c.cn) !== "").map(c => ({
+      c, d: scanLev(lead, String(c.cn).replace(/^0+(?=\d)/, "")),
+      setHit: set && c.s ? String(c.s).toUpperCase() === set : null,
+    }));
+    if(!scored.length) continue;
+    let exact = scored.filter(x => x.d === 0);
+    if(exact.length > 1 && set) exact = exact.filter(x => x.setHit === true);
+    // an exact number whose set clearly disagrees is some OTHER printing (the
+    // candidates are capped, so the card in hand may not be among them)
+    if(exact.length === 1){ if(exact[0].setHit !== false) picks.push({ id: exact[0].c.id, how: "exact" }); continue; }
+    if(exact.length > 1) continue;   // same number in two sets and the set unread: no call
+    scored.sort((a, b) => a.d - b.d);
+    // one glyph off ("19V/204" for 191), clearly nearer than every other card
+    if(lead.length >= 2 && scored[0].d === 1 && scored[0].setHit !== false
+       && (scored.length === 1 || scored[1].d >= scored[0].d + 2)) picks.push({ id: scored[0].c.id, how: "near" });
+  }
+  if(!picks.length) return null;
+  if(new Set(picks.map(p => p.id)).size !== 1) return null;
+  return { id: picks[0].id, how: picks.some(p => p.how === "exact") ? "exact" : "near", votes: picks.length };
+};
+// ⚠ A character's printings, ordered by how much of each one's VERSION text the
+// read found. Only SCAN_ORB.MAX_CANDS reach the art check, and a family can be far
+// bigger (Mickey Mouse 61, Minnie 36; a third of the index sits in a family over
+// 8), so in index order the right printing of a popular character was often never
+// even looked at. Score = the share of the version's letter trigrams found in the
+// best line (a line can carry name AND version); ties keep the index order.
+const scanTri = (s) => {
+  const t = " " + String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "") + " ";
+  const out = new Set();
+  for(let i = 0; i + 3 <= t.length; i++) out.add(t.slice(i, i + 3));
+  return out;
+};
+const scanFamilyByText = (ids, lines, metaOf) => {
+  const L = (lines || []).map(scanTri);
+  const score = (id) => {
+    const m = metaOf(id) || {};
+    const v = scanTri(m.version);
+    if(!v.size || !L.length) return 0;   // no version text to look for ("V.8" is only two trigrams — still counts)
+    let best = 0;
+    for(const l of L){ let k = 0; for(const g of v) if(l.has(g)) k++; if(k / v.size > best) best = k / v.size; }
+    return best;
+  };
+  return ids.map((id, i) => ({ id, i, s: score(id) })).sort((a, b) => (b.s - a.s) || (a.i - b.i)).map(x => x.id);
+};
+// every printing of a character (case-folded name, the same key the version
+// chips use), over the shipped index plus the catalog supplement
+let _scanFamMap = null, _scanFamKey = null;
+const scannerFamilyOf = (name) => {
+  const CS = window.CardScanner;
+  const key = ((CS && CS.state && CS.state.cards) ? CS.state.cards.length : 0) + ":" + ((CS && CS.metaVersion) || 0);
+  if(!_scanFamMap || _scanFamKey !== key){
+    const m = new Map();
+    for(const c of scannerMetaMap().values()){
+      const k = String(c.name || "").toLowerCase();
+      if(!m.has(k)) m.set(k, []);
+      m.get(k).push(c.id);
+    }
+    _scanFamMap = m; _scanFamKey = key;
+  }
+  return _scanFamMap.get(String(name || "").toLowerCase()) || [];
+};
 // ── Card VERSIONS in a scan review row (2026-09-12) ─────────────────────
 // Two different questions sit on one review row and must not be conflated. The
 // Non-Foil/Foil segment is the FINISH — one card_id, two SKUs. This is the
@@ -17191,6 +17317,20 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   const ocrPendingRef = useRef(new Map());    // OCR request promises by id
   const ocrMsgIdRef = useRef(0);
   const ocrReadyRef = useRef(false);          // OCR models loaded
+  const orbSentRef = useRef(new Set());       // reference ids the verify worker holds features for
+  // card_id -> {img, type} off the catalog: the reference art ORB verify matches
+  // against, and the card type (a Location's number line is not where a portrait
+  // card's is, so it skips the registered read)
+  const scanArtById = useMemo(() => {
+    const m = new Map();
+    for(const r of raw || []){
+      const id = r && r.card_id;
+      if(!id || m.has(id)) continue;
+      const img = r.img_normal || r.img_large || r.img_small;
+      if(img) m.set(id, { img, type: r.card_type || "" });
+    }
+    return m;
+  }, [raw]);
   const ocrLoadingRef = useRef(false);        // models still downloading/compiling
   const rectRef = useRef(null);   // last rectified card (for the data flywheel)
   const ambCanvasRef = useRef(null);      // reused small rectified canvas (ambient)
@@ -17552,6 +17692,12 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     // which is fine — it only ever holds this browser's own in-flight scan state.
     try { window.__scanQA = { trace: traceRef.current, amb: ambientRef.current, opened: openedAtRef.current }; } catch(_e){}
     (async () => {
+      // ⚠ A /scan link or the app shortcut opens the scanner WHILE the page loads,
+      // and scanner.js is a deferred script that may not have run yet. For anyone
+      // who has already accepted the notice the camera starts at once, so a bare
+      // check here read "Scanner unavailable" on every such open. Wait for it.
+      for(let t = 0; !window.CardScanner && !cancelled && t < 200; t++) await new Promise(r => setTimeout(r, 100));
+      if(cancelled) return;
       if(!window.CardScanner){ setPhase("noindex"); setErr("scanner module not loaded"); return; }
       try { await window.CardScanner.load(); }
       catch(e){ setPhase("noindex"); setErr("couldn't load the card index"); return; }
@@ -17658,6 +17804,127 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       if(!r) return { lines: [], cnNum: null, cnSet: null, nameMs: 0, cnMs: 0 };
       return { lines: r.lines || [], cnNum: r.cnNum || null, cnSet: r.cnSet || null, nameMs: r.nameMs || 0, cnMs: r.cnMs || 0 };
     } catch(_e){ return { lines: [], cnNum: null, cnSet: null, nameMs: 0, cnMs: 0 }; }
+  };
+  // ── ORB verify plumbing (see scanOrbVerdict) ─────────────────────────────
+  // Reference art is the catalog's own card image (same-origin /img-proxy, so it
+  // rides the service worker's image cache). A card with no art is simply not a
+  // candidate: verify can only judge what it can see.
+  const refBitmap = async (id) => {
+    const a = scanArtById.get(id);
+    if(!a) return null;
+    try { const r = await fetch(a.img); if(!r.ok) return null; return await createImageBitmap(await r.blob()); }
+    catch(_e){ return null; }
+  };
+  // One verify round trip. The worker keeps each reference's features (LRU), so a
+  // reference is sent once; if it has since been evicted the worker names it in
+  // `missing` and the call is repeated once with just those.
+  const orbVerify = async (queryBlob, candIds) => {
+    if(!workerRef.current || !queryBlob || !candIds || !candIds.length) return null;
+    const S = orbSentRef.current;
+    let cands = candIds.slice();
+    // in parallel: a cold family is up to MAX_CANDS round trips, and one after
+    // another they cost more than the matching itself (measured ~2-3s vs ~0.3s)
+    // ⚠ Then ONE REFERENCE PER MESSAGE. The detector worker is shared with the
+    // live loop, which waits on every detect reply, so one message carrying a cold
+    // family's 8 ORB extractions froze the live badge for all of them — a few
+    // seconds on a phone, right when the next card is going under the camera.
+    const load = async (ids) => {
+      const got = await Promise.all(ids.map(id => refBitmap(id).then(b => ({ id, b }))));
+      for(const { id, b } of got){
+        const r = b ? await post("verify-ref", { ref: { id, bitmap: b } }, [b]) : null;
+        if(r && r.ok) S.add(id); else cands = cands.filter(c => c !== id);
+      }
+    };
+    await load(cands.filter(id => !S.has(id)));
+    for(let attempt = 0; attempt < 2 && cands.length; attempt++){
+      let q = null;
+      try { q = await createImageBitmap(queryBlob); } catch(_e){ return null; }
+      const d = await post("verify", { query: q, refs: [], cands, wantStrip: true }, [q]);
+      if(!d || d.error) return null;
+      if(!d.missing || !d.missing.length) return d;
+      for(const id of d.missing) S.delete(id);
+      await load(d.missing);
+    }
+    return null;
+  };
+  // rec (no detector) of the registered number line at three vertical offsets —
+  // a couple of pixels of registration error is the difference between a clean
+  // line and half of one
+  const ocrRecStrip = (strip) => new Promise((resolve) => {
+    const wk = ocrWorkerRef.current;
+    if(!wk || !strip || !strip.buffer || !ocrReadyRef.current){ resolve(null); return; }
+    const id = ++ocrMsgIdRef.current; ocrPendingRef.current.set(id, resolve);
+    const boxes = [-8, 0, 8].map(o => [0, Math.max(0, strip.lineY0 + o), strip.w, Math.min(strip.h, strip.lineY1 + o)]);
+    try { wk.postMessage({ type: "rec", id, buffer: strip.buffer, w: strip.w, h: strip.h, boxes }, [strip.buffer]); }
+    catch(e){ ocrPendingRef.current.delete(id); resolve(null); }
+  });
+  // VERIFY an identified snap: which PRINTING is in the photo? Shared by the snap
+  // tail and __scanBench so the bench measures exactly what ships. In: the rect
+  // as a JPEG blob plus the identity so far. Out: the identity after verification
+  // (and `info` for the trace). It never touches a row.
+  //  - the candidates are the pick, identify's own alternates, then the rest of the
+  //    character's printings in identify's order, capped at SCAN_ORB.MAX_CANDS
+  //  - a confident single winner is the card (✓); ORB may change the VERSION of the
+  //    character the name read found, but when a DECISIVE name read and the art
+  //    disagree about the CHARACTER the row says so (≈ with both) rather than
+  //    siding with either
+  //  - art twins tied with the winner go to the registered collector-number read;
+  //    unread, the answer stays within the tied group and keeps its ≈
+  const verifyIdentity = async ({ rectBlob, top, cands, idr, verUnsure, conf, lines }) => {
+    const out = { top, cands, verUnsure, conf, settled: false, changed: false, info: null };
+    const byId = scannerMetaMap();
+    const topM = top && top.id ? byId.get(top.id) : null;
+    if(!rectBlob || !topM) return out;
+    const lc = (s) => String(s || "").toLowerCase();
+    const ids = [], seen = new Set();
+    const add = (id) => { if(id && !seen.has(id) && byId.get(id) && scanArtById.has(id)){ seen.add(id); ids.push(id); } };
+    add(top.id);
+    for(const id of ((idr && idr.top3) || [])) add(id);
+    for(const n of ((idr && idr.names) || [])) if(lc(n.name) === lc(topM.name)) add(n.id);
+    for(const id of scanFamilyByText(scannerFamilyOf(topM.name), lines, (id) => byId.get(id))) add(id);
+    const candIds = ids.slice(0, SCAN_ORB.MAX_CANDS);
+    if(!candIds.length) return out;
+    const t0 = Date.now();
+    const res = await orbVerify(rectBlob, candIds);
+    const v = res && res.scores ? scanOrbVerdict(res.scores, res.ncc) : null;
+    out.info = { ms: Date.now() - t0, n: candIds.length, win: v ? v.win : null, inl: v ? v.top : 0,
+      sec: v ? v.second : 0, tw: v ? v.twins.length : 0, ok: v && v.confident ? 1 : 0, err: res ? 0 : 1 };
+    if(!v || !v.confident) return out;
+    const group = [v.win].concat(v.twins);
+    let pick = group.length === 1 ? v.win : null, how = pick ? "orb" : null;
+    if(!pick && res.strip && !/Location/.test((scanArtById.get(v.win) || {}).type || "")){
+      const rr = await ocrRecStrip(res.strip);
+      const cn = rr && rr.texts ? scanCnPick(rr.texts, group.map(id => { const t = scanTxtMeta(id) || {}; return { id, cn: t.cn, s: t.s }; })) : null;
+      if(cn){ pick = cn.id; how = "cn-" + cn.how; }
+      out.info.cn = rr && rr.texts ? rr.texts.slice(0, 3) : null;
+    }
+    out.info.pick = pick; out.info.how = how;
+    const decisive = conf === "lock" || conf === "high";
+    const sameChar = (id) => lc((byId.get(id) || {}).name) === lc(topM.name);
+    const candOf = (id) => { const m = byId.get(id) || {}; return { id, name: m.name, version: m.version, rarity: m.rarity, colourScore: null }; };
+    const promote = (id) => [candOf(id)].concat((cands || []).filter(c => c && c.id !== id)).slice(0, 6);
+    const beside = (id) => [(cands && cands[0]) || candOf(top.id), candOf(id)].concat((cands || []).slice(1).filter(c => c && c.id !== id)).slice(0, 6);
+    const nv = (id) => { const m = byId.get(id) || {}; return lc(m.name) + "|" + lc(m.version); };
+    if(pick){
+      if(pick === top.id || sameChar(pick) || !decisive){
+        out.cands = promote(pick); out.top = out.cands[0]; out.verUnsure = false;
+        out.conf = conf === "lock" ? "lock" : "high"; out.settled = true;
+        out.changed = pick !== top.id || !!verUnsure || conf !== out.conf;
+      } else {
+        out.cands = beside(pick); out.verUnsure = true; out.changed = true; out.info.clash = 1;
+      }
+      return out;
+    }
+    // art twins, number unread: the printing is one of `group`
+    if(group.indexOf(top.id) >= 0){
+      if(!verUnsure && group.some(id => id !== top.id && nv(id) === nv(top.id))){ out.verUnsure = true; out.changed = true; }
+      return out;
+    }
+    const CHASE = new Set(["Enchanted", "Iconic", "Epic", "Promo"]);
+    const lead = group.filter(id => !CHASE.has((byId.get(id) || {}).rarity)).concat(group)[0];
+    if(decisive && !group.some(sameChar)){ out.cands = beside(lead); out.verUnsure = true; out.changed = true; out.info.clash = 1; return out; }
+    out.cands = promote(lead); out.top = out.cands[0]; out.verUnsure = true; out.changed = true;
+    return out;
   };
   // Identify a rectified card with the number read GATED behind the name. The
   // collector-number det is the slowest op in the pipeline (a big upscaled-strip
@@ -18478,10 +18745,18 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   // (scripts/scanner/data/bench, gitignored) so accuracy is MEASURED on real
   // frames before a deploy instead of asserted from spot checks. No uploads,
   // no rows, no collection writes; inert unless called.
-  window.__scanBench = async (canvas) => {
+  // opts: {rect: true} = `canvas` is ALREADY a rectified card (a stored field
+  // crop), so detect+rectify is skipped; {band: true} forces the old inline
+  // subtitle band; {verify: false} skips ORB verify ({band:true, verify:false}
+  // is the pre-2026-09-26 snap path, for A/B runs over the same crops). The stages after the name read are the snap tail's own —
+  // qaCandsFrom, verifyIdentity, then the look only when verify was not
+  // confident — so the bench measures what ships, not a copy of it.
+  window.__scanBench = async (canvas, opts) => {
+    const o0 = opts || {};
     const out = { detected: false, detConf: 0 };
     let rect = null;
-    try {
+    if(o0.rect){ rect = canvas; out.detected = true; }
+    else try {
       const bmp = await createImageBitmap(canvas);
       const bw2 = bmp.width, bh2 = bmp.height;
       const r = await post("capture", { bitmap: bmp, outW: 1200, outH: 1680 }, [bmp]);
@@ -18504,47 +18779,65 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     try {
       const res = window.CardScanner.searchCrop(rect, 0, 0, rect.width, rect.height, 20, 0.12);
       const seen = new Set();
-      for(const x of res){ if(seen.has(x.card.id)) continue; seen.add(x.card.id); colour.push(x.card.id); if(colour.length >= 10) break; }
+      for(const x of res){ if(seen.has(x.card.id)) continue; seen.add(x.card.id);
+        colour.push({ id: x.card.id, score: Math.round((x.color || 0) * 1000) / 1000 }); if(colour.length >= 10) break; }
     } catch(_e){}
+    const colIds = colour.map(c => c.id);
     let lines = [], idr = {};
+    const t0 = Date.now();
     try {
-      // bench replays the queue-idle snap (band ON) — the flow-critical
-      // burst path skips the band, but accuracy analysis wants the full read
-      const o = await ocrCardRegions(rect, { doName: true, doNumber: false, doBand: true });
+      const o = await ocrCardRegions(rect, { doName: true, doNumber: false, doBand: !!o0.band });
       lines = o.lines || [];
-      idr = window.CardScanner.identify({ lines, cnNum: null, cnSet: null, colourRanked: colour }) || {};
+      out.nameMs = o.nameMs || 0;
+      idr = window.CardScanner.identify({ lines, cnNum: null, cnSet: null, colourRanked: colIds }) || {};
     } catch(_e){}
-    out.primary = { top: (idr.top3 || [])[0] || null, conf: idr.conf || null, verBy: idr.verBy || null, nLines: lines.length };
-    try {
-      const altRect = out.detected ? rawGuideCrop(canvas) : null;   // same alternate crop the deferred look uses
-      if(altRect){
-        const o2 = await ocrCardRegions(altRect, { doName: true, doNumber: false });
-        const extra = (o2.lines || []).filter(l => lines.indexOf(l) < 0);
+    const nameRead = lines.some(l => /[A-Za-z]{4,}/.test(l));
+    let cands = qaCandsFrom(idr, colIds, colour, nameRead);
+    let top = cands[0] || null;
+    let conf = idr.conf || "low";
+    let ver = ((idr.verBy !== "body") && qaVerTied(idr.names)) || !!idr.printUnsure;
+    out.primary = { top: top ? top.id : null, conf, ver, verBy: idr.verBy || null, nLines: lines.length, ms: Date.now() - t0 };
+    let decided = false;
+    if(top && nameRead && o0.verify !== false){
+      const rectBlob = await canvasToBlob(rect, 1000);
+      const r = await verifyIdentity({ rectBlob, top, cands, idr, verUnsure: ver, conf, lines });
+      out.verify = r.info;
+      decided = r.settled || !!(r.info && r.info.ok);
+      top = r.top; cands = r.cands; ver = r.verUnsure; conf = r.conf;
+    }
+    // the look, as the snap tail runs it: only when verify was not confident
+    if(!decided && o0.look !== false && (ver || conf !== "high")){
+      try {
+        const extra = [];
+        const ob = await ocrCardRegions(rect, { doName: true, doNumber: false, doBand: true });
+        for(const l of ob.lines || []) if(lines.indexOf(l) < 0) extra.push(l);
+        const altRect = (!o0.rect && out.detected) ? rawGuideCrop(canvas) : null;
+        if(altRect){ const o2 = await ocrCardRegions(altRect, { doName: true, doNumber: false, doBand: true });
+          for(const l of o2.lines || []) if(lines.indexOf(l) < 0 && extra.indexOf(l) < 0) extra.push(l); }
         if(extra.length){
           const merged = lines.concat(extra);
-          const idr2 = window.CardScanner.identify({ lines: merged, cnNum: null, cnSet: null, colourRanked: colour }) || {};
+          const idr2 = window.CardScanner.identify({ lines: merged, cnNum: null, cnSet: null, colourRanked: colIds }) || {};
+          const sameChar = top && idr2.top3 && idr2.top3.length && (((scannerMetaMap().get(idr2.top3[0]) || {}).name || "") === (top.name || ""));
           out.look = { top: (idr2.top3 || [])[0] || null, conf: idr2.conf || null, verBy: idr2.verBy || null, nExtra: extra.length };
-          if(idr2.conf === "high") idr = idr2;
+          if((idr2.conf === "high" && (sameChar || (idr2.nameMargin ?? 0) >= 0.15)) || idr2.source === "rescue"){
+            idr = idr2; lines = merged; cands = qaCandsFrom(idr, colIds, colour, true); top = cands[0] || top;
+            conf = idr.conf; ver = ((idr.verBy !== "body") && qaVerTied(idr.names)) || !!idr.printUnsure;
+          }
         }
-      }
-    } catch(_e){}
-    // idle-time COLLECTOR-NUMBER stage (the deferred look's finisher): when the
-    // answer is still version-tied or sub-high, read the cn off the rectify —
-    // set+number is an exact key that overrides both the shortest-name version
-    // fallback AND the flavor-attribution hijack. Slow (~9s on phone) but the
-    // idle look has no cadence to protect.
-    try {
-      const tied = ((idr.verBy !== "body") && qaVerTied(idr.names)) || !!idr.printUnsure;
-      if(out.detected && (tied || idr.conf !== "high")){
-        const num = await ocrCardRegions(rect, { doName: false, doNumber: true });
-        if(num && num.cnNum){
-          const idr3 = window.CardScanner.identify({ lines, cnNum: num.cnNum, cnSet: num.cnSet, colourRanked: colour }) || {};
-          out.cn = { num: num.cnNum, set: num.cnSet || null, top: (idr3.top3 || [])[0] || null, conf: idr3.conf || null, src: idr3.source || null };
-          if(idr3.source === "cn+name" || (idr3.source === "cn" && idr3.conf !== "low")) idr = idr3;
-        } else { out.cn = { num: null }; }
-      }
-    } catch(_e){}
-    out.final = { top: (idr.top3 || [])[0] || null, conf: idr.conf || null, verBy: idr.verBy || null };
+        if(out.detected && (ver || conf !== "high")){
+          const num = await ocrCardRegions(rect, { doName: false, doNumber: true });
+          if(num && num.cnNum){
+            const idr3 = window.CardScanner.identify({ lines, cnNum: num.cnNum, cnSet: num.cnSet, colourRanked: colIds }) || {};
+            out.cn = { num: num.cnNum, set: num.cnSet || null, top: (idr3.top3 || [])[0] || null, conf: idr3.conf || null, src: idr3.source || null };
+            if(idr3.source === "cn+name" || (idr3.source === "cn" && idr3.conf !== "low")){
+              idr = idr3; cands = qaCandsFrom(idr, colIds, colour, true); top = cands[0] || top; conf = idr.conf; ver = false;
+            }
+          }
+        }
+      } catch(_e){}
+    }
+    out.final = { top: top ? top.id : null, conf, ver, check: !!top && !ver && (conf === "high" || conf === "lock") };
+    out.ms = Date.now() - t0;
     return out;
   };
   const undoLast = () => {
@@ -18787,6 +19080,28 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       out.printing = out.prN || out.prF || null;
       return out;
     } catch(_e){ return out; }
+  };
+  // A snap row's candidates: identify's top-3, then colour's picks — but colour is
+  // near-random on a camera photo (41% right version, and a few "hub" cards sit
+  // near the top of nearly every query: Cinderella - Dream Come True and friends
+  // filled the alternates of most rows), so it only fills slots with printings
+  // of a character the name read found. With no name read at all it is the only
+  // guess going, and stays as the editor's suggestions. Shared by runQaJob and
+  // __scanBench.
+  const qaCandsFrom = (theIdr, colIds, colour, nameRead) => {
+    const byId = scannerMetaMap();
+    const t3 = (theIdr && theIdr.top3) || [];
+    const lc = (s) => String(s || "").toLowerCase();
+    const names = new Set(t3.map(id => lc((byId.get(id) || {}).name)).filter(Boolean));
+    const colFill = (nameRead && names.size) ? (colIds || []).filter(id => names.has(lc((byId.get(id) || {}).name))) : (colIds || []);
+    const seenL = new Set(), out = [];
+    for(const id of t3.concat(colFill)){
+      const m = byId.get(id); if(!m) continue;
+      const k = (m.name || "") + "|" + (m.version || ""); if(seenL.has(k)) continue; seenL.add(k);
+      out.push({ id, name: m.name, version: m.version, rarity: m.rarity, colourScore: ((colour || []).find(c => c.id === id) || {}).score ?? null });
+      if(out.length >= 6) break;
+    }
+    return out;
   };
   // One identity patch for a QA row: guess/img/price + the printing model + a
   // light candidate list (the inline editor's tappable alternates). Every
@@ -19074,11 +19389,12 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       // batch: 0/27 snaps ever saw a text lock; no locks → no instant rows).
       job.holdsOcr = true; qaOcrHoldRef.current++;
       try {
-        // adaptive band: at deliberate pacing (queue empty) the ~4×-costlier
-        // subtitle-band read runs inline so the version is right at row-land;
-        // during a burst it's skipped (the deferred look re-reads WITH band at
-        // queue-idle) so the queue can never backlog like batch 6 did.
-        const o = await ocrCardRegions(rect, { doName: true, doNumber: false, doBand: !qaJobsRef.current.q.length });
+        // NO subtitle band on the snap path (2026-09-26). It cost 2-3x the name
+        // read (snap-to-row median 6-12s on phones, p90 up to 52s) to guess a
+        // VERSION that ORB verify now settles from the card's own art in the tail
+        // (see verifyIdentity). The band still runs in the deferred look, when
+        // verify could not settle the printing.
+        const o = await ocrCardRegions(rect, { doName: true, doNumber: false, doBand: false });
         ocrLines = o.lines || []; tmr.nameMs = o.nameMs || 0;
         idr = window.CardScanner.identify({ lines: ocrLines, cnNum: null, cnSet: null, colourRanked: colIds }) || {};
       } catch(_e){}
@@ -19087,19 +19403,13 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     if(!idr.source) idr = (window.CardScanner.identify ? window.CardScanner.identify({ lines: ocrLines, cnNum, cnSet, colourRanked: colIds }) : {}) || {};
     // 4. resolve candidates + finalize the row NOW (the cn refinement never holds it)
     const byId = scannerMetaMap();
-    const candsOf = (theIdr) => {
-      const orderedIds = (theIdr.top3 && theIdr.top3.length) ? theIdr.top3.concat(colIds) : colIds;
-      const seenL = new Set(), out = [];
-      for(const id of orderedIds){ const m = byId.get(id); if(!m) continue; const k = (m.name||"")+"|"+(m.version||""); if(seenL.has(k)) continue; seenL.add(k);
-        out.push({ id, name: m.name, version: m.version, rarity: m.rarity, colourScore: (colour.find(c => c.id === id) || {}).score ?? null });
-        if(out.length >= 6) break; }
-      return out;
-    };
+    const candsOf = (theIdr) => qaCandsFrom(theIdr, colIds, colour, (ocrLines || []).some(l => /[A-Za-z]{4,}/.test(l)));
     let cands = candsOf(idr);
     if(lock && idr.source === "live-lock" && (!cands.length || cands[0].id !== lock.id))
       cands = [{ id: lock.id, name: lock.name, version: lock.version, rarity: lock.rarity, colourScore: null }].concat(cands).slice(0, 6);
     let top = cands[0] || null;
     const rowConf = (lock && idr.source === "live-lock") ? "lock" : (idr.conf || "low");
+    let curConf = rowConf;   // what the row shows NOW — verify can raise it after row-land
     // version honesty: conf keys on the CHARACTER. When the character's versions
     // tied on the name score AND the body-text tiebreak (scanner.js) abstained,
     // the version shown is a colour guess — the row says ≈ and keeps the alts.
@@ -19201,8 +19511,29 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
             .then(sid => { if(sid != null){ updateQaRow(rid, { sampleId: sid, uploadPredId: upPred }); flushPendingLabel(rid, sid, upPred); } })
             .catch(() => {});
         } catch(_e){}
-        const unsure = verUnsure || rowConf === "low" || rowConf === "medium" || !(ocrLines || []).length;
-        if(!(unsure && ocrReadyRef.current && window.CardScanner.identify)) return;
+        // ORB VERIFY first, for EVERY identified row: which printing is actually in
+        // the photo (verifyIdentity). It confirms (≈ → ✓), corrects a version, or
+        // abstains — and only a row it could not settle pays for the look below.
+        // The row's flywheel sample follows a change through updateQaRow's
+        // auto-relabel, exactly as a look's does.
+        // decided = ORB was confident. Then the look below must NOT run even when an
+        // art-twin tie is still open: its name re-read can only flip ORB's version
+        // back to a text guess, and its detector-based number read lands ~10% of
+        // the time against the registered read's ~51%.
+        let orbDecided = false;
+        const doVerify = async () => {
+          if(unread || !rectBlob || !top) return;
+          const r = await verifyIdentity({ rectBlob, top, cands, idr, verUnsure, conf: curConf, lines: ocrLines });
+          if(r.info){
+            traceRef.current.n.snapVerifies = (traceRef.current.n.snapVerifies || 0) + 1;
+            trc("snap-verify", Object.assign({ was: top.id }, r.info));
+          }
+          orbDecided = r.settled || !!(r.info && r.info.ok);
+          if(!r.changed) return;
+          top = r.top; cands = r.cands; verUnsure = r.verUnsure; curConf = r.conf;
+          updateQaRow(rid, { ...qaRowFields(top, cands), conf: curConf, ver: verUnsure,
+            alts: (!verUnsure && (curConf === "lock" || curConf === "high")) ? "" : cands.slice(1, 3).map(qaLabelOf).filter(Boolean).join(", ") });
+        };
         const doLook = async () => {
           if(!ocrReadyRef.current || !window.CardScanner.identify) return;
           trc("look-run", { lock: lock ? 1 : 0 });   // fires whether or not the look ACCEPTS — proves drains execute
@@ -19292,12 +19623,19 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
             }
           }
         };
+        const work = async () => {
+          try { await doVerify(); } catch(_e){}
+          const unsure = verUnsure || curConf === "low" || curConf === "medium" || !(ocrLines || []).length;
+          if(!orbDecided && unsure && ocrReadyRef.current && window.CardScanner.identify) await doLook();
+        };
+        // verify and look share one idle slot: both would otherwise hold the CV
+        // worker against the next snap's rectify in a burst
         if(!qaJobsRef.current.q.length && !qaJobsRef.current.running && !qaLookBusyRef.current){
           qaLookBusyRef.current = true;
-          try { await doLook(); } finally { qaLookBusyRef.current = false; drainQaLooks(); }
+          try { await work(); } finally { qaLookBusyRef.current = false; drainQaLooks(); }
         } else {
           const P = qaLookPendRef.current;
-          P.push(doLook);
+          P.push(work);
           if(P.length > 40) P.shift();   // runaway backstop; oldest look is the least useful
         }
       } catch(_e){ qaLookBusyRef.current = false; }
@@ -57339,6 +57677,11 @@ const PATH_TO_VIEW = (() => {
   // the canonical VIEW_PATHS entry on arrival, so these never persist.
   m["/help"] = "faq";
   m["/faq"] = "faq";
+  // /scan opens the card scanner over the home page — a link someone sends, the
+  // home-screen shortcut (manifest.json), or a modifier-click on the Scan tab.
+  // The scanner is a modal, not a view, so the path maps to home; the landing
+  // rewrites the address to "/" before opening (LANDED_ON_SCAN, in App).
+  m["/scan"] = "home";
   return m;
 })();
 function parseViewFromPath(pathname){
@@ -57353,6 +57696,9 @@ function parseViewFromPath(pathname){
 // the address to "/". With nothing said, that reads as the link being broken or
 // as the page having been taken away without notice. Captured at load, before
 // the rewrite; App says so once.
+const LANDED_ON_SCAN = (() => {
+  try { return (window.location.pathname.replace(/\/$/, "") || "/") === "/scan"; } catch { return false; }
+})();
 const LANDED_ON_UNKNOWN_PATH = (() => {
   try {
     const p = window.location.pathname.replace(/\/$/, "") || "/";
@@ -57988,6 +58334,14 @@ function App(){
   viewRef.current = view;
   useEffect(() => {
     if(LANDED_ON_UNKNOWN_PATH) flashToast("That page doesn't exist — here's the home page instead.", 5000);
+  }, []);
+  // A /scan landing opens the scanner. The address becomes "/" FIRST, so the
+  // entry openScan pushes sits on the home page and Back closes the scanner onto
+  // it — not onto a stale /scan that would then read as a page of its own.
+  useEffect(() => {
+    if(!LANDED_ON_SCAN) return;
+    try { window.history.replaceState(window.history.state, "", "/" + window.location.search + window.location.hash); } catch {}
+    openScan();
   }, []);
   // Analytics sub-tab, mirrored into the URL (?a=<sub>) so a refresh keeps you
   // on the tab and Back/Forward step between tabs you visited. A trade share
@@ -60623,15 +60977,17 @@ function App(){
   // the real name out of reach just because the visible text got shorter).
   const TABS_BOTTOM = [["screener","Screener"],["history","Price Graphing","Graphs"],["market","Analytics"],["calendar","Calendar"]];
   const renderTab = ([v,l,short]) => {
-    // The scanner is a modal, not a routed view — there's no URL to hand a
-    // modifier-click, so it's an honest <button> instead of an <a href>.
-    if(v === "scan") return html`<button key=${v}
-      class=${"nav-tab nav-tab--scan"+(scanOpen?" active":"")} type="button"
-      onClick=${openScan}
+    // The scanner is a modal, but /scan opens it (LANDED_ON_SCAN), so the tab
+    // is an <a href> like every other: a modifier-click opens the scanner in a
+    // new tab and "Copy link address" hands someone the camera directly.
+    if(v === "scan") return html`<a key=${v}
+      class=${"nav-tab nav-tab--scan"+(scanOpen?" active":"")}
+      href="/scan"
+      onClick=${navHandler(openScan)}
       title="Scan a card with your camera (beta)" aria-label="Scan a card (beta)">
       <span class="nav-tab-icon">${NAV_ICONS.scan}<span class="nav-tab-beta" aria-hidden="true">BETA</span></span>
       <span class="nav-tab-label">${l}</span>
-    </button>`;
+    </a>`;
     return html`<a key=${v} class=${"nav-tab"+(view===v?" active":"")}
       href=${VIEW_PATHS[v] || "/"}
       onClick=${navHandler(()=>onTabClick(v))}

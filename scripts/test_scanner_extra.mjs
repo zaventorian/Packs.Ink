@@ -20,7 +20,7 @@ import { loadScanner } from "./scanner/replay_common.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
-const HTML = fs.readFileSync(path.join(REPO, "Index.html"), "utf8");
+const HTML = fs.readFileSync(path.join(REPO, "Index.html"), "utf8").replace(/\r\n/g, "\n");   // a Windows checkout is CRLF
 
 let fails = 0;
 const check = (cond, msg) => { console.log((cond ? "  ok    " : "  FAIL  ") + msg); if (!cond) fails++; };
@@ -159,11 +159,20 @@ check(probe.every((l) => (csA.rankNames(l, 3).top[0] || {}).id === (csB.rankName
     "the scanner modal hands the supplement over right after the index loads, before text + camera");
   check(!/const META = window\.CardScanner\.state\.cards/.test(HTML),
     "no review path builds its own id map off the colour index alone");
-  check((HTML.match(/const byId = scannerMetaMap\(\);/g) || []).length === 3,
-    "all three review paths resolve ids through scannerMetaMap");
+  // the three review paths (ambient confirm, capture, runQaJob) plus the verify
+  // step and the candidate builder, which read the same lookup
+  check((HTML.match(/const byId = scannerMetaMap\(\);/g) || []).length >= 3
+    && /const byId = scannerMetaMap\(\);\s+const chosen = byId\.get\(topId\)/.test(HTML),
+    "every review path resolves ids through scannerMetaMap");
   check(/select\("id,name,code,released_at"\)/.test(HTML) && /select:"id,name,code,released_at"/.test(HTML),
     "both catalog reads of `sets` carry the printed code");
   check(/_setCodeById = code;/.test(HTML), "setSetReleaseDates stamps the set-code map");
+  // a /scan link or the app shortcut opens the scanner while the page is still
+  // loading; scanner.js is deferred, so a bare check read "Scanner unavailable"
+  const wait = HTML.indexOf("!window.CardScanner && !cancelled && t < 200; t++) await new Promise");
+  const bail = HTML.indexOf('if(!window.CardScanner){ setPhase("noindex"); setErr("scanner module not loaded"); return; }');
+  check(wait > 0 && bail > wait && bail - wait < 400,
+    "the scanner WAITS for its deferred module before declaring it missing (a /scan landing opens it mid-load)");
 }
 
 console.log(fails ? `\n${fails} failed` : "\nall passed");
