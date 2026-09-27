@@ -106,9 +106,11 @@ const POISON = [
   // A puzzle, also card-named.
   P({ name: "Elsa - The Fifth Spirit", is_puzzle: true, product_type: "Puzzle",
       low_price: null, market_price: null, set_id: "__puzzles__", tcgplayer_product_id: 912001932 }),
-  // A retailer exclusive — a real box, but no TCGplayer price to show.
-  P({ name: "Best Buddies Bundle", is_exclusive: true, product_type: "Bundle",
-      low_price: null, market_price: null, set_id: null, tcgplayer_product_id: 930000001 }),
+  // A retailer exclusive — a real box, but no TCGplayer price to show. (A
+  // stand-in: the first real one, the Best Buddies Bundle, is a priced
+  // TCGplayer row since 2026-09-24 and SHOULD be found.)
+  P({ name: "Test Retailer Bundle", is_exclusive: true, product_type: "Bundle",
+      low_price: null, market_price: null, set_id: null, tcgplayer_product_id: 930000999 }),
   // A collectible that somehow CARRIES a price. Nothing produces this today —
   // the static catalogs hardcode null — so without it the two guards overlap
   // completely and isUnpricedSealed is never tested on its own. It stops being
@@ -143,7 +145,7 @@ console.log("1. the poison rows are unreachable by any query");
       'searching "' + bad.name + '" must not return that row');
   }
   // And by the bare character name, which is how somebody actually searches.
-  for (const q of ["mickey", "belle", "elsa", "best buddies", "brave little tailor",
+  for (const q of ["mickey", "belle", "elsa", "retailer bundle", "brave little tailor",
                     "ariel", "whoseit"]) {
     ok(find(q).length === 0, '"' + q + '" must match no sealed product');
   }

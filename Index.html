@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=494">
+<link rel="stylesheet" href="styles.css?v=495">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -15869,24 +15869,20 @@ const SEALED_PUZZLES = [
 //
 // ⚠ This is the one static catalog whose rows CAN become real TCGplayer
 // products: a retailer exclusive usually reaches the secondary market, and the
-// daily loader would then bring in a second row for the same box under its own
-// set. When that happens, DELETE the entry here rather than keeping both — two
-// tiles for one product is worse than the owned marks it drops, and the real
-// row is the one that carries a price. `scripts/reconcile_catalog.py --watch`
-// is what reports the new listing (`missing_sealed`).
+// daily loader then brings in a second row for the same box under its own set.
+// When that happens, DELETE the entry here rather than keeping both — two tiles
+// for one product is worse than the owned marks it drops, and the real row is
+// the one that carries a price and TCGplayer's studio photo. A retired `n` is
+// never reused, or an old owned mark would attach itself to a different box.
+//
+// ⚠ NOTHING flags that moment. The daily sealed loader absorbs the new listing
+// the same day it appears, so `reconcile_catalog.py --watch` never sees it as
+// `missing_sealed` and the two tiles sit side by side in silence. When one of
+// these reaches TCGplayer, look for it by name in sealed_products.
+//
+// Retired: n:1 Best Buddies Bundle (Costco, Sep 2026). TCGplayer listed it on
+// 2026-09-24 as 719823, under Wilds Unknown; nobody had marked n:1 owned.
 const SEALED_EXCLUSIVES = [
-  {
-    n: 1,
-    name: "Best Buddies Bundle",
-    retailer: "Costco",
-    date: "Sep 2026",
-    type: "Bundle",
-    art: "Logos/sealed/best-buddies-bundle.jpg",
-    // Printed on the box, verbatim: "1 CARD PORTFOLIO + 6 WILDS UNKNOWN BOOSTER
-    // PACKS + 2 SPECIAL EDITION PROMO CARDS + 1 PIN". The portfolio holds 252
-    // cards; the promos are 18/PD1 and 19/PD1 and the pin is LORCANA_PINS n:45.
-    contents: "Card portfolio (252 cards) · 6 Wilds Unknown booster packs · 2 promo cards (18/PD1, 19/PD1) · 1 pin",
-  },
 ].map(p => ({
   tcgplayer_product_id: 930000000 + p.n,
   name: p.name,
@@ -16000,7 +15996,7 @@ const LORCANA_PINS = [
   {n:40, name:"Ursula - Deceiver",                         source:"League - Season of Villainy",      date:"Sep 2026"},
   // The first pin that comes in a RETAIL BOX rather than an event kit, a
   // convention or a prize wall — the Costco-exclusive Best Buddies Bundle
-  // (SEALED_EXCLUSIVES n:1), which also carries the 18/PD1 + 19/PD1 promos.
+  // (TCGplayer 719823), which also carries the 18/PD1 + 19/PD1 promos.
   // Its photo is a cut from the announcement shot rather than a studio one, so
   // it is worth re-cutting from a better source later; it is in storage as
   // pins/45.png like every other entry, so that is a re-upload, not a code edit.
@@ -25374,8 +25370,11 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <div class="sealed-detail-head">
         <div class="sealed-detail-img-wrap">
+          ${/* The stored URL is TCGplayer's 200px thumbnail, and this well is 176px
+                (a playmat's, 300): soft on any phone. The 400px size is the same
+                photo. tcgImgSized leaves any other URL, our own photos included, alone. */ ""}
           ${product.image_url
-            ? html`<span class="sealed-detail-img"><${ProductPhoto} src=${product.image_url} glyph=${mat ? "mat" : "box"} size=${44}
+            ? html`<span class="sealed-detail-img"><${ProductPhoto} src=${tcgImgSized(product.image_url)} glyph=${mat ? "mat" : "box"} size=${44}
                 noCut=${!!product.own_photo}/></span>`
             : html`<div class="sealed-detail-img-fallback">${product.name||"Sealed product"}</div>`}
         </div>
