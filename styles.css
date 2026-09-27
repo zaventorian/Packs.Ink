@@ -885,24 +885,28 @@ body:has(.cards-bulk-bar--docked) .cards-toast{bottom:calc(78px + env(safe-area-
 .cards-bulk-menu-sub{font-size:11px;color:var(--text-muted);line-height:1.3;}
 .cards-bulk-picker-list{display:flex;flex-direction:column;gap:1px;}
 
-/* The little checkbox button overlaid on each card tile. Hidden by default
-   in grid mode and revealed on hover; once selected, stays visible. */
+/* The little checkbox button overlaid on each card tile. ALWAYS on screen,
+   faint at rest, full on hover / keyboard focus / once selected (Zaven,
+   2026-09-26). It used to be opacity 0 until hover, so on a touch screen it
+   was invisible but still took the tap: tapping that corner of a card
+   selected it instead of opening it. */
 .card-tile-check{position:absolute;top:6px;right:6px;width:30px;height:30px;
   padding:0;display:inline-flex;align-items:center;justify-content:center;
   border:1.5px solid rgba(255,255,255,0.85);background:rgba(0,0,0,0.45);
   color:#fff;border-radius:6px;font-size:17px;font-weight:700;cursor:pointer;
-  z-index:4;opacity:0;transition:opacity 0.1s,background 0.1s,border-color 0.1s;
+  z-index:4;opacity:0.4;transition:opacity 0.1s,background 0.1s,border-color 0.1s;
   line-height:1;}
-/* The checkbox now sits where the owned badge does, so the badge steps down
-   to make room — but only while the checkbox is actually on screen (hover, or
-   selected), otherwise every resting tile would carry a 36px hole under its
-   top edge. Needs the doubled class to outrank `.card-tile .owned-badge`,
-   which is equally specific but declared later in this file. */
-.card-tile.card-tile--selectable .owned-badge{transition:top 0.1s;}
-.card-tile.card-tile--selectable:hover .owned-badge,
-.card-tile.card-tile--selectable:focus-within .owned-badge,
-.card-tile.card-tile--selectable:has(.card-tile-check.on) .owned-badge{top:42px;}
-.card-tile:hover .card-tile-check,
+/* The checkbox sits where the owned badge does, so on a selectable tile the
+   badge lives just below it. It used to step down only while the checkbox was
+   showing, which made the badge jump on every hover; with the box always there
+   it simply stays put. Needs the doubled class to outrank `.card-tile
+   .owned-badge`, which is equally specific but declared later in this file. */
+.card-tile.card-tile--selectable .owned-badge{top:42px;}
+/* Hover only where hover is real: a touch screen keeps :hover on the last
+   tile tapped, which would leave one box at full strength for no reason. */
+@media (hover:hover){ .card-tile:hover .card-tile-check{opacity:1;} }
+.card-tile:focus-visible .card-tile-check,
+.card-tile-check:focus-visible,
 .card-tile-check.on{opacity:1;}
 .card-tile-check.on{background:var(--accent);border-color:var(--accent);}
 .card-tile.is-selected{box-shadow:0 0 0 2px var(--accent);}
@@ -1541,10 +1545,6 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
   letter-spacing:1.5px;text-transform:uppercase;padding:10px 34px;border-radius:24px;
   background:var(--accent);border-color:var(--accent);color:var(--bg-solid);}
 .dice-roll:hover{background:var(--accent);filter:brightness(1.08);}
-.dice-retie{font-family:'Cinzel',serif;font-weight:600;font-size:12px;
-  letter-spacing:0.8px;padding:9px 16px;border-radius:24px;
-  color:var(--accent);border-color:var(--border-accent);background:transparent;}
-.dice-retie:hover{background:var(--accent-glow);}
 /* Tray */
 .dice-tray{display:flex;flex-wrap:wrap;justify-content:center;gap:10px 14px;width:100%;}
 .dice-die{flex:1 1 132px;max-width:200px;min-width:0;display:flex;flex-direction:column;
@@ -1596,12 +1596,6 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
   gap:12%;width:42%;height:42%;}
 .dice-pip{display:block;border-radius:50%;background:transparent;}
 .dice-pip.on{background:var(--text);box-shadow:inset 0 1px 1px rgba(0,0,0,0.35);}
-/* The winner of a turn-order roll. Suppressed while a tie stands — a tie is
-   reported, never silently awarded to the leftmost seat. */
-.dice-die.is-high .dice-shape-sheen{stroke-opacity:1;stroke-width:4.5;}
-.dice-die.is-high .dice-shape-svg{filter:drop-shadow(0 6px 8px rgba(0,0,0,0.26))
-  drop-shadow(0 0 9px var(--accent));}
-.dice-die.is-high .dice-slot{color:var(--accent);}
 /* Dice tumble; the coin flips end over end (rotateX under the button's
    perspective). Both run once per roll — the wrapper is re-keyed per roll
    so a mid-air click restarts the animation. */

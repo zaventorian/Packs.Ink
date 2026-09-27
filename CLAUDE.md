@@ -2216,6 +2216,11 @@ The FAQ ("Tracking your collection" section, Help bubble `?`) explains this user
   top-right (`.dice-stage` carries the `position:relative` and a 48px top pad so a full row of
   type chips can never wrap under it), and stays an `<a href="/analytics?a=lore">` + `navHandler`
   so modifier-click still opens a tab — the Lore Tracker has a real route, unlike the Scan tab.
+- **The Dice Tray reads a TOTAL and never names a winner** (Zaven, 2026-09-26). It used to say
+  "Player 2 goes first with 4", light up that die, and offer "Reroll the tie" with a roll-off mode
+  behind it. All of that is gone: players read their own dice, and tapping one rerolls just that
+  one. The per-seat "Player N" labels stay, because they only say whose die is whose. Don't bring
+  back a verdict line or a highlight.
 - **The tab bar also renders a right-aligned "Sealed ↗" pointer chip** (`.market-subtab-ext`) — a muscle-memory bridge to the Screener's Sealed mode. It and the `?a=sealed` redirect share App's `openScreenerSealed` callback (writes the two screener localStorage flags, then `setView("screener")` — must run before the Screener mounts, since its mode flags are read in `useState` initializers).
 - **Coachmark fixes that shipped with this work** (tour infra, not Analytics-specific): an open auto-tour now DISMISSES on top-nav view change instead of following the user into a view where its selectors match nothing (context-free floating card; dismissal does NOT stamp `sectionTourSeen` — abort semantics). And the tip re-measures on a slow keepalive for its whole life instead of stopping 1.1s after mount, so async data reflowing the page can't strand the spotlight.
 - Dead code cleaned with it: the unused v1 `CompareView` (absorbed into Card Averages long ago), `.trade-intro`, `.card-avg-chip-reset`, `.sim-kind-*` CSS.
@@ -2570,6 +2575,8 @@ The orphaned `.tournament-result-*` and `.tr-*` rule clusters were already gone 
 ## Cards-tile magnify button + enlarged-card overlay
 
 Every `CardTileImpl` — browse mode AND deck-builder card browser — has a tiny `.tile-magnify-btn` (22×22, inline Lucide-style SVG circle+line) in the bottom-left of the image wrap. Opens `openEnlargedCard(group)` directly, skipping the detail-modal popup. Hover-only on desktop (`opacity:0; pointer-events:none` resting → `opacity:0.9; pointer-events:auto` on `.card-tile:hover` / `:focus-within`); always-visible on touch via `@media (hover:none)`. In deck mode where the `⤢` expand button is also at `bottom:6px; left:6px`, the `.card-tile:has(.tile-expand-btn) .tile-magnify-btn{bottom:42px}` rule lifts the magnifier above it so both are tappable. **Don't re-gate the magnify on `openModal` truthy** — the initial implementation gated it that way assuming deck mode didn't pass `openModal`, but it does (the expand button needs it), so the gate was a no-op AND a stale-comment trap. Current code unconditionally wires `onMagnify` and the JSX `${onMagnify && ...}` is the always-truthy presence check.
+
+**The select checkbox (`.card-tile-check`, top-right, Cards tab only) is ALWAYS on screen — faint (opacity 0.4) at rest, full on hover, keyboard focus or once selected** (Zaven, 2026-09-26). It used to be opacity 0 until hover, which on a touch screen made it invisible but still tappable: tapping that corner of a card selected it instead of opening it. Two consequences: the owned badge now sits permanently just below it on selectable tiles (`top:42px`; it used to jump down on every hover), and the hover rule is wrapped in `@media (hover:hover)`, because a touch screen keeps `:hover` on the last tile tapped.
 
 **Don't re-introduce the double-click path.** Pre-fix the same intent was wired as `onDoubleClick` on the tile, with a `packsink:close-card-detail` window event the detail modal listened for to dismiss itself. Unreliable because the SINGLE-click that fires first opens the detail modal — on slow devices the modal flashes and the dblclick lands on a freshly-rendered tile underneath. The magnify-button affordance avoids the race.
 
@@ -7353,11 +7360,11 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
   sit on the Pins & Counters boards: `collectible_boards` (owner-only RLS, grants in the same
   file) + `get_shared_collectible_boards` for viewers. Safe to ship the client first — until it
   lands, boards save on the device and the tab says so. See "Pins & Counters".
-- **`supabase/137_amazon_stock_checks.sql`** — **HALF-APPLIED: re-paste it.** Probed 2026-09-26 with the
-  public key: the table exists, but `select=msrp` answers `42703 column amazon_stock_checks.msrp does not
-  exist`, so the in-place extension below never reached the live database. The file is idempotent, so
-  pasting the whole thing again is the upgrade. Until then the checklist's MSRP / Over controls can't
-  save, and stock rulings still work (the client drops the two columns on 42703). Original entry: the manual Amazon stock
+- ~~`supabase/137_amazon_stock_checks.sql`~~ — **FULLY APPLIED 2026-09-26; verified.** Until then it was
+  only half on the live database: `select=msrp` answered `42703 … msrp does not exist`, so the in-place
+  extension below had never reached it, whatever this entry said. Zaven re-pasted the (idempotent) file
+  and the same read with the public key now returns rows with `msrp` and `price_over`. The lesson: an
+  in-place extension of an applied migration needs its own paste and its own probe. Original entry: the manual Amazon stock
   **and price** check: anon-readable, graded-admin writes. **Extended in place 2026-09-12**
   with `msrp` + `price_over` (the 20%-above-MSRP ceiling) rather than followed by a new
   migration — the whole file is idempotent (`create table if not exists`, `add column if not

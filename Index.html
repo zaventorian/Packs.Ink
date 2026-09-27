@@ -36989,10 +36989,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
 }
 
 // ── Dice Tray ───────────────────────────────────────────────────────────
-// A table helper rather than a market calculator: roll for turn order, flip
-// a coin, throw rock–paper–scissors. Every die keeps its SLOT (one per
-// player, left to right) — a reroll never reshuffles which die belongs to
-// whom, which is the whole point when six people are deciding who goes first.
+// A table helper rather than a market calculator: roll dice, flip a coin,
+// throw rock–paper–scissors. Every die keeps its SLOT (one per player, left to
+// right) — a reroll never reshuffles which die belongs to whom.
+//
+// It reads out a TOTAL and never names a winner (Zaven, 2026-09-26). It used to
+// announce "Player 2 goes first with 4", light up that die and offer "Reroll the
+// tie" — a verdict nobody asked for, on a tool that is just as often used to add
+// dice up. Players read their own dice; tapping one rerolls it.
 const DICE_KINDS = [
   {k:"coin", label:"Coin", sides:2},
   {k:"d4",   label:"d4",   sides:4},
@@ -37131,10 +37135,6 @@ function DiceTray({onOpen}){
   // mid-tumble remounts the wrapper and restarts the CSS animation — without
   // it the class never toggles off and the second roll doesn't animate.
   const [rollTick, setRollTick] = useState(0);
-  // Who is still in a roll-off. null = everyone; after "Reroll the tie" only
-  // the tied dice can win — [6,6,5] rerolled to [2,3,5] used to hand the turn
-  // to Player 3, who had already lost the first roll.
-  const [contenders, setContenders] = useState(null);
   const spinRef = useRef(null);
   useEffect(() => {
     try { localStorage.setItem(DICE_PREFS_KEY, JSON.stringify({kind, count})); } catch {}
@@ -37168,27 +37168,15 @@ function DiceTray({onOpen}){
   const setDiceCount = (n) => {
     const c = Math.min(DICE_MAX, Math.max(1, n));
     if(c === count) return;
-    setContenders(null);
     setCount(c);
     setVals(v => c <= v.length
       ? v.slice(0, c)
       : v.concat(Array.from({length: c - v.length}, () => rollDie(DICE_SIDES(kind)))));
   };
-  const pickKind = (k) => { if(k === kind) return; setContenders(null); setKind(k); roll(vals.map((_, i) => i), k); };
-  const rollAll  = () => { setContenders(null); roll(vals.map((_, i) => i)); };
+  const pickKind = (k) => { if(k === kind) return; setKind(k); roll(vals.map((_, i) => i), k); };
+  const rollAll  = () => roll(vals.map((_, i) => i));
 
-  const numeric = kind !== "coin" && kind !== "rps";
   const settled = !spin;
-  // Who won the turn-order roll. Ties are surfaced rather than broken — the
-  // table rerolls just the tied dice, exactly like it would with real ones.
-  const top = useMemo(() => {
-    if(!numeric || vals.length < 2) return {idxs: [], best: null, tied: false};
-    const inPlay = vals.map((_, i) => i).filter(i => !contenders || contenders.has(i));
-    const best = Math.max(...inPlay.map(i => vals[i]));
-    const idxs = inPlay.filter(i => vals[i] === best);
-    return {idxs, best, tied: idxs.length > 1};
-  }, [vals, numeric, contenders]);
-  const highs = settled && top.idxs.length === 1 ? top.idxs : [];
   const summary = (() => {
     if(!settled) return kind === "coin" ? "Flipping…" : "Rolling…";
     if(kind === "coin"){
@@ -37205,12 +37193,7 @@ function DiceTray({onOpen}){
         .join(" · ");
     }
     if(vals.length === 1) return `Rolled ${vals[0]}`;
-    const total = vals.reduce((a, b) => a + b, 0);
-    if(top.tied) return `Tie at ${top.best} — ${top.idxs.map(i => "Player " + (i+1)).join(" & ")}`;
-    // In a roll-off the other dice are out of it, so "with 3" beside someone
-    // else's 5 needs saying which contest it won.
-    if(contenders) return `Player ${top.idxs[0] + 1} wins the roll-off with ${top.best} · goes first`;
-    return `Player ${top.idxs[0] + 1} goes first with ${top.best} · total ${total}`;
+    return `Total ${vals.reduce((a, b) => a + b, 0)}`;
   })();
 
   return html`<${React.Fragment}>
@@ -37252,12 +37235,10 @@ function DiceTray({onOpen}){
           <button onClick=${()=>setDiceCount(count+1)} disabled=${count>=DICE_MAX} aria-label="One more die">+</button>
         </div>
         <button class="dice-roll" onClick=${rollAll}>${kind==="coin" ? "Flip" : "Roll"}</button>
-        ${settled && top.tied && html`<button class="dice-retie" onClick=${()=>{ setContenders(new Set(top.idxs)); roll(top.idxs); }}>
-          Reroll the tie</button>`}
       </div>
       <div class=${"dice-tray"+(vals.length<=3?" dice-tray--few":"")+(spin?" is-rolling":"")}>
         ${vals.map((v, i) => html`<button key=${i}
-          class=${"dice-die dice-die--"+kind+(spin&&spin.has(i)?" is-spin":"")+(highs.includes(i)?" is-high":"")}
+          class=${"dice-die dice-die--"+kind+(spin&&spin.has(i)?" is-spin":"")}
           onClick=${()=>roll([i])} title=${kind==="coin" ? "Flip this one" : "Reroll this one"}
           aria-label=${`Player ${i+1} rolled ${diceFaceLabel(kind, v)} — reroll`}>
           ${count > 1 && html`<span class="dice-slot">Player ${i+1}</span>`}
@@ -37271,9 +37252,8 @@ function DiceTray({onOpen}){
       <p>Every roll comes from the browser's cryptographic random source, drawn so that each
       face is equally likely — no weighting, no house edge.</p>
       <p>Dice stay in their seats on purpose. With one die per player you can roll the whole
-      table at once, and a reroll (tap a single die, or <strong>Reroll the tie</strong>)
-      leaves everyone else's number alone. Highest roll goes first; a tie is called out
-      instead of quietly broken.</p>
+      table at once, and tapping a single die rerolls just that one, leaving everyone else's
+      number alone.</p>
       <p>Your die type and count are remembered on this device.</p>
     <//>
   <//>`;
@@ -37295,8 +37275,8 @@ const MARKET_TOOL_INFO = {
            pts:["Pack, box, and thousand-box odds modes","Open any pulled card to add it to your collection","See how often a box beats its price"]},
   swiss:  {blurb:"Will your record make the cut?",
            pts:["Monte Carlo over any field size and round count","Draw safety and intentional-draw guidance","Prize-tier odds past the cut"]},
-  dice:   {blurb:"Roll for turn order, or settle it with a coin.",
-           pts:["Up to 8 dice, one per player, held in place","d4 through d100, plus coins and rock-paper-scissors","Highest roll called out, ties rerolled on their own"]},
+  dice:   {blurb:"Dice, a coin, or rock-paper-scissors for the table.",
+           pts:["Up to 8 dice, each held in its own seat","d4 through d100, plus coins and rock-paper-scissors","Tap one die to reroll just that one"]},
   lore:   {blurb:"Keep score at the table.",
            pts:["One to four players, face-to-face on a phone","Every change logged, with one-tap undo","Knows the cards that move the 20-lore goal"]},
   ticker: {blurb:"Put the market on your stream.",
