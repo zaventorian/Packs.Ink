@@ -48,6 +48,19 @@ check(not (suppressed & {c['id'] for c in index}), "index.json carries no suppre
 # every card it can answer must be one the text index (already checked above) also holds.
 stray = [c["id"] for c in index if c["id"] not in text_ids]
 check(not stray, f"every index.json card is in text.json ({len(stray)} strays)")
+# ...and the other way round: the review row resolves ids through the colour
+# index's list, so a card only text.json holds is named by the matcher and then
+# silently dropped (the four Challenge Promo cards Lorcast gives only image_large).
+index_ids = {c["id"] for c in index}
+text_only = [c["id"] for c in text if c["id"] not in index_ids]
+check(not text_only, f"every text.json card is in index.json ({len(text_only)} text-only: {text_only[:4]})")
+
+# the shared image predicate: normal -> large -> small, and an empty string is no image
+ci = scanner_scope.card_image
+check(ci({"image_normal": "", "image_large": "L.avif"}) == "L.avif", "an empty image_normal falls back to image_large")
+check(ci({"image_normal": "N.avif", "image_large": "L.avif"}) == "N.avif", "image_normal wins when present")
+check(ci({"image_normal": None, "image_large": " ", "image_small": "S.avif"}) == "S.avif", "...then image_small")
+check(ci({"image_normal": "", "image_large": None}) is None, "no image at all -> None")
 
 # `d` is emitted only for a set that was unreleased at build time, so it must look
 # like a date; a malformed one would compare wrong against the browser's today.

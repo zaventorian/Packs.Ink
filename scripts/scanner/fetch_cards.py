@@ -39,12 +39,11 @@ def pull_catalog() -> list[dict]:
     bad_ids = scanner_scope.suppressed_card_ids()
     rows = sb.select(
         "cards",
-        columns="id,name,version,set_id,rarity,card_type,image_normal",
-        filters={"image_normal": "not.is.null"},
+        columns="id,name,version,set_id,rarity,card_type," + ",".join(scanner_scope.IMAGE_COLUMNS),
     )
     out = []
     for r in rows:
-        url = r.get("image_normal")
+        url = scanner_scope.card_image(r)
         if not url or not scanner_scope.in_scope(r["id"], r.get("set_id"), bad_sets, bad_ids):
             continue
         # art_key = filename without the ?ts cache-buster (a data: URI has no

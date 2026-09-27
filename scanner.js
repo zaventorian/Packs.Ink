@@ -19,8 +19,8 @@
   var GRID = 12;
   var DIMS = GRID * GRID * 3; // 432
   var BASE = "scanner/";
-  var IDXV = "?v=6"; // bump when color.bin/index.json content changes (v6 = 3412 cards incl. Hyperia City + CC2, 2026-09-26; v5 = Locations rotated upright + 3210 cards, 2026-07-29; v4 = Set 13 REAL Lorcast art)
-  var TXTV = "?v=6"; // bump when text.json content/shape changes (v6 = 3416 cards incl. Hyperia City, 2026-09-26; v5 = +rarity code `r` for base-before-chase ordering, 2026-07-23)
+  var IDXV = "?v=6"; // bump when color.bin/index.json content changes (v6 = 3396 cards incl. Hyperia City + CC2, the 4 image_large-only C1 promos, no Coconut/suppressed rows, 2026-09-26; v5 = Locations rotated upright + 3210 cards, 2026-07-29; v4 = Set 13 REAL Lorcast art)
+  var TXTV = "?v=6"; // bump when text.json content/shape changes (v6 = 3396 cards incl. Hyperia City + `d` release dates, the same card set as index.json, 2026-09-26; v5 = +rarity code `r` for base-before-chase ordering, 2026-07-23)
 
   var state = {
     loaded: false,
@@ -32,6 +32,9 @@
     dhashLo: null, // Uint32Array(count)
     dhashHi: null, // Uint32Array(count)
     cards: null, // [{id,name,version,set_id,rarity,art_key}]
+    // Cards the shipped index predates, fed in by the page (addCards). Kept OUT of
+    // `cards`, whose rows line up with color.bin: these have no colour vector.
+    extra: [],
   };
 
   // --- reusable offscreen canvases (avoid per-frame allocation) ---
@@ -200,7 +203,7 @@
   // Validated to fix the cases colour confuses (Helga, Joshua Sweet): even
   // garbled OCR matches because distinctive name/ability tokens carry weight
   // (IDF — rare tokens score high, generic "during your turn" tokens don't).
-  var text = { loaded: false, loading: null, cards: null, toks: null, idf: null };
+  var text = { loaded: false, loading: null, cards: null, toks: null, idf: null, asOf: null, extra: [] };
 
   function tnorm(s) { return (s || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim(); }
   function ttoks(s) { return tnorm(s).split(" ").filter(function (w) { return w.length >= 3; }); }
@@ -216,60 +219,132 @@
   function loadText(opts) {
     if (text.loaded) return Promise.resolve(text);
     if (text.loading) return text.loading;
-    var asOf = (opts && opts.asOf) || localYmd();
+    text.asOf = (opts && opts.asOf) || localYmd();
     text.loading = fetch(BASE + "text.json" + TXTV).then(function (r) { return r.json(); }).then(function (cards) {
-      // CANONICAL ORDER — base printing before chase reprints (v16, 2026-07-23).
-      // Same-(name,version) groups (base + Enchanted/Iconic/Epic/Promo reprints
-      // + custom variants) arrived in DB fetch order (no ORDER BY = arbitrary),
-      // and every downstream tie inherited it: rankNames' topK is a stable sort,
-      // rankVersions*' per-version id lists push in this order, orderByColour is
-      // stable for colour-unranked ids. Net effect: ~half the reprint pairs
-      // defaulted to the CHASE card on a text-identical read (v15 field: Scar -
-      // Finally King → Enchanted ×4, Merida → Iconic ×5, Hades → Iconic ×3,
-      // Show Me More! → Enchanted…). One stable sort here fixes every consumer:
-      // within a group the base printing leads; chase/custom reprints win only
-      // on positive evidence (colour rank, exact collector number). Groups keep
-      // their first-occurrence position; members become adjacent. `r` is the
-      // rarity code from text.json v5 (missing on a stale cache → no reorder,
-      // which is just the old behavior).
-      var CHASE_R = { E: 1, I: 1, X: 1, P: 1 };  // Enchanted / Iconic / Epic / Promo
-      // A card whose set is not out yet (`d` = its release date, text.json v6)
-      // goes behind every card that exists: a group with no released member sorts
-      // after all the others, and inside a group it trails the released printings.
-      // Without it a new set's same-named character wins a name-only read
-      // ("LEXINGTON" answered as Hyperia City's Fearless Flier a month before the
-      // set is in anyone's hand). Demoted, never removed — an early copy still
-      // matches on positive evidence (number, version, body text).
-      var firstAt = Object.create(null), relAt = Object.create(null), ci, NC = cards.length;
-      for (ci = 0; ci < NC; ci++) {
-        var cc = cards[ci], gk = (cc.n || "") + "|" + (cc.v || "");
-        cc._unrel = !!(cc.d && cc.d > asOf);
-        if (firstAt[gk] == null) firstAt[gk] = ci;
-        if (!cc._unrel && relAt[gk] == null) relAt[gk] = ci;
-        cc._gk = gk; cc._i = ci;
-        cc._demote = (CHASE_R[cc.r] ? 2 : 0) + (String(cc.id).lastIndexOf("crd_custom_", 0) === 0 ? 1 : 0) + (cc._unrel ? 4 : 0);
-      }
-      for (var gkey in firstAt) firstAt[gkey] = relAt[gkey] != null ? relAt[gkey] : NC + firstAt[gkey];
-      cards.sort(function (a, b) {
-        if (firstAt[a._gk] !== firstAt[b._gk]) return firstAt[a._gk] - firstAt[b._gk];
-        if (a._demote !== b._demote) return a._demote - b._demote;
-        return a._i - b._i;
-      });
-      text.cards = cards;
-      var N = cards.length, df = Object.create(null);
-      text.toks = new Array(N);
-      for (var i = 0; i < N; i++) {
-        var set = Object.create(null), ts = ttoks(cards[i].b);
-        for (var j = 0; j < ts.length; j++) set[ts[j]] = 1;
-        text.toks[i] = set;
-        for (var t in set) df[t] = (df[t] || 0) + 1;
-      }
-      var idf = Object.create(null);
-      for (var k in df) idf[k] = Math.log(N / (df[k] + 1));
-      text.idf = idf; text.loaded = true;
+      ingestText(text.extra.length ? cards.concat(text.extra) : cards);
       return text;
     });
     return text.loading;
+  }
+  // Sort + tokenize the text index. Runs once when text.json lands, and again
+  // whenever addCards brings in a card the shipped file predates.
+  function ingestText(cards) {
+    var asOf = text.asOf;
+    // a shipped row always wins over a page-supplied copy of the same card
+    var seenId = Object.create(null);
+    cards = cards.filter(function (c) { if (!c || !c.id || seenId[c.id]) return false; seenId[c.id] = 1; return true; });
+    // CANONICAL ORDER — base printing before chase reprints (v16, 2026-07-23).
+    // Same-(name,version) groups (base + Enchanted/Iconic/Epic/Promo reprints
+    // + custom variants) arrived in DB fetch order (no ORDER BY = arbitrary),
+    // and every downstream tie inherited it: rankNames' topK is a stable sort,
+    // rankVersions*' per-version id lists push in this order, orderByColour is
+    // stable for colour-unranked ids. Net effect: ~half the reprint pairs
+    // defaulted to the CHASE card on a text-identical read (v15 field: Scar -
+    // Finally King → Enchanted ×4, Merida → Iconic ×5, Hades → Iconic ×3,
+    // Show Me More! → Enchanted…). One stable sort here fixes every consumer:
+    // within a group the base printing leads; chase/custom reprints win only
+    // on positive evidence (colour rank, exact collector number). Groups keep
+    // their first-occurrence position; members become adjacent. `r` is the
+    // rarity code from text.json v5 (missing on a stale cache → no reorder,
+    // which is just the old behavior).
+    var CHASE_R = { E: 1, I: 1, X: 1, P: 1 };  // Enchanted / Iconic / Epic / Promo
+    // A card whose set is not out yet (`d` = its release date, text.json v6)
+    // goes behind every card that exists: a group with no released member sorts
+    // after all the others, and inside a group it trails the released printings.
+    // Without it a new set's same-named character wins a name-only read
+    // ("LEXINGTON" answered as Hyperia City's Fearless Flier a month before the
+    // set is in anyone's hand). Demoted, never removed — an early copy still
+    // matches on positive evidence (number, version, body text).
+    var firstAt = Object.create(null), relAt = Object.create(null), ci, NC = cards.length;
+    for (ci = 0; ci < NC; ci++) {
+      var cc = cards[ci], gk = (cc.n || "") + "|" + (cc.v || "");
+      cc._unrel = !!(cc.d && cc.d > asOf);
+      if (firstAt[gk] == null) firstAt[gk] = ci;
+      if (!cc._unrel && relAt[gk] == null) relAt[gk] = ci;
+      cc._gk = gk; cc._i = ci;
+      cc._demote = (CHASE_R[cc.r] ? 2 : 0) + (String(cc.id).lastIndexOf("crd_custom_", 0) === 0 ? 1 : 0) + (cc._unrel ? 4 : 0);
+    }
+    for (var gkey in firstAt) firstAt[gkey] = relAt[gkey] != null ? relAt[gkey] : NC + firstAt[gkey];
+    cards.sort(function (a, b) {
+      if (firstAt[a._gk] !== firstAt[b._gk]) return firstAt[a._gk] - firstAt[b._gk];
+      if (a._demote !== b._demote) return a._demote - b._demote;
+      return a._i - b._i;
+    });
+    text.cards = cards;
+    var N = cards.length, df = Object.create(null);
+    text.toks = new Array(N);
+    for (var i = 0; i < N; i++) {
+      var set = Object.create(null), ts = ttoks(cards[i].b);
+      for (var j = 0; j < ts.length; j++) set[ts[j]] = 1;
+      text.toks[i] = set;
+      for (var t in set) df[t] = (df[t] || 0) + 1;
+    }
+    var idf = Object.create(null);
+    for (var k in df) idf[k] = Math.log(N / (df[k] + 1));
+    text.idf = idf; text.loaded = true;
+    // everything built lazily FROM text.cards has to come from the new list
+    nameDB = null; charCanonSet = null; quotersCache = Object.create(null);
+  }
+
+  // Cards the shipped index predates, handed in by the page from its own catalog
+  // (a set Lorcast indexed after the last index build, a promo staged since). They
+  // join the NAME matcher and the review screen's id lookup, so a new set is
+  // scannable the day it lands in the catalog instead of the day someone rebuilds
+  // and redeploys the index. They carry no colour vector or dHash: searchCrop never
+  // returns one, and refColourCos reads them as unknown, which baseGuard already
+  // treats as "cannot separate" — absence of evidence never favours the new card.
+  //
+  // rows: [{id, n, v, b, s, cn, r, d?, set_id?, rarity?, art_key?}] — the text.json
+  // row shape plus the three meta fields. A row whose id the shipped files already
+  // hold is dropped (per side: an id can be in text.json without a colour row), so
+  // a stale catalog can never shadow the shipped record. Returns how many rows
+  // reached either side.
+  function addCards(rows) {
+    if (!rows || !rows.length) return 0;
+    var i, r, metaHas = Object.create(null), textHas = Object.create(null);
+    if (state.cards) for (i = 0; i < state.cards.length; i++) metaHas[state.cards[i].id] = 1;
+    for (i = 0; i < state.extra.length; i++) metaHas[state.extra[i].id] = 1;
+    if (text.cards) for (i = 0; i < text.cards.length; i++) textHas[text.cards[i].id] = 1;
+    for (i = 0; i < text.extra.length; i++) textHas[text.extra[i].id] = 1;
+    var freshText = [], added = 0;
+    for (i = 0; i < rows.length; i++) {
+      r = rows[i];
+      if (!r || !r.id || !r.n) continue;
+      var took = false;
+      if (!metaHas[r.id]) {
+        metaHas[r.id] = 1; took = true;
+        state.extra.push({ id: r.id, name: r.n, version: r.v || null, set_id: r.set_id || null,
+          rarity: r.rarity || null, art_key: r.art_key || ("x:" + r.id), extra: true });
+      }
+      if (!textHas[r.id]) {
+        textHas[r.id] = 1; took = true;
+        var t = { id: r.id, n: r.n, v: r.v || null, b: r.b || "", s: r.s || null, cn: r.cn != null ? String(r.cn) : "", r: r.r || "" };
+        if (r.d) t.d = r.d;
+        text.extra.push(t); freshText.push(t);
+      }
+      if (took) added++;
+    }
+    if (added) { metaIdx = null; metaVersion++; }
+    // text.json already in: fold the new rows in now. Still loading: loadText
+    // concatenates text.extra when it lands, so nothing is lost either way.
+    if (freshText.length && text.loaded) ingestText(text.cards.concat(freshText));
+    return added;
+  }
+  // Every card the review screen can resolve: the colour index's rows, then the
+  // page-supplied ones. `metaVersion` moves whenever the list grows, so a caller
+  // that memoises a lookup can tell its copy is stale.
+  var metaVersion = 0, metaIdx = null;
+  function allMeta() {
+    if (!state.cards) return state.extra.slice();
+    return state.extra.length ? state.cards.concat(state.extra) : state.cards;
+  }
+  function metaById(id) {
+    if (!metaIdx) {
+      metaIdx = Object.create(null);
+      var list = allMeta();
+      for (var i = 0; i < list.length; i++) if (!metaIdx[list[i].id]) metaIdx[list[i].id] = list[i];
+    }
+    return metaIdx[id] || null;
   }
 
   // ocrText = raw OCR string; returns top-k [{id,name,version,score}]
@@ -1532,6 +1607,10 @@
     deckTop: deckTop,
     loadText: loadText,
     textMatch: textMatch,
+    addCards: addCards,
+    allMeta: allMeta,
+    metaById: metaById,
+    get metaVersion() { return metaVersion; },
     get state() { return state; },
     get textState() { return text; },
   };

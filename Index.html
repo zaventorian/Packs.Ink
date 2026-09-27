@@ -1785,6 +1785,10 @@ let _setFamilyById  = new Map();  // set_id -> family id; SET_PARENT children fo
 // legality. Extras rows keep their ORIGIN set_id, so they read as mainline here
 // — an Extras foil of a Whispers card is a Whispers card.
 let _setMainlineById = new Map();
+// set_id -> the PRINTED set code ("14", "P1", "CC2") — what the card's own bottom
+// line says, and what the scanner keys a (set, number) read on. Only the scanner's
+// catalog supplement reads it (scannerExtraRows).
+let _setCodeById = new Map();
 // "2023-08-18" -> "Aug 2023". Pinned to UTC: the date is a plain calendar day,
 // and letting it drift into the viewer's zone renames a set's month west of it.
 const releaseLabel = (d) => {
@@ -1793,7 +1797,7 @@ const releaseLabel = (d) => {
   catch { return String(d).slice(0, 7); }
 };
 const setSetReleaseDates = (rows) => {
-  const rel = new Map(), rank = new Map(), fam = new Map(), main = new Map(), idByName = new Map();
+  const rel = new Map(), rank = new Map(), fam = new Map(), main = new Map(), code = new Map(), idByName = new Map();
   for(const s of rows || []) if(s && s.id) idByName.set(SET_DISPLAY_NAMES[s.name] || s.name, s.id);
   for(const s of rows || []){
     if(!s || !s.id) continue;
@@ -1808,10 +1812,11 @@ const setSetReleaseDates = (rows) => {
     const isMain = MAINLINE_SETS.includes(name);
     rank.set(s.id, (d || "9999-99-99") + "|" + (isMain ? "0" : "1"));
     main.set(s.id, isMain);
+    if(s.code) code.set(s.id, String(s.code).trim().toUpperCase());
     const parent = SET_PARENT[name];
     fam.set(s.id, (parent && idByName.get(parent)) || s.id);
   }
-  _setReleaseById = rel; _setRankById = rank; _setFamilyById = fam; _setMainlineById = main;
+  _setReleaseById = rel; _setRankById = rank; _setFamilyById = fam; _setMainlineById = main; _setCodeById = code;
 };
 
 // Collapse catalog rows into printings, newest-set last. ONE entry per card_id:
@@ -17006,6 +17011,65 @@ const SCANNER_BUILD = "v21";
 // uploads the rectified crop and a filmstrip of the frames before the tap —
 // what we upload was understated, so this is a change of substance.
 const SCAN_BETA_VERSION = "2026-09-26";
+// ── The scanner's catalog supplement (2026-09-26) ─────────────────────────
+// scanner/text.json + index.json are built by hand (scripts/scanner/*) and ship
+// with a deploy, so a card Lorcast indexes AFTER the last build was invisible to
+// the scanner until somebody rebuilt and redeployed: the name matcher could not
+// answer with it and the review row could not resolve it. The catalog already
+// holds every one of those cards, so the scanner takes them from here when it
+// opens — name matching and review work the day a card reaches the catalog. The
+// colour index stays build-only (it needs the art downloaded and descriptored),
+// which costs nothing on a camera photo: that path carries no signal there.
+// Only REAL card ids, and only ones the shipped index lacks: a `::` clone or a
+// Coconut leader is minted in this file and has no printed identity to read.
+const SCAN_RARITY_CODE = { Common: "C", Uncommon: "U", Rare: "R", "Super Rare": "S", Legendary: "L",
+  Enchanted: "E", Iconic: "I", Epic: "X", Promo: "P" };
+const scanNormText = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ");
+const scannerExtraRows = (rows, knownIds, today) => {
+  const out = [], seen = new Set(), day = today || localYmd();
+  for(const r of rows || []){
+    const id = r && r.card_id;
+    if(!id || seen.has(id) || (knownIds && knownIds.has(id))) continue;
+    if(!/^crd_/.test(id) || id.includes("::") || r.Set === COCONUT_SET_NAME) continue;
+    const pn = String(r["Product Name"] || "").trim();
+    // Product Name is `name - version`; the first " - " splits every card in the catalog
+    const cut = pn.indexOf(" - ");
+    const n = cut >= 0 ? pn.slice(0, cut) : pn, v = cut >= 0 ? pn.slice(cut + 3) : null;
+    if(!n) continue;
+    seen.add(id);
+    const cls = Array.isArray(r.classifications) ? r.classifications.join(" ") : (r.classifications || "");
+    const rel = r.set_id ? _setReleaseById.get(r.set_id) : null;
+    const img = String(r.img_normal || r.img_large || r.img_small || "");
+    const row = {
+      id, n, v,
+      // the same blob build_text_index.py writes, minus flavour text (the catalog does not carry it)
+      b: [n, v, r.card_type, cls, r.text].map(scanNormText).join(" ").replace(/\s+/g, " ").trim(),
+      s: (r.set_id && _setCodeById.get(r.set_id)) || null,
+      cn: String(r.Number || ""),
+      r: SCAN_RARITY_CODE[r.Rarity] || "",
+      set_id: r.set_id || null, rarity: r.Rarity || null,
+      art_key: (img && img.split("/").pop().split("?")[0]) || ("x:" + id),
+    };
+    // a set that is not out yet: the scanner keeps it behind every card that exists
+    if(rel && rel > day) row.d = rel;
+    out.push(row);
+  }
+  return out;
+};
+// id -> scanner meta for the review rows: the colour index's cards, then the
+// catalog supplement. Rebuilt when the scanner's list grows (metaVersion) so a
+// lookup built before the hand-off can never hide a card after it.
+let _scanMetaMap = null, _scanMetaKey = null;
+const scannerMetaMap = () => {
+  const CS = window.CardScanner;
+  if(!CS || !CS.state || !CS.state.cards) return new Map();
+  const key = CS.state.cards.length + ":" + (CS.metaVersion || 0);
+  if(_scanMetaMap && _scanMetaKey === key) return _scanMetaMap;
+  const m = new Map();
+  for(const c of (CS.allMeta ? CS.allMeta() : CS.state.cards)) if(!m.has(c.id)) m.set(c.id, c);
+  _scanMetaMap = m; _scanMetaKey = key;
+  return m;
+};
 // ── Card VERSIONS in a scan review row (2026-09-12) ─────────────────────
 // Two different questions sit on one review row and must not be conflated. The
 // Non-Foil/Foil segment is the FINISH — one card_id, two SKUs. This is the
@@ -17134,7 +17198,6 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   const autoAddRef = useRef(false);       // mirror of `autoAdd`
   const previewRef = useRef(null);        // current ambient preview (for tap-commit)
   const ambientRef = useRef({ frames: [], voteKey: null, margin: 0, armed: true, committedKey: null, emptyFrames: 0, noDet: 0, lastQuad: null, wasJumped: false, ocrBusy: false, rearmTimer: 0, lockKey: null, lockCard: null, lockText: false, challengerKey: null, challengerCount: 0, tick: 0, nameVotes: [], ocrTries: 0, epoch: 0, pinged: false, firstQuadAt: 0, badgeState: "" });
-  const ambByIdRef = useRef(null);        // memoized id->meta map for OCR fusion
   const commitAmbientRef = useRef(null);  // set after commitAmbient is defined
   const triggerOcrRef = useRef(null);     // set after triggerOcr is defined
   const fhRef = useRef("");               // last frame-hint pushed to React
@@ -17492,6 +17555,11 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       if(!window.CardScanner){ setPhase("noindex"); setErr("scanner module not loaded"); return; }
       try { await window.CardScanner.load(); }
       catch(e){ setPhase("noindex"); setErr("couldn't load the card index"); return; }
+      // cards the shipped index predates, from the catalog (scannerExtraRows)
+      try {
+        const CS = window.CardScanner;
+        if(CS.addCards) CS.addCards(scannerExtraRows(raw, new Set(CS.state.cards.map(c => c.id))));
+      } catch(_e){}
       // text matcher + OCR engine load in the background — capture works on
       // colour-only until they're ready, then fuses text in.
       window.CardScanner.loadText().catch(() => {});
@@ -18370,8 +18438,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       const twoAgree = L >= 2 && A.nameVotes[L-1].id === A.nameVotes[L-2].id
         && okConf(A.nameVotes[L-1].conf) && okConf(A.nameVotes[L-2].conf);
       if(idr.conf !== "high" && !twoAgree) return;   // not sure yet — keep reading
-      const META = window.CardScanner.state.cards;
-      const byId = ambByIdRef.current || (ambByIdRef.current = (() => { const m = new Map(); for(const c of META) if(!m.has(c.id)) m.set(c.id, c); return m; })());
+      const byId = scannerMetaMap();
       const chosen = byId.get(topId); if(!chosen) return;
       if(A.lockText && A.lockKey === chosen.art_key){ A.lockReadAt = tFire; return; }   // re-verify agreed — refresh the lock's evidence age
       const cands = idr.top3.map(id => byId.get(id)).filter(Boolean);
@@ -18577,10 +18644,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       if(!orderedIds.length){ setStatus("Couldn't read it — frame the card and tap again"); return; }
 
       // 5. build candidates, dedup by name+version
-      const META = window.CardScanner.state.cards;
-      const byId = capture._byId || (capture._byId = (() => {
-        const m = new Map(); for(const c of META) if(!m.has(c.id)) m.set(c.id, c); return m;
-      })());
+      const byId = scannerMetaMap();
       const seenLbl = new Set(), cands = [];
       for(const id of orderedIds){
         const m = byId.get(id); if(!m) continue;
@@ -19022,8 +19086,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     }
     if(!idr.source) idr = (window.CardScanner.identify ? window.CardScanner.identify({ lines: ocrLines, cnNum, cnSet, colourRanked: colIds }) : {}) || {};
     // 4. resolve candidates + finalize the row NOW (the cn refinement never holds it)
-    const META = window.CardScanner.state.cards;
-    const byId = capture._byId || (capture._byId = (() => { const m = new Map(); for(const c of META) if(!m.has(c.id)) m.set(c.id, c); return m; })());
+    const byId = scannerMetaMap();
     const candsOf = (theIdr) => {
       const orderedIds = (theIdr.top3 && theIdr.top3.length) ? theIdr.top3.concat(colIds) : colIds;
       const seenL = new Set(), out = [];
@@ -57491,7 +57554,7 @@ function App(){
     (async () => {
       try {
         const {data, error} = await sbClient.from("sets")
-          .select("id,name,released_at").order("released_at", {ascending:false});
+          .select("id,name,code,released_at").order("released_at", {ascending:false});
         if(cancelled || error || !data) return;
         setSetsMeta(data);
         try { localStorage.setItem("packsink:setsMeta:v1", JSON.stringify(data)); } catch {}
@@ -60463,7 +60526,7 @@ function App(){
       if(hasTier2Stats) CARDS_COLS += ",strength,willpower,lore,move_cost";
       const SEALED_COLS = "tcgplayer_product_id,set_id,product_type,name,clean_name,low_price,market_price,image_url,tcgplayer_url,printing,price_date";
       const [setsData, priceRows, cardsRows, sealedRows] = await Promise.all([
-        sbFetchAll("sets",  {select:"id,name,released_at", order:"id.asc"}),
+        sbFetchAll("sets",  {select:"id,name,code,released_at", order:"id.asc"}),
         sbFetchAll("card_prices_latest", {select:PRICE_COLS, order:"tcgplayer_product_id.asc,printing.asc"}),
         sbFetchAll("cards", {select:CARDS_COLS, order:"id.asc"}),
         // Sealed prices are independent of the cards/prices join — fetch

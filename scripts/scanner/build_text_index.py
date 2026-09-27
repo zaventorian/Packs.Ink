@@ -39,9 +39,12 @@ def main():
                     if s.get("released_at") and str(s["released_at"])[:10] > today}
     bad_sets, bad_ids = scanner_scope.excluded_set_ids(sets), scanner_scope.suppressed_card_ids()
     rows = sb.select("cards",
-        columns="id,name,version,set_id,card_type,classifications,cost,strength,willpower,lore,inkable,ink,collector_number,text,flavor_text,rarity",
-        filters={"image_normal": "not.is.null"})
-    rows = [r for r in rows if scanner_scope.in_scope(r["id"], r.get("set_id"), bad_sets, bad_ids)]
+        columns="id,name,version,set_id,card_type,classifications,cost,strength,willpower,lore,inkable,ink,collector_number,text,flavor_text,rarity,"
+                + ",".join(scanner_scope.IMAGE_COLUMNS))
+    # the SAME image predicate as fetch_cards.py, so text.json can never hold an id
+    # the colour index lacks (scanner_scope.card_image says why that matters)
+    rows = [r for r in rows if scanner_scope.card_image(r)
+            and scanner_scope.in_scope(r["id"], r.get("set_id"), bad_sets, bad_ids)]
     out = []
     # single-char rarity code — scanner.js uses it to order same-(name,version)
     # reprint groups base-first (chase = E/I/X/P loses ties without evidence).
