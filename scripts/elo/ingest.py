@@ -72,6 +72,76 @@ def event_already_ingested(conn, event_id):
     return row["status"] == "EVENT_FINISHED" and bool(row["has_matches"])
 
 
+def match_is_complete(m):
+    """RPH gives every match its own status. A match in a round still being
+    played comes back with its pairing but no result, and storing it then
+    records a 0-0 no-winner row — which reads exactly like an agreed draw (0-0
+    is always an ID) and could never be replaced afterwards, because the
+    (round, table) guard in ingest_event skips a table we already hold. Found
+    2026-09-28 at HoneyBee Games (919790): two semifinals captured mid-round by
+    the 9/13 refresh sat in the DB as 0-0 draws while RPH recorded 2-1 wins.
+    A payload with no status at all keeps the old behaviour."""
+    st = m.get("status")
+    return st is None or st == "COMPLETE"
+
+
+def canonical_id(conn, pid):
+    """Follow merged_into_id to the canonical player. Cycle-guarded."""
+    seen = set()
+    while pid is not None and pid not in seen:
+        seen.add(pid)
+        row = conn.execute("SELECT merged_into_id FROM players WHERE player_id=?", (pid,)).fetchone()
+        if not row or row[0] is None:
+            return pid
+        pid = row[0]
+    return pid
+
+
+def _name_ids(conn, name):
+    """Canonical ids of every player stored under exactly this name, any platform
+    (get_or_create_player matches on the name alone, so this must too)."""
+    return {canonical_id(conn, r[0]) for r in conn.execute(
+        "SELECT player_id FROM players WHERE display_name = ?", (name,))}
+
+
+def same_players(conn, row, p1, p2):
+    """Is the RPH pairing at this table still the pair stored in `row`? Each side
+    must resolve to the stored player (following merges) or be a name we have
+    never seen — a rename not applied yet — and at least one side must match
+    positively. A name that resolves to someone ELSE means the table was
+    re-paired, and moving a result onto the wrong two players is worse than
+    leaving it alone."""
+    matched = 0
+    for p, stored in ((p1, row["player1_id"]), (p2, row["player2_id"])):
+        ids = _name_ids(conn, p.get("tv_display_name"))
+        if not ids:
+            continue
+        if canonical_id(conn, stored) not in ids:
+            return False
+        matched += 1
+    return matched > 0
+
+
+def sync_match_result(conn, row, p1, p2):
+    """Bring a stored match's RESULT in line with a COMPLETE RPH match at the same
+    (round, table): winner and games only, never the players, and never a row a
+    person entered (source != 'api'). Covers a result captured before it was
+    final and one the TO corrected after the fact (707597, the 6/28 Critical
+    Games final, was re-scored on RPH after we pulled it). True if it changed."""
+    if row["source"] != "api":
+        return False
+    side = 1 if p1.get("is_winner") else 2 if p2.get("is_winner") else None
+    want = (row["player1_id"] if side == 1 else row["player2_id"] if side == 2 else None,
+            p1.get("games_won"), p2.get("games_won"))
+    if (row["winner_id"], row["games_won_p1"], row["games_won_p2"]) == want:
+        return False
+    if not same_players(conn, row, p1, p2):
+        return False
+    conn.execute("UPDATE matches SET winner_id=?, games_won_p1=?, games_won_p2=? WHERE match_id=?",
+                 (*want, row["match_id"]))
+    return True
+
+
 def ingest_event(event_id, store=None, location=None, event_date=None, season=None):
     """Pull one event + all its rounds and write to DB. Idempotent at event level."""
     conn = db()
@@ -158,21 +228,41 @@ def ingest_event(event_id, store=None, location=None, event_date=None, season=No
             # (there is exactly one table per round). Skip any (round, table) we
             # already have. Bit "LoL_METALLICFLARE" vs "LoL METALLICFLARE" once —
             # double-counted whole rounds across two pulls.
-            existing_rt = {(r["round_id"], r["table_number"]) for r in conn.execute(
-                "SELECT round_id, table_number FROM matches "
+            existing_rt = {(r["round_id"], r["table_number"]): r for r in conn.execute(
+                "SELECT match_id, round_id, table_number, player1_id, player2_id, winner_id, "
+                "games_won_p1, games_won_p2, source FROM matches "
                 "WHERE event_id=? AND is_bye=0 AND table_number IS NOT NULL", (event_id,))}
 
+            # Byes need the same guard, by COUNT: RPH seats every bye at table -1
+            # and a renamed bye-holder resolves to a new player_id, so the UNIQUE
+            # key never collides and each re-pull of an unfinished event added a
+            # second bye for the same seat (675962, Gemini Games 6/14: one R1 bye on
+            # RPH, two in the DB under the holder's old and interim names). A round
+            # only gains byes while it holds fewer than RPH shows.
+            byes_held = {}
+            for r in conn.execute(
+                    "SELECT round_id, player1_id FROM matches WHERE event_id=? AND is_bye=1",
+                    (event_id,)):
+                byes_held.setdefault(r["round_id"], set()).add(r["player1_id"])
+
+            unreported = corrected = 0
             for rid, rnum, rtype, phase_type, rstatus in all_rounds:
                 d = round_payloads[rid]
-                for m in d.get("results", []):
+                results = d.get("results", [])
+                held = byes_held.setdefault(rid, set())
+                bye_room = sum(1 for m in results
+                               if m.get("match_is_bye") and m.get("players")) - len(held)
+                for m in results:
                     players = m.get("players", [])
                     is_bye = bool(m.get("match_is_bye"))
 
                     if is_bye:
-                        if not players:
+                        if not players or bye_room <= 0:
                             continue
                         p = players[0]
                         pid = get_or_create_player(conn, p["tv_display_name"], event_id)
+                        if pid in held:
+                            continue
                         conn.execute(
                             """INSERT OR IGNORE INTO matches
                                (event_id, round_id, round_number, round_type, table_number,
@@ -181,14 +271,23 @@ def ingest_event(event_id, store=None, location=None, event_date=None, season=No
                             (event_id, rid, rnum, rtype, m.get("table_number"),
                              pid, pid, p.get("games_won")),
                         )
+                        held.add(pid)
+                        bye_room -= 1
                         continue
 
                     if len(players) < 2:
                         continue
+                    if not match_is_complete(m):
+                        unreported += 1  # fills in on the next pull; see match_is_complete
+                        continue
                     tnum = m.get("table_number")
-                    if tnum is not None and (rid, tnum) in existing_rt:
-                        continue  # same physical match already recorded (see guard above)
                     p1, p2 = sorted(players, key=lambda p: p.get("player_order") or 0)
+                    if tnum is not None and (rid, tnum) in existing_rt:
+                        # Same physical match already recorded (see guard above) —
+                        # but its result may since have been finalised or corrected.
+                        if sync_match_result(conn, existing_rt[(rid, tnum)], p1, p2):
+                            corrected += 1
+                        continue
                     p1_id = get_or_create_player(conn, p1["tv_display_name"], event_id)
                     p2_id = get_or_create_player(conn, p2["tv_display_name"], event_id)
                     winner_id = None
@@ -224,7 +323,9 @@ def ingest_event(event_id, store=None, location=None, event_date=None, season=No
                     )
                     gaps += 1
 
-        return event_id, "ok", f"{name} ({len(all_rounds)} rounds, {gaps} gaps)"
+        extra = (f", {unreported} unreported" if unreported else "") + \
+                (f", {corrected} corrected" if corrected else "")
+        return event_id, "ok", f"{name} ({len(all_rounds)} rounds, {gaps} gaps{extra})"
     except Exception as e:
         return event_id, "err", repr(e)
     finally:

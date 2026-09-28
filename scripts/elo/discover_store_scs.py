@@ -63,6 +63,21 @@ API = d.API
 # INGEST, and nothing it says ever reached the table those tabs read.
 from elo_scope import EXCLUDED_STORE_IDS, ONE_OFF_EVENT_IDS  # noqa: E402
 
+# "past" and "upcoming" are not the whole feed. An event whose TO never closes it
+# sits in RPH's third bucket, inProgress, indefinitely — Game 'n Grub's 9/20 SC
+# (843303) did, with two rounds played, and a pull of past + upcoming could never
+# see it again, so it stayed at the zero matches it was queued with.
+PULL_STATUSES = ("past", "inProgress", "upcoming")
+
+# Unfinished events we already hold are re-pulled BY ID (requeue_unfinished), not
+# only when a search happens to return them again: a search can only offer the
+# CURRENT set, and the relevance nets miss titles. ZENERGY's 9/4 SC (796836) sat
+# at EVENT_IN_PROGRESS here three weeks after RPH closed it. A played event is
+# retried at any age (it holds partial results worth finishing); one with nothing
+# yet is retried for REQUEUE_DAYS, so a cancelled SC ages out instead of being
+# asked about forever.
+REQUEUE_DAYS = 60
+
 
 def tracked_store_ids(refresh: bool) -> tuple[set[int], dict[int, set[str]]]:
     """Map every rph event we've ingested -> its RPH store.id. Returns the set of
@@ -147,6 +162,45 @@ def ingested_event_ids() -> set[int]:
                                    WHERE m.event_id = e.event_id)))""")}
     conn.close()
     return ids
+
+
+def unfinished_events(today: datetime.date) -> list[sqlite3.Row]:
+    """Events already in the DB that ingest would still re-pull — the complement
+    of ingested_event_ids(), deliberately computed FROM it so there is one
+    definition of "done" — dated today or earlier. See REQUEUE_DAYS for the age
+    rule."""
+    done = ingested_event_ids()
+    cutoff = (today - datetime.timedelta(days=REQUEUE_DAYS)).isoformat()
+    conn = sqlite3.connect(DB)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """SELECT e.event_id, e.store, e.location, e.event_date, e.season, e.status,
+                  EXISTS(SELECT 1 FROM matches m WHERE m.event_id = e.event_id) AS played
+             FROM events e
+            WHERE e.platform = 'rph' AND e.is_ignored = 0 AND e.event_date <= ?
+            ORDER BY e.event_date, e.event_id""", (today.isoformat(),)).fetchall()
+    conn.close()
+    return [r for r in rows
+            if r["event_id"] not in done and (r["played"] or r["event_date"] >= cutoff)]
+
+
+def requeue_unfinished(offered: set[int], today: datetime.date) -> list[tuple]:
+    """Re-pull every unfinished event we hold that discovery didn't already offer
+    this run. Passes the event's OWN stored store / location / date / season: with
+    those left None, ingest_event fills the store from RPH's current name (which
+    drifts — store 3813 is "Gemini Games, LLC" here and "Pegasus Games" on RPH now,
+    and the store report keys on the name) and writes location and season NULL."""
+    todo = [r for r in unfinished_events(today) if r["event_id"] not in offered]
+    print(f"Re-pulling {len(todo)} unfinished event(s) already in the DB "
+          f"(played: any age; unplayed: last {REQUEUE_DAYS} days)...")
+    out = []
+    for r in todo:
+        eid, status, msg = ing.ingest_event(
+            r["event_id"], store=r["store"], location=r["location"],
+            event_date=r["event_date"], season=r["season"])
+        print(f"    eid={eid:<8} {r['event_date']}  [{r['status']}]  -> {status.upper()}: {msg}")
+        out.append((eid, status, msg))
+    return out
 
 
 def season_label_for(set_name: str) -> str | None:
@@ -268,7 +322,7 @@ def pull_set_scs(set_name: str, nets: list[str], sets_sorted, aliases,
     union: dict[int, dict] = {}
     base = {"game_slug": "disney-lorcana", "page_size": 250}
     combos = []
-    for status in ("past", "upcoming"):
+    for status in PULL_STATUSES:
         for net in nets:
             for ordering in ("-start_datetime", "start_datetime"):
                 combos.append({"display_statuses": status, "name": net, "ordering": ordering})
@@ -315,7 +369,7 @@ def pull_store_scs(store_ids, set_name: str, window, sets_sorted, aliases) -> di
 
     def one(sid: int) -> dict[int, dict]:
         found: dict[int, dict] = {}
-        for status in ("past", "upcoming"):
+        for status in PULL_STATUSES:
             if status == "upcoming" and season_over:
                 continue
             for param in ("store", "store_id"):
@@ -323,7 +377,7 @@ def pull_store_scs(store_ids, set_name: str, window, sets_sorted, aliases) -> di
                 while True:
                     params = {"game_slug": "disney-lorcana", "display_statuses": status,
                               param: sid, "page_size": 250, "ordering": "id", "page": page}
-                    if status == "past":
+                    if status != "upcoming":
                         params["start_date_after"] = start.isoformat()
                     try:
                         doc = d.http_json(API + "?" + urlencode(params))
@@ -439,6 +493,10 @@ def main() -> None:
                     ev["id"], store=ours_name,
                     location=sibling_location(ours_name), season=label)
                 print(f"        -> {status.upper()}: {msg}")
+        print()
+
+    if args.ingest:
+        requeue_unfinished({c["event_id"] for c in all_candidates}, datetime.date.today())
         print()
 
     if args.json and all_candidates:
