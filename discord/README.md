@@ -9,15 +9,20 @@ on workers.dev), so deploying it can never touch packs.ink.
 
 | | |
 |---|---|
-| `/card mowgli` | The card, big, with its NM Market / Low, recent changes and graded sales. |
+| `/card mowgli` | The card, big, with its NM Market / Low, recent changes, graded sales, its ink / cost / type, and how much it's played in recent tournament top cuts. |
 | `/price mowgli` | The same, as a price chart (1M / 3M / 1Y / All buttons), card art as a thumbnail. |
 | `/price elsa psa 10` | Graded: every grade's last sale and average of the last 5, and a chart of the PSA 10 sales. |
 | `/price azurite sea box` | Sealed product: price, changes, chart, TCGplayer + Amazon links. |
-| `/deck` | Opens a box: paste a decklist, get what it costs to build (each card at its cheapest printing, NM Market and Low). |
-| `/movers` | Biggest gains or drops over 1D–1Y, by rarity group, NM Market or Low. |
-| `/events 60614` | Upcoming events near a postal code or town (the site's own event finder). |
-| `/calendar` | Set releases, Challenges and qualifiers coming up. |
-| **Apps → Price check** | Right-click any message: prices every card it mentions, or totals it as a deck when the message is a decklist. |
+| `/trade` | Is a trade fair? Both sides priced (each card at the version named — `enchanted elsa` is the Enchanted), sealed and cash too, a verdict in words, and a button that opens it in the site's Trade Compare. Type both sides inline (`give:` / `get:`) or leave them empty for a box. |
+| `/deck` | Opens a box: paste a decklist, get what it costs to build (each card at its cheapest printing, NM Market and Low) and one TCGplayer cart for the whole list. |
+| `/set azurite` | A set at a glance: release dates, booster box price vs box EV (the site's own EV maths) with an open-or-hold verdict, chase cards, sealed prices. |
+| `/open` | Open a simulated booster pack — or `box: True`, a whole box — with the site's pull rates and real prices. |
+| `/movers` | A board of the biggest gains or drops: buttons switch 1D–1Y, gains/drops and NM Market/Low; a menu switches rarity group, or sealed product. |
+| `/meta` | The most-played cards in recent tournament top cuts, and the top four of the latest events with links to their decks. |
+| `/events 60614` | Near a postal code or town: Set Championships, prereleases (nearest first, seats and fees), and weekly play one line per store. Buttons change the kind and the radius. |
+| `/calendar` | Set releases, Challenges and qualifiers by month; buttons and a menu narrow the kind and the region. |
+| `/help` | What it does, with clickable commands and "Try it" buttons. |
+| **Apps → Price check** | Right-click any message: a trade post (`H: … W: …`) is priced as a trade, a decklist as a deck, anything else card by card. |
 | `/reports daily` | (Server managers) the daily movers report, posted into a channel. |
 
 **Names are forgiving by design.** `mowgli`, `mogli`, `moglie`, `how much is
@@ -69,9 +74,11 @@ discord/
   src/index.js          Worker entry: /interactions, /chart/..., /invite, /
   src/verify.js         Ed25519 request signatures (+ 5-minute replay window)
   src/interactions.js   commands, buttons, menus, autocomplete — deferred + PATCH
-  src/resolver.js       plain-English fuzzy card/sealed lookup
+  src/resolver.js       plain-English fuzzy card/sealed/set lookup
   src/text.js           normalisation + bounded edit distance
-  src/data.js           the Supabase reads (prices, graded, movers, events, calendar)
+  src/trade.js          /trade and trade posts: parse, price, verdict, site link
+  src/set.js            /set (overview, box EV) and /open (simulated packs)
+  src/data.js           the Supabase reads (prices, graded, movers, events, calendar, tournaments)
   src/db.js             PostgREST over fetch
   src/embeds.js         Discord message payloads (pure)
   src/charts.js         the /chart routes Discord's image proxy fetches
@@ -79,6 +86,7 @@ discord/
   src/png.js            PNG with a fast fixed-Huffman deflate
   src/site.generated.js the site's own helpers, copied verbatim (see below)
   src/card-index.json   built daily, not committed
+  src/command-ids.json  {command: id} from registration, for clickable /help (not committed)
   tools/build_index.mjs builds the index by running the SITE's catalog transform
   tools/bake_art.mjs    card art Discord can show, for printings TCGplayer hasn't listed
   public/art/           that art, served as the Worker's static assets (not committed)
@@ -121,6 +129,22 @@ discord/
   fails a reply that doesn't.
 - **Nothing it says can ping anyone** (`allowed_mentions: {parse: []}` on every
   message), because a reply can echo what somebody typed.
+- **Sized for the free Workers plan's 10 ms of CPU per request.** The resolver
+  precomputes what it can at startup and is warmed there (startup has its own,
+  larger allowance); a lookup is ~0.1–0.6 ms, a trade ~2 ms, a long chat
+  message ~4 ms. Anything that searches or resolves many names is capped.
+- **A reply Discord refuses is re-sent as plain text**, so nobody is left on
+  "thinking…". A button's failed update goes to the clicker privately.
+- **Box EV, sealed movers and the /meta play shares are computed in the daily
+  index build** with the site's own code (`processData`/`calcEV`,
+  `computeSealedDeltas`), so those replies need no database read.
+- **Boards are browsed, not re-typed**: /movers, /events and /calendar carry
+  their state in each control's custom_id and redraw in place. Every control
+  in a message has a DIFFERENT custom_id — Discord refuses a message with two
+  the same, and the guard checks every reply for it.
+- **Commands are registered before each deploy**, so their ids can be bundled
+  (src/command-ids.json) and /help can show them as clickable mentions; the
+  interactions endpoint is set after the deploy (Discord pings it first).
 
 ## Working on it
 

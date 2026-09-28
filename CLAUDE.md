@@ -4841,9 +4841,10 @@ Zaven's ask: call a card in Discord and get its picture and price history, plus
 trend reports, with **plain-English, typo-tolerant lookup as the main
 requirement** — "people will say mowgli and not know the subtitle, but there is
 one main one that is played, or spell mowgli slightly wrong". `/card`, `/price`,
-`/deck`, `/movers`, `/events`, `/calendar`, `/help`, `/reports` and a **Price
-check** message menu. Setup (the steps only Zaven can do) is `discord/README.md`.
-Guarded by `node scripts/test_discord_bot.mjs` (~800 checks) and
+`/trade`, `/deck`, `/set`, `/open`, `/movers`, `/meta`, `/events`, `/calendar`,
+`/help`, `/reports` and a **Price check** message menu (v2 additions below).
+Setup (the steps only Zaven can do) is `discord/README.md`.
+Guarded by `node scripts/test_discord_bot.mjs` (~2,300 checks) and
 `python scripts/test_discord_reports.py`.
 
 - **LIVE since 2026-09-28** (PR #149, site v493) at
@@ -4954,6 +4955,79 @@ Guarded by `node scripts/test_discord_bot.mjs` (~800 checks) and
   with a throwaway Ed25519 key pair, signs requests the way Discord does, and
   captures the follow-ups into `discord/.wrangler/sim/`. That is how every reply
   shape was checked before any Discord app existed.
+
+### v2 (2026-09-28): /trade, /set, /open, /meta, boards you browse
+
+- **The free plan's 10 ms of CPU is the binding constraint, and v1 was over it
+  on two paths**: a cold first lookup (~11 ms) and Price check on a long chat
+  message (~15–17 ms) — over the limit the reply simply never arrives. The
+  resolver now precomputes the popularity priors and each character's versions,
+  skips an edit distance when the two tokens' LETTER SETS differ by more than
+  2 per allowed edit (exact: one edit changes the set by at most two symbols —
+  property-tested in the guard), and `findInText` skips a message window whose
+  best possible coverage is under the 0.9 a clean match needs. The isolate is
+  warmed at startup. Lookup ~0.98 → ~0.12 ms, long message ~15 → ~4 ms, cold
+  lookup ~11 → ~4 ms. **Proven answer-identical**: 22,612 answers over the
+  live index (every card name, typos, rarity/foil/grade phrasings, autocomplete
+  prefixes, 810 chat messages, 40 decklists) diffed before and after, 0
+  changes. Re-run that kind of harness before touching the resolver's speed.
+- **A reply Discord refuses (400) is re-sent as plain text** (`plainFallback`);
+  a button's failed update goes to the clicker as a private follow-up.
+- **⚠ Every component in a message needs a DIFFERENT custom_id** — Discord
+  refuses the message otherwise. The boards highlight the current state on
+  several controls at once, so each control carries a letter:
+  `m|<w|d|b|g>|…` (movers), `e|<k|r>|…` (events), `cl|<k|r>|…` (calendar).
+  `checkMessage` in the guard asserts uniqueness on every reply.
+- **`/trade` prices each card at the VERSION the words name** — "enchanted
+  elsa" is the Enchanted — never at its cheapest printing (that is /deck's
+  question, not a trade's). Prices come from the index (rebuilt daily after
+  the ETL), so the reply needs no database read. Commas split items EXCEPT
+  between the word pairs real card names hold ("Fix-It Felix, Jr.", "Wake Up,
+  Alice!" — built from the index); "and", "&" and "for" never split (55 names
+  hold "and"/"&", 20 hold "for"). A whole line that is an exact card name wins
+  over reading its first number as a count ("99 Puppies"). Capped at 15 items
+  a side and 24 resolver calls a trade.
+- **The trade hands off to the site's Trade Compare through its ORIGINAL inline
+  form, `?trade=<base64url JSON>`** — still decoded by `decodeTrade` — rather
+  than `create_trade`: no database write, and that RPC's per-IP rate limit
+  would see every bot user as one Worker. Keys are the site's `tradeGroupKey`,
+  so a Challenge Promo (C1) card carries its printing (`sets[].sp` in the index).
+- **Price check reads a trade post as a trade** (`H:`/`Have:`/`W:`/`Want:`/`LF`/
+  `FT`/`ISO` markers, one-line or multi-line, markdown-bold or bulleted), then
+  a decklist as a deck, then free text card by card (only that last path is
+  capped at 1,200 characters).
+- **Box EV, sealed movers and play shares are computed in the daily index
+  build** with the site's own code: `processData` + `calcEV` (the EV tool's
+  defaults — nothing excluded, Low and NM Market), `computeSealedDeltas` as of
+  the index's price date (so a delisted product reports no move), and
+  `playDecks` (the recency-weighted count of top-cut decks, so a card's `pl`
+  reads as "in 38% of decks"). An unreleased set shows no box EV — its prices
+  are pre-sale.
+- **`/open` is the site's `simPack` with `getPull`** (copied by
+  `extract_site.mjs`), over pools built from the index; named variants are not
+  a pack slot. Averaged over 200 simulated boxes it reproduces the site's pull
+  rates (e.g. 6.12 Legendaries / 2.52 Epics / 0.32 Enchanteds per Attack of the
+  Vine! box against 6 / 2.5 / 0.333). A pack's pictures are up to four embeds
+  sharing one `url`, which Discord draws as one image grid.
+- **`/events` asks the RPC once PER KIND.** It returns the soonest series first,
+  capped, so in a busy metro "everything" was sixty weekly nights and the Set
+  Championship three weeks out never made the list. Prereleases sort nearest
+  first (they share a weekend); weekly play is one line per store.
+- **`/set`'s chase list is its own embed's description, not a field**: every
+  name is a ~220-character affiliate link and a field's 1,024 clipped the list
+  mid-link. Same reason `/deck`'s one-cart TCGplayer link (the site's
+  `tcgMassEntryParts` + `tcgMassName`, with `tcgplayer_names` carried in the
+  index) is a second embed.
+- **Commands are registered BEFORE the deploy** (`register_commands.mjs --ids
+  src/command-ids.json`) so their ids are bundled and /help shows them as
+  clickable `</name:id>` mentions; the interactions endpoint is set AFTER
+  (`--endpoint-only`). A failed registration still deploys the day's index,
+  then a last step turns the run red. `build_index.mjs` leaves `{}` for local runs.
+- **No `-#` subtext inside embeds** — it isn't reliably drawn there; secondary
+  lines are italics. Plain message content (the fallback) keeps it.
+- **The channel report is dressed in `discord_reports.py` only** (the lead
+  card's picture, "week to …" on weekly, a footer naming /reports); the
+  digest's own layout, shared with the site's webhook, is untouched.
 
 ## The guards RUN now — `.github/workflows/guards.yml` (2026-09-21)
 
