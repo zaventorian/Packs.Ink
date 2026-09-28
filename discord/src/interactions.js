@@ -170,15 +170,12 @@ async function priceCheck(it, deps) {
     const f = res.printing.f[res.fi] || res.printing.f[0];
     const price = f && f[1] && !f[6]
       ? await D.priceHistory(deps.db, f[1], f[2] || "Normal").then(D.priceSummary, () => null) : null;
-    embeds.push(E.compactCardEmbed({ R: deps.R, res, price, inkColors: deps.index.inkColors }));
+    embeds.push(E.compactCardEmbed({ R: deps.R, res, price, inkColors: deps.index.inkColors, origin: deps.origin }));
   }
   const options = found.map((res) => res.kind === "sealed"
     ? { label: res.item.n.slice(0, 100), value: deps.R.sealedKey(res.item) }
     : { label: res.card.n.slice(0, 100), value: deps.R.cardKey(res.printing, res.fi) });
-  return {
-    embeds,
-    components: [{ type: 1, components: [{ type: 3, custom_id: E.pickId("chart", D.DEFAULT_RANGE), placeholder: "Open one with its price chart", options }] }],
-  };
+  return E.priceCheckMessage({ embeds, options, range: D.DEFAULT_RANGE });
 }
 
 // ── /deck's text box ─────────────────────────────────────────────────────

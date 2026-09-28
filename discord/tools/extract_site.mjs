@@ -17,7 +17,7 @@ export const WANT = [
   // prices
   "computeSeriesDeltas", "CARD_DELTA_WINDOWS", "priceStanding",
   // links
-  "tcgUrl", "TCG_AFFILIATE_BASE", "amazonForSealed",
+  "tcgUrl", "tcgSetSearchUrl", "TCG_AFFILIATE_BASE", "amazonForSealed",
   // release calendar
   "SET_RELEASE_DATES", "UPCOMING_SET_NAMES", "PRODUCT_RELEASE_DATES", "CALENDAR_KINDS",
   "calendarSetEntries", "calendarEstimatedSetEntries", "calendarSetEstimates",

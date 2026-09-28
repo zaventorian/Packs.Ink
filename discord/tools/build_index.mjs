@@ -22,6 +22,8 @@
 // card lookup fetches live prices.
 import { writeFileSync, mkdirSync } from "node:fs";
 import { loadSite } from "./sitecode.mjs";
+import { fileURLToPath } from "node:url";
+import { bakeArt, SAFE_IMG } from "./bake_art.mjs";
 
 const SB_URL = process.env.SUPABASE_URL || "https://umwqowkiatjjltologrd.supabase.co";
 // Public publishable key — the same one Index.html and worker/index.js ship.
@@ -184,6 +186,8 @@ const artUrl = (r) => {
   if (!u) return null;
   if (u.startsWith("/img-proxy/")) u = "https://cards.lorcast.io/" + u.slice("/img-proxy/".length);
   else if (u.startsWith("/")) u = "https://packs.ink" + u;
+  // "Logos/cards/…": a regional scan or a promo photo, served by the site.
+  else if (!/^(?:https?:|data:)/.test(u)) u = "https://packs.ink/" + u;
   const m = u.match(LORCAST_ART);
   return m && m[1] === r.card_id ? null : u;
 };
@@ -278,6 +282,21 @@ for (const p of sealed) {
   });
 }
 sealedOut.sort((a, b) => a.n.localeCompare(b.n));
+
+// ── Art Discord can show ────────────────────────────────────────────────
+// See bake_art.mjs. --no-art skips the download (a quick local build) and
+// just drops the art Discord could not have shown anyway.
+// wrangler.toml's [assets] directory must exist even then, or every deploy
+// and `wrangler dev` refuses to start.
+const artDir = fileURLToPath(new URL("../public/art/", import.meta.url));
+if (process.argv.includes("--no-art")) {
+  mkdirSync(artDir, { recursive: true });
+  for (const c of identities) for (const p of c.p) if (p.img && !SAFE_IMG.test(p.img)) p.img = null;
+} else {
+  const art = await bakeArt(identities, artDir);
+  console.log(`art: baked ${art.baked} of ${art.total} printings TCGplayer has no photo of`);
+  for (const f of art.failed.slice(0, 10)) console.log(`::warning::card art not baked: ${f}`);
+}
 
 const inkColors = Object.fromEntries(Object.entries(site.INK_COLORS).map(([k, v]) => [k, v.border]));
 const out = {
