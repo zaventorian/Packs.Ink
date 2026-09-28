@@ -59,8 +59,10 @@ export default {
         return Response.redirect(u.toString(), 302);
       }
       if (request.method === "GET" && url.pathname === "/") {
+        // `reports` says whether /reports can write — i.e. whether the deploy
+        // handed the Worker a service key. A yes/no, never the key.
         return json({ ok: true, name: "packs-ink-discord", built: INDEX.built, priceDate: INDEX.priceDate,
-          cards: INDEX.cards.length, sealed: INDEX.sealed.length });
+          cards: INDEX.cards.length, sealed: INDEX.sealed.length, reports: !!env.SUPABASE_SERVICE_KEY });
       }
       return new Response("not found", { status: 404 });
     } catch (e) {
