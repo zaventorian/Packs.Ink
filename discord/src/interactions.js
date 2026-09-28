@@ -206,13 +206,15 @@ export function tradeReply(give, get, mode, deps) {
 }
 
 // ── "Price check" on a message ───────────────────────────────────────────
-// A message longer than this is read only this far: every window of it is a
-// candidate card name, and the free plan gives a request 10 ms of CPU.
+// Searching free text for card names is read only this far: every window of
+// it is a candidate name, and the free plan gives a request 10 ms of CPU. A
+// trade post or a decklist is parsed line by line under its own caps, so it
+// gets the whole message.
 const PRICE_CHECK_MAX_CHARS = 1200;
 async function priceCheck(it, deps) {
   const msg = it.data.resolved && it.data.resolved.messages && it.data.resolved.messages[it.data.target_id];
   const text = [msg && msg.content, ...((msg && msg.embeds) || []).map((e) => [e.title, e.description].filter(Boolean).join(" "))]
-    .filter(Boolean).join("\n").slice(0, PRICE_CHECK_MAX_CHARS);
+    .filter(Boolean).join("\n").slice(0, 6000);
   // A trade post ("H: … W: …") is priced as a TRADE: both sides, compared.
   const post = parseTradePost(text);
   if (post) {
@@ -223,7 +225,7 @@ async function priceCheck(it, deps) {
   if (looksLikeDeck(text)) {
     return E.deckMessage({ result: priceDeck(deps.R, parseDeckList(text)), priceDate: deps.index.priceDate, tcgNames: E.tcgNameMap(deps.index.tcgNames) });
   }
-  const found = deps.R.findInText(text, 3).filter((r) => r.kind === "card" || r.kind === "sealed");
+  const found = deps.R.findInText(text.slice(0, PRICE_CHECK_MAX_CHARS), 3).filter((r) => r.kind === "card" || r.kind === "sealed");
   if (!found.length) {
     return { content: "No Lorcana cards in that message that I can recognise. Try `/price` with the name.", embeds: [], components: [] };
   }
