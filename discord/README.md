@@ -44,9 +44,10 @@ Price check menu cover the same ground.
      people use it in any server or DM without the bot joining).
 2. **GitHub → Settings → Secrets and variables → Actions → New repository secret**:
    - `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN`
-   - Optional, only for `/reports`: `DISCORD_BOT_SUPABASE_KEY` (the Supabase
-     service key; giving the bot Worker service-role access is a choice, so it
-     has its own secret name). Also apply `supabase/173_discord_reports.sql`.
+   - Nothing extra for `/reports`: the workflow hands the bot the repo's
+     existing `SUPABASE_SERVICE_KEY` (a `DISCORD_BOT_SUPABASE_KEY` secret, if
+     you ever add one, overrides it). It does need
+     `supabase/173_discord_reports.sql` applied.
    - `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` already exist for the site.
 3. **Cloudflare**: the account needs a workers.dev subdomain (Workers & Pages →
    the subdomain shown on the overview). The first deploy fails and says so if
