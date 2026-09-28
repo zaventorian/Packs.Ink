@@ -4731,6 +4731,104 @@ BEFORE the digest for the same reason `catalog-watch.yml` tests its ack layer fi
 drifted constant or a blown embed limit fails by posting something wrong, not by failing.
 
 
+## Discord bot (`discord/`) — 2026-09-27
+
+Zaven's ask: call a card in Discord and get its picture and price history, plus
+trend reports, with **plain-English, typo-tolerant lookup as the main
+requirement** — "people will say mowgli and not know the subtitle, but there is
+one main one that is played, or spell mowgli slightly wrong". `/card`, `/price`,
+`/deck`, `/movers`, `/events`, `/calendar`, `/help`, `/reports` and a **Price
+check** message menu. Setup (the steps only Zaven can do) is `discord/README.md`.
+Guarded by `node scripts/test_discord_bot.mjs` (~800 checks) and
+`python scripts/test_discord_reports.py`.
+
+- **A SEPARATE Worker, `packs-ink-discord`, on workers.dev.** Deploying it
+  cannot touch packs.ink, and it adds no route to the site's zone.
+  `.github/workflows/discord_bot.yml` deploys it **on a daily schedule (21:45
+  UTC)** — the one scheduled deploy in the repo, and deliberately: the card
+  index lives inside the Worker and has to follow the catalog. A Workers deploy
+  costs nothing; the push policy is about the SITE. Until the `DISCORD_*`
+  secrets exist the job builds, tests and stops, green.
+- **Slash commands, not @mentions.** Reading ordinary messages needs a 24/7
+  gateway connection — a server — which this deliberately is not. Discord
+  interactions over HTTP are all a Worker can answer.
+- **The card index is built by running the SITE's catalog code.**
+  `discord/tools/sitecode.mjs` parses Index.html's app script with acorn, takes
+  the transitive closure of the declarations a function needs, and runs it in a
+  Node vm; `build_index.mjs` feeds `transformSupabaseData` live rows, so every
+  catalog rule (Holofoil mislabel, connecting foils, C2 ghosts, regional
+  exclusives, variant clones, `printingBadge`) applies with no copy of it.
+  `card-index.json` is NOT committed; `check_index.mjs` refuses a build that
+  came out small. Popularity is recency-weighted tournament top-cut appearances
+  (half-life 120 days) grouped by `cardFamilyKey`; collector words (a chase
+  rarity, a grade) switch the tiebreak to graded sale volume.
+- **⚠ `discord/src/site.generated.js` is Index.html code copied VERBATIM**
+  (`computeSeriesDeltas`, `priceStanding`, `tcgUrl`, `amazonForSealed`, the
+  calendar derivation, the postal-code walk, `gradedSlotBucket`, `rawSaleMatch`
+  and their closure). The guard fails the moment a copied statement stops
+  matching Index.html, so **changing any of those functions on the site turns
+  the Discord guard red until you run `node discord/tools/extract_site.mjs`**.
+  That is the point: the bot must never say a different "1W" or "Cheapest in 12
+  months" than the site. The deploy workflow regenerates it from the commit it
+  ships, too.
+- **Every database read is DEFERRED.** Discord gives an interaction 3 seconds;
+  the Worker answers "thinking…" (type 5, or 6 for a button) at once and PATCHes
+  `@original` from `waitUntil`. Autocomplete and `/help` are local and answer
+  directly. **`allowed_mentions: {parse: []}` on every payload** — a reply can
+  echo what somebody typed, and that could be `@everyone`.
+- **Keys are `c|<card_id>|<N|C|H|F>` and `s|<pid>`** — pipes, because card ids
+  carry colons (`extras:647652`, `<base>::variant::text-error`). A button's
+  custom_id is `r|<range>|<view>|<grade|->|<key>`, key LAST; the grade token is
+  how a graded reply's buttons remember the slab. All fit Discord's 100 chars
+  (the guard checks every card in the fixture).
+- **Charts are drawn by the Worker** (`src/chart.js` rasteriser, glyphs baked
+  from Nunito Sans by `tools/bake_font.py`, `src/png.js` with its own fixed-
+  Huffman deflate, ~5 ms per 800×340 chart). The image URL carries `?d=<price
+  date>`: Discord caches by URL, so a new day needs a new URL. Card art is
+  **TCGplayer's JPEG** (`<pid>_in_1000x1000.jpg`), not Lorcast's AVIF, which
+  Discord cannot be relied on to show.
+- **`/movers` defaults to NM Market and drops stale rows.** Low produced a $7 →
+  $0.50 "crash" on the first live test. And `price_movers` repeats a SKU's last
+  change after its listing disappears, so a mover only counts when
+  `prices_daily` holds the same price for it on the newest date (`fetchMovers`).
+  The window floor is on the STARTING price, the home banners' rule.
+- **On a promo TCGplayer cannot price, eBay leads** — the site's raw-sales
+  rule (see "Raw eBay sales"): Last sold + Avg of last N come first, TCGplayer
+  Low / Mkt second, and the chart draws each eBay sale as a DOT over the Market
+  line with Low left off (`/chart/p/...?r=<card>&rb=<bucket>`), or the sales
+  alone (`/chart/r/...`) for a card with no TCGplayer product. The split bucket
+  goes through `gradedSlotBucket` / `rawSaleMatch`, copied from the site, so a
+  Challenge card's Top Prize and Prize Wall sales never share a chart.
+- **`/deck` opens a text box** (a modal, type 9) because a slash-command option
+  cannot hold line breaks, and **Price check on a message that is mostly
+  `N Name` lines totals it as a deck** (`looksLikeDeck`: ≥5 card lines and ≥60%
+  of the lines). Each card is priced at its CHEAPEST printing, NM Market and Low.
+  Three matching tiers, cheapest first: the exact normalized name; a full name
+  within 1–2 letters of exactly ONE card (`Be Prepard`, `Tinker Bel - Giant
+  Fairy`; close to two cards means neither); then the resolver, only when it is
+  unambiguous and sure (score ≥ 0.9, or a corrected typo ≥ 0.75). A guessed row
+  says `(closest match)`; an unknown line is listed as not counted, never
+  guessed. **⚠ The resolver runs at most `MAX_GUESSES` (8) times a list** — it is
+  ~1 ms a call, a real exported list needs none, and the Worker has a small CPU
+  budget. The name index is built at startup (`prepareDeckIndex`), not per request.
+- **`/reports`** stores (server, channel, cadence) in
+  `discord_report_subscriptions` (**migration 173, STAGED**) through the service
+  key; `scripts/discord_reports.py` posts the **digest's own embed** (built by
+  `discord_digest.py`'s functions) through the bot token, daily 21:20 + 23:20
+  UTC and on Mondays for weekly. Safe to run twice: today's-prices gate plus
+  `last_posted_on`. It adds the same stale-row filter the Worker uses. A 403/404
+  is written to `last_error`, which `/reports status` shows.
+- **Secrets live in GitHub and are synced into the Worker on every deploy**:
+  `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN`, and
+  optionally `DISCORD_BOT_SUPABASE_KEY` (the service key under its own name, so
+  giving the bot Worker service-role access is a deliberate choice; without it
+  `/reports` says it is not switched on). The bot token is never logged or
+  pasted anywhere else.
+- **`node discord/tools/simulate.mjs` runs the real Worker in `wrangler dev`**
+  with a throwaway Ed25519 key pair, signs requests the way Discord does, and
+  captures the follow-ups into `discord/.wrangler/sim/`. That is how every reply
+  shape was checked before any Discord app existed.
+
 ## The guards RUN now — `.github/workflows/guards.yml` (2026-09-21)
 
 The repo carries **52 guard tests** (35 `scripts/test_*.mjs`, 17 `scripts/test_*.py` +
@@ -7612,6 +7710,12 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
+- **`supabase/173_discord_reports.sql`** — **STAGED 2026-09-27, needs a paste (only when `/reports` is wanted).**
+  Written as 172 and renumbered before any push: `172_price_movers_freshness.sql` (branch
+  `claude/suspicious-wilbur-7a848a`) took 172 and was APPLIED the same day.
+  `discord_report_subscriptions` (server, channel, cadence, last_posted_on, last_error); RLS on with
+  no policies, service_role only. The bot and `discord_reports.py` both treat a missing table as
+  "not switched on yet" and stay green. Pure ASCII, short header, per the 142 lesson.
 - ~~`supabase/171_playmat_sections.sql`~~ — **APPLIED 2026-09-27** through the Supabase connector.
   Widens `playmats_section_chk` to allow `disney` and `ravensburger` (Zaven's own headers for the
   shop exclusives); nothing else. The catalog was reloaded under it the same day.
