@@ -4819,7 +4819,7 @@ Guarded by `node scripts/test_discord_bot.mjs` (~800 checks) and
   ~1 ms a call, a real exported list needs none, and the Worker has a small CPU
   budget. The name index is built at startup (`prepareDeckIndex`), not per request.
 - **`/reports`** stores (server, channel, cadence) in
-  `discord_report_subscriptions` (**migration 173, STAGED**) through the service
+  `discord_report_subscriptions` (**migration 173, APPLIED 2026-09-28**) through the service
   key; `scripts/discord_reports.py` posts the **digest's own embed** (built by
   `discord_digest.py`'s functions) through the bot token, daily 21:20 + 23:20
   UTC and on Mondays for weekly. Safe to run twice: today's-prices gate plus
@@ -7717,7 +7717,7 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
-- **`supabase/173_discord_reports.sql`** — **STAGED 2026-09-27, needs a paste (only when `/reports` is wanted).**
+- ~~`supabase/173_discord_reports.sql`~~ — **APPLIED 2026-09-28 by Zaven; verified** (an anon read answers `42501 permission denied`, i.e. the table exists and stays private).
   Written as 172 and renumbered before any push: `172_price_movers_freshness.sql` (branch
   `claude/suspicious-wilbur-7a848a`) took 172 and was APPLIED the same day.
   `discord_report_subscriptions` (server, channel, cadence, last_posted_on, last_error); RLS on with
