@@ -67,6 +67,9 @@ Price check menu cover the same ground.
 
 After that it redeploys itself every day after the price ETL (the card index
 has to follow the catalog), and `Discord reports` posts the subscribed reports.
+The reports run whenever an ETL run finishes, not only on GitHub's schedule,
+which has been starting this repo's evening jobs 2-3 hours late. A day's report
+can go out until noon UTC the next day, and never twice to one channel.
 
 ## How it works
 

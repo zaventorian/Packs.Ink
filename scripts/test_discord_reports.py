@@ -33,6 +33,14 @@ def check(cond, msg):
 
 
 TODAY = dt.date(2026, 9, 28)      # a Monday
+UTC = dt.timezone.utc
+
+
+def at(day, hour, minute=0):
+    return dt.datetime.combine(day, dt.time(hour, minute), tzinfo=UTC)
+
+
+EVENING = at(TODAY, 21, 20)       # when the report is meant to go out
 
 
 class FakeSb:
@@ -88,10 +96,10 @@ def args(**kw):
     return SimpleNamespace(**base)
 
 
-def run(sb, disc, **kw):
+def run(sb, disc, now=EVENING, **kw):
     out = io.StringIO()
     with redirect_stdout(out):
-        code = rep.run(args(**kw), sb=sb, session=disc, today=TODAY)
+        code = rep.run(args(**kw), sb=sb, session=disc, now=now)
     return code, out.getvalue()
 
 
@@ -134,10 +142,10 @@ tue = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_p
 disc3 = FakeDiscord()
 out3 = io.StringIO()
 with redirect_stdout(out3):
-    rep.run(args(), sb=tue, session=disc3, today=TODAY + dt.timedelta(days=1))
+    rep.run(args(), sb=tue, session=disc3, now=at(TODAY + dt.timedelta(days=1), 21, 20))
 check(not disc3.posts, "weekly reports wait for Monday")
 with redirect_stdout(io.StringIO()):
-    rep.run(args(force_weekly=True), sb=tue, session=disc3, today=TODAY + dt.timedelta(days=1))
+    rep.run(args(force_weekly=True), sb=tue, session=disc3, now=at(TODAY + dt.timedelta(days=1), 21, 20))
 check(len(disc3.posts) == 1, "--force-weekly posts the weekly report")
 
 # 4. prices not in yet -> nothing
@@ -145,6 +153,30 @@ old = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_po
 disc4 = FakeDiscord()
 run(old, disc4)
 check(not disc4.posts, "yesterday's prices never post as today's")
+
+# 4b. A run that slips past midnight UTC still owes the day's report: GitHub
+# started this repo's evening schedules 2-3 hours late, and the old "prices
+# must be dated today" rule skipped the whole day (the first daily report,
+# 2026-09-28). Monday's weekly goes out too, dated Monday.
+late = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None},
+               {"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}])
+disc_late = FakeDiscord()
+run(late, disc_late, now=at(TODAY + dt.timedelta(days=1), 1, 45))
+check(len(disc_late.posts) == 2, f"a run after midnight still sends the day's daily and weekly reports ({len(disc_late.posts)})")
+check(all(u[2].get("last_posted_on") == TODAY.isoformat() for u in late.updates if "last_posted_on" in u[2]),
+      "a late post records the price date it covers, not the day it was sent")
+dated = str(disc_late.posts[0]["json"]) if disc_late.posts else ""
+check("Sep 28, 2026" in dated, "a late report says which day it covers")
+# ...until noon: a day-old report is never sent the next evening
+stale = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}])
+disc_stale = FakeDiscord()
+run(stale, disc_stale, now=at(TODAY + dt.timedelta(days=1), 12, 0))
+check(not disc_stale.posts, "a report more than half a day old is not sent")
+# and the grace never re-sends a report a channel already has
+again = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": TODAY.isoformat()}])
+disc_again = FakeDiscord()
+run(again, disc_again, now=at(TODAY + dt.timedelta(days=1), 1, 45))
+check(not disc_again.posts, "a late run never re-sends a report the channel already has")
 
 # 5. table missing / no token -> clean exit 0, nothing posted
 code5, out5 = run(FakeSb([], table_missing=True), FakeDiscord())

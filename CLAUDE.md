@@ -4941,16 +4941,29 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
 - **`/reports`** stores (server, channel, cadence) in
   `discord_report_subscriptions` (**migration 173, APPLIED 2026-09-28**) through the service
   key; `scripts/discord_reports.py` posts the **digest's own embed** (built by
-  `discord_digest.py`'s functions) through the bot token, daily 21:20 + 23:20
-  UTC and on Mondays for weekly. Safe to run twice: today's-prices gate plus
-  `last_posted_on`. It adds the same stale-row filter the Worker uses. A 403/404
-  is written to `last_error`, which `/reports status` shows.
-- **Secrets live in GitHub and are synced into the Worker on every deploy**:
-  `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` (all set
-  2026-09-28), and for `/reports` the repo's own `SUPABASE_SERVICE_KEY`, reused
-  so nobody copies a service key by hand (Zaven, 2026-09-28). A
-  `DISCORD_BOT_SUPABASE_KEY` secret overrides it. The bot token is never logged
-  or pasted anywhere else.
+  `discord_digest.py`'s functions) through the bot token, daily and on Mondays
+  for weekly. It adds the same stale-row filter the Worker uses. A 403/404 is
+  written to `last_error`, which `/reports status` shows.
+  - **⚠ It runs when an ETL run FINISHES** (`workflow_run` on "ETL", which
+    cron-job.org dispatches on time), with the 21:20 / 23:20 UTC schedule kept
+    only as a fallback. GitHub has started this repo's evening schedules 2-3
+    hours late — the 21:15 digest ran at 23:35-23:56 UTC every day that week —
+    so on the schedule alone the report landed near midnight, and the old
+    "newest prices must be dated today" rule skipped the whole day whenever a
+    run crossed it. Found 2026-09-28, the first day a report was due, when none
+    had arrived by 22:45 UTC.
+  - **A day's report may post until noon UTC the next day** (`LATE_GRACE_HOURS`),
+    never later, and `last_posted_on` holds the PRICE date a channel got — so the
+    many runs a day are safe: nothing posts twice, and no day-old report is sent
+    the next evening. The embed title carries its date, so a post after midnight
+    is still clearly that day's.
+- **Secrets live in GitHub**: `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`,
+  `DISCORD_BOT_TOKEN` (all set 2026-09-28). The deploy syncs the first two into
+  the Worker, plus, for `/reports`, the repo's own `SUPABASE_SERVICE_KEY`, reused
+  so nobody copies a service key by hand (Zaven, 2026-09-28; a
+  `DISCORD_BOT_SUPABASE_KEY` secret overrides it). **The bot token is NOT in the
+  Worker** — it stays in GitHub, used only to register commands and by
+  `discord_reports.yml` — and is never logged or pasted anywhere else.
 - **`node discord/tools/simulate.mjs` runs the real Worker in `wrangler dev`**
   with a throwaway Ed25519 key pair, signs requests the way Discord does, and
   captures the follow-ups into `discord/.wrangler/sim/`. That is how every reply
