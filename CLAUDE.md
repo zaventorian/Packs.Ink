@@ -60,7 +60,7 @@ node scripts/build_dist.mjs && npx wrangler@4 deploy
   3. **RETIRED 2026-06-30 — there is no graded ETL.** The third-party graded feed was discontinued; the legacy client paths were deleted 2026-07-29 and `graded_prices_daily` / `graded_prices_latest` were **DROPPED 2026-08-22** (migration 112; archive on Desktop). All graded value comes from the in-house `graded_sales` scrape (see "Graded pricing: legacy vs current"). `scripts/etl_tcgpricelookup_daily.py`, `scripts/graded_overrides.json`, and the `probe_/backfill_/cleanup_*graded*` scripts remain on disk for reference but are **invoked nowhere and cannot run** (the API is gone). Don't wire them back up; don't chase "graded is stale" alerts.
 - **Card metadata**: Lorcast (`scripts/load_lorcast.py`).
 - **Sealed catalog**: `scripts/load_sealed_products.py`.
-- **MCP**: `.mcp.json` configures Supabase MCP server (`mcp.supabase.com/mcp?project_ref=...`). Loads on session start; gives the agent direct DB query/mutation access without paste-back.
+- **MCP**: Supabase, Sentry and Gmail are **claude.ai account connectors** (claude.ai → Customize → Connectors), so they reach desktop, cloud and phone sessions alike — direct DB query/mutation access without paste-back. **There is no project `.mcp.json`**: its `supabase` and `netlify` entries and a local-scope `sentry` were removed 2026-09-27. The CLI copies' sign-ins had lapsed, so every session opened with "need authorizing" (and signed in, they'd double every tool); Netlify never had a token and stopped building the site 2026-09-05. Don't re-add them — git history has the old file. ⚠ `claude mcp list` does not show the connectors even with the app's environment stripped, so their absence there proves nothing; per the docs a terminal session on the claude.ai login lists them under `/mcp`.
 
 ## Native app (Capacitor) — groundwork 2026-07-17
 
@@ -2692,7 +2692,10 @@ so #7 there is five different cards.
   - **⚠ Delete a retired `art` file only AFTER the rows point at TCGplayer** — read
     `cards.image_normal` for the ids first. Deleted in the same deploy, the image 404s from the
     deploy until the next run. That is why `sulley-protective-monster-pd1-18.jpg` and
-    `violet-parr-super-resilient-pd1-19.jpg` were still in `Logos/cards/` after the switch.
+    `violet-parr-super-resilient-pd1-19.jpg` stayed in `Logos/cards/` after the switch; they
+    were deleted 2026-09-28, once a metadata run from main had pointed both rows at TCGplayer
+    (719967 / 719968, `image_normal` on tcgplayer-cdn, prices live). The scanner index's
+    `art_key` still names them, and that is fine: it is an identity key, not a URL.
 - **⚠ Check Lorcast before hand-writing any promo's stats.** #18/#19 turned out to be promo
   printings of Attack of the Vine! #128 and #176, so cloning those rows gave exact cost / ink /
   stats / lore / classifications / ability text instead of a blurry photo's best guess. A promo
@@ -3991,6 +3994,21 @@ residual is reported, never guessed. `raw_load.py` is **dry-run by default**.
   different catalog cards; "Brave Little Tailor" alone returns The First Chapter
   #115 (a bulk rare), D23 Collection #1, and Promo Set 1 #1, whose graded copies
   pass $14,000.
+- **⚠ So the searches pair a name with a PROMO token, and they were MEASURED
+  (2026-09-27).** The first deep run of bare `"Lorcana" "Brave Little Tailor"`
+  hit the 60-page cap on bulk #115s and never reached the 2022 sales. Now: 8
+  set-wide nets (`C1`, `Top Prize`, `Prize Wall`, `Side Event`, `C2`,
+  `D23`+`2022`, `Expo`+`2022`, `Cruise`) plus per-card `<name>`+`Challenge` /
+  `D23` / `2022` / `P3`, 45 in all. Replayed against all 3,225 evidence-bearing
+  titles we hold for the 24 cards, they catch **3,201**, and every one of the 24
+  misses is a graded row on the wrong card or a typo. The old subtitle-only list
+  was WORSE on recall, not just noisier: of 184 Captain Hook P1 #7 sales only 41
+  say "Forceful Duelist". **Terapeak also matches item specifics** (a "Lorcana"
+  search returns PSA auto-titles with no "Lorcana" in them), so a title-only
+  replay is a floor. **⚠ A per-card search that is a subset of a net is
+  redundant** (`"Rapunzel" "C1"` ⊂ `"C1"`) and just adds ~67s of anti-captcha
+  wait; `test_raw_match.py` pins that every search names its card and that no
+  one-term search on a base-card name comes back.
 - **⚠ `terapeak_match.match_one` stays the ONLY matcher.** Measured over the
   8,253 corpus titles carrying a watchlist token, stripping every grading token
   out of a title (which is what a raw title looks like) changed the attributed
@@ -7951,6 +7969,12 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
+- ~~`supabase/174_calendar_chattanooga_london_youth.sql`~~ — **APPLIED 2026-09-25 by Zaven; verified
+  via REST** (both rows read back: Chattanooga CCQ confirmed Nov 7-8, DLC London carries the Youth
+  Division notes; re-checked 2026-09-28). From two Ravensburger OP graphics. ⚠ It was applied under
+  the name **169** and renumbered twice before merge (169 → 172 → 174), because main's
+  `169_tcgplayer_names.sql`, then `172_price_movers_freshness.sql` and `173_discord_reports.sql`,
+  took those numbers first. Same SQL, and re-running it is safe.
 - ~~`supabase/173_discord_reports.sql`~~ — **APPLIED 2026-09-28 by Zaven; verified** (an anon read answers `42501 permission denied`, i.e. the table exists and stays private).
   Written as 172 and renumbered before any push: `172_price_movers_freshness.sql` (branch
   `claude/suspicious-wilbur-7a848a`) took 172 and was APPLIED the same day.
@@ -7971,9 +7995,7 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
   a new table, its read policy and grants, and the `playmat_prices_latest` view). Loaded the same
   day: 63 mats (`load_playmats.py`), 21,570 prices from the local archive cache plus the
   2026-09-26 publish (`backfill_playmat_prices.py`). Safe ahead of the client — nothing read it
-  until the Playmats tab shipped. ⚠ Open PR #138 carries a
-  `169_calendar_chattanooga_london_youth.sql` that collides with main's `169_tcgplayer_names.sql`;
-  renumber that one (to 172 or later — 171 is taken by the playmat sections) before it merges.
+  until the Playmats tab shipped.
 - **`supabase/168_curators_cc2.sql`** — **STAGED 2026-09-22, needs a paste.** Creates
   `set_curators_cc2` — "Curator's Collection: Beauty and the Beast" (code **CC2**), the second
   Curator's Collection drop (see 107 for CC1, Heroines). Announced at D23 2026, six premium foil
