@@ -1,11 +1,17 @@
-// set.js — /set (a set at a glance) and /open (a simulated pack or box).
+// set.js — /set (a set at a glance), /open (a simulated pack or box) and /new
+// (the site's reveal reel, below).
 //
-// Both answer from the card index alone: the build runs the site's own EV
+// /set and /open answer from the card index alone: the build runs the site's own EV
 // maths each day (build_index.mjs), and a pack is the site's own simPack with
 // the site's own pull rates (site.generated.js). So "Box EV" here is the number
 // Analytics » Expected Value shows, and a simulated Enchanted turns up exactly
 // as often as it does in the site's simulator.
-import { simPack, getPull, tcgUrl, INKS } from "./site.generated.js";
+import {
+  simPack, getPull, tcgUrl, INKS,
+  revealRotation, revealSetLabel, REVEAL_WINDOW_HOURS, REVEAL_MAX_CARDS, REVEAL_EXCLUDED_SETS,
+  SET_DISPLAY_NAMES, SET_ORDER, PROMO_RARITY_SETS, normalizeRarity,
+  SUPPRESSED_CARD_IDS, TCG_PID_OVERRIDES, COLLECTOR_NUMBER_OVERRIDES, EXTRAS_MAP, CONNECTING_FOILS,
+} from "./site.generated.js";
 import { money, shortDate, BRAND_COLOR, cardImage, buyUrl, AFFILIATE_NOTE, openId, inkMarks } from "./embeds.js";
 import { FIN_PRINTING } from "./data.js";
 
@@ -162,21 +168,142 @@ export function setMessage(o, { origin } = {}) {
 }
 
 // ── /new ─────────────────────────────────────────────────────────────────
-// The site's reveal reel, as a message: every card that first reached the
-// catalog in the last 96 hours (reprints and Extras excluded — the build ran
-// the site's own revealRotation), newest first. A card that has aged out of
-// the window since the build is dropped here, so a late index never presents
-// last week's reveals as news.
-export const REVEAL_WINDOW_MS = 96 * 3600 * 1000;
-export function newCards(R, index, now = Date.now()) {
+// The site's reveal reel, worked out when someone asks. The daily build hands
+// over the reel's INPUTS rather than its answer — every card that reached the
+// catalog inside the window, and when each card's NAME was first seen — and
+// this runs the site's own revealRotation over them plus any card that has
+// landed since the build.
+//
+// ⚠ Two reasons it cannot be answered at build time. Reveals land all day
+// (prestaged art through the afternoon, Lorcast's load in the evening) and the
+// index is built once, so a reel frozen at build time ran up to a day behind the
+// site's. And the site's reel moves on its own: a card leaves 96 hours after its
+// NAME first appeared, so an Enchanted revealed on Wednesday goes with Monday's
+// base card — which only a first-seen time can reproduce.
+export const REVEAL_WINDOW_MS = REVEAL_WINDOW_HOURS * 36e5;
+const isoOf = (ms) => new Date(ms).toISOString();
+
+// The index's window, as the rows revealRotation reads. An entry from an index
+// built before first-seen times were stored ({id, t} alone) takes its name,
+// set and number from the card index and counts its own time as first seen.
+export function indexRevealRows(R, index) {
+  const rows = [];
+  for (const e of index.reveals || []) {
+    if (!e || !e.id || !Number.isFinite(e.t)) continue;
+    const hit = R.byCardId.get(e.id);
+    const name = e.n || (hit && R.cards[hit.i].n);
+    if (!name) continue;
+    rows.push({ card_id: e.id, "Product Name": name, added_at: isoOf(e.t), img_normal: "art",
+      Set: e.s != null ? e.s : (hit && R.sets[hit.p.s] ? R.sets[hit.p.s].n : ""),
+      Number: e.no != null ? e.no : (hit ? hit.p.no : "") });
+    // When the name was first seen: the reel drops every card of a name once
+    // that name is older than the window.
+    if (Number.isFinite(e.f) && e.f < e.t) rows.push({ "Product Name": name, added_at: isoOf(e.f) });
+  }
+  return rows;
+}
+
+// What the daily build stores for the reel: every card inside the window at
+// `now`, one per card_id, art only, never Extras, only cards the index holds —
+// with when its NAME was first seen, when that is earlier than the card. A
+// name first seen before the window is left out: it is a reprint now and stays
+// one. These are revealRotation's own checks in its own order, so the stored
+// entries give the site's reel at any later moment too (the guard proves it).
+export function revealInputs(rows, { now = Date.now(), indexed = null } = {}) {
+  const cut = now - REVEAL_WINDOW_MS;
+  const firstSeen = new Map();
+  for (const r of rows || []) {
+    const nm = r && r["Product Name"];
+    if (!nm) continue;
+    const t = r.added_at ? Date.parse(r.added_at) : NaN;
+    const v = Number.isFinite(t) ? t : -Infinity;
+    if (!firstSeen.has(nm) || v < firstSeen.get(nm)) firstSeen.set(nm, v);
+  }
+  const win = new Map();
+  for (const r of rows || []) {
+    if (!r || !r.card_id || !r.added_at || win.has(r.card_id) || (indexed && !indexed.has(r.card_id))) continue;
+    if (REVEAL_EXCLUDED_SETS.has(r.Set)) continue;
+    const t = Date.parse(r.added_at);
+    const f = firstSeen.get(r["Product Name"]);
+    if (!Number.isFinite(t) || t < cut || !(f >= cut)) continue;
+    if (!(r.img_normal || r.img_large || r.img_small)) continue;
+    win.set(r.card_id, { id: r.card_id, t, n: r["Product Name"], s: r.Set || "", no: String(r.Number || ""),
+      ...(f < t ? { f } : {}) });
+  }
+  return [...win.values()].sort((a, b) => b.t - a.t);
+}
+
+// Cards that reached the catalog after the build read it: a direct read of
+// `cards`, put through the rules the site's catalog transform applies before
+// its reel ever sees a row, so a card that landed an hour ago is judged the way
+// tomorrow's index will judge it.
+const FRESH_COLS = "id,name,version,set_id,rarity,ink,inks,collector_number,"
+  + "image_small,image_normal,image_large,tcgplayer_product_id,inserted_at,sets(name)";
+// Rows inserted a little before the read are asked for too — a row landing
+// while the build paged through `cards` can miss it — and those the index did
+// see are skipped by id, so the overlap costs nothing.
+const FRESH_OVERLAP_MS = 2 * 36e5;
+const FRESH_LIMIT = 250;
+// The site's transform skips a connecting foil's companion product outright
+// (Index.html: `new Set(Object.values(CONNECTING_FOILS))`).
+const FOIL_COMPANION_PIDS = new Set(Object.values(CONNECTING_FOILS));
+const pgQuote = (s) => '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+export async function freshRevealRows(db, R, index, now = Date.now()) {
+  const cutoff = now - REVEAL_WINDOW_MS;
+  const read = Date.parse(index.catalogAt || index.built || "");
+  const since = Math.max(cutoff, (Number.isFinite(read) ? read : cutoff) - FRESH_OVERLAP_MS);
+  if (since >= now) return [];
+  const got = await db.get("cards", { select: FRESH_COLS, inserted_at: "gt." + isoOf(since),
+    order: "inserted_at.desc,id.asc", limit: FRESH_LIMIT });
+  const rows = [];
+  for (const c of Array.isArray(got) ? got : []) {
+    if (!c || !c.id || !c.name || R.byCardId.has(c.id) || SUPPRESSED_CARD_IDS.has(c.id)) continue;
+    const raw = c.sets && c.sets.name;
+    const set = SET_DISPLAY_NAMES[raw] || raw;
+    if (!set) continue;
+    const name = c.version ? c.name + " - " + c.version : c.name;
+    const ov = TCG_PID_OVERRIDES[name + "|" + (c.collector_number || "")];
+    const pid = ov != null ? ov : c.tcgplayer_product_id;
+    if (pid != null && FOIL_COMPANION_PIDS.has(pid)) continue;
+    if (pid != null && EXTRAS_MAP[pid] && EXTRAS_MAP[pid].excludeFromBaseSet) continue;
+    let rarity = normalizeRarity(c.rarity);
+    if (!SET_ORDER.includes(set)) rarity = "Promo";
+    else if (PROMO_RARITY_SETS.has(set)) rarity = "Promo";
+    const art = c.image_normal || c.image_large || c.image_small || null;
+    rows.push({ card_id: c.id, "Product Name": name, _card: c.name, Set: set, added_at: c.inserted_at, img_normal: art,
+      Number: COLLECTOR_NUMBER_OVERRIDES[(c.set_id || "") + "|" + (c.collector_number || "")] || c.collector_number || "",
+      _fresh: { rarity, pid: pid ?? null, art: c.image_large || art,
+        inks: Array.isArray(c.inks) && c.inks.length ? c.inks : (c.ink ? [c.ink] : []) } });
+  }
+  if (!rows.length) return [];
+  // ⚠ A reprint is not a reveal: a new printing of a name the catalog held
+  // before the window is left out, exactly as the site leaves it out. That is a
+  // question about the WHOLE catalog, so it is asked of the database. If it
+  // cannot be answered this throws, and the caller shows the index alone —
+  // never a list that might present an old card as news.
+  const old = await db.get("cards", { select: "id,name,version",
+    name: "in.(" + [...new Set(rows.map((r) => r._card))].map(pgQuote).join(",") + ")",
+    or: `(inserted_at.lt.${pgQuote(isoOf(cutoff))},inserted_at.is.null)`, limit: 2000 });
+  for (const o of Array.isArray(old) ? old : []) {
+    if (!o || !o.name || SUPPRESSED_CARD_IDS.has(o.id)) continue;
+    rows.push({ "Product Name": o.version ? o.name + " - " + o.version : o.name, added_at: null });
+  }
+  return rows;
+}
+
+// The reel: the site's revealRotation over the index's window and whatever
+// freshRevealRows found. An index card keeps its printing (i, p); a card the
+// index has not seen yet carries what the database said about it.
+export function newCards(R, index, now = Date.now(), fresh = []) {
   const out = [];
-  for (const r of index.reveals || []) {
-    if (!(r.t <= now && r.t >= now - REVEAL_WINDOW_MS)) continue;
-    const hit = R.byCardId.get(r.id);
-    if (hit) out.push({ ...hit, t: r.t });
+  for (const c of revealRotation([...indexRevealRows(R, index), ...fresh], now)) {
+    const hit = R.byCardId.get(c.card_id);
+    if (hit) out.push({ i: hit.i, p: hit.p, t: c.t, set: c.set });
+    else if (c.row && c.row._fresh) out.push({ t: c.t, set: c.set, name: c.name, fresh: c.row._fresh });
   }
   return out;
 }
+
 // A card of a set still being revealed has no TCGplayer listing, and a search
 // for it finds nothing — so a name is linked only when it has its own listing.
 // Unlinked, every reveal fits: linked, a 250-character search URL per line
@@ -184,8 +311,15 @@ export function newCards(R, index, now = Date.now()) {
 // RANK is declared further down; read it at call time, never at import.
 const newRank = (r) => (r === "Promo" ? 3 : RANK[r] || 0);
 const NEW_BOLD = new Set(["Legendary", "Enchanted", "Epic", "Iconic"]);
-export function newCardsMessage(R, index, cards, { origin } = {}) {
-  const label = index.revealSet && cards.some((c) => R.sets[c.p.s] && R.sets[c.p.s].n === index.revealSet) ? index.revealSet : null;
+const rarityOf = (c) => (c.fresh ? c.fresh.rarity : c.p.r) || null;
+// Headings are DAYS back from the moment of asking. Reveals trickle in one or
+// two at a time (prestaged art is added through the day), so a heading per
+// load timestamp was a heading per card, and Discord's relative times coarsen
+// with age until two neighbouring headings both said "a day ago".
+const DAY_MS = 24 * 36e5;
+const ageHeading = (k) => (k === 0 ? "Added in the last 24 hours" : `Added ${k}–${k + 1} days ago`);
+export function newCardsMessage(R, index, cards, { origin, now = Date.now() } = {}) {
+  const label = revealSetLabel(cards);
   const url = label ? setPageUrl(label) : "https://packs.ink/cards";
   if (!cards.length) {
     return { embeds: [{ title: "Nothing new this week", color: BRAND_COLOR,
@@ -194,26 +328,31 @@ export function newCardsMessage(R, index, cards, { origin } = {}) {
       components: [{ type: 1, components: [{ type: 2, style: 5, label: "Release calendar", url: "https://packs.ink/calendar" }] }] };
   }
   const line = (c) => {
+    const rar = rarityOf(c);
+    const rarTxt = rar ? (NEW_BOLD.has(rar) ? ` · **${rar}**` : ` · ${rar}`) : "";
+    const where = c.set && c.set !== label ? ` · ${c.set}` : "";
+    if (c.fresh) {
+      const name = clip(c.name, 60);
+      const shown = c.fresh.pid ? `[${name}](${buyUrl(c.name, c.fresh.pid, null)})` : name;
+      return `${inkMarks(c.fresh.inks)} ${shown}${rarTxt}${where}`.trim();
+    }
     const card = R.cards[c.i];
-    const set = R.sets[c.p.s] || {};
     const f = c.p.f[0] || [];
     const name = clip(card.n, 60);
     const shown = f[1] && !f[6] ? `[${name}](${buyUrl(card.n, f[1], f[2] || FIN_PRINTING[f[0]])})` : name;
-    const rar = c.p.r ? (NEW_BOLD.has(c.p.r) ? ` · **${c.p.r}**` : ` · ${c.p.r}`) : "";
-    const where = set.n && set.n !== label ? ` · ${set.n}` : "";
-    return `${inkMarks(card.i)} ${shown}${rar}${where}`.trim();
+    return `${inkMarks(card.i)} ${shown}${rarTxt}${where}`.trim();
   };
-  // One heading per catalog load: a day's reveals share one timestamp.
   const groups = [];
   for (const c of cards) {
+    const k = Math.max(0, Math.floor((now - c.t) / DAY_MS));
     const g = groups[groups.length - 1];
-    if (g && g.t === c.t) g.cards.push(c); else groups.push({ t: c.t, cards: [c] });
+    if (g && g.k === k) g.cards.push(c); else groups.push({ k, cards: [c] });
   }
   const body = [];
   let used = 0, left = cards.length;
   const budget = 3500;
   for (const g of groups) {
-    const head = `**Added <t:${Math.floor(g.t / 1000)}:R>**`;
+    const head = `**${ageHeading(g.k)}**`;
     if (used + head.length + 1 > budget) break;
     body.push(head);
     used += head.length + 1;
@@ -227,30 +366,38 @@ export function newCardsMessage(R, index, cards, { origin } = {}) {
     if (used >= budget - 40) break;
   }
   if (left > 0) body.push(`*…and ${left} more*`);
-  const capped = index.revealCap && cards.length >= index.revealCap;
+  const capped = cards.length >= REVEAL_MAX_CARDS;
   const intro = capped
     ? `The **${cards.length}** newest cards, from the last four days.`
     : `**${cards.length} new card${cards.length === 1 ? "" : "s"}** in the last four days.`;
   const linked = body.some((l) => l.includes("]("));
+  const pending = cards.some((c) => c.fresh);
   const main = {
     title: label ? `Just revealed: ${label}` : "Just revealed", url, color: BRAND_COLOR,
     description: intro + "\n\n" + body.join("\n"),
-    footer: { text: "Added to packs.ink as they're revealed" + (linked ? ` · ${AFFILIATE_NOTE}` : "") },
+    footer: { text: ["Added to packs.ink as they're revealed",
+      // A card that landed since the daily build has no card page in the bot
+      // yet, so it is listed but not in the menus.
+      pending ? "The newest open from the menu after the daily update" : null,
+      linked ? AFFILIATE_NOTE : null].filter(Boolean).join(" · ") },
   };
   // Pictures: the biggest reveals first, newest among equals.
-  const byRank = cards.slice().sort((a, b) => newRank(b.p.r) - newRank(a.p.r) || b.t - a.t);
+  const byRank = cards.slice().sort((a, b) => newRank(rarityOf(b)) - newRank(rarityOf(a)) || b.t - a.t);
   const pics = [];
   for (const c of byRank) {
     if (pics.length >= 4) break;
-    const img = cardImage(c.p, origin);
+    const img = c.fresh
+      ? cardImage({ img: c.fresh.art, f: c.fresh.pid ? [["N", c.fresh.pid]] : [] }, origin)
+      : cardImage(c.p, origin);
     if (img && !pics.includes(img)) pics.push(img);
   }
   const embeds = [{ ...main, ...(pics[0] ? { image: { url: pics[0] } } : {}) }, ...pics.slice(1).map((u) => ({ url, image: { url: u } }))];
-  // Every card reachable from a menu: a select holds 25, and a reel holds up
-  // to 36, so a second menu takes the rest (each with its own custom_id).
+  // Every index card reachable from a menu: a select holds 25, and a reel holds
+  // up to 36, so a second menu takes the rest (each with its own custom_id).
   const options = [];
   const seen = new Set();
   for (const c of cards) {
+    if (c.fresh) continue;
     const key = R.cardKey(c.p, 0);
     if (seen.has(key) || options.length >= 50) continue;
     seen.add(key);

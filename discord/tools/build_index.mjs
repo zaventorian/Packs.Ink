@@ -24,6 +24,7 @@ import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { loadSite } from "./sitecode.mjs";
 import { fileURLToPath } from "node:url";
 import { bakeArt, SAFE_IMG } from "./bake_art.mjs";
+import { indexRevealRows, revealInputs } from "../src/set.js";
 
 const SB_URL = process.env.SUPABASE_URL || "https://umwqowkiatjjltologrd.supabase.co";
 // Public publishable key — the same one Index.html and worker/index.js ship.
@@ -60,9 +61,9 @@ const site = loadSite([
   // /set's box EV and /movers' sealed movers: the site's own maths, run here
   // once a day so the Worker answers from the index with no database read.
   "processData", "calcEV", "computeSealedDeltas", "SEALED_MOVER_KIND_OF_TYPE", "lorcanaSetArt",
-  // /new: the site's own reveal reel — a card is news for 96 hours after it
-  // first lands, a reprint never is, Extras never are.
-  "revealRotation", "revealSetLabel", "REVEAL_MAX_CARDS",
+  // /new: the site's own reveal reel, to check the inputs stored below still
+  // reproduce it.
+  "revealRotation", "REVEAL_WINDOW_HOURS",
 ]);
 
 const CARDS_COLS = "id,set_id,name,version,rarity,ink,inks,collector_number,cost,inkable,card_type,"
@@ -71,6 +72,9 @@ const PRICE_COLS = "tcgplayer_product_id,printing,low_price,market_price,price_d
 const SEALED_COLS = "tcgplayer_product_id,set_id,product_type,name,clean_name,low_price,market_price,image_url,printing,price_date,is_stale";
 
 console.log("fetching catalog…");
+// When the catalog was read. A card inserted after this is not in the index,
+// and the Worker asks the database for exactly those when /new is run.
+const catalogAt = new Date().toISOString();
 const [sets, prices, cards, sealed, tournaments, tdecks, gradedRoll, rawRoll] = await Promise.all([
   sbAll("sets", { select: "id,name,code,released_at", order: "id.asc" }),
   sbAll("card_prices_latest", { select: PRICE_COLS, order: "tcgplayer_product_id.asc,printing.asc" }),
@@ -92,8 +96,6 @@ const setNameById = Object.fromEntries(sets.map((s) => [s.id, s.name]));
 const rows = site.transformSupabaseData(prices, cards, setNameById);
 site.setPrintingBadges(rows);
 const priceDate = prices.reduce((m, p) => (p.price_date && p.price_date > m ? p.price_date : m), "");
-const reveals = site.revealRotation(rows, Date.now());
-console.log(`  reveals: ${reveals.length} card(s) in the site's 96-hour window`);
 console.log(`  transform -> ${rows.length} catalog rows, newest price ${priceDate}`);
 
 // ── Sets ────────────────────────────────────────────────────────────────
@@ -310,6 +312,24 @@ const identities = [...byName.values()].map((ident) => {
 });
 identities.sort((a, b) => a.n.localeCompare(b.n));
 
+// ── /new: the reel's inputs, not its answer ─────────────────────────────
+// The Worker runs the site's revealRotation when someone asks, over these and
+// any card that has landed since (see revealInputs in src/set.js).
+const revealNow = Date.now();
+const indexedIds = new Set(identities.flatMap((c) => c.p.map((p) => p.id)));
+const reveals = revealInputs(rows, { now: revealNow, indexed: indexedIds });
+// ⚠ The same inputs, run the way the Worker runs them, must give the site's
+// reel. A difference means this derivation drifted from revealRotation.
+{
+  const noR = { byCardId: new Map(), cards: [], sets: [] };
+  const mine = site.revealRotation(indexRevealRows(noR, { reveals }), revealNow).map((c) => c.card_id);
+  const theirs = site.revealRotation(rows, revealNow).map((c) => c.card_id).filter((id) => indexedIds.has(id));
+  if (mine.slice(0, theirs.length).join() !== theirs.join()) {
+    console.log(`::warning::/new inputs no longer reproduce the site's reel (${mine.length} vs ${theirs.length} cards)`);
+  }
+  console.log(`  reveals: ${reveals.length} card(s) inside the ${site.REVEAL_WINDOW_HOURS}-hour window; the site's reel shows ${theirs.length}`);
+}
+
 // ── Sealed ──────────────────────────────────────────────────────────────
 // Same admission rule as the site's searchSealedProducts: priced rows only,
 // never a promo single or a hidden multi-unit listing.
@@ -389,14 +409,11 @@ const inkColors = Object.fromEntries(Object.entries(site.INK_COLORS).map(([k, v]
 const out = {
   v: 2,
   built: new Date().toISOString(),
+  catalogAt,
   priceDate,
   playDecks,
-  // Newest first, as the reel shows them; the Worker drops any that have aged
-  // out of the 96-hour window by the time it answers.
-  reveals: reveals.map((c) => ({ id: c.card_id, t: c.t })),
-  revealSet: site.revealSetLabel(reveals),
-  // The site's reel stops at this many; a reel that long may have more behind it.
-  revealCap: site.REVEAL_MAX_CARDS,
+  // The reel's inputs (see above), newest first.
+  reveals,
   tcgNames: Object.fromEntries(tcgNames.map((r) => [String(r.product_id), r.name])),
   newestMain: site.MAINLINE_SETS[site.MAINLINE_SETS.length - 1],
   sets: setsOut,

@@ -5011,10 +5011,28 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
   Vine! box against 6 / 2.5 / 0.333). A pack's pictures are up to four embeds
   sharing one `url`, which Discord draws as one image grid.
 - **`/new` is the site's reveal reel** (`revealRotation`: `added_at` within 96
-  hours, capped at `REVEAL_MAX_CARDS` 36, Extras and reprints left out), run in
-  the daily index build into `index.reveals` (`{id, t}`), `revealSet` and
-  `revealCap`. Grouped by load time, newest first, a picture grid of up to four,
-  and two menus past 25 cards. **⚠ A name links to TCGplayer only when that
+  hours, capped at `REVEAL_MAX_CARDS` 36, Extras and reprints left out), **run
+  when someone asks, not at build time** (2026-09-28). Reveals land all day
+  (prestaged art through the afternoon, Lorcast's load in the evening) and the
+  index is built once, so a reel frozen in the index ran up to a day behind the
+  site's. The build stores the reel's INPUTS in `index.reveals` — every card
+  inside the window, uncapped, `{id, t, n, s, no, f?}`, where `f` is when the
+  card's NAME was first seen (a card leaves the site's reel once its name is
+  older than the window) — plus `index.catalogAt`. The Worker runs the site's
+  `revealRotation` over those plus any card inserted since `catalogAt - 2h`
+  (`freshRevealRows`: one read of `cards` with `sets(name)`, put through the
+  transform's rules — display names, promo rarity, suppressed rows, pid
+  overrides, companion and Extras-only products), so /new is DEFERRED.
+  **⚠ The reprint check is a second read, and if it fails nothing just added is
+  shown** (fail closed); if the first read fails the reply comes from the index.
+  `revealInputs` (set.js) is the one derivation; the build warns if its entries
+  stop reproducing the site's reel, and the guard proves they give the site's
+  reel at the build moment and at every later moment. A just-added card is
+  listed but kept out of the menus until the next build. Headings are DAYS back
+  from the moment of asking ("Added in the last 24 hours", "Added 1–2 days
+  ago"): reveals trickle in one or two at a time, so a heading per load was a
+  heading per card. Newest first, a picture grid of up to four, and two menus
+  past 25 cards. **⚠ A name links to TCGplayer only when that
   printing has its own listing** (`f[1] && !f[6]`): a card of a set still being
   revealed has none, and a ~250-character search link per line fit 13 of 36.
   **⚠ `newRank` reads `RANK` at CALL time** — `RANK` is declared further down

@@ -623,34 +623,166 @@ const D = await mod("discord/src/data.js");
   eq(S.parsePackId("k|3|7"), null, "a pack id only opens 1 or 24");
 }
 
-// ── 10c. /new — the site's reveal reel ───────────────────────────────────
-// The build runs the site's revealRotation; the Worker only drops what has
-// aged out of the 96-hour window since, so a late index never presents last
-// week's reveals as news.
+// ── 10c. /new — the site's reveal reel, worked out when asked ────────────
+// The build stores the reel's INPUTS and the Worker runs the site's own
+// revealRotation over them, plus any card added since. Pinned: the stored
+// inputs give the site's reel at the build moment AND later (cards and names
+// ageing out on the site's schedule); a card added after the build shows up,
+// judged by the site's catalog rules; a reprint never does, and if that cannot
+// be checked nothing fresh is shown; the reply's shape.
 {
   const S = await mod("discord/src/set.js");
+  const G = await mod("discord/src/site.generated.js");
   const now = Date.parse("2026-09-28T12:00:00Z");
   const H = 3600 * 1000;
+  const iso = (ms) => new Date(ms).toISOString();
+  eq(S.REVEAL_WINDOW_MS, G.REVEAL_WINDOW_HOURS * H, "/new's window is the site's REVEAL_WINDOW_HOURS");
+
+  // (a) An index built before first-seen times were stored ({id, t} alone)
+  // still works: the window is kept; an aged-out, a future and an unknown card
+  // are dropped.
   const ids = index.cards.slice(0, 45).map((c) => c.p[0].id);
-  const lead = R.byCardId.get(ids[0]);
-  // Three catalog loads of 12, the way reveals arrive: one timestamp a load.
   const batch = [1, 20, 40];
-  const reveals = [
+  const legacy = [
     ...ids.slice(0, 36).map((id, k) => ({ id, t: now - batch[Math.floor(k / 12)] * H })),
     { id: ids[36], t: now - 97 * H },
     { id: ids[37], t: now + 5 * H },
     { id: "crd_not_in_this_index", t: now - H },
   ];
-  const ix = { ...index, reveals, revealSet: R.sets[lead.p.s].n, revealCap: 36 };
-  const got = S.newCards(R, ix, now);
+  const got = S.newCards(R, { ...index, reveals: legacy }, now);
   eq(got.length, 36, "/new keeps the 96-hour window and drops an aged-out, a future and an unknown card");
   ok(got.every((c, k) => k === 0 || got[k - 1].t >= c.t), "/new lists the newest first");
-  const m = S.newCardsMessage(R, ix, got, { origin: "https://bot.example" });
+  eq(S.newCards(R, { ...index, reveals: undefined }, now).length, 0, "/new on an index with no reveals shows nothing, not an error");
+
+  // (b) Storing inputs instead of the answer is only safe if they give the
+  // site's reel at every later moment too. Random catalogs: names shared across
+  // cards, printings, Extras rows, missing art, missing and future stamps.
+  {
+    let seed = 11;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    const noR = { byCardId: new Map(), cards: [], sets: [] };
+    let bad = 0, checks = 0, full = 0;
+    for (let trial = 0; trial < 80; trial++) {
+      const rows = [];
+      const names = 5 + Math.floor(rnd() * 25);
+      for (let c = 0; c < 45; c++) {
+        const name = "Card " + Math.floor(rnd() * names);
+        const at = rnd() < 0.05 ? null : iso(now - rnd() * 9 * 24 * H + (rnd() < 0.06 ? 30 * H : 0));
+        const set = rnd() < 0.08 ? G.EXTRAS_SET_NAME : (rnd() < 0.5 ? "Hyperia City" : "Promo Set 3");
+        const no = String(1 + Math.floor(rnd() * 200));
+        const n = rnd() < 0.3 ? 2 : 1;
+        for (let k = 0; k < n; k++) {
+          rows.push({ card_id: "c" + c, "Product Name": name, Set: k && rnd() < 0.3 ? G.EXTRAS_SET_NAME : set,
+            added_at: at, img_normal: rnd() < 0.12 ? null : "art.jpg", Number: no });
+        }
+      }
+      const inputs = S.revealInputs(rows, { now });
+      for (const h of [0, 1, 7, 23, 49, 95, 97, 150]) {
+        const want = G.revealRotation(rows, now + h * H).map((c) => c.card_id).join();
+        const have = G.revealRotation(S.indexRevealRows(noR, { reveals: inputs }), now + h * H).map((c) => c.card_id).join();
+        checks++;
+        if (want) full++;
+        if (want !== have) bad++;
+      }
+    }
+    eq(bad, 0, `the stored reveal inputs give the site's reel now and later (${checks} checks, ${full} non-empty)`);
+  }
+
+  // (c) Cards added after the build: read from the database, put through the
+  // site's catalog rules, reprints left out.
+  const known = index.cards[0].p[0];
+  const extrasOnly = Object.keys(G.EXTRAS_MAP).find((pid) => G.EXTRAS_MAP[pid].excludeFromBaseSet);
+  const row = (id, extra) => ({ id, name: "Brand New", version: id, set_id: "set_x", rarity: "Common", ink: "Ruby", inks: null,
+    collector_number: "7", image_small: null, image_normal: "https://img.example/" + id + ".jpg", image_large: null,
+    tcgplayer_product_id: null, inserted_at: iso(now - 2 * H), sets: { name: "Hyperia City" }, ...extra });
+  const freshRows = [
+    row("first-look", { rarity: "Super_rare", inks: ["Ruby", "Amber"] }),
+    row("avif-only", { rarity: "Enchanted", image_normal: "https://cards.lorcast.io/card/x.avif", inserted_at: iso(now - 3 * H) }),
+    row("listed", { name: "Listed Promo", version: "Fresh", rarity: "Rare", tcgplayer_product_id: 999001,
+      image_normal: "https://cards.lorcast.io/card/p.avif", sets: { name: "Promo Set 3" }, inserted_at: iso(now - 4 * H) }),
+    row("renamed-set", { name: "Renamed", sets: { name: "Challenge Promo" } }),
+    row("unheard-set", { name: "Far Future", sets: { name: "A Set Nobody Has Seen" } }),
+    row("quoted", { name: 'Wake Up, "Alice"', version: "Back\\Slash", inserted_at: iso(now - 5 * H) }),
+    row("reprint", { name: "Old Friend", version: "Again" }),
+    row(known.id, { name: "Known" }),
+    row([...G.SUPPRESSED_CARD_IDS][0], { name: "Suppressed" }),
+    row("no-set", { name: "Nowhere", sets: null }),
+    row("no-art", { name: "Blank", image_normal: null }),
+    row("future", { name: "Tomorrow", inserted_at: iso(now + 5 * H) }),
+    row("companion", { name: "Companion", tcgplayer_product_id: Object.values(G.CONNECTING_FOILS)[0] }),
+    ...(extrasOnly ? [row("extras-only", { name: "Extras Only", tcgplayer_product_id: Number(extrasOnly) })] : []),
+  ];
+  const calls = [];
+  const stub = {
+    async get(table, params) {
+      calls.push({ table, params });
+      if (params.inserted_at) return freshRows;
+      return [{ id: "crd_old_friend", name: "Old Friend", version: "Again" }];
+    },
+  };
+  const ix = { ...index, reveals: legacy.slice(24, 29), catalogAt: iso(now - 10 * H) };
+  const fresh = await S.freshRevealRows(stub, R, ix, now);
+  eq(calls[0] && calls[0].params.inserted_at, "gt." + iso(now - 12 * H), "/new asks for cards added since the index read the catalog (with 2h of overlap)");
+  ok(calls[0] && /sets\(name\)/.test(calls[0].params.select), "the fresh read brings each card's set name with it");
+  const inList = calls[1] && calls[1].params.name;
+  ok(inList && inList.includes('"Wake Up, \\"Alice\\""') && inList.includes('"Brand New"'), `names in the reprint check are quoted for PostgREST (${inList})`);
+  ok(calls[1] && calls[1].params.or === `(inserted_at.lt."${iso(now - S.REVEAL_WINDOW_MS)}",inserted_at.is.null)`, "the reprint check asks for rows older than the window, or never stamped");
+  const cards = S.newCards(R, ix, now, fresh);
+  const fr = cards.filter((c) => c.fresh);
+  eq(fr.map((c) => c.name).sort().join(" | "), ["Brand New - first-look", "Brand New - avif-only", "Listed Promo - Fresh",
+    "Renamed - renamed-set", "Far Future - unheard-set", 'Wake Up, "Alice" - Back\\Slash'].sort().join(" | "),
+    "/new shows a just-added card, and not a reprint, a known, suppressed, setless, artless, future or companion card, nor one that lives only in Extras");
+  ok(cards[0].fresh && cards[0].name === "Brand New - first-look", "the newest just-added card heads the list");
+  const rarity = Object.fromEntries(fr.map((c) => [c.name, c.fresh.rarity]));
+  eq(rarity["Brand New - first-look"], "Super Rare", "a just-added card's rarity is normalised the site's way");
+  eq(rarity["Listed Promo - Fresh"], "Promo", "a just-added promo-set card reads Promo, as on the site");
+  eq(rarity["Far Future - unheard-set"], "Promo", "a card of a set the site doesn't order yet reads Promo, as on the site");
+  eq(fr.find((c) => c.name === "Renamed - renamed-set").set, "Lorcana Challenge Promo (C1)", "a just-added card's set gets the site's display name");
+  const nm = S.newCardsMessage(R, ix, cards, { origin: "https://bot.example", now });
+  checkMessage(nm, "new cards, with just-added ones");
+  const nd = nm.embeds[0].description;
+  const lineOf = (name) => nd.split("\n").find((l) => l.includes(name));
+  ok(lineOf("Brand New - first-look") && !lineOf("Brand New - first-look").includes("](") && lineOf("Brand New - first-look").startsWith("🟥🟨"),
+    `a just-added card with no listing is unlinked and shows its inks (${lineOf("Brand New - first-look")})`);
+  ok(lineOf("Listed Promo") && lineOf("Listed Promo").includes("](https://partner.tcgplayer.com/"), "a just-added card with a listing links to it through the affiliate");
+  const fm = S.newCardsMessage(R, ix, fr, { origin: "https://bot.example", now });
+  checkMessage(fm, "new cards, only just-added ones");
+  const pics = fm.embeds.map((e) => e.image && e.image.url).filter(Boolean);
+  ok(pics.includes("https://img.example/first-look.jpg") && pics.includes("https://tcgplayer-cdn.tcgplayer.com/product/999001_in_1000x1000.jpg")
+    && !pics.some((u) => /\.avif/.test(u)), `just-added art is used only where Discord can show it (${pics.join(", ")})`);
+  ok(!fm.components.some((r) => r.components[0].type === 3), "a reel of only just-added cards has no menu");
+  const opts = nm.components.filter((r) => r.components[0].type === 3).flatMap((r) => r.components[0].options);
+  ok(opts.length > 0 && opts.every((o) => { const h = R.resolve(o.value); return h && h.kind === "card"; }), "every /new menu entry opens a card the bot knows");
+  ok(!opts.some((o) => fr.some((c) => c.name === o.label)), "just-added cards stay out of the menus");
+  ok(/open from the menu after the daily update/.test(nm.embeds[0].footer.text), "the footer says when just-added cards join the menus");
+  // Failures. The fresh read failing leaves the index; the reprint check
+  // failing shows nothing fresh rather than risk calling an old card new.
+  const downReprint = { async get(t, p) { if (p.inserted_at) return freshRows; throw new Error("down"); } };
+  let threw = false;
+  try { await S.freshRevealRows(downReprint, R, ix, now); } catch { threw = true; }
+  ok(threw, "if the reprint check cannot be asked, no just-added card is shown");
+  const late = [];
+  await S.freshRevealRows({ async get(t, p) { late.push(p); return []; } }, R, { ...ix, catalogAt: iso(now - 200 * H) }, now);
+  eq(late[0] && late[0].inserted_at, "gt." + iso(now - S.REVEAL_WINDOW_MS), "a stale index asks for the whole window, never further back");
+  eq(late.length, 1, "no fresh cards, no reprint check");
+
+  // (d) The reply. Headings are days back from the moment of asking; the set
+  // named is the one that dominates the reel; 36 cards read as the newest 36.
+  const reveals = [
+    ...ids.slice(0, 20).map((id, k) => ({ id, t: now - (k < 10 ? 1 : 20) * H, n: "Card " + k, s: "Hyperia City", no: String(k) })),
+    ...ids.slice(20, 30).map((id, k) => ({ id, t: now - 40 * H, n: "Card " + (20 + k), s: "Promo Set 3", no: String(k) })),
+    ...ids.slice(30, 36).map((id, k) => ({ id, t: now - 80 * H, n: "Card " + (30 + k), s: "Hyperia City", no: String(k) })),
+  ];
+  const ixd = { ...index, reveals };
+  const cd = S.newCards(R, ixd, now);
+  eq(cd.length, 36, "/new holds the site's 36");
+  const m = S.newCardsMessage(R, ixd, cd, { origin: "https://bot.example", now });
   checkMessage(m, "new cards");
   const d = m.embeds[0].description;
-  ok(m.embeds[0].title === `Just revealed: ${ix.revealSet}`, `/new names the set being revealed (${m.embeds[0].title})`);
+  eq(m.embeds[0].title, "Just revealed: Hyperia City", "/new names the set that dominates the reel");
   ok(/^The \*\*36\*\* newest cards/.test(d), "/new at the reel's cap says these are the newest, not all of them");
-  eq((d.match(/\*\*Added <t:\d+:R>\*\*/g) || []).length, 3, "/new heads each catalog load once");
+  const heads = (d.match(/^\*\*Added [^*]+\*\*$/gm) || []).join(" | ");
+  eq(heads, "**Added in the last 24 hours** | **Added 1–2 days ago** | **Added 3–4 days ago**", "/new heads each day once, newest first");
   const shown = d.split("\n").filter((l) => l && !l.startsWith("**") && !l.startsWith("The ") && !l.startsWith("*…")).length;
   const more = Number((/\*…and (\d+) more\*/.exec(d) || [0, 0])[1]);
   eq(shown + more, 36, `/new accounts for every card, shown or counted (${shown} + ${more})`);
@@ -658,22 +790,24 @@ const D = await mod("discord/src/data.js");
   const menus = m.components.filter((r) => r.components[0].type === 3).map((r) => r.components[0]);
   eq(menus.map((x) => x.options.length).join("+"), "25+11", "/new puts all 36 cards in two menus");
   ok(menus.every((x) => E.parseOpenId(x.custom_id) && E.parseOpenId(x.custom_id).view === "card"), "both /new menus open a card");
-  ok(menus.flatMap((x) => x.options).every((o) => { const h = R.resolve(o.value); return h && h.kind === "card"; }), "every /new menu entry opens a card");
-  // A card of another set says which; a card with no listing is not linked.
-  const other = index.cards.findIndex((c) => R.sets[c.p[0].s].n !== ix.revealSet);
+  ok(!/open from the menu after/.test(m.embeds[0].footer.text), "no just-added note when nothing was just added");
+  // No set dominating: no set in the title. A card of another set says which;
+  // a card with no listing is not linked.
   const unlisted = index.cards.flatMap((c) => c.p).find((p) => (p.f[0] || [])[6]);
-  const two = S.newCards(R, { ...ix, reveals: [{ id: ids[0], t: now - H }, { id: index.cards[other].p[0].id, t: now - H }, { id: unlisted.id, t: now - H }] }, now);
-  const tm = S.newCardsMessage(R, ix, two, { origin: "https://bot.example" });
+  const two = S.newCards(R, { ...index, reveals: [{ id: ids[0], t: now - H }, { id: ids[1], t: now - H }, { id: unlisted.id, t: now - H }] }, now);
+  const tm = S.newCardsMessage(R, index, two, { origin: "https://bot.example", now });
   checkMessage(tm, "new cards, mixed");
+  const sets3 = new Set(two.map((c) => c.set));
+  if (sets3.size === 3) eq(tm.embeds[0].title, "Just revealed", "with no set over half the reel, the title names none");
   const tl = tm.embeds[0].description.split("\n");
-  ok(tl.some((l) => l.endsWith(" · " + R.sets[index.cards[other].p[0].s].n)), "/new names the set of a card from another set");
+  ok(two.every((c) => c.set === revealLabel(two) || tl.some((l) => l.endsWith(" · " + c.set))), "/new names the set of a card from another set");
   const ul = tl.find((l) => l.includes(R.cards[R.byCardId.get(unlisted.id).i].n));
   ok(ul && !ul.includes("]("), `/new leaves a card with no listing unlinked (${ul})`);
-  const none = S.newCardsMessage(R, ix, [], {});
+  const none = S.newCardsMessage(R, index, [], { now });
   checkMessage(none, "new cards, none");
   ok(/Nothing new/.test(none.embeds[0].title) && none.components.flatMap((r) => r.components).every((c) => c.style === 5),
     "/new says so when nothing was revealed, with only a link to the calendar");
-  eq(S.newCards(R, { ...index, reveals: undefined }, now).length, 0, "/new on an index built before reveals shows nothing, not an error");
+  function revealLabel(cs) { return G.revealSetLabel(cs); }
 }
 
 // ── 10b. the meta, a card's play line, a deck's one cart ─────────────────
@@ -913,8 +1047,19 @@ const D = await mod("discord/src/data.js");
   const again = op.data.components[1].components.find((c) => c.label === "Open another pack");
   const op2 = await handleInteraction({ type: 3, token: "t17", application_id: "123", message: { flags: 64 }, data: { custom_id: again.custom_id, component_type: 2 } }, deps);
   ok(op2.type === 4 && op2.data.flags === 64, "Open another pack posts a new message, private when the first one was");
+  // /new asks the database for cards added since the index was built, so it
+  // defers; if that read fails the reply still comes, from the index alone.
+  patches.length = 0;
   const nw = await handleInteraction({ type: 2, token: "t20", application_id: "123", data: { type: 1, name: "new", options: [{ type: 5, name: "private", value: true }] } }, deps);
-  ok(nw.type === 4 && nw.data.flags === 64 && nw.data.embeds[0].title, `/new answers at once, privately when asked (${nw.data.embeds[0].title})`);
+  ok(nw.type === 5 && nw.data.flags === 64, "/new defers, privately when asked");
+  await Promise.all(pending.splice(0));
+  ok(patches[0] && patches[0].body.embeds && patches[0].body.embeds[0].title, `/new edits in the reel (${patches[0] && patches[0].body.embeds && patches[0].body.embeds[0].title})`);
+  patches.length = 0;
+  const dbDown = { ...deps, db: { ...fakeDb, async get() { throw new Error("database down"); } } };
+  await handleInteraction({ type: 2, token: "t21", application_id: "123", data: { type: 1, name: "new", options: [] } }, dbDown);
+  await Promise.all(pending.splice(0));
+  ok(patches[0] && patches[0].body.embeds && patches[0].body.embeds[0].title && !patches[0].body.content,
+    "/new with the database down still answers, from the index");
   const ac2 = await handleInteraction({ type: 4, data: { name: "set", options: [{ type: 3, name: "set", value: "azur", focused: true }] } }, deps);
   ok(ac2.type === 8 && ac2.data.choices[0] && ac2.data.choices[0].value === "Azurite Sea", "a set option autocompletes set names");
   // /help's examples are private
