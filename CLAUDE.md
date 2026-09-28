@@ -7851,6 +7851,12 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
+- ~~`supabase/174_calendar_chattanooga_london_youth.sql`~~ — **APPLIED 2026-09-25 by Zaven; verified
+  via REST** (both rows read back: Chattanooga CCQ confirmed Nov 7-8, DLC London carries the Youth
+  Division notes; re-checked 2026-09-28). From two Ravensburger OP graphics. ⚠ It was applied under
+  the name **169** and renumbered twice before merge (169 → 172 → 174), because main's
+  `169_tcgplayer_names.sql`, then `172_price_movers_freshness.sql` and `173_discord_reports.sql`,
+  took those numbers first. Same SQL, and re-running it is safe.
 - ~~`supabase/173_discord_reports.sql`~~ — **APPLIED 2026-09-28 by Zaven; verified** (an anon read answers `42501 permission denied`, i.e. the table exists and stays private).
   Written as 172 and renumbered before any push: `172_price_movers_freshness.sql` (branch
   `claude/suspicious-wilbur-7a848a`) took 172 and was APPLIED the same day.
@@ -7871,9 +7877,7 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
   a new table, its read policy and grants, and the `playmat_prices_latest` view). Loaded the same
   day: 63 mats (`load_playmats.py`), 21,570 prices from the local archive cache plus the
   2026-09-26 publish (`backfill_playmat_prices.py`). Safe ahead of the client — nothing read it
-  until the Playmats tab shipped. ⚠ Open PR #138 carries a
-  `169_calendar_chattanooga_london_youth.sql` that collides with main's `169_tcgplayer_names.sql`;
-  renumber that one (to 172 or later — 171 is taken by the playmat sections) before it merges.
+  until the Playmats tab shipped.
 - **`supabase/168_curators_cc2.sql`** — **STAGED 2026-09-22, needs a paste.** Creates
   `set_curators_cc2` — "Curator's Collection: Beauty and the Beast" (code **CC2**), the second
   Curator's Collection drop (see 107 for CC1, Heroines). Announced at D23 2026, six premium foil
