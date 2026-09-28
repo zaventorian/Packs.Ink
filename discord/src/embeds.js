@@ -349,11 +349,18 @@ export function sealedMessage(ctx) {
 }
 
 // ── nothing found ────────────────────────────────────────────────────────
-export function notFoundMessage(R, res, query) {
+export function notFoundMessage(R, res, query, ids) {
   const sug = (res.suggestions || []).slice(0, 5);
   const lines = [res.dimsOnly
     ? `“${clip(query, 60)}” narrows it down but doesn't name a card — add the card's name, e.g. \`elsa ${clip(query, 30)}\`.`
     : `No card or product matched “${clip(query, 60)}”.`];
+  // What someone probably meant when the words aren't a card at all.
+  const q = String(query || "").trim();
+  if (/^(?:\d{5}(?:-\d{4})?|[a-z]\d[a-z] ?\d[a-z]\d|[a-z]{1,2}\d[a-z\d]? ?\d[a-z]{2})$/i.test(q)) {
+    lines.push(`Looks like a postal code — for events near there, try ${cmdMention(ids, "events")} \`${clip(q, 12)}\`.`);
+  } else if (R.resolveSet && R.resolveSet(q) >= 0 && /\S/.test(q)) {
+    lines.push(`For a whole set, try ${cmdMention(ids, "set")} \`${clip(q, 30)}\`.`);
+  }
   const embed = { title: "No match", color: 0x6b6480, description: lines.join("\n") };
   const components = [];
   if (sug.length) {

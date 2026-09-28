@@ -150,7 +150,7 @@ export function plainFallback(payload) {
 // ── /card and /price ─────────────────────────────────────────────────────
 export async function lookup(query, view, range, deps) {
   const res = deps.R.resolve(query);
-  if (res.kind === "none") return E.notFoundMessage(deps.R, res, query);
+  if (res.kind === "none") return E.notFoundMessage(deps.R, res, query, deps.commandIds);
   if (!D.RANGES[range]) range = D.DEFAULT_RANGE;
   return res.kind === "sealed"
     ? sealedPayload(res, { view, range }, deps)

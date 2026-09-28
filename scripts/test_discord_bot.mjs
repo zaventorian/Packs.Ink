@@ -215,6 +215,7 @@ function checkMessage(m, label) {
     for (const c of row.components) {
       if (c.type === 2) {
         ok(!c.label || c.label.length <= 80, `${label}: button label ≤80`);
+        ok(!c.url || c.url.length <= 512, `${label}: link button URL ≤512 characters (${c.url && c.url.length})`);
         ok(c.style === 5 ? /^https:\/\//.test(c.url) && !c.custom_id : c.custom_id && c.custom_id.length <= 100, `${label}: button ${c.label} is a link or has a custom_id ≤100`);
       }
       if (c.type === 3) {
@@ -226,8 +227,23 @@ function checkMessage(m, label) {
     }
   }
 }
+// A modal Discord would refuse never opens — the command just fails.
+function checkModal(m, label) {
+  ok(m.custom_id && m.custom_id.length <= 100, `${label}: modal custom_id ≤100`);
+  ok(m.title && m.title.length <= 45, `${label}: modal title ≤45`);
+  ok(m.components.length >= 1 && m.components.length <= 5, `${label}: 1..5 modal rows`);
+  for (const row of m.components) {
+    const c = row.components ? row.components[0] : row.component;
+    ok(c && c.type === 4 && c.custom_id && c.label && c.label.length <= 45, `${label}: text input with a label ≤45`);
+    ok(!c.placeholder || c.placeholder.length <= 100, `${label}: placeholder ≤100`);
+    ok(!c.value || c.value.length <= (c.max_length || 4000), `${label}: prefilled value within max_length`);
+    ok(!c.max_length || c.max_length <= 4000, `${label}: max_length ≤4000`);
+  }
+}
 const D = await mod("discord/src/data.js");
 {
+  checkModal(E.deckModal(true), "deck box");
+  checkModal((await mod("discord/src/trade.js")).tradeModal(false, "x".repeat(3000), "2x mowgli"), "trade box");
   const DAY = 86400000;
   const hist = Array.from({ length: 400 }, (_, i) => ({ date: new Date(Date.UTC(2025, 7, 1) + i * DAY).toISOString().slice(0, 10), low_price: 4 + i / 200, market_price: 5 + i / 150 }));
   const price = D.priceSummary(hist);
