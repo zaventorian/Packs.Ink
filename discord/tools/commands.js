@@ -85,6 +85,11 @@ export const COMMANDS = [
   },
   { name: "help", type: 1, ...EVERYWHERE, description: "What this bot can do" },
   {
+    name: "new", type: 1, ...EVERYWHERE,
+    description: "The newest cards — everything revealed in the last four days",
+    options: [privOpt],
+  },
+  {
     name: "set", type: 1, ...EVERYWHERE,
     description: "A set at a glance: release dates, box price vs box EV, chase cards, sealed",
     options: [{ type: 3, name: "set", autocomplete: true, max_length: 60, description: "Which set — hyperia city, azurite, set 5 (default: the newest)" }, privOpt],

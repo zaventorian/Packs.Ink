@@ -114,14 +114,13 @@ function parseLine(line) {
     return cmd(name, [give && { type: 3, name: "give", value: give }, get && { type: 3, name: "get", value: get }].filter(Boolean));
   }
   if (name === "set" || name === "open") return cmd(name, rest ? [{ type: 3, name: "set", value: rest }] : []);
-  if (name === "new") return cmd(name, rest ? [{ type: 3, name: "set", value: rest }] : []);
   return cmd(name, []);
 }
 
 const script = process.argv.slice(2).length ? process.argv.slice(2) : [
   "/price mowgli", "/card enchanted elsa", "/price elsa psa 10", "/price azurite sea box",
   "/price asdfgh", "/movers 1w up chase", "/movers 1d down all", "/movers 1m up sealed", "/events 60614", "/calendar", "/help",
-  "/trade 2x mowgli, enchanted elsa, $20 vs stitch rock star foil, azurite sea box", "/set azurite", "/set", "/open fabled",
+  "/trade 2x mowgli, enchanted elsa, $20 vs stitch rock star foil, azurite sea box", "/set azurite", "/set", "/open fabled", "/new",
 ];
 
 const bad = await (async () => {

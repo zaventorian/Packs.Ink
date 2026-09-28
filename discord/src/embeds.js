@@ -93,9 +93,10 @@ export function parsePickId(id) {
 // A menu that OPENS a card in a new private reply, where pickId replaces the
 // message it sits on: a trade, a deck, a set's chase list or a movers board
 // must stay where it is when someone looks at one of its cards.
-export const openId = (view) => `o|${view}`;
+// A second menu in one message needs its own custom_id, so a number may follow.
+export const openId = (view, n = 0) => (n ? `o|${view}|${n}` : `o|${view}`);
 export function parseOpenId(id) {
-  const m = /^o\|([a-z]+)$/.exec(String(id || ""));
+  const m = /^o\|([a-z]+)(?:\|\d)?$/.exec(String(id || ""));
   return m && VIEWS.includes(m[1]) ? { view: m[1] } : null;
 }
 
@@ -728,6 +729,7 @@ export function helpMessage(ids) {
           `${c("card")} \`mowgli\` — the card and what it's worth`,
           `${c("price")} \`elsa psa 10\` — price chart, graded and eBay sales`,
           `${c("set")} \`azurite\` — box price vs box EV, chase cards`,
+          `${c("new")} — the newest cards, as they're revealed`,
         ].join("\n") },
         { name: "Trading", value: [
           `${c("trade")} — is a trade fair? Both sides priced, cash too`,

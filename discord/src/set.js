@@ -6,7 +6,7 @@
 // Analytics » Expected Value shows, and a simulated Enchanted turns up exactly
 // as often as it does in the site's simulator.
 import { simPack, getPull, tcgUrl, INKS } from "./site.generated.js";
-import { money, shortDate, BRAND_COLOR, cardImage, buyUrl, AFFILIATE_NOTE, openId } from "./embeds.js";
+import { money, shortDate, BRAND_COLOR, cardImage, buyUrl, AFFILIATE_NOTE, openId, inkMarks } from "./embeds.js";
 import { FIN_PRINTING } from "./data.js";
 
 const DAY = 86400000;
@@ -159,6 +159,109 @@ export function setMessage(o, { origin } = {}) {
   row.push({ type: 2, style: 5, label: "All the cards", url: setPageUrl(set.n) });
   components.push({ type: 1, components: row });
   return { embeds, components };
+}
+
+// ── /new ─────────────────────────────────────────────────────────────────
+// The site's reveal reel, as a message: every card that first reached the
+// catalog in the last 96 hours (reprints and Extras excluded — the build ran
+// the site's own revealRotation), newest first. A card that has aged out of
+// the window since the build is dropped here, so a late index never presents
+// last week's reveals as news.
+export const REVEAL_WINDOW_MS = 96 * 3600 * 1000;
+export function newCards(R, index, now = Date.now()) {
+  const out = [];
+  for (const r of index.reveals || []) {
+    if (!(r.t <= now && r.t >= now - REVEAL_WINDOW_MS)) continue;
+    const hit = R.byCardId.get(r.id);
+    if (hit) out.push({ ...hit, t: r.t });
+  }
+  return out;
+}
+// A card of a set still being revealed has no TCGplayer listing, and a search
+// for it finds nothing — so a name is linked only when it has its own listing.
+// Unlinked, every reveal fits: linked, a 250-character search URL per line
+// left room for 13 of 36.
+// RANK is declared further down; read it at call time, never at import.
+const newRank = (r) => (r === "Promo" ? 3 : RANK[r] || 0);
+const NEW_BOLD = new Set(["Legendary", "Enchanted", "Epic", "Iconic"]);
+export function newCardsMessage(R, index, cards, { origin } = {}) {
+  const label = index.revealSet && cards.some((c) => R.sets[c.p.s] && R.sets[c.p.s].n === index.revealSet) ? index.revealSet : null;
+  const url = label ? setPageUrl(label) : "https://packs.ink/cards";
+  if (!cards.length) {
+    return { embeds: [{ title: "Nothing new this week", color: BRAND_COLOR,
+      description: "No new cards have reached packs.ink in the last four days. While a set is being revealed they land daily — try again soon, or see what's coming with `/calendar`.",
+      footer: { text: "packs.ink" } }],
+      components: [{ type: 1, components: [{ type: 2, style: 5, label: "Release calendar", url: "https://packs.ink/calendar" }] }] };
+  }
+  const line = (c) => {
+    const card = R.cards[c.i];
+    const set = R.sets[c.p.s] || {};
+    const f = c.p.f[0] || [];
+    const name = clip(card.n, 60);
+    const shown = f[1] && !f[6] ? `[${name}](${buyUrl(card.n, f[1], f[2] || FIN_PRINTING[f[0]])})` : name;
+    const rar = c.p.r ? (NEW_BOLD.has(c.p.r) ? ` · **${c.p.r}**` : ` · ${c.p.r}`) : "";
+    const where = set.n && set.n !== label ? ` · ${set.n}` : "";
+    return `${inkMarks(card.i)} ${shown}${rar}${where}`.trim();
+  };
+  // One heading per catalog load: a day's reveals share one timestamp.
+  const groups = [];
+  for (const c of cards) {
+    const g = groups[groups.length - 1];
+    if (g && g.t === c.t) g.cards.push(c); else groups.push({ t: c.t, cards: [c] });
+  }
+  const body = [];
+  let used = 0, left = cards.length;
+  const budget = 3500;
+  for (const g of groups) {
+    const head = `**Added <t:${Math.floor(g.t / 1000)}:R>**`;
+    if (used + head.length + 1 > budget) break;
+    body.push(head);
+    used += head.length + 1;
+    for (const c of g.cards) {
+      const l = line(c);
+      if (used + l.length + 1 > budget) break;
+      body.push(l);
+      used += l.length + 1;
+      left--;
+    }
+    if (used >= budget - 40) break;
+  }
+  if (left > 0) body.push(`*…and ${left} more*`);
+  const capped = index.revealCap && cards.length >= index.revealCap;
+  const intro = capped
+    ? `The **${cards.length}** newest cards, from the last four days.`
+    : `**${cards.length} new card${cards.length === 1 ? "" : "s"}** in the last four days.`;
+  const linked = body.some((l) => l.includes("]("));
+  const main = {
+    title: label ? `Just revealed: ${label}` : "Just revealed", url, color: BRAND_COLOR,
+    description: intro + "\n\n" + body.join("\n"),
+    footer: { text: "Added to packs.ink as they're revealed" + (linked ? ` · ${AFFILIATE_NOTE}` : "") },
+  };
+  // Pictures: the biggest reveals first, newest among equals.
+  const byRank = cards.slice().sort((a, b) => newRank(b.p.r) - newRank(a.p.r) || b.t - a.t);
+  const pics = [];
+  for (const c of byRank) {
+    if (pics.length >= 4) break;
+    const img = cardImage(c.p, origin);
+    if (img && !pics.includes(img)) pics.push(img);
+  }
+  const embeds = [{ ...main, ...(pics[0] ? { image: { url: pics[0] } } : {}) }, ...pics.slice(1).map((u) => ({ url, image: { url: u } }))];
+  // Every card reachable from a menu: a select holds 25, and a reel holds up
+  // to 36, so a second menu takes the rest (each with its own custom_id).
+  const options = [];
+  const seen = new Set();
+  for (const c of cards) {
+    const key = R.cardKey(c.p, 0);
+    if (seen.has(key) || options.length >= 50) continue;
+    seen.add(key);
+    options.push({ label: clip(R.cards[c.i].n, 100), value: key, description: clip([c.p.r, (R.sets[c.p.s] || {}).n].filter(Boolean).join(" · "), 100) });
+  }
+  const menus = [options.slice(0, 25), options.slice(25, 50)].filter((o) => o.length).map((o, k) => ({ type: 1, components: [{
+    type: 3, custom_id: openId("card", k), placeholder: k ? "More new cards" : "Look at a new card", options: o }] }));
+  return {
+    embeds,
+    components: [...menus, { type: 1, components: [{ type: 2, style: 5, label: label ? `All of ${clip(label, 60)}` : "Browse the cards", url }] }],
+  };
 }
 
 // ── /open ────────────────────────────────────────────────────────────────

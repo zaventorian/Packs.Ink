@@ -623,6 +623,59 @@ const D = await mod("discord/src/data.js");
   eq(S.parsePackId("k|3|7"), null, "a pack id only opens 1 or 24");
 }
 
+// ── 10c. /new — the site's reveal reel ───────────────────────────────────
+// The build runs the site's revealRotation; the Worker only drops what has
+// aged out of the 96-hour window since, so a late index never presents last
+// week's reveals as news.
+{
+  const S = await mod("discord/src/set.js");
+  const now = Date.parse("2026-09-28T12:00:00Z");
+  const H = 3600 * 1000;
+  const ids = index.cards.slice(0, 45).map((c) => c.p[0].id);
+  const lead = R.byCardId.get(ids[0]);
+  // Three catalog loads of 12, the way reveals arrive: one timestamp a load.
+  const batch = [1, 20, 40];
+  const reveals = [
+    ...ids.slice(0, 36).map((id, k) => ({ id, t: now - batch[Math.floor(k / 12)] * H })),
+    { id: ids[36], t: now - 97 * H },
+    { id: ids[37], t: now + 5 * H },
+    { id: "crd_not_in_this_index", t: now - H },
+  ];
+  const ix = { ...index, reveals, revealSet: R.sets[lead.p.s].n, revealCap: 36 };
+  const got = S.newCards(R, ix, now);
+  eq(got.length, 36, "/new keeps the 96-hour window and drops an aged-out, a future and an unknown card");
+  ok(got.every((c, k) => k === 0 || got[k - 1].t >= c.t), "/new lists the newest first");
+  const m = S.newCardsMessage(R, ix, got, { origin: "https://bot.example" });
+  checkMessage(m, "new cards");
+  const d = m.embeds[0].description;
+  ok(m.embeds[0].title === `Just revealed: ${ix.revealSet}`, `/new names the set being revealed (${m.embeds[0].title})`);
+  ok(/^The \*\*36\*\* newest cards/.test(d), "/new at the reel's cap says these are the newest, not all of them");
+  eq((d.match(/\*\*Added <t:\d+:R>\*\*/g) || []).length, 3, "/new heads each catalog load once");
+  const shown = d.split("\n").filter((l) => l && !l.startsWith("**") && !l.startsWith("The ") && !l.startsWith("*…")).length;
+  const more = Number((/\*…and (\d+) more\*/.exec(d) || [0, 0])[1]);
+  eq(shown + more, 36, `/new accounts for every card, shown or counted (${shown} + ${more})`);
+  ok(m.embeds.length <= 4 && m.embeds.slice(1).every((e) => e.url === m.embeds[0].url && e.image), "/new pictures are one gallery");
+  const menus = m.components.filter((r) => r.components[0].type === 3).map((r) => r.components[0]);
+  eq(menus.map((x) => x.options.length).join("+"), "25+11", "/new puts all 36 cards in two menus");
+  ok(menus.every((x) => E.parseOpenId(x.custom_id) && E.parseOpenId(x.custom_id).view === "card"), "both /new menus open a card");
+  ok(menus.flatMap((x) => x.options).every((o) => { const h = R.resolve(o.value); return h && h.kind === "card"; }), "every /new menu entry opens a card");
+  // A card of another set says which; a card with no listing is not linked.
+  const other = index.cards.findIndex((c) => R.sets[c.p[0].s].n !== ix.revealSet);
+  const unlisted = index.cards.flatMap((c) => c.p).find((p) => (p.f[0] || [])[6]);
+  const two = S.newCards(R, { ...ix, reveals: [{ id: ids[0], t: now - H }, { id: index.cards[other].p[0].id, t: now - H }, { id: unlisted.id, t: now - H }] }, now);
+  const tm = S.newCardsMessage(R, ix, two, { origin: "https://bot.example" });
+  checkMessage(tm, "new cards, mixed");
+  const tl = tm.embeds[0].description.split("\n");
+  ok(tl.some((l) => l.endsWith(" · " + R.sets[index.cards[other].p[0].s].n)), "/new names the set of a card from another set");
+  const ul = tl.find((l) => l.includes(R.cards[R.byCardId.get(unlisted.id).i].n));
+  ok(ul && !ul.includes("]("), `/new leaves a card with no listing unlinked (${ul})`);
+  const none = S.newCardsMessage(R, ix, [], {});
+  checkMessage(none, "new cards, none");
+  ok(/Nothing new/.test(none.embeds[0].title) && none.components.flatMap((r) => r.components).every((c) => c.style === 5),
+    "/new says so when nothing was revealed, with only a link to the calendar");
+  eq(S.newCards(R, { ...index, reveals: undefined }, now).length, 0, "/new on an index built before reveals shows nothing, not an error");
+}
+
 // ── 10b. the meta, a card's play line, a deck's one cart ─────────────────
 {
   const results = [{ id: "t1", name: "Big Event", event_date: "2026-09-12", num_players: 200, top: [
@@ -860,6 +913,8 @@ const D = await mod("discord/src/data.js");
   const again = op.data.components[1].components.find((c) => c.label === "Open another pack");
   const op2 = await handleInteraction({ type: 3, token: "t17", application_id: "123", message: { flags: 64 }, data: { custom_id: again.custom_id, component_type: 2 } }, deps);
   ok(op2.type === 4 && op2.data.flags === 64, "Open another pack posts a new message, private when the first one was");
+  const nw = await handleInteraction({ type: 2, token: "t20", application_id: "123", data: { type: 1, name: "new", options: [{ type: 5, name: "private", value: true }] } }, deps);
+  ok(nw.type === 4 && nw.data.flags === 64 && nw.data.embeds[0].title, `/new answers at once, privately when asked (${nw.data.embeds[0].title})`);
   const ac2 = await handleInteraction({ type: 4, data: { name: "set", options: [{ type: 3, name: "set", value: "azur", focused: true }] } }, deps);
   ok(ac2.type === 8 && ac2.data.choices[0] && ac2.data.choices[0].value === "Azurite Sea", "a set option autocompletes set names");
   // /help's examples are private

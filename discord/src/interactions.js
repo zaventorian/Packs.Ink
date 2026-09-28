@@ -8,7 +8,7 @@ import * as E from "./embeds.js";
 import * as D from "./data.js";
 import { parseDeckList, looksLikeDeck, priceDeck } from "./deck.js";
 import { parseTradePost, priceTrade, tradeMessage, tradeModal, tradeSiteUrl } from "./trade.js";
-import { setOverview, setMessage, openPacks, packMessage, parsePackId } from "./set.js";
+import { setOverview, setMessage, openPacks, packMessage, parsePackId, newCards, newCardsMessage } from "./set.js";
 import { CALENDAR_REGIONS } from "./site.generated.js";
 
 export const T = { PING: 1, COMMAND: 2, COMPONENT: 3, AUTOCOMPLETE: 4, MODAL_SUBMIT: 5 };
@@ -73,6 +73,7 @@ function command(it, deps) {
     case "reports": return deferred(it, deps, true, () => reports(it, deps));
     // Both answer from the index alone, so at once.
     case "set": return instant(setReply(String(optVal(o, "set", "")), deps), priv);
+    case "new": return instant(newCardsMessage(deps.R, deps.index, newCards(deps.R, deps.index), { origin: deps.origin }), priv);
     case "open": return instant(packReply(String(optVal(o, "set", "")), optVal(o, "box", false) ? 24 : 1, it, deps), priv);
     default: return { type: R_.MESSAGE, data: { content: "Unknown command.", flags: EPHEMERAL } };
   }

@@ -60,6 +60,9 @@ const site = loadSite([
   // /set's box EV and /movers' sealed movers: the site's own maths, run here
   // once a day so the Worker answers from the index with no database read.
   "processData", "calcEV", "computeSealedDeltas", "SEALED_MOVER_KIND_OF_TYPE", "lorcanaSetArt",
+  // /new: the site's own reveal reel — a card is news for 96 hours after it
+  // first lands, a reprint never is, Extras never are.
+  "revealRotation", "revealSetLabel", "REVEAL_MAX_CARDS",
 ]);
 
 const CARDS_COLS = "id,set_id,name,version,rarity,ink,inks,collector_number,cost,inkable,card_type,"
@@ -89,6 +92,8 @@ const setNameById = Object.fromEntries(sets.map((s) => [s.id, s.name]));
 const rows = site.transformSupabaseData(prices, cards, setNameById);
 site.setPrintingBadges(rows);
 const priceDate = prices.reduce((m, p) => (p.price_date && p.price_date > m ? p.price_date : m), "");
+const reveals = site.revealRotation(rows, Date.now());
+console.log(`  reveals: ${reveals.length} card(s) in the site's 96-hour window`);
 console.log(`  transform -> ${rows.length} catalog rows, newest price ${priceDate}`);
 
 // ── Sets ────────────────────────────────────────────────────────────────
@@ -386,6 +391,12 @@ const out = {
   built: new Date().toISOString(),
   priceDate,
   playDecks,
+  // Newest first, as the reel shows them; the Worker drops any that have aged
+  // out of the 96-hour window by the time it answers.
+  reveals: reveals.map((c) => ({ id: c.card_id, t: c.t })),
+  revealSet: site.revealSetLabel(reveals),
+  // The site's reel stops at this many; a reel that long may have more behind it.
+  revealCap: site.REVEAL_MAX_CARDS,
   tcgNames: Object.fromEntries(tcgNames.map((r) => [String(r.product_id), r.name])),
   newestMain: site.MAINLINE_SETS[site.MAINLINE_SETS.length - 1],
   sets: setsOut,
@@ -414,7 +425,9 @@ if (process.argv.includes("--fixture")) {
     "Cruella De Vil", "HeiHei", "Heihei", "Grandmother Willow", "Ursula", "Scar", "Flounder", "The Queen"]);
   const fxCards = identities.filter((i) => WANT.has(i.c));
   const fxPids = new Set(fxCards.flatMap((c) => c.p.flatMap((p) => p.f.map((f) => String(f[1])))));
+  const fxIds = new Set(fxCards.flatMap((c) => c.p.map((p) => p.id)));
   const fx = { ...out, cards: fxCards,
+    reveals: out.reveals.filter((r) => fxIds.has(r.id)),
     sealed: sealedOut.filter((s) => s.sn === "Azurite Sea" || s.sn === out.newestMain),
     tcgNames: Object.fromEntries(Object.entries(out.tcgNames).filter(([pid]) => fxPids.has(pid))) };
   mkdirSync(new URL("../test/", import.meta.url), { recursive: true });
