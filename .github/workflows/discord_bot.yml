@@ -100,9 +100,10 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           DISCORD_PUBLIC_KEY: ${{ secrets.DISCORD_PUBLIC_KEY }}
           DISCORD_APPLICATION_ID: ${{ secrets.DISCORD_APPLICATION_ID }}
-          # Optional: only /reports writes need it. Its own secret name so that
-          # handing the Worker service-role access is a deliberate choice.
-          DISCORD_BOT_SUPABASE_KEY: ${{ secrets.DISCORD_BOT_SUPABASE_KEY }}
+          # Only /reports writes need it. It reuses the repo's own service key
+          # (the one the ETL runs on) so nobody copies a key by hand; set a
+          # DISCORD_BOT_SUPABASE_KEY secret to give the bot a different one.
+          DISCORD_BOT_SUPABASE_KEY: ${{ secrets.DISCORD_BOT_SUPABASE_KEY || secrets.SUPABASE_SERVICE_KEY }}
         run: |
           umask 077
           f=$(mktemp)

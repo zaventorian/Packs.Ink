@@ -4742,6 +4742,13 @@ check** message menu. Setup (the steps only Zaven can do) is `discord/README.md`
 Guarded by `node scripts/test_discord_bot.mjs` (~800 checks) and
 `python scripts/test_discord_reports.py`.
 
+- **LIVE since 2026-09-28** (PR #149, site v493) at
+  `https://packs-ink-discord.packs-ink-app.workers.dev` (`/` is a health check,
+  `/invite` a server install). Discord app **packs.ink**, application id
+  `1553932826980782282`; install link
+  `https://discord.com/oauth2/authorize?client_id=1553932826980782282`. User and
+  Guild install are both on; Guild Install brings the bot with View Channels,
+  Send Messages and Embed Links, which `/reports` needs to post.
 - **A SEPARATE Worker, `packs-ink-discord`, on workers.dev.** Deploying it
   cannot touch packs.ink, and it adds no route to the site's zone.
   `.github/workflows/discord_bot.yml` deploys it **on a daily schedule (21:45
@@ -4819,11 +4826,11 @@ Guarded by `node scripts/test_discord_bot.mjs` (~800 checks) and
   `last_posted_on`. It adds the same stale-row filter the Worker uses. A 403/404
   is written to `last_error`, which `/reports status` shows.
 - **Secrets live in GitHub and are synced into the Worker on every deploy**:
-  `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN`, and
-  optionally `DISCORD_BOT_SUPABASE_KEY` (the service key under its own name, so
-  giving the bot Worker service-role access is a deliberate choice; without it
-  `/reports` says it is not switched on). The bot token is never logged or
-  pasted anywhere else.
+  `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` (all set
+  2026-09-28), and for `/reports` the repo's own `SUPABASE_SERVICE_KEY`, reused
+  so nobody copies a service key by hand (Zaven, 2026-09-28). A
+  `DISCORD_BOT_SUPABASE_KEY` secret overrides it. The bot token is never logged
+  or pasted anywhere else.
 - **`node discord/tools/simulate.mjs` runs the real Worker in `wrangler dev`**
   with a throwaway Ed25519 key pair, signs requests the way Discord does, and
   captures the follow-ups into `discord/.wrangler/sim/`. That is how every reply
