@@ -185,6 +185,21 @@ function checkMessage(m, label) {
     }
   }
   ok(total <= 6000, `${label}: embeds total ≤6000 chars (${total})`);
+  // A text clipped mid-way leaves a markdown link or a <t:…> timestamp open,
+  // and Discord shows the raw syntax. Every link must close; every tag too.
+  for (const e of embeds) {
+    for (const t of [e.description, ...(e.fields || []).map((f) => f.value)].filter(Boolean)) {
+      const s = String(t);
+      let at = s.indexOf("](");
+      let broken = null;
+      while (at >= 0 && !broken) {
+        if (!/^\]\(https?:\/\/[^\s)]+\)/.test(s.slice(at))) broken = s.slice(at, at + 60);
+        at = s.indexOf("](", at + 2);
+      }
+      ok(!broken, `${label}: no markdown link is cut off (${broken})`);
+      ok(!/<t:\d*(?::[a-zA-Z])?(?:[^>\d:a-zA-Z]|$)/.test(s), `${label}: no <t:…> timestamp is cut off`);
+    }
+  }
   // Every TCGplayer link earns through the affiliate program, and a message
   // carrying one says so (the FTC wants the disclosure near the links).
   const links = [];
@@ -305,6 +320,14 @@ const D = await mod("discord/src/data.js");
   ];
   checkMessage(E.calendarMessage({ events: calEvents, kind: "all", region: "all", regions: [{ key: "na", label: "North America" }, { key: "eu", label: "Europe" }] }), "calendar");
   checkMessage(E.calendarMessage({ events: [], kind: "ccq", region: "eu", regions: [{ key: "eu", label: "Europe" }] }), "calendar, nothing matches");
+  // A crowded month: long titles, long registration links, venue + street
+  // addresses — the shape that clipped a field mid-timestamp in testing.
+  const crowd = Array.from({ length: 12 }, (_, k) => ({ id: "c" + k, kind: k % 2 ? "ccq" : "dlc", title: `A Very Long Challenge Championship Qualifier Name Number ${k}`,
+    starts_on: `2026-10-${String(k + 1).padStart(2, "0")}`, url: "https://example.com/register/" + "x".repeat(200) + k,
+    location: `Some Convention Center Hall ${k} · 1234 Long Street Name Boulevard, Springfield, IL 62701`, country: "US" }));
+  checkMessage(E.calendarMessage({ events: crowd, kind: "all", region: "all", regions: [] }), "calendar, a crowded month");
+  eq(E.shortPlace("Charlie's Collectible Show · 3801 Sumner Blvd, Raleigh, NC 27616"), "Raleigh, NC 27616", "shortPlace keeps the city and region");
+  eq(E.shortPlace("Schloss Freyenthurn, Austria"), "Schloss Freyenthurn, Austria", "shortPlace leaves a short place alone");
   {
     for (const k of ["all", "release", "dlc", "ccq"]) for (const r of ["all", "eu", "latam"]) {
       const back = E.parseCalendarId(E.calendarId("k", { kind: k, region: r }));
@@ -628,6 +651,12 @@ const D = await mod("discord/src/data.js");
   const dest = decodeURIComponent(cart.slice(TCG_AFFILIATE.length));
   ok(cart.startsWith(TCG_AFFILIATE) && dest.startsWith("https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c="), "deck: the cart is a TCGplayer mass entry, through the affiliate program");
   ok(decodeURIComponent(dest.split("&c=")[1]).includes("4 Mowgli - Man Cub (TCG spelling)||2 Be Prepared"), `deck: the cart spells cards TCGplayer's way (${dest.slice(0, 160)})`);
+  // A long list of long names: every row is an affiliate link, and the list
+  // must stop at a whole line rather than clip one.
+  const longNames = index.cards.map((c) => c.n).sort((a, b) => b.length - a.length).slice(0, 22);
+  const longDeck = priceDeck(R, parseDeckList(longNames.map((n) => `3 ${n}`).join("\n")));
+  checkMessage(E.deckMessage({ result: longDeck, priceDate: "2026-09-27", tcgNames: null }), "deck of long names");
+  ok(/more card/.test(E.deckMessage({ result: longDeck, priceDate: "2026-09-27", tcgNames: null }).embeds[0].description), "deck of long names: the rows that don't fit are summed");
   const dm = E.deckMessage({ result: dr, priceDate: "2026-09-27", tcgNames: null });
   ok(dm.embeds.length === 2 && /Buy the whole deck/.test(dm.embeds[1].description), "deck: the reply carries the one-cart link");
   checkMessage(dm, "deck with cart");

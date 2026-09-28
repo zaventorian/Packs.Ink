@@ -30,6 +30,20 @@ export const shortDate = (ymd) => {
   return m ? `${MONTHS[+m[2] - 1]} ${+m[3]}` + (new Date().getUTCFullYear() !== +m[1] ? `, ${m[1]}` : "") : "";
 };
 const clip = (s, n) => { s = String(s || ""); return s.length <= n ? s : s.slice(0, n - 1) + "…"; };
+// As many WHOLE lines as fit in `budget` characters, then "…and N more". Any
+// text holding links goes through this, never clip(): a line cut mid-way is a
+// broken markdown link, which Discord shows as raw brackets and a URL.
+export function fitLines(lines, budget, more = (n) => `*…and ${n} more*`) {
+  const out = [];
+  let used = 0;
+  for (const l of lines) {
+    if (used + l.length + 1 > budget - 40) break;
+    out.push(l);
+    used += l.length + 1;
+  }
+  if (out.length < lines.length) out.push(more(lines.length - out.length));
+  return out.join("\n");
+}
 const hex = (h) => { const n = parseInt(String(h || "").replace("#", ""), 16); return Number.isFinite(n) ? n : BRAND_COLOR; };
 export const cardPageUrl = (cardId) => `${SITE}/cards?card=${encodeURIComponent(cardId)}`;
 
@@ -463,7 +477,7 @@ export function moversMessage({ result, win, dir, group, basis, min, R }) {
   });
   const embed = {
     title, color: rows.length ? (dir === "down" ? 0xe86868 : 0x5cc480) : BRAND_COLOR,
-    description: rows.length ? clip(lines.join("\n"), 4000)
+    description: rows.length ? fitLines(lines, 4000)
       : "Nothing cleared the filters. Try a longer window or another group below" + (min > 0 ? `, or a lower price floor than ${money(min)} with \`/movers min_price\`.` : "."),
     footer: { text: [`TCGplayer ${basis === "low" ? "Low" : g.sealed ? "Market" : "NM Market"}`, `starting price ≥ ${money(min)}`,
       result.latest ? `prices as of ${shortDate(result.latest)}` : null, rows.length ? AFFILIATE_NOTE : null].filter(Boolean).join(" · ") },
@@ -629,24 +643,44 @@ export function parseCalendarId(id) {
   const m = /^cl\|([kr])\|(all|release|dlc|ccq)\|([a-z]{2,6})$/.exec(String(id || ""));
   return m ? { kind: m[2], region: m[3] } : null;
 }
+// "Charlie's Collectible Show · 3801 Sumner Blvd, Raleigh, NC 27616" -> the
+// part a reader places an event by: the last "·" segment, its last two
+// comma parts.
+export function shortPlace(loc) {
+  const seg = String(loc || "").split("·").pop().trim();
+  const parts = seg.split(",").map((s) => s.trim()).filter(Boolean);
+  return clip(parts.length > 2 ? parts.slice(-2).join(", ") : seg, 40);
+}
 export function calendarMessage({ events, kind = "all", region = "all", regions = [] }) {
   const months = new Map();
-  for (const e of events || []) {
+  (events || []).forEach((e, k) => {
     const m = /^(\d{4})-(\d{2})/.exec(String(e.starts_on || ""));
     const key = m ? `${MONTH_NAMES[+m[2] - 1]} ${m[1]}` : "Later";
     if (!months.has(key)) months.set(key, []);
     const t = Date.parse(String(e.starts_on) + "T12:00:00Z");
     const when = Number.isFinite(t) ? `<t:${Math.floor(t / 1000)}:D>` : shortDate(e.starts_on);
-    const rel = Number.isFinite(t) ? ` (<t:${Math.floor(t / 1000)}:R>)` : "";
-    const name = clip(calEventTitle(e), 70);
-    const title = e.url && /^https:\/\//.test(e.url) ? `[${name}](${e.url})` : `**${name}**`;
-    const where = e.kind === "dlc" || e.kind === "ccq" ? (e.location ? " · " + clip(e.location, 50) : "") : "";
+    // The countdown on the first entry only — "in 3 weeks" beside every line
+    // is noise, beside the next thing it is the answer.
+    const rel = k === 0 && Number.isFinite(t) ? ` (<t:${Math.floor(t / 1000)}:R>)` : "";
+    const name = clip(calEventTitle(e), 60);
+    const title = e.url && /^https:\/\//.test(e.url) && e.url.length <= 300 ? `[${name}](${e.url})` : `**${name}**`;
+    const where = (e.kind === "dlc" || e.kind === "ccq") && e.location ? " · " + shortPlace(e.location) : "";
     months.get(key).push(`${CAL_MARK[e.kind] || "•"} ${title}${e.estimated ? " *(estimated)*" : ""}${where} — ${when}${rel}`);
-  }
+  });
   const fields = [];
   for (const [name, lines] of months) {
     if (fields.length >= 12) break;
-    fields.push({ name, value: clip(lines.join("\n"), 1024) });
+    // Whole lines only: a line clipped mid-way is a broken link or a raw
+    // <t:…> tag on screen.
+    const kept = [];
+    let used = 0;
+    for (const l of lines) {
+      if (used + l.length + 1 > 990) break;
+      kept.push(l);
+      used += l.length + 1;
+    }
+    if (kept.length < lines.length) kept.push(`*…and ${lines.length - kept.length} more*`);
+    fields.push({ name, value: kept.join("\n") });
   }
   const label = { all: "Coming up in Lorcana", release: "Set and product releases", dlc: "Disney Lorcana Challenges", ccq: "Challenge qualifiers" }[kind];
   const regionName = region !== "all" ? (regions.find((r) => r.key === region) || {}).label : null;
@@ -750,7 +784,7 @@ export function metaMessage({ R, index, results }) {
   });
   const played = {
     title: "Most played in recent tournaments", color: BRAND_COLOR, url: `${SITE}/decks?s=tournaments`,
-    description: clip(lines.join("\n"), 4000) || "No tournament decks on record yet.",
+    description: fitLines(lines, 4000) || "No tournament decks on record yet.",
   };
   const fields = [];
   for (const t of results || []) {
@@ -762,7 +796,7 @@ export function metaMessage({ R, index, results }) {
       return `${PLACE_MARK[r.place_rank] || "▫️"} ${escMd(clip(r.player_name || "?", 28))} — ${inkMarks(inks)} ${link}${PLACE_MARK[r.place_rank] ? "" : ` *(${escMd(r.place || "top " + r.place_rank)})*`}`;
     });
     const meta = [shortDate(t.event_date), t.num_players ? `${t.num_players} players` : null].filter(Boolean).join(" · ");
-    fields.push({ name: clip(`${t.name}${meta ? " — " + meta : ""}`, 256), value: clip(rows.join("\n"), 1024) });
+    fields.push({ name: clip(`${t.name}${meta ? " — " + meta : ""}`, 256), value: fitLines(rows, 1024) });
   }
   const results_ = {
     title: "Latest results", color: BRAND_COLOR, url: `${SITE}/decks?s=tournaments`,
@@ -784,28 +818,41 @@ export function deckMessage({ result, priceDate, tcgNames }) {
   ];
   if (r.count !== 60) lines.push(`Note: that's ${r.count} cards — a Lorcana deck is 60.`);
   lines.push("");
-  const shown = r.rows.slice(0, 15);
-  for (const x of shown) {
+  const tail = [];
+  if (r.unmatched.length) {
+    tail.push("", "Couldn't find: " + r.unmatched.slice(0, 8).map((e) => `“${clip(e.name, 40)}”`).join(", ") +
+      (r.unmatched.length > 8 ? ` and ${r.unmatched.length - 8} more` : "") + " — not counted.");
+  }
+  if (r.unpricedMarket) tail.push(`${r.unpricedMarket} card${r.unpricedMarket === 1 ? " has" : "s have"} no NM Market price and count as $0.`);
+  // Most valuable first, as many WHOLE lines as fit beside the header and the
+  // notes (each is an affiliate link of ~200 characters; clipping one mid-way
+  // would show a broken link), and the rest summed in one line.
+  const rowLine = (x) => {
     // The link buys the printing the price came from — the cheapest one.
     const f = x.mktAt ? x.mktAt.f : null;
     const url = buyUrl(x.card.n, f && !f[6] ? f[1] : null, f ? f[2] || FIN_PRINTING[f[0]] : "Normal");
     const each = x.mkt != null ? money(x.mkt) : "no price";
     const tot = x.mkt != null ? ` · **${money(x.mkt * x.qty)}**` : "";
-    lines.push(`\`${String(x.qty).padStart(2)}×\` [${clip(x.card.n, 48)}](${url}) — ${each} ea${tot}${x.guessed ? " *(closest match)*" : ""}`);
+    return `\`${String(x.qty).padStart(2)}×\` [${clip(x.card.n, 48)}](${url}) — ${each} ea${tot}${x.guessed ? " *(closest match)*" : ""}`;
+  };
+  let budget = 3900 - lines.join("\n").length - tail.join("\n").length - 120;
+  let shown = 0;
+  for (const x of r.rows.slice(0, 15)) {
+    const l = rowLine(x);
+    if (l.length + 1 > budget) break;
+    lines.push(l);
+    budget -= l.length + 1;
+    shown++;
   }
-  if (r.rows.length > shown.length) {
-    const rest = r.rows.slice(shown.length);
+  if (r.rows.length > shown) {
+    const rest = r.rows.slice(shown);
     const restTotal = rest.reduce((s, x) => s + (x.mkt != null ? x.mkt * x.qty : 0), 0);
     const restCount = rest.reduce((s, x) => s + x.qty, 0);
     lines.push(`…and ${restCount} more card${restCount === 1 ? "" : "s"} (${rest.length} line${rest.length === 1 ? "" : "s"}) worth ${money(restTotal) || "$0.00"} together.`);
   }
-  if (r.unmatched.length) {
-    lines.push("", "Couldn't find: " + r.unmatched.slice(0, 8).map((e) => `“${clip(e.name, 40)}”`).join(", ") +
-      (r.unmatched.length > 8 ? ` and ${r.unmatched.length - 8} more` : "") + " — not counted.");
-  }
-  if (r.unpricedMarket) lines.push(`${r.unpricedMarket} card${r.unpricedMarket === 1 ? " has" : "s have"} no NM Market price and count as $0.`);
+  lines.push(...tail);
   const embeds = [{
-    title: "Deck price", color: BRAND_COLOR, description: clip(lines.join("\n"), 4000),
+    title: "Deck price", color: BRAND_COLOR, description: lines.join("\n"),
     footer: { text: `TCGplayer prices as of ${shortDate(priceDate)} · cheapest printing of each card · ${AFFILIATE_NOTE}` },
   }];
   // The whole list as ONE TCGplayer cart (mass entry), each card spelled the
