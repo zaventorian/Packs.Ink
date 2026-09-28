@@ -75,6 +75,24 @@ jobs:
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # Registered BEFORE the deploy so the command ids can go into the bundle
+      # (src/command-ids.json — /help shows the commands as clickable). A
+      # failure here still lets the day's card index deploy; the last step
+      # turns the run red afterwards, so it is never missed.
+      - name: Register the slash commands
+        id: register
+        if: steps.cfg.outputs.ready == 'true' && !inputs.dry_run
+        continue-on-error: true
+        env:
+          DISCORD_APPLICATION_ID: ${{ secrets.DISCORD_APPLICATION_ID }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+        run: |
+          if [ -z "$DISCORD_BOT_TOKEN" ]; then
+            echo "::notice::No DISCORD_BOT_TOKEN secret — commands not registered."
+            exit 0
+          fi
+          node tools/register_commands.mjs --ids src/command-ids.json
+
       - name: Deploy
         id: deploy
         if: steps.cfg.outputs.ready == 'true' && !inputs.dry_run
@@ -116,21 +134,12 @@ jobs:
           rm -f "$f"
           echo "secrets synced"
 
-      - name: Register the slash commands
-        if: steps.deploy.outputs.url != ''
+      - name: Point Discord at the Worker
+        if: steps.deploy.outputs.url != '' && inputs.set_endpoint
         env:
           DISCORD_APPLICATION_ID: ${{ secrets.DISCORD_APPLICATION_ID }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-        run: |
-          if [ -z "$DISCORD_BOT_TOKEN" ]; then
-            echo "::notice::No DISCORD_BOT_TOKEN secret — commands not registered."
-            exit 0
-          fi
-          if [ "${{ inputs.set_endpoint }}" = "true" ]; then
-            node tools/register_commands.mjs --endpoint "${{ steps.deploy.outputs.url }}/interactions"
-          else
-            node tools/register_commands.mjs
-          fi
+        run: node tools/register_commands.mjs --endpoint-only "${{ steps.deploy.outputs.url }}/interactions"
 
       # Proof it is live, not just uploaded: the health route reports the index
       # this deploy carries, and an unsigned request to the interactions
@@ -152,3 +161,9 @@ jobs:
           echo "unsigned interaction refused (401) - good"
           echo "### Discord bot live at $url" >> "$GITHUB_STEP_SUMMARY"
           echo "$body" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Command registration failed
+        if: steps.register.outcome == 'failure'
+        run: |
+          echo "::error::Registering the slash commands failed (see that step). The card index deployed anyway; commands may be a day stale and /help shows them unclickable."
+          exit 1

@@ -28,6 +28,15 @@ export const COMMANDS = [
     options: [nameOpt, { type: 3, name: "range", description: "Chart range (default 3 months)", choices: rangeChoices }, privOpt],
   },
   {
+    name: "trade", type: 1, ...EVERYWHERE,
+    description: "Is this trade fair? Both sides priced and compared",
+    options: [
+      { type: 3, name: "give", max_length: 1000, description: "What you give — 2x mowgli, enchanted elsa, $20 (or leave empty for a box)" },
+      { type: 3, name: "get", max_length: 1000, description: "What you get — stitch rock star foil, azurite sea box" },
+      privOpt,
+    ],
+  },
+  {
     name: "deck", type: 1, ...EVERYWHERE,
     description: "Price a decklist — paste it into the box that opens",
     options: [privOpt],
@@ -43,7 +52,8 @@ export const COMMANDS = [
         { name: "Gains", value: "up" }, { name: "Drops", value: "down" }] },
       { type: 3, name: "rarity", description: "Which cards (default all)", choices: [
         { name: "Chase (Enchanted / Epic / Iconic)", value: "chase" }, { name: "Rare to Legendary", value: "rareleg" },
-        { name: "Promos", value: "promo" }, { name: "All", value: "all" }] },
+        { name: "Promos", value: "promo" }, { name: "All", value: "all" },
+        { name: "Sealed product (boxes, troves, gift sets)", value: "sealed" }] },
       { type: 3, name: "basis", description: "Which price (default NM Market)", choices: [
         { name: "NM Market", value: "market" }, { name: "Low", value: "low" }] },
       { type: 10, name: "min_price", description: "Only cards that started at or above this price (default $5)", min_value: 0, max_value: 10000 },
@@ -58,7 +68,8 @@ export const COMMANDS = [
       { type: 4, name: "radius", description: "Miles (default 50)", choices: [
         { name: "10 mi", value: 10 }, { name: "25 mi", value: 25 }, { name: "50 mi", value: 50 }, { name: "100 mi", value: 100 }] },
       { type: 3, name: "kind", description: "Which events (default all)", choices: [
-        { name: "All events", value: "all" }, { name: "Set Championships", value: "sc" }, { name: "Prereleases", value: "prerelease" }] },
+        { name: "All events", value: "all" }, { name: "Set Championships", value: "sc" }, { name: "Prereleases", value: "prerelease" },
+        { name: "Weekly play (league nights, locals)", value: "other" }] },
       privOpt,
     ],
   },

@@ -25,6 +25,53 @@ const rawSaleMatch = (rows, printing) => {
   return b ? (rows.find(r => r.printing === b) || null) : null;
 };
 // ---- site ----
+const EXTRAS_SET_NAME = "Extras & Oddities";
+// ---- site ----
+const MAINLINE_SETS = [
+  "The First Chapter","Rise of the Floodborn","Into the Inklands",
+  "Ursula's Return","Shimmering Skies","Azurite Sea","Archazia's Island",
+  "Reign of Jafar","Fabled","Whispers in the Well","Winterspell",
+  "Wilds Unknown","Attack of the Vine!","Hyperia City"
+];
+// ---- site ----
+const SET_ORDER = [
+  EXTRAS_SET_NAME,
+  // Yearly promo sets — appear below mainline sets in the Collection grid
+  // (reverse() in the renderer puts them between mainlines and EXTRAS).
+  "Promo Set 1","Promo Set 2","Promo Set 3",
+  // Special / non-mainline sets that Lorcast indexes separately. Names
+  // must match what Lorcast returns in /sets so the loader picks them up.
+  "Lorcana Challenge Promo (C1)",       // 2024-05-17 — Cinderella Stouthearted, Baymax, etc.
+  "D23 Collection",             // 2024-08-09 — Mickey Brave Little Tailor, etc.
+  "Lorcana Challenge Promo (C2)",   // 2026-01-16 — Pegasus, Mulan Charging Ahead, etc.
+  "Magical Places Promos", // 2026-01-16 — Ravensburger's "N/DIS" promo line. Not every
+  // card in it is an EPCOT Festival of the Arts card — that's a sub-label inside this
+  // set (like a grading sub), not a set of its own.
+  "Curator's Collection: Heroines", // 2026-07-17 — premium 6-card promo set (CC1)
+  "Promo Set 4",                    // 2026-07-17 — P4, Lorcast-indexed
+  "PD1",                            // 2026-07-28 — Lorcast's rolling product-promo set (5/PD1, 16/PD1 …)
+  "Curator's Collection: Beauty and the Beast", // 2026-10-01 — premium 6-card promo set (CC2)
+  ...MAINLINE_SETS,
+];
+// ---- site ----
+const PULL = {
+  "Common":144,"Uncommon":72,"Rare":31.75,"Super Rare":12,"Legendary":4,
+  "Common Foil":13,"Uncommon Foil":6,"Rare Foil":3,"Super Rare Foil":1,
+  "Legendary Foil":0.5,"Enchanted":0.25,"Epic":1.5,"Iconic":0.0141
+};
+// ---- site ----
+const PULL_V2 = {
+  "Common":144,"Uncommon":72,"Rare":29.75,"Super Rare":12,"Legendary":6,
+  "Common Foil":12.259,"Uncommon Foil":5.658,"Rare Foil":3,"Super Rare Foil":1,
+  "Legendary Foil":0.5,"Enchanted":0.333,"Epic":2.5,"Iconic":0.0141
+};
+// ---- site ----
+const NEW_PULL_START = SET_ORDER.indexOf("Wilds Unknown");
+// ---- site ----
+const getPull = set => {const idx=SET_ORDER.indexOf(set); return (idx===-1||idx>=NEW_PULL_START)?PULL_V2:PULL;};
+// ---- site ----
+const INKS = ["Amber","Amethyst","Emerald","Ruby","Sapphire","Steel"];
+// ---- site ----
 const CAL_D = (s) => String(s || "").slice(0, 10);
 // ---- site ----
 const calYmdParts = (s) => {
@@ -255,6 +302,24 @@ const calendarUpcoming = (events, fromYmd, limit) => {
   });
   const sorted = calendarSort(live);
   return limit > 0 ? sorted.slice(0, limit) : sorted;
+};
+// ---- site ----
+const pick = a => a?.length?a[Math.floor(Math.random()*a.length)]:null;
+// ---- site ----
+const wPick = opts => {
+  const av=opts.filter(o=>o.p?.length); if(!av.length) return null;
+  let r=Math.random()*av.reduce((s,o)=>s+o.w,0);
+  for(const o of av){r-=o.w; if(r<=0) return o.p;} return av[av.length-1].p;
+};
+// ---- site ----
+const simPack = (pools,pull) => {
+  const cards=[];
+  for(const ink of INKS){const c=pick(pools.byInk[ink]);if(c) cards.push(c);}
+  for(let i=0;i<3;i++){const c=pick(pools.unc);if(c) cards.push(c);}
+  for(let i=0;i<2;i++){const pool=wPick([{p:pools.rar,w:pull["Rare"]},{p:pools.sr,w:pull["Super Rare"]},{p:pools.leg,w:pull["Legendary"]}]);const c=pick(pool);if(c) cards.push(c);}
+  const fp=wPick([{p:pools.cF,w:pull["Common Foil"]},{p:pools.uF,w:pull["Uncommon Foil"]},{p:pools.rF,w:pull["Rare Foil"]},{p:pools.srF,w:pull["Super Rare Foil"]},{p:pools.lF,w:pull["Legendary Foil"]},{p:pools.enc,w:pull["Enchanted"]},{p:pools.epi,w:pull["Epic"]},{p:pools.ico,w:pull["Iconic"]}]);
+  const fc=pick(fp);if(fc) cards.push(fc);
+  return cards;
 };
 // ---- site ----
 const TCG_AFFILIATE_BASE = "https://partner.tcgplayer.com/c/7285926/1780961/21018";
@@ -735,4 +800,4 @@ const scLocalTime12 = (hhmm) => {
   h = h % 12 || 12;
   return `${h}:${m[2]} ${ap}`;
 };
-export { AMAZON_ASIN_BY_SET, AMAZON_DEPT_DEFAULT, AMAZON_PUZZLE_ASINS, AMAZON_SEALED_RULES, AMAZON_TAG, CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_REGIONS, CAL_D, CAL_EST_SUFFIX, CARD_DELTA_WINDOWS, GRADED_FOIL_PRINTINGS, GRADED_NONFOIL_PRINTINGS, PRICE_STANDING_HIGH, PRICE_STANDING_LOW, PRICE_STANDING_MIN_POINTS, PRICE_STANDING_MIN_SPAN_RATIO, PRICE_STANDING_MIN_SPREAD, PRICE_STANDING_NEAR_LOW, PRICE_STANDING_WINDOWS, PRODUCT_RELEASE_DATES, SC_GEO_COUNTRIES, SC_GEO_TIMEOUT_MS, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, SC_POSTAL_FORMATS, SEALED_DISPLAY_TYPE_FOR, SET_CADENCE_DAYS, SET_LGS_WEEKDAY, SET_RELEASE_DATES, SET_RELEASE_LABELS, SET_RELEASE_PHASES, SET_RETAIL_LAG_DAYS, TCG_AFFILIATE_BASE, UPCOMING_SET_NAMES, _CAL_REGION_BY_CC, _amznNorm, _calKindRank, _calPhaseRank, _calSetKey, _calSetPhase, amazonForSealed, amazonSearchUrl, amazonUrl, calAddDays, calEndOf, calEstimated, calEventFullLabel, calEventSubtitle, calEventTitle, calRegionOf, calStoreEventName, calTodayYmd, calUTCToYmd, calYmdParts, calYmdToUTC, calendarEstimatedSetEntries, calendarMergeEvents, calendarProductEntries, calendarSetEntries, calendarSetEstimates, calendarSort, calendarUpcoming, cleanSealedName, computeSeriesDeltas, deriveSealedDisplayType, gradedSlotBucket, haversineMi, priceStanding, rawSaleMatch, scLocalTime12, scNormalizePostal, scPlaceLabel, scPostalCandidates, scPostalShape, scRankPlaces, scZippo, searchNorm, seriesPricedOn, tcgSetSearchUrl, tcgUrl };
+export { AMAZON_ASIN_BY_SET, AMAZON_DEPT_DEFAULT, AMAZON_PUZZLE_ASINS, AMAZON_SEALED_RULES, AMAZON_TAG, CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_REGIONS, CAL_D, CAL_EST_SUFFIX, CARD_DELTA_WINDOWS, EXTRAS_SET_NAME, GRADED_FOIL_PRINTINGS, GRADED_NONFOIL_PRINTINGS, INKS, MAINLINE_SETS, NEW_PULL_START, PRICE_STANDING_HIGH, PRICE_STANDING_LOW, PRICE_STANDING_MIN_POINTS, PRICE_STANDING_MIN_SPAN_RATIO, PRICE_STANDING_MIN_SPREAD, PRICE_STANDING_NEAR_LOW, PRICE_STANDING_WINDOWS, PRODUCT_RELEASE_DATES, PULL, PULL_V2, SC_GEO_COUNTRIES, SC_GEO_TIMEOUT_MS, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, SC_POSTAL_FORMATS, SEALED_DISPLAY_TYPE_FOR, SET_CADENCE_DAYS, SET_LGS_WEEKDAY, SET_ORDER, SET_RELEASE_DATES, SET_RELEASE_LABELS, SET_RELEASE_PHASES, SET_RETAIL_LAG_DAYS, TCG_AFFILIATE_BASE, UPCOMING_SET_NAMES, _CAL_REGION_BY_CC, _amznNorm, _calKindRank, _calPhaseRank, _calSetKey, _calSetPhase, amazonForSealed, amazonSearchUrl, amazonUrl, calAddDays, calEndOf, calEstimated, calEventFullLabel, calEventSubtitle, calEventTitle, calRegionOf, calStoreEventName, calTodayYmd, calUTCToYmd, calYmdParts, calYmdToUTC, calendarEstimatedSetEntries, calendarMergeEvents, calendarProductEntries, calendarSetEntries, calendarSetEstimates, calendarSort, calendarUpcoming, cleanSealedName, computeSeriesDeltas, deriveSealedDisplayType, getPull, gradedSlotBucket, haversineMi, pick, priceStanding, rawSaleMatch, scLocalTime12, scNormalizePostal, scPlaceLabel, scPostalCandidates, scPostalShape, scRankPlaces, scZippo, searchNorm, seriesPricedOn, simPack, tcgSetSearchUrl, tcgUrl, wPick };

@@ -108,12 +108,20 @@ function parseLine(line) {
     const [window = "1d", direction = "up", rarity = "all"] = rest.split(/\s+/).filter(Boolean);
     return cmd(name, [{ type: 3, name: "window", value: window }, { type: 3, name: "direction", value: direction }, { type: 3, name: "rarity", value: rarity }]);
   }
+  // /trade 2x mowgli, $20 vs enchanted elsa   ("vs": Git Bash rewrites "//")
+  if (name === "trade") {
+    const [give = "", get = ""] = rest.split(/\s+vs\s+/i).map((s) => s.trim());
+    return cmd(name, [give && { type: 3, name: "give", value: give }, get && { type: 3, name: "get", value: get }].filter(Boolean));
+  }
+  if (name === "set" || name === "open") return cmd(name, rest ? [{ type: 3, name: "set", value: rest }] : []);
+  if (name === "new") return cmd(name, rest ? [{ type: 3, name: "set", value: rest }] : []);
   return cmd(name, []);
 }
 
 const script = process.argv.slice(2).length ? process.argv.slice(2) : [
   "/price mowgli", "/card enchanted elsa", "/price elsa psa 10", "/price azurite sea box",
-  "/price asdfgh", "/movers 1w up chase", "/movers 1d down all", "/events 60614", "/calendar", "/help",
+  "/price asdfgh", "/movers 1w up chase", "/movers 1d down all", "/movers 1m up sealed", "/events 60614", "/calendar", "/help",
+  "/trade 2x mowgli, enchanted elsa, $20 vs stitch rock star foil, azurite sea box", "/set azurite", "/set", "/open fabled",
 ];
 
 const bad = await (async () => {

@@ -2,11 +2,12 @@
 // has already been fetched and returns {embeds, components} JSON, which is what
 // lets the guard test check a reply without a network.
 import { tcgUrl, tcgSetSearchUrl, amazonForSealed, calEventTitle, calEventSubtitle, scLocalTime12 } from "./site.generated.js";
-import { FIN_PRINTING, RANGES, DEFAULT_RANGE, MOVER_WINDOWS, MOVER_GROUPS } from "./data.js";
+import { FIN_PRINTING, RANGES, DEFAULT_RANGE, MOVER_WINDOWS, MOVER_GROUPS, CAL_FILTERS } from "./data.js";
 
 export const SITE = "https://packs.ink";
 export const BRAND_COLOR = 0xe3b341;
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
 // ── formatting ───────────────────────────────────────────────────────────
 export function money(v) {
@@ -74,6 +75,14 @@ export function parsePickId(id) {
   const m = /^p\|([a-z]+)\|([a-z0-9]+)$/.exec(String(id || ""));
   if (!m || !VIEWS.includes(m[1]) || !RANGES[m[2]]) return null;
   return { view: m[1], range: m[2] };
+}
+// A menu that OPENS a card in a new private reply, where pickId replaces the
+// message it sits on: a trade, a deck, a set's chase list or a movers board
+// must stay where it is when someone looks at one of its cards.
+export const openId = (view) => `o|${view}`;
+export function parseOpenId(id) {
+  const m = /^o\|([a-z]+)$/.exec(String(id || ""));
+  return m && VIEWS.includes(m[1]) ? { view: m[1] } : null;
 }
 
 // ── one card ─────────────────────────────────────────────────────────────
@@ -351,30 +360,84 @@ export function priceCheckMessage({ embeds, options, range = DEFAULT_RANGE }) {
 }
 
 // ── movers ───────────────────────────────────────────────────────────────
+// The board is browsed, not re-typed: every control below redraws THIS
+// message. The state rides in each control's custom_id —
+//   m|<control>|<window>|<up|down>|<group>|<market|low>|<min>
+// ⚠ The <control> letter is what keeps custom_ids unique: the highlighted
+// window button, the highlighted direction and the highlighted basis all
+// describe the CURRENT board, and Discord refuses a message in which two
+// components share a custom_id.
+const MOVER_BUTTON_WINDOWS = ["1d", "1w", "1m", "3m", "1y"];
+export const moversId = (ctl, s) => `m|${ctl}|${s.win}|${s.dir}|${s.group}|${s.basis}|${s.min}`;
+export function parseMoversId(id) {
+  const m = /^m\|([wdbg])\|([a-z0-9]+)\|(up|down)\|([a-z]+)\|(market|low)\|(\d{1,5}(?:\.\d{1,2})?)$/.exec(String(id || ""));
+  if (!m || !MOVER_WINDOWS[m[2]] || !MOVER_GROUPS[m[4]]) return null;
+  return { win: m[2], dir: m[3], group: m[4], basis: m[5], min: Number(m[6]) };
+}
+const SEALED_SINGULAR = {
+  "Booster Boxes": "Booster Box", "Illumineer's Troves": "Trove", "Gift Sets": "Gift Set",
+  "Collector's Edition": "Collector's Edition", "Bundles": "Bundle", "Quests": "Quest",
+};
+const FIN_CODE = { "Normal": "N", "Cold Foil": "C", "Holofoil": "H", "Foil": "F" };
+
 export function moversMessage({ result, win, dir, group, basis, min, R }) {
   const w = MOVER_WINDOWS[win] || MOVER_WINDOWS["1d"];
   const g = MOVER_GROUPS[group] || MOVER_GROUPS.all;
+  const state = { win, dir, group, basis, min };
   const rows = result.rows || [];
-  const title = `${dir === "down" ? "Biggest drops" : "Biggest gains"} · ${w.label} · ${g.label}`;
-  if (!rows.length) {
-    return { embeds: [{ title, color: BRAND_COLOR,
-      description: "Nothing cleared the filters today. Try a longer window, another rarity group, or a lower price floor.",
-      footer: { text: "packs.ink" } }] };
-  }
+  const title = `${dir === "down" ? "Biggest drops" : "Biggest gains"} · ${w.label} · ${g.sealed ? "Sealed product" : g.label}`;
+  const picks = [];
+  let topImg = null;
   const lines = rows.map((r, i) => {
-    const name = r.version ? `${r.name} - ${r.version}` : r.name;
-    const fin = finishWord(R, r);
-    const was = money(r[result.priorCol]), now = money(r[result.todayCol]);
-    return `\`${String(i + 1).padStart(2)}\` **${pct(Number(r[result.col]))}** [${clip(name, 60)}](${buyUrl(name, r.tcgplayer_product_id, r.printing)}) · ${r.rarity}${fin ? " · " + fin : ""} · ${was} → **${now}**`;
+    let name, url, what, was, now, change, key, img;
+    if (result.sealed) {
+      const s = r.s;
+      name = s.n; url = tcgUrl(s.pid, "Normal");
+      what = [SEALED_SINGULAR[s.ty] || s.ty, s.sn].filter(Boolean).join(" · ");
+      was = money(r.prior); now = money(r.now); change = r.pct;
+      key = R.sealedKey(s); img = s.img;
+    } else {
+      name = r.version ? `${r.name} - ${r.version}` : r.name;
+      url = buyUrl(name, r.tcgplayer_product_id, r.printing);
+      const fin = finishWord(R, r);
+      what = r.rarity + (fin ? " · " + fin : "");
+      was = money(r[result.priorCol]); now = money(r[result.todayCol]); change = Number(r[result.col]);
+      key = R.byCardId.has(r.card_id) ? `c|${r.card_id}|${FIN_CODE[r.printing] || "N"}` : null;
+      img = r.tcgplayer_product_id ? `https://tcgplayer-cdn.tcgplayer.com/product/${r.tcgplayer_product_id}_in_1000x1000.jpg` : null;
+    }
+    if (key && !picks.some((p) => p.value === key)) {
+      picks.push({ label: clip(name, 100), value: key, description: clip(`${pct(change)} · ${what} · ${now}`, 100) });
+    }
+    if (i === 0) topImg = img;
+    return `\`${String(i + 1).padStart(2)}\` **${pct(change)}** [${clip(name, 60)}](${url}) · ${what} · ${was} → **${now}**`;
   });
-  const top = rows[0];
   const embed = {
-    title, color: dir === "down" ? 0xe86868 : 0x5cc480,
-    description: clip(lines.join("\n"), 4000),
-    footer: { text: `TCGplayer ${basis === "low" ? "Low" : "NM Market"} · starting price ≥ ${money(min)} · prices as of ${shortDate(result.latest)} · ${AFFILIATE_NOTE}` },
+    title, color: rows.length ? (dir === "down" ? 0xe86868 : 0x5cc480) : BRAND_COLOR,
+    description: rows.length ? clip(lines.join("\n"), 4000)
+      : "Nothing cleared the filters. Try a longer window or another group below" + (min > 0 ? `, or a lower price floor than ${money(min)} with \`/movers min_price\`.` : "."),
+    footer: { text: [`TCGplayer ${basis === "low" ? "Low" : g.sealed ? "Market" : "NM Market"}`, `starting price ≥ ${money(min)}`,
+      result.latest ? `prices as of ${shortDate(result.latest)}` : null, rows.length ? AFFILIATE_NOTE : null].filter(Boolean).join(" · ") },
   };
-  if (top && top.tcgplayer_product_id) embed.thumbnail = { url: `https://tcgplayer-cdn.tcgplayer.com/product/${top.tcgplayer_product_id}_in_1000x1000.jpg` };
-  return { embeds: [embed], components: [{ type: 1, components: [{ type: 2, style: 5, label: "Open the Screener", url: `${SITE}/screener` }] }] };
+  if (topImg) embed.thumbnail = { url: topImg };
+
+  const btn = (label, ctl, s, on) => ({ type: 2, style: on ? 1 : 2, label, custom_id: moversId(ctl, s), disabled: !!on });
+  const wins = MOVER_BUTTON_WINDOWS.includes(win) ? MOVER_BUTTON_WINDOWS : MOVER_BUTTON_WINDOWS.map((k) => (k === "3m" ? win : k));
+  const components = [
+    { type: 1, components: wins.map((k) => btn(MOVER_WINDOWS[k].label, "w", { ...state, win: k }, k === win)) },
+    { type: 1, components: [
+      btn("▲ Gains", "d", { ...state, dir: "up" }, dir === "up"),
+      btn("▼ Drops", "d", { ...state, dir: "down" }, dir === "down"),
+      btn(g.sealed ? "Market" : "NM Market", "b", { ...state, basis: "market" }, basis === "market"),
+      btn("Low", "b", { ...state, basis: "low" }, basis === "low"),
+    ] },
+    { type: 1, components: [{
+      type: 3, custom_id: moversId("g", state), placeholder: "Which cards",
+      options: Object.entries(MOVER_GROUPS).map(([k, v]) => ({ label: clip(v.label, 100), value: k, default: k === group })),
+    }] },
+  ];
+  if (picks.length) components.push({ type: 1, components: [{ type: 3, custom_id: openId("chart"), placeholder: "Look at one of these", options: picks.slice(0, 25) }] });
+  components.push({ type: 1, components: [{ type: 2, style: 5, label: "Open the Screener", url: `${SITE}/screener${g.sealed ? "?m=sealed" : ""}` }] });
+  return { embeds: [embed], components };
 }
 
 // A finish word only when the card really has two printings — the site's
@@ -387,64 +450,224 @@ function finishWord(R, row) {
 }
 
 // ── events near a place ──────────────────────────────────────────────────
-const KIND_LABEL = { sc: "Set Championship", prerelease: "Prerelease", other: "Store event" };
-export function eventsMessage({ place, series, radius, kind }) {
-  const where = [place.city, place.state || place.country].filter(Boolean).join(", ");
-  const title = `${kind === "sc" ? "Set Championships" : kind === "prerelease" ? "Prereleases" : "Lorcana events"} near ${where}`;
-  const list = (series || []).slice().sort((a, b) => String(a.next_start).localeCompare(String(b.next_start))).slice(0, 12);
-  if (!list.length) {
-    return { embeds: [{ title, color: BRAND_COLOR,
-      description: `Nothing listed within ${radius} miles yet. Try a wider radius, or check back — stores post events a few weeks out.`,
-      footer: { text: "From Ravensburger Play · packs.ink" } }] };
-  }
-  const lines = list.map((s) => {
+// Three sections, rarest first: Set Championships, prereleases, then the
+// weekly play grouped BY STORE (one line a shop, its nights listed), because
+// "every Monday at Pixel and Packs" is one fact, not four list rows.
+// custom_id "e|<control>|<lat>|<lng>|<radius>|<kind>|<place label>" — the
+// label is last because it is free text.
+export const EVENT_RADII = [10, 25, 50, 100];
+const EVENT_KIND_BUTTONS = [["all", "Everything"], ["sc", "Set Champs"], ["prerelease", "Prereleases"], ["other", "Weekly play"]];
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const FORMAT_SHORT = { "Core Constructed": "", "Infinity Constructed": "Infinity", "[Format Coconut]": "Coconut" };
+export const eventsId = (ctl, s) => `e|${ctl}|${Number(s.lat).toFixed(3)}|${Number(s.lng).toFixed(3)}|${s.radius}|${s.kind}|${clip(s.label, 40)}`;
+export function parseEventsId(id) {
+  const m = /^e\|([kr])\|(-?\d{1,3}\.\d{1,3})\|(-?\d{1,3}\.\d{1,3})\|(\d{1,3})\|(all|sc|prerelease|other)\|(.*)$/.exec(String(id || ""));
+  if (!m) return null;
+  return { lat: Number(m[2]), lng: Number(m[3]), radius: Number(m[4]), kind: m[5], label: m[6] };
+}
+
+export function eventsMessage({ place, byKind, radius, kind = "all", query }) {
+  const where = [place.city, place.state || place.country].filter(Boolean).join(", ") || clip(query, 40);
+  const heading = { all: "Lorcana events", sc: "Set Championships", prerelease: "Prereleases", other: "Weekly Lorcana" }[kind] || "Lorcana events";
+  const byTime = (a, b) => String(a.next_start).localeCompare(String(b.next_start));
+  const fields = [];
+  const within = `within ${radius} mi`;
+  const oneOff = (s) => {
     const occ = (s.occurrences || [])[0] || {};
-    const unix = Math.floor(Date.parse(s.next_start) / 1000);
+    const unix = Math.floor(Date.parse(occ.start_datetime || s.next_start) / 1000);
     const when = Number.isFinite(unix) ? `<t:${unix}:f>` : shortDate(s.next_start);
-    const more = s.occurrence_count > 1 ? ` · every ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][s.dow] || ""} ${scLocalTime12(s.local_time)}`.replace(/\s+$/, "") : "";
-    const store = occ.url ? `[${clip(s.store_name || s.name, 60)}](${occ.url})` : clip(s.store_name || s.name, 60);
-    return `**${when}** · ${store} · ${(s.distance_mi || 0).toFixed(0)} mi · ${KIND_LABEL[s.kind] || "Event"}${more}`;
-  });
-  return { embeds: [{
-    title, color: BRAND_COLOR, description: clip(lines.join("\n"), 4000),
-    footer: { text: `Within ${radius} mi · times in your time zone · from Ravensburger Play · packs.ink` },
-  }], components: [{ type: 1, components: [{ type: 2, style: 5, label: "Open the event finder", url: `${SITE}/calendar` }] }] };
+    const name = clip(s.store_name || s.name, 48);
+    const store = occ.url ? `[${name}](${occ.url})` : name;
+    const bits = [`**${when}**`, store, `${Math.round(s.distance_mi || 0)} mi`];
+    const fmt = FORMAT_SHORT[s.gameplay_format] ?? s.gameplay_format;
+    if (fmt && s.kind !== "sc") bits.push(fmt);
+    if (occ.registered_user_count != null && occ.capacity) {
+      bits.push(occ.registered_user_count >= occ.capacity ? `**full** (${occ.capacity})` : `${occ.registered_user_count}/${occ.capacity} signed up`);
+    }
+    else if (occ.registered_user_count) bits.push(`${occ.registered_user_count} signed up`);
+    if (occ.cost_cents > 0) bits.push((occ.currency || "USD").toUpperCase() === "USD" ? money(occ.cost_cents / 100).replace(/\.00$/, "") : `${(occ.cost_cents / 100).toFixed(0)} ${occ.currency}`);
+    return bits.join(" · ");
+  };
+  const listField = (title, rows, cap, empty) => {
+    const lines = [];
+    for (const s of rows.slice(0, cap)) {
+      const line = oneOff(s);
+      if (lines.join("\n").length + line.length + 1 > 1000) break;
+      lines.push(line);
+    }
+    const rest = rows.length - lines.length;
+    if (rest > 0) lines.push(`*…and ${rest} more ${within}*`);
+    return { name: title + (rows.length ? ` · ${rows.length}` : ""), value: lines.length ? lines.join("\n") : empty };
+  };
+  if (kind === "all" || kind === "sc") {
+    const rows = (byKind.sc || []).slice().sort(byTime);
+    fields.push(listField("🏆 Set Championships", rows, kind === "sc" ? 12 : 5,
+      byKind.sc == null ? "*Couldn't load these just now.*" : `None listed ${within} yet — stores post them a few weeks ahead.`));
+  }
+  // A set's prereleases all fall on one weekend, so the question is WHERE:
+  // nearest first. Set Championships spread over months: soonest first.
+  if (kind === "all" || kind === "prerelease") {
+    const rows = (byKind.prerelease || []).slice().sort((a, b) => (a.distance_mi || 0) - (b.distance_mi || 0) || byTime(a, b));
+    if (rows.length || kind === "prerelease") {
+      fields.push(listField("✨ Prereleases", rows, kind === "prerelease" ? 12 : 5,
+        byKind.prerelease == null ? "*Couldn't load these just now.*" : `None listed ${within} right now.`));
+    }
+  }
+  if (kind === "all" || kind === "other") {
+    const stores = new Map();
+    for (const s of byKind.other || []) {
+      const k = s.store_id != null ? "id:" + s.store_id : "n:" + (s.store_name || s.name);
+      let g = stores.get(k);
+      if (!g) { g = { name: s.store_name || s.name, mi: s.distance_mi || 0, url: null, first: s.next_start, slots: new Map() }; stores.set(k, g); }
+      g.mi = Math.min(g.mi, s.distance_mi || 0);
+      const occ = (s.occurrences || [])[0] || {};
+      if (occ.url && (!g.url || String(s.next_start) < String(g.first))) { g.url = occ.url; g.first = s.next_start; }
+      // One slot per night and time; a store running Core and Infinity at
+      // the same hour is one night with two formats, not two nights.
+      const fmt = FORMAT_SHORT[s.gameplay_format] ?? s.gameplay_format ?? "";
+      const sk = `${s.dow}|${s.local_time}`;
+      const slot = g.slots.get(sk) || { dow: s.dow, time: s.local_time, fmts: new Set() };
+      slot.fmts.add(fmt);
+      g.slots.set(sk, slot);
+    }
+    const list = [...stores.values()].sort((a, b) => a.mi - b.mi);
+    const lines = [];
+    for (const g of list) {
+      const slots = [...g.slots.values()].sort((a, b) => ((a.dow + 6) % 7) - ((b.dow + 6) % 7) || String(a.time).localeCompare(String(b.time)))
+        .slice(0, 4).map((x) => {
+          const f = [...x.fmts];
+          const label = f.length > 1 ? " (" + f.map((v) => v || "Core").join(" + ") + ")" : f[0] ? " " + f[0] : "";
+          return `${DOW[x.dow] || ""} ${scLocalTime12(x.time)}${label}`.trim();
+        });
+      const name = clip(g.name, 40);
+      const line = `${g.url ? `[${name}](${g.url})` : `**${name}**`} · ${Math.round(g.mi)} mi — ${slots.join(", ")}`;
+      if (lines.join("\n").length + line.length + 1 > 1000 || lines.length >= (kind === "other" ? 12 : 6)) break;
+      lines.push(line);
+    }
+    if (list.length > lines.length) lines.push(`*…and ${list.length - lines.length} more stores ${within}*`);
+    fields.push({ name: `🗓️ Weekly play${list.length ? ` · ${list.length} store${list.length === 1 ? "" : "s"}` : ""}`,
+      value: lines.length ? lines.join("\n") : (byKind.other == null ? "*Couldn't load these just now.*" : `No weekly events listed ${within}.`) });
+  }
+  const state = { lat: place.lat, lng: place.lng, radius, kind, label: where };
+  const finder = new URL(SITE + "/");
+  finder.searchParams.set("sczip", clip(query || where, 60));
+  finder.searchParams.set("scdist", String(radius));
+  if (kind !== "all") finder.searchParams.set("scmode", kind);
+  return {
+    embeds: [{
+      title: clip(`${heading} near ${where}`, 256), color: BRAND_COLOR, fields,
+      footer: { text: `Within ${radius} mi · dates in your time zone, weekly times in the store's · from Ravensburger Play · packs.ink` },
+    }],
+    components: [
+      { type: 1, components: EVENT_KIND_BUTTONS.map(([k, l]) => ({ type: 2, style: k === kind ? 1 : 2, label: l, custom_id: eventsId("k", { ...state, kind: k }), disabled: k === kind })) },
+      { type: 1, components: EVENT_RADII.map((r) => ({ type: 2, style: r === radius ? 1 : 2, label: `${r} mi`, custom_id: eventsId("r", { ...state, radius: r }), disabled: r === radius })) },
+      { type: 1, components: [
+        { type: 2, style: 5, label: "Open the event finder", url: finder.toString() },
+        { type: 2, style: 5, label: "Lorcana calendar", url: `${SITE}/calendar` },
+      ] },
+    ],
+  };
 }
 
 // ── the calendar ─────────────────────────────────────────────────────────
-export function calendarMessage({ events }) {
-  const lines = (events || []).map((e) => {
+// Grouped by month, one line an event, marked by kind; buttons narrow the
+// kind and a menu the region. custom_id "cl|<control>|<kind>|<region>".
+const CAL_MARK = { set: "📦", product: "🎁", dlc: "🏆", ccq: "🎟️" };
+const CAL_KIND_BUTTONS = [["all", "Everything"], ["release", "Releases"], ["dlc", "Challenges"], ["ccq", "Qualifiers"]];
+export const calendarId = (ctl, s) => `cl|${ctl}|${s.kind}|${s.region}`;
+export function parseCalendarId(id) {
+  const m = /^cl\|([kr])\|(all|release|dlc|ccq)\|([a-z]{2,6})$/.exec(String(id || ""));
+  return m ? { kind: m[2], region: m[3] } : null;
+}
+export function calendarMessage({ events, kind = "all", region = "all", regions = [] }) {
+  const months = new Map();
+  for (const e of events || []) {
+    const m = /^(\d{4})-(\d{2})/.exec(String(e.starts_on || ""));
+    const key = m ? `${MONTH_NAMES[+m[2] - 1]} ${m[1]}` : "Later";
+    if (!months.has(key)) months.set(key, []);
     const t = Date.parse(String(e.starts_on) + "T12:00:00Z");
-    const when = Number.isFinite(t) ? `<t:${Math.floor(t / 1000)}:D> (<t:${Math.floor(t / 1000)}:R>)` : shortDate(e.starts_on);
-    const sub = calEventSubtitle(e);
-    return `**${clip(calEventTitle(e), 70)}**${e.estimated ? " *(estimated)*" : ""}${sub ? " · " + clip(sub, 60) : ""}${e.location ? " · " + clip(e.location, 50) : ""}\n${when}`;
-  });
-  return { embeds: [{
-    title: "Coming up in Lorcana", color: BRAND_COLOR,
-    description: clip(lines.join("\n") || "Nothing on the calendar right now.", 4000),
-    footer: { text: "Set releases, Challenges and qualifiers · packs.ink/calendar" },
-  }], components: [{ type: 1, components: [{ type: 2, style: 5, label: "Full calendar", url: `${SITE}/calendar` }] }] };
+    const when = Number.isFinite(t) ? `<t:${Math.floor(t / 1000)}:D>` : shortDate(e.starts_on);
+    const rel = Number.isFinite(t) ? ` (<t:${Math.floor(t / 1000)}:R>)` : "";
+    const name = clip(calEventTitle(e), 70);
+    const title = e.url && /^https:\/\//.test(e.url) ? `[${name}](${e.url})` : `**${name}**`;
+    const where = e.kind === "dlc" || e.kind === "ccq" ? (e.location ? " · " + clip(e.location, 50) : "") : "";
+    months.get(key).push(`${CAL_MARK[e.kind] || "•"} ${title}${e.estimated ? " *(estimated)*" : ""}${where} — ${when}${rel}`);
+  }
+  const fields = [];
+  for (const [name, lines] of months) {
+    if (fields.length >= 12) break;
+    fields.push({ name, value: clip(lines.join("\n"), 1024) });
+  }
+  const label = { all: "Coming up in Lorcana", release: "Set and product releases", dlc: "Disney Lorcana Challenges", ccq: "Challenge qualifiers" }[kind];
+  const regionName = region !== "all" ? (regions.find((r) => r.key === region) || {}).label : null;
+  const site = new URL(SITE + "/calendar");
+  if (kind !== "all") site.searchParams.set("ck", (CAL_FILTERS[kind] || []).join(","));
+  if (region !== "all") site.searchParams.set("cr", region);
+  return {
+    embeds: [{
+      title: label + (regionName ? ` · ${regionName}` : ""), color: BRAND_COLOR, url: site.toString(),
+      ...(fields.length ? { fields } : { description: "Nothing on the calendar for that — try Everything, or another region." }),
+      footer: { text: "📦 release · 🎁 product · 🏆 Challenge · 🎟️ qualifier · dates in your time zone · packs.ink/calendar" },
+    }],
+    components: [
+      { type: 1, components: CAL_KIND_BUTTONS.map(([k, l]) => ({ type: 2, style: k === kind ? 1 : 2, label: l, custom_id: calendarId("k", { kind: k, region }), disabled: k === kind })) },
+      { type: 1, components: [{ type: 3, custom_id: calendarId("r", { kind, region }), placeholder: "Region",
+        options: [{ key: "all", label: "Everywhere" }, ...regions].slice(0, 25).map((r) => ({ label: r.label, value: r.key, default: r.key === region })) }] },
+      { type: 1, components: [{ type: 2, style: 5, label: "Full calendar", url: site.toString() }] },
+    ],
+  };
 }
 
 // ── help ─────────────────────────────────────────────────────────────────
-export function helpMessage() {
-  return { embeds: [{
-    title: "Packs.Ink bot", color: BRAND_COLOR,
-    description: [
-      "**/card** `name` — the card, big, with its price.",
-      "**/price** `name` — prices, changes and a price chart.",
-      "Type it however you say it: `mowgli`, `enchanted elsa`, `elsa psa 10`, `stich`, `azurite sea box`. With no subtitle you get the version people actually play; pick another from the menu under the reply.",
-      "",
-      "**/deck** — paste a decklist and see what it costs to build.",
-      "**/movers** — today's biggest gains and drops.",
-      "**/events** `zip or town` — Lorcana events near you.",
-      "**/calendar** — set releases, Challenges and qualifiers coming up.",
-      "Right-click any message → **Apps → Price check** to price every card it mentions, or a whole posted decklist.",
-      "",
-      "**/reports** (server managers) — a daily or weekly movers report in a channel.",
-    ].join("\n"),
-    footer: { text: "Prices from TCGplayer, graded and raw sales from eBay · packs.ink" },
-  }] };
+// A command written as </name:id> is one a person can CLICK to start typing
+// it. The ids come from registering the commands (tools/register_commands.mjs
+// writes src/command-ids.json before each deploy); without them — a local
+// run, a first deploy — it falls back to plain bold text.
+export const cmdMention = (ids, name) => {
+  const top = name.split(" ")[0];
+  return ids && /^\d{5,25}$/.test(String(ids[top] || "")) ? `</${name}:${ids[top]}>` : `**/${name}**`;
+};
+export const helpTryId = (what) => `h|${what}`;
+export function parseHelpTryId(id) {
+  const m = /^h\|(card|trade|open|set|movers)$/.exec(String(id || ""));
+  return m ? m[1] : null;
+}
+export function helpMessage(ids) {
+  const c = (n) => cmdMention(ids, n);
+  return {
+    embeds: [{
+      title: "packs.ink — Lorcana prices, trades and events", color: BRAND_COLOR, url: SITE,
+      description: "Type names the way you'd say them: `mowgli`, `enchanted elsa`, `elsa psa 10`, `stich`, `azurite box`. " +
+        "No subtitle? You get the version people actually play — switch versions from the menu under any card.",
+      fields: [
+        { name: "Look something up", value: [
+          `${c("card")} \`mowgli\` — the card and what it's worth`,
+          `${c("price")} \`elsa psa 10\` — price chart, graded and eBay sales`,
+          `${c("set")} \`azurite\` — box price vs box EV, chase cards`,
+        ].join("\n") },
+        { name: "Trading", value: [
+          `${c("trade")} — is a trade fair? Both sides priced, cash too`,
+          `${c("deck")} — paste a decklist, see what it costs to build`,
+          "Right-click a message → **Apps → Price check** — prices a trade post (H: / W:), a decklist, or any cards it mentions",
+        ].join("\n") },
+        { name: "Market", value: `${c("movers")} — biggest gains and drops, cards or sealed; flip windows with the buttons` },
+        { name: "Play", value: [
+          `${c("events")} \`60614\` — Set Championships, prereleases and weekly play near you`,
+          `${c("calendar")} — set releases, Challenges and qualifiers coming up`,
+        ].join("\n") },
+        { name: "For fun", value: `${c("open")} — open a booster pack (or a box) at real prices` },
+        { name: "Server managers", value: `${c("reports daily")} — the day's movers posted in a channel` },
+      ],
+      footer: { text: "Add private: True to a command to see the reply alone · prices from TCGplayer, sales from eBay · packs.ink" },
+    }],
+    components: [{ type: 1, components: [
+      { type: 2, style: 1, label: "Try a card", custom_id: helpTryId("card") },
+      { type: 2, style: 2, label: "Try a trade", custom_id: helpTryId("trade") },
+      { type: 2, style: 2, label: "Open a pack", custom_id: helpTryId("open") },
+      { type: 2, style: 2, label: "Today's movers", custom_id: helpTryId("movers") },
+      { type: 2, style: 5, label: "packs.ink", url: SITE },
+    ] }],
+  };
 }
 
 // ── a whole decklist ─────────────────────────────────────────────────────

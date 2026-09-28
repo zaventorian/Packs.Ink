@@ -3,7 +3,7 @@ import {
   computeSeriesDeltas, priceStanding, seriesPricedOn, gradedSlotBucket, rawSaleMatch,
   calendarMergeEvents, calendarSetEntries, calendarEstimatedSetEntries, calendarSetEstimates,
   calendarProductEntries, calendarUpcoming, SET_RELEASE_DATES, UPCOMING_SET_NAMES,
-  PRODUCT_RELEASE_DATES, calTodayYmd, calAddDays,
+  PRODUCT_RELEASE_DATES, calTodayYmd, calAddDays, calRegionOf,
   scPostalCandidates, scNormalizePostal, scZippo, scRankPlaces,
 } from "./site.generated.js";
 
@@ -129,11 +129,34 @@ export const MOVER_WINDOWS = {
   "6m": { col: "180d", prior: "180d", label: "6M" }, "1y": { col: "365d", prior: "365d", label: "1Y" },
 };
 export const MOVER_GROUPS = {
+  all: { label: "All rarities", rarities: null },
   chase: { label: "Chase (Enchanted / Epic / Iconic)", rarities: ["Enchanted", "Epic", "Iconic"] },
   rareleg: { label: "Rare – Legendary", rarities: ["Rare", "Super Rare", "Legendary"] },
   promo: { label: "Promos", rarities: ["Promo"] },
-  all: { label: "All rarities", rarities: null },
+  sealed: { label: "Sealed product (boxes, troves, gift sets)", sealed: true },
 };
+
+// Sealed movers need no query: the index build runs the site's
+// computeSealedDeltas over a year of history each day (see build_index.mjs),
+// and the candidates are the site's Sealed Movers row — boxes, troves and
+// specials, never packs or cases. Same floor as the cards: the price a product
+// STARTED the window at.
+export function sealedMovers(index, { win = "1d", dir = "up", basis = "market", min = 5, limit = 10 } = {}) {
+  const at = basis === "low" ? 0 : 1;
+  const rows = [];
+  for (const s of index.sealed || []) {
+    const d = s.d && s.d[win];
+    const pctv = d ? d[at] : null;
+    const now = basis === "low" ? s.low : s.mkt;
+    if (pctv == null || !Number.isFinite(pctv) || pctv === 0 || now == null) continue;
+    if (dir === "down" ? pctv > 0 : pctv < 0) continue;
+    const prior = now / (1 + pctv / 100);
+    if (!(prior >= Number(min || 0))) continue;
+    rows.push({ s, pct: pctv, now, prior });
+  }
+  rows.sort((a, b) => (dir === "down" ? a.pct - b.pct : b.pct - a.pct));
+  return { latest: index.priceDate, rows: rows.slice(0, limit), sealed: true };
+}
 
 // ⚠ price_movers carries a SKU's LAST change forever: when a listing drops out,
 // low_prev is "the Low before the last Low we saw", so an old move keeps being
@@ -209,11 +232,28 @@ export async function resolvePlace(db, query, home = "US") {
   return places[0] || null;
 }
 
-export async function nearbyEvents(db, place, { radius = 50, kind = null } = {}) {
+export async function nearbyEvents(db, place, { radius = 50, kind = null, maxSeries = 60, maxOcc = 4 } = {}) {
   return db.rpc("get_nearby_lorcana_events", {
     p_lat: place.lat, p_lng: place.lng, p_radius_mi: radius,
-    p_kind: kind && kind !== "all" ? kind : null, p_max_series: 60, p_max_occurrences: 4,
+    p_kind: kind && kind !== "all" ? kind : null, p_max_series: maxSeries, p_max_occurrences: maxOcc,
   });
+}
+
+// ⚠ One query PER KIND, never one query for everything. The RPC returns the
+// soonest series first, capped — so in a busy metro "everything" is sixty
+// weekly league nights and the Set Championship three weeks out never makes
+// the list, which is the one event the person asking most wanted. One
+// occurrence per series: the next date is all a list needs, and each
+// occurrence carries a description of up to 1,000 characters.
+export const EVENT_KINDS = ["sc", "prerelease", "other"];
+export async function nearbyByKind(db, place, { radius = 50, kind = "all" } = {}) {
+  const want = kind === "all" ? EVENT_KINDS : EVENT_KINDS.filter((k) => k === kind);
+  const out = { sc: [], prerelease: [], other: [] };
+  const got = await Promise.all(want.map((k) => nearbyEvents(db, place, {
+    radius, kind: k, maxSeries: k === "other" ? 40 : 15, maxOcc: 1,
+  }).then((rows) => [k, rows || []], () => [k, null])));
+  for (const [k, rows] of got) out[k] = rows;
+  return out;
 }
 
 // ── the release + competitive calendar ───────────────────────────────────
@@ -235,3 +275,14 @@ export async function calendarEvents(db) {
   return calendarMergeEvents(derived, rows || []);
 }
 export const upcoming = (events, n) => calendarUpcoming(events, calTodayYmd(), n);
+
+// /calendar's filters. A set or product release is in no place — it comes
+// out everywhere — so a region filter never drops one (the site's
+// calRegionless rule); it narrows the Challenges and qualifiers.
+export const CAL_FILTERS = { all: null, release: ["set", "product"], dlc: ["dlc"], ccq: ["ccq"] };
+export function upcomingFiltered(events, { kind = "all", region = "all", n = 12 } = {}) {
+  const kinds = CAL_FILTERS[kind] || null;
+  const list = (events || []).filter((e) => (!kinds || kinds.includes(e.kind)) &&
+    (region === "all" || e.kind === "set" || e.kind === "product" || calRegionOf(e.country) === region));
+  return calendarUpcoming(list, calTodayYmd(), n);
+}
