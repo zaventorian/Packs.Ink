@@ -112,6 +112,17 @@ check(disc.posts and disc.posts[0]["url"].endswith("/channels/c1/messages"), "po
 check("secret-bot-token-value" not in out, "the bot token is never printed")
 check(sum(1 for u in sb.updates if u[2].get("last_posted_on") == TODAY.isoformat()) == 2, "last_posted_on recorded")
 
+# 1b. dressed for a channel: the lead card's picture, a weekly title that
+# says it covers a week, and a footer naming /reports
+emb = body.get("embeds", [{}])[0] if body else {}
+check(emb.get("thumbnail", {}).get("url") == "https://tcgplayer-cdn.tcgplayer.com/product/1_in_1000x1000.jpg",
+      f"the report shows the card it leads with ({emb.get('thumbnail')})")
+check("/reports" in emb.get("footer", {}).get("text", ""), "the report's footer names /reports")
+weekly = next((p["json"]["embeds"][0] for p in disc.posts if p["url"].endswith("/channels/c2/messages")), {})
+check(weekly.get("title", "").startswith("Lorcana movers — week to "), f"a weekly report says it covers a week ({weekly.get('title')})")
+check(not emb.get("title", "").startswith("Lorcana movers — week"), "a daily report keeps the digest's title")
+check(len(emb.get("footer", {}).get("text", "")) <= 2048 and len(emb.get("title", "")) <= 256, "title and footer within Discord's limits")
+
 # 2. already posted today -> nothing
 sb2 = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": TODAY.isoformat()}])
 disc2 = FakeDiscord()

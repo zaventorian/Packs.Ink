@@ -108,7 +108,32 @@ def build_report(sb, price_date, window):
     hist = digest.fetch_history(sb, pids, since)
     standings = {k: s for k, s in ((k, digest.price_standing(p)) for k, p in hist.items()) if s}
     embed = digest.build_embed(price_date, window, risers, fallers, standings)
-    return embed if embed.get("fields") else None
+    if not embed.get("fields"):
+        return None
+    return dress_report(embed, price_date, window, risers, fallers, standings)
+
+
+def dress_report(embed, price_date, window, risers, fallers, standings):
+    """The digest's embed, dressed for a server channel: the card the report
+    leads with as its picture, a title that says when a WEEKLY report covers
+    a week, and a footer naming the command that put it there — so a member
+    who has never seen it knows where it comes from. Only the wrapper changes;
+    the digest's own layout (shared with the site's webhook) is untouched."""
+    out = dict(embed)
+    if window != "1d":
+        out["title"] = f"Lorcana movers — week to {price_date:%b} {price_date.day}, {price_date:%Y}"
+
+    def worth(r):
+        s = standings.get((r.get("tcgplayer_product_id"), r.get("printing") or "Normal"))
+        return bool(s) and s[0] in ("low", "near-low")
+
+    lead = next((r for r in fallers if worth(r)), None) or (risers[0] if risers else None) or (fallers[0] if fallers else None)
+    pid = lead and lead.get("tcgplayer_product_id")
+    if pid:
+        out["thumbnail"] = {"url": f"https://tcgplayer-cdn.tcgplayer.com/product/{int(pid)}_in_1000x1000.jpg"}
+    foot = (out.get("footer") or {}).get("text") or ""
+    out["footer"] = {"text": (foot + " · " if foot else "") + "posted by the packs.ink bot — /reports"}
+    return out
 
 
 def post(token, channel_id, embed, session=requests):
