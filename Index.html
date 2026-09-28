@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=490">
+<link rel="stylesheet" href="styles.css?v=491">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1589,8 +1589,20 @@ const SCREENER_MODES = ["raw","graded","sealed"];
 // viewer's access is decided — see effectiveSection in CollectionView.
 // "playmats" (2026-09-27) is the same shape again — owned mats are rows under
 // PLAYMAT_PID_BASE in sealed_collection_items — so it shares that axis too.
-const COLLECTION_SECTIONS = ["cards","sealed","graded","pins","playmats"];
+// Render order is this array's order: Pins & Counters sits LAST (Zaven,
+// 2026-09-27), after Playmats.
+const COLLECTION_SECTIONS = ["cards","sealed","graded","playmats","pins"];
 const COLLECTION_SECTION_LABELS = {cards:"Cards", sealed:"Sealed", graded:"Graded", pins:"Pins & Counters", playmats:"Playmats"};
+// The section shelf's glyph per tab. `lines` splits a label that is too wide
+// for a phone cell: all five share one row there, and "Pins & Counters" is
+// about twice a cell's width, so on a phone it stacks as two lines.
+const COLLECTION_SECTION_TABS = {
+  cards:    {icon: "cards"},
+  sealed:   {icon: "box"},
+  graded:   {icon: "slab"},
+  playmats: {icon: "mat"},
+  pins:     {icon: "pin", lines: ["Pins &", "Counters"]},
+};
 // Human names for the toast. Deliberately separate from the nav labels: this
 // reads as a sentence ("Link to Decks · Tournaments copied"), not a chip.
 const VIEW_SHARE_LABELS = {
@@ -2803,7 +2815,7 @@ const NAV_ICONS = {
 // button text); pass 16-20 for a standalone bubble. Declared here, above every
 // consumer, because module-scope consts are read at render time from surfaces
 // tens of thousands of lines further down.
-const _icoSvg = (path, sw) => (size) => html`<svg viewBox="0 0 24 24"
+const _icoSvg = (path, sw, cls) => (size) => html`<svg viewBox="0 0 24 24" class=${cls}
   width=${size || 14} height=${size || 14} fill="none" stroke="currentColor"
   stroke-width=${sw || 1.9} stroke-linecap="round" stroke-linejoin="round"
   aria-hidden="true" focusable="false">${path}</svg>`;
@@ -2851,6 +2863,17 @@ const UI_ICON_PATHS = {
   wave:      _icoSvg(html`<path d="M8 11.2V7.9a1.5 1.5 0 0 1 3 0v3"/><path d="M11 10.4V5.4a1.5 1.5 0 0 1 3 0v5"/><path d="M14 10.6V6.1a1.5 1.5 0 0 1 3 0v5"/><path d="M17 11.6V8.6a1.5 1.5 0 0 1 3 0v5.9a6.5 6.5 0 0 1-6.5 6.5h-1a5.5 5.5 0 0 1-4.4-2.2l-3.4-4.5a1.6 1.6 0 0 1 2.4-2.1L9.5 15"/>`),
   party:     _icoSvg(html`<path d="M3.2 20.8l4.4-12 8.4 8.4z"/><path d="M13.5 4.5c1.3-1.3 3-1.2 3.9 0"/><path d="M19 8c1.3-1.3 1.4-3 .1-4.3"/><path d="M14.8 10.2l1.4-1.4"/><path d="M19.6 13.4h.01"/><path d="M11.4 4.1h.01"/>`),
   check:     _icoSvg(html`<path d="M4 12.5l5.5 5.5L20 7"/>`),
+  // Trails every link that leaves the site. It was the ↗ CHARACTER until
+  // 2026-09-27, and U+2197 is emoji-capable: Nunito Sans doesn't carry it, so
+  // iOS filled the gap from Apple Color Emoji and every "Buy on TCGplayer" wore
+  // a blue sticker tile. Reach it through extIcon(), which sizes it in em.
+  ext:       _icoSvg(html`<path d="M5.5 18.5l13-13"/><path d="M8.5 5.5h10v10"/>`, 2.2, "ico-ext"),
+  // Collection's section shelf: Cards and the Share control. Sealed, Graded,
+  // Playmats and Pins reuse box / slab / mat / pin below.
+  cards:     _icoSvg(html`<rect x="4" y="6" width="10.5" height="14.5" rx="1.5"/><path d="M8.5 3.5h9a1.5 1.5 0 0 1 1.5 1.5v12"/>`),
+  share:     _icoSvg(html`<circle cx="17.5" cy="5.5" r="2.5"/><circle cx="6.5" cy="12" r="2.5"/><circle cx="17.5" cy="18.5" r="2.5"/><path d="M8.7 10.7l6.6-3.9"/><path d="M8.7 13.3l6.6 3.9"/>`),
+  // The Screener's "this Low hasn't moved in days" mark (it was the stopwatch emoji).
+  clock:     _icoSvg(html`<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>`),
   // A tick alone reads as "done"; a tick in a BOX reads as "this is optional and
   // you may untick it", which is the whole point wherever one of these is used.
   checkbox:  _icoSvg(html`<rect x="3.5" y="3.5" width="17" height="17" rx="4"/>`),
@@ -2900,6 +2923,11 @@ const uiIcon = (key, size) => {
   const f = UI_ICON_PATHS[key];
   return f ? f(size) : null;
 };
+// The arrow after an outbound link. 1em, because every wrapper that held the
+// old character set its own font-size (8px on a price badge, 14px on a printing
+// row) and the glyph has to follow it. Never type the arrow character itself;
+// test_no_emoji.mjs fails on it.
+const extIcon = () => uiIcon("ext", "1em");
 
 // ⚠ A HOVER PREVIEW MUST BE MOUSE-ONLY. Touch fires a synthetic mouseenter
 // and never a matching mouseleave, so a preview opened by a tap floats over the
@@ -8110,7 +8138,7 @@ const PriceBadge = ({row, label, klass}) => {
   const url = tcgUrl(row.tcgplayer_product_id, row.tcg_printing);
   return html`<a class=${"price-badge "+(klass||"")} href=${url} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>
     ${label && html`<span class="label">${label}</span>`}
-    <span class="low">${low!=null?fmtUSD(low):"—"}<span class="ext">↗</span></span>
+    <span class="low">${low!=null?fmtUSD(low):"—"}<span class="ext">${extIcon()}</span></span>
     ${market!=null && html`<span class="market">Mkt ${fmtUSD(market)}</span>`}
   </a>`;
 };
@@ -8489,7 +8517,7 @@ const PrintingBlock = ({row, title, subtitle, qty, onQtyChange}) => {
   const body = html`
       <div class="printing-block-head">
         <span class="printing-title">${title}</span>
-        ${url && html`<span class="printing-ext">↗</span>`}
+        ${url && html`<span class="printing-ext">${extIcon()}</span>`}
       </div>
       ${subtitle && html`<div class="printing-subtitle">${subtitle}</div>`}
       <div class="printing-prices">
@@ -8952,8 +8980,8 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
           ${sel.printing ? html`<span class="muted">${sel.printing}</span>` : null}
         </div>
         <div class="gs-sale-detail-links">
-          ${safeHttpUrl(sel.listing_url) && html`<a href=${safeHttpUrl(sel.listing_url)} target="_blank" rel="noopener nofollow">View eBay listing ↗</a>`}
-          ${safeHttpUrl(sel.image_url) && html`<a href=${safeHttpUrl(sel.image_url)} target="_blank" rel="noopener nofollow">Open image ↗</a>`}
+          ${safeHttpUrl(sel.listing_url) && html`<a href=${safeHttpUrl(sel.listing_url)} target="_blank" rel="noopener nofollow">View eBay listing ${extIcon()}</a>`}
+          ${safeHttpUrl(sel.image_url) && html`<a href=${safeHttpUrl(sel.image_url)} target="_blank" rel="noopener nofollow">Open image ${extIcon()}</a>`}
           ${onReport && html`<button class="gs-report-btn" type="button"
             onClick=${()=>onReport(sel)} title="Report this sale as mislabeled or not a valid graded single">⚑ Report</button>`}
           ${canEditGraded && onEditGraded && html`<button class="gs-admin-btn" type="button"
@@ -8981,7 +9009,7 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
             <td class="num">${money(s.sale_price)}</td>
             <td class="muted">${priv?"private":s.listing_type==="auction"?"auction":s.listing_type==="fixed_price"?"fixed":"—"}</td>
             <td>${safeHttpUrl(s.listing_url)
-              ? html`<a href=${safeHttpUrl(s.listing_url)} target="_blank" rel="noopener nofollow" onClick=${e=>e.stopPropagation()} title="View on eBay">↗</a>`
+              ? html`<a href=${safeHttpUrl(s.listing_url)} target="_blank" rel="noopener nofollow" onClick=${e=>e.stopPropagation()} title="View on eBay">${extIcon()}</a>`
               : priv ? html`<span class="gs-private-tag" title="Private / manually entered sale">${uiIcon("edit", 12)}</span>` : ""}</td>
           </tr>`; })}
         </tbody>
@@ -9162,8 +9190,8 @@ const RawSalesPanel = ({raw, cardId, printings, setName, tcgNormal, tcgFoil}) =>
           ${sel.listing_type ? html`<span class="muted">${sel.listing_type === "auction" ? "auction" : "fixed price"}</span>` : null}
         </div>
         <div class="gs-sale-detail-links">
-          ${safeHttpUrl(sel.listing_url) && html`<a href=${safeHttpUrl(sel.listing_url)} target="_blank" rel="noopener nofollow">View eBay listing ↗</a>`}
-          ${safeHttpUrl(sel.image_url) && html`<a href=${safeHttpUrl(sel.image_url)} target="_blank" rel="noopener nofollow">Open image ↗</a>`}
+          ${safeHttpUrl(sel.listing_url) && html`<a href=${safeHttpUrl(sel.listing_url)} target="_blank" rel="noopener nofollow">View eBay listing ${extIcon()}</a>`}
+          ${safeHttpUrl(sel.image_url) && html`<a href=${safeHttpUrl(sel.image_url)} target="_blank" rel="noopener nofollow">Open image ${extIcon()}</a>`}
         </div>
       </div>
       <button class="gs-sale-detail-close" type="button" onClick=${() => setSel(null)} aria-label="Close detail">×</button>
@@ -9187,7 +9215,7 @@ const RawSalesPanel = ({raw, cardId, printings, setName, tcgNormal, tcgFoil}) =>
             <td class="num">${money(x.sale_price)}</td>
             <td class="muted raw-col-type">${x.listing_type === "auction" ? "auction" : x.listing_type === "fixed_price" ? "fixed" : "—"}</td>
             <td>${safeHttpUrl(x.listing_url)
-              ? html`<a href=${safeHttpUrl(x.listing_url)} target="_blank" rel="noopener nofollow" onClick=${e => e.stopPropagation()} title="View on eBay">↗</a>`
+              ? html`<a href=${safeHttpUrl(x.listing_url)} target="_blank" rel="noopener nofollow" onClick=${e => e.stopPropagation()} title="View on eBay">${extIcon()}</a>`
               : ""}</td>
           </tr>`)}
         </tbody>
@@ -9294,7 +9322,7 @@ const GradedSaleEditModal = ({sale, onClose, onChanged}) => {
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <h3 class="gs-modal-title">Edit graded sale <span class="gs-modal-admin-tag">admin</span></h3>
       <div class="gs-modal-sale muted">${(sale.title||"").slice(0,90)}</div>
-      <a class="gs-modal-link" href=${safeHttpUrl(sale.listing_url)||"#"} target="_blank" rel="noopener nofollow">View eBay listing ↗</a>
+      <a class="gs-modal-link" href=${safeHttpUrl(sale.listing_url)||"#"} target="_blank" rel="noopener nofollow">View eBay listing ${extIcon()}</a>
       <div class="gs-modal-fields">
         <label>Grader<select value=${grader} onChange=${e=>setGrader(e.target.value)}>
           ${GRADED_GRADER_OPTS.map(g=>html`<option key=${g} value=${g}>${g}</option>`)}
@@ -9358,7 +9386,7 @@ const GradedReviewModal = ({onClose, onEditSale}) => {
                 <b style=${{color: GRADER_COLOR[(r.grader||'').toLowerCase()]||'inherit'}}>${(r.grader||"").toUpperCase()} ${r.grade||"—"}</b>
                 <span>$${Number(r.sale_price||0).toLocaleString()}</span>
                 <span class="muted">${dstr(r.sold_date)}</span>
-                ${safeHttpUrl(r.listing_url) && html`<a href=${safeHttpUrl(r.listing_url)} target="_blank" rel="noopener nofollow">↗</a>`}
+                ${safeHttpUrl(r.listing_url) && html`<a href=${safeHttpUrl(r.listing_url)} target="_blank" rel="noopener nofollow" title="View on eBay" aria-label="View on eBay">${extIcon()}</a>`}
               </div>
               <div class="gs-review-title muted">${(r.title||"").slice(0,90)}</div>
               ${r.comment && html`<div class="gs-review-comment">“${r.comment}”</div>`}
@@ -13010,7 +13038,7 @@ const COACH_TOURS = {
     {sel:".market-subtabs", title:"The toolbox", body:"Every calculator on the site: what a box is worth, what a trade is worth, what a set costs to finish — plus a pack simulator, Swiss odds, at-the-table score and dice, and a movers ticker for your stream. Overview lists what each one does — and every tab keeps its own URL, so any tool is shareable and bookmarkable."},
   ]},
   collection: { title: "Collection", requiresUser: true, steps: [
-    {sel:".collection-section-tabs", title:"Cards · Sealed · Graded · Pins", body:"Each kind of collectible gets its own section, its own value tracking and its own completion math — and your pins and lore counters get a board to arrange them on."},
+    {sel:".collection-section-tabs", title:"Cards · Sealed · Graded · Playmats · Pins", body:"Each kind of collectible gets its own section, its own value tracking and its own completion math — and your pins and lore counters get a board to arrange them on."},
     {sel:".collection-stats", title:"Your portfolio", body:"Owned value, set completion and extras at a glance — the home page charts it over time."},
     {sel:".collection-share-btn", title:"Share it (or don't)", body:"Each section can be private, unlisted or public — share a read-only link without exposing what you paid."},
   ]},
@@ -15294,7 +15322,7 @@ const FeedbackAdminModal = ({onClose, onSeen})=>{
                             <button onClick=${()=>sendReply(r, true)} disabled=${sending || !draft.trim()}>Send & resolve</button>
                             <button class="active" onClick=${()=>sendReply(r, false)} disabled=${sending || !draft.trim()}>${sending ? "Sending…" : "Send reply"}</button>`
                         : html`${canReply && html`<button onClick=${()=>{ setReplyFor(r.id); setDraft(""); }}>Reply</button>`}
-                            <button onClick=${()=>toggleResolved(r.id, !r.resolved)}>${r.resolved ? "↩ Reopen" : "✓ Resolve"}</button>
+                            <button onClick=${()=>toggleResolved(r.id, !r.resolved)}>${r.resolved ? html`${uiIcon("undo", 12)} Reopen` : "✓ Resolve"}</button>
                             ${armedDel===r.id
                               ? html`<button class="danger" onClick=${()=>del(r.id)}>Confirm delete</button>`
                               : html`<button onClick=${()=>{ setArmedDel(r.id); setTimeout(()=>setArmedDel(a=>a===r.id?null:a), 3000); }}>Delete</button>`}`}
@@ -15590,7 +15618,7 @@ function EVView({raw, sets, avgs, nc, setNc,
         tabIndex=${openSetHistory ? 0 : null}
         onKeyDown=${openSetHistory ? (e)=>{ if(e.target===e.currentTarget && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); openSetHistory(setName);} } : null}
         title=${openSetHistory ? "Open price history for "+setName : null}>
-        <div class="ev-row-set">${setName}${PRERELEASE_SETS.has(setName) && html` <span class="ev-presale-tag" title=${EV_PRESALE_TIP}>Pre-sale</span>`} <span class="ev-row-set-hint">↗</span>
+        <div class="ev-row-set">${setName}${PRERELEASE_SETS.has(setName) && html` <span class="ev-presale-tag" title=${EV_PRESALE_TIP}>Pre-sale</span>`} <span class="ev-row-set-hint">${extIcon()}</span>
           ${onSimulateSet && html`<button class="ev-row-simbtn"
             title=${"Simulate opening a "+setName+" box"}
             onClick=${e=>{ e.stopPropagation(); onSimulateSet(setName); }}>${uiIcon("die",12)} Sim</button>`}
@@ -15606,7 +15634,7 @@ function EVView({raw, sets, avgs, nc, setNc,
                 ${box.url
                   ? html`<a href=${box.url} target="_blank" rel="noopener nofollow sponsored"
                       onClick=${e=>e.stopPropagation()}
-                      class="ev-box-link" title=${box.name + " on TCGplayer (affiliate link)"}>${fmt(box.price)}<span class="ev-box-link-ext">↗</span></a>`
+                      class="ev-box-link" title=${box.name + " on TCGplayer (affiliate link)"}>${fmt(box.price)}<span class="ev-box-link-ext">${extIcon()}</span></a>`
                   : fmt(box.price)}
                 ${(() => {
                   const az = amazonForSealed(box.product, setName);
@@ -16260,7 +16288,7 @@ const AmazonBuyLink = ({product, setName, cls}) => {
     title=${a.exact
       ? "Buy this on Amazon (affiliate link)"
       : "Search Amazon for this product (affiliate link)"}>
-    ${uiIcon("cart", 13)} ${a.exact ? "Buy on Amazon" : "Find on Amazon"} ↗</a>`;
+    ${uiIcon("cart", 13)} ${a.exact ? "Buy on Amazon" : "Find on Amazon"} ${extIcon()}</a>`;
 };
 
 // The small Amazon BUTTON that sits beside a TCGplayer price (2026-09-26,
@@ -16277,7 +16305,7 @@ const amazonPill = (az, {cls = "", stop = false, label} = {}) => az && az.url
       onClick=${stop ? (e => e.stopPropagation()) : undefined}
       title=${az.exact ? "Buy this on Amazon — opens Amazon (affiliate link)"
                        : "Search Amazon for this — opens Amazon (affiliate link)"}>
-      ${uiIcon("cart", 11)}<span>${label || "Amazon"}</span><span class="amz-btn-ext" aria-hidden="true">↗</span></a>`
+      ${uiIcon("cart", 11)}<span>${label || "Amazon"}</span><span class="amz-btn-ext" aria-hidden="true">${extIcon()}</span></a>`
   : null;
 
 // ── Sealed product on Amazon, with TCGplayer's photo and price ─────────────
@@ -16790,7 +16818,7 @@ const AmazonStockCheck = ({pool, stock}) => {
         <div class="amz-check-body">
           <span class="amz-check-name"><b title=${it.name}>${it.name}</b><span>${it.sub}${it.exact ? "" : " · search"}</span></span>
           <div class="amz-check-ctl">
-            <a class="amz-check-open" href=${amazonCheckUrl(key)} target="_blank" rel="noopener nofollow">Open ↗</a>
+            <a class="amz-check-open" href=${amazonCheckUrl(key)} target="_blank" rel="noopener nofollow">Open ${extIcon()}</a>
             <span class="amz-check-seg" role="group" aria-label=${"Amazon stock for " + it.name}>
               <button class=${rec && !rec.out_of_stock ? "active" : ""} disabled=${busy || off}
                 onClick=${() => mark([key], {out_of_stock: false})}>In stock</button>
@@ -16841,9 +16869,9 @@ const AmazonShelfTile = ({it}) => html`<div class="amz-tile">
     : html`<span class="amz-tile-px-lbl">${it.tcg ? "No TCGplayer price" : "Not on TCGplayer"}</span>`}</div>
   <a class="amz-tile-btn amz-tile-btn--amazon" href=${it.amazon} target="_blank" rel="noopener nofollow sponsored"
     draggable="false" title=${it.exact ? "Buy this on Amazon (affiliate link)" : "Search Amazon for this (affiliate link)"}>
-    ${it.exact ? "Buy on Amazon" : "Find on Amazon"} ↗</a>
+    ${it.exact ? "Buy on Amazon" : "Find on Amazon"} ${extIcon()}</a>
   ${it.tcg && html`<a class="amz-tile-btn" href=${it.tcg} target="_blank" rel="noopener nofollow sponsored"
-    draggable="false" title="Buy this on TCGplayer (affiliate link)">TCGplayer ↗</a>`}
+    draggable="false" title="Buy this on TCGplayer (affiliate link)">TCGplayer ${extIcon()}</a>`}
 </div>`;
 
 // Set Breakdown — average price per rarity, per set, with a second lens that
@@ -16930,7 +16958,7 @@ function AvgView({sets, avgs, nc, setNc, priceMode, setPriceMode, metric, setMet
             ${visibleSets.map(s => html`<th key=${s} style=${{minWidth:90,whiteSpace:"nowrap"}}>
               ${openSetHistory
                 ? html`<button class="card-avg-set-head" onClick=${()=>openSetHistory(s)}
-                    title=${"Open price history for "+s}>${s} <span class="card-avg-set-head-hint">↗</span></button>`
+                    title=${"Open price history for "+s}>${s} <span class="card-avg-set-head-hint">${extIcon()}</span></button>`
                 : s}
             </th>`)}
             ${showDiff && html`<th style=${{minWidth:80}}>Diff (A−B)</th>`}
@@ -20828,7 +20856,7 @@ const CardGrid=({cards,showImages,theme,onCardClick})=>html`<div style=${{displa
       <${Badge} rarity=${c.rarity} foil=${foil} theme=${theme}/><div style=${{fontSize:11,fontWeight:500,lineHeight:1.4,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",minHeight:26}}>${c.name}</div>
       ${!showImages&&ink&&html`<div class="muted" style=${{fontSize:10}}>${ink}</div>`}
       ${url
-        ? html`<a href=${url} target="_blank" rel="noopener nofollow sponsored" class="sim-buy-btn" onClick=${e=>e.stopPropagation()}>${fmt(c.price)}<span class="sim-buy-ext">↗</span></a>`
+        ? html`<a href=${url} target="_blank" rel="noopener nofollow sponsored" class="sim-buy-btn" onClick=${e=>e.stopPropagation()}>${fmt(c.price)}<span class="sim-buy-ext">${extIcon()}</span></a>`
         : html`<div class="sim-buy-btn disabled">${fmt(c.price)}</div>`}
     </div>`;
   })}</div>`;
@@ -21250,7 +21278,7 @@ const GoalControl = ({goal, setGoal, setFoilMode}) => {
             <input type="number" min="0" max="99" value=${goal.c|0} onInput=${(e)=>setC(e.target.value)} style=${inStyle}/></label>`}
       <button class="chip" onClick=${togglePerRarity} style=${{fontSize:10, padding:"3px 8px"}}
         title=${perRarity ? "Use one target for all chase cards" : "Set Epic / Enchanted / Iconic / Promo separately"}>
-        ${perRarity ? "↩ Simple chase" : "⋯ Per rarity"}</button>
+        ${perRarity ? html`${uiIcon("undo", 11)} Simple chase` : "⋯ Per rarity"}</button>
     </div>`}
   </div>`;
 };
@@ -21721,11 +21749,11 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     ${!allMode && visibleMissing.count > 0 && html`<a class="setdet-buy-missing"
       href=${(missingMassEntryUrl && missingMassEntryUrl[0]?.url) || tcgSetSearchUrl(setName)} target="_blank" rel="noopener nofollow sponsored">
       <span class="setdet-buy-missing-text">Shop ${visibleMissing.count} missing card${visibleMissing.count===1?'':'s'}${searchOrFilterLabel(inkFilter,rarityFilter,search,foilMode,statusFilter,priceBand)}</span>
-      <span class="setdet-buy-missing-price">${fmt(visibleMissing.value)}<span class="setdet-buy-missing-cta">${missingMassEntryUrl && missingMassEntryUrl.length > 1 ? "Buy bulk — part 1 of " + missingMassEntryUrl.length : "Buy bulk on TCGplayer"}</span><span class="setdet-buy-missing-arrow">↗</span></span>
+      <span class="setdet-buy-missing-price">${fmt(visibleMissing.value)}<span class="setdet-buy-missing-cta">${missingMassEntryUrl && missingMassEntryUrl.length > 1 ? "Buy bulk — part 1 of " + missingMassEntryUrl.length : "Buy bulk on TCGplayer"}</span><span class="setdet-buy-missing-arrow">${extIcon()}</span></span>
     </a>`}
     ${!allMode && missingMassEntryUrl && missingMassEntryUrl.length > 1 && html`<div class="setdet-buy-parts">
       <span class="muted">Too many for one TCGplayer cart link — add each part (they all go into the same cart):</span>
-      ${missingMassEntryUrl.map((p, i) => html`<a key=${i} class="setdet-buy-part" href=${p.url} target="_blank" rel="noopener nofollow sponsored">Part ${i + 1} · ${p.copies} ${p.copies === 1 ? "copy" : "copies"} ↗</a>`)}
+      ${missingMassEntryUrl.map((p, i) => html`<a key=${i} class="setdet-buy-part" href=${p.url} target="_blank" rel="noopener nofollow sponsored">Part ${i + 1} · ${p.copies} ${p.copies === 1 ? "copy" : "copies"} ${extIcon()}</a>`)}
     </div>`}
 
     ${(() => {
@@ -24072,9 +24100,9 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                     <div class="history-preview-name">${previewItem.name}</div>
                     <div class="history-preview-meta">${previewItem.sub || ""}</div>
                     ${tcgUrl(previewItem.productId) && html`<div class="history-preview-type">
-                      <a href=${tcgUrl(previewItem.productId)} target="_blank" rel="noopener nofollow sponsored">View on TCGplayer ↗</a>
+                      <a href=${tcgUrl(previewItem.productId)} target="_blank" rel="noopener nofollow sponsored">View on TCGplayer ${extIcon()}</a>
                       ${previewAmazon && html`<span class="history-preview-sep" aria-hidden="true"> · </span><a href=${previewAmazon.url} target="_blank" rel="noopener nofollow sponsored"
-                        title=${previewAmazon.exact ? "Buy this on Amazon (affiliate link)" : "Search Amazon for this (affiliate link)"}>${previewAmazon.exact ? "Buy on Amazon" : "Find on Amazon"} ↗</a>`}
+                        title=${previewAmazon.exact ? "Buy this on Amazon (affiliate link)" : "Search Amazon for this (affiliate link)"}>${previewAmazon.exact ? "Buy on Amazon" : "Find on Amazon"} ${extIcon()}</a>`}
                     </div>`}
                   </div>
                 </div>`}
@@ -25200,7 +25228,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
             ${product.exclusive_contents && html`<div class="sealed-detail-meta muted">${product.exclusive_contents}</div>`}
             <div class="sealed-detail-prices">
               <span class="muted" style=${{fontSize:"12.5px",lineHeight:1.4}}>Retailer exclusive — not listed on TCGplayer, so no market price is tracked.</span>
-              ${product.buy_url && html`<a class="sealed-detail-buy" href=${product.buy_url} target="_blank" rel="noopener nofollow sponsored">Buy ↗</a>`}
+              ${product.buy_url && html`<a class="sealed-detail-buy" href=${product.buy_url} target="_blank" rel="noopener nofollow sponsored">Buy ${extIcon()}</a>`}
               <${AmazonBuyLink} product=${product}/>
             </div>
             ${!readOnly && html`<div class="sealed-detail-owncounter">
@@ -25241,7 +25269,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
             </div>
             <div class="sealed-detail-prices">
               <span class="muted" style=${{fontSize:"12.5px",lineHeight:1.4}}>Ravensburger puzzle — not sold on TCGplayer, so no market price is tracked.</span>
-              ${product.buy_url && html`<a class="sealed-detail-buy" href=${product.buy_url} target="_blank" rel="noopener nofollow" title="View on Ravensburger">View on Ravensburger ↗</a>`}
+              ${product.buy_url && html`<a class="sealed-detail-buy" href=${product.buy_url} target="_blank" rel="noopener nofollow" title="View on Ravensburger">View on Ravensburger ${extIcon()}</a>`}
               <${AmazonBuyLink} product=${product}/>
             </div>
             ${!readOnly && html`<div class="sealed-detail-owncounter">
@@ -25319,14 +25347,14 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
                 + "th percentile of the last " + standing.window.replace("-", " ") + " ("
                 + standing.n + " daily prices)."}>${standing.label}</span>`}
             ${url && html`<a class="sealed-detail-buy" href=${url} target="_blank"
-              rel="noopener nofollow sponsored" title="Buy on TCGplayer (affiliate link)">Buy on TCGplayer ↗</a>`}
+              rel="noopener nofollow sponsored" title="Buy on TCGplayer (affiliate link)">Buy on TCGplayer ${extIcon()}</a>`}
             ${mat
               // A prize mat is not sold anywhere new, and an Amazon search for
               // one lands on resellers' lots — so only a plain retail mat gets
               // the link, and as a search it says "Find", never "Buy".
               ? (product.amazon_q && html`<a class="sealed-detail-buy sealed-detail-buy--amazon"
                   href=${amazonSearchUrl(product.amazon_q)} target="_blank" rel="noopener nofollow sponsored"
-                  title="Search Amazon for this playmat (affiliate link)">${uiIcon("cart", 13)} Find on Amazon ↗</a>`)
+                  title="Search Amazon for this playmat (affiliate link)">${uiIcon("cart", 13)} Find on Amazon ${extIcon()}</a>`)
               : html`<${AmazonBuyLink} product=${product} setName=${setName}/>`}
           </div>
           <div class="sealed-detail-affiliate muted">
@@ -25808,7 +25836,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
                                 ? (amzn ? "Buy this puzzle on Amazon (affiliate link)" : "View on Ravensburger")
                                 : item.is_exclusive
                                 ? "Search Amazon for this bundle (affiliate link)"
-                                : "Buy on TCGplayer (affiliate link)"}>${isUnpricedSealed(item) ? "Buy" : "TCGplayer"} ↗</a>`}
+                                : "Buy on TCGplayer (affiliate link)"}>${isUnpricedSealed(item) ? "Buy" : "TCGplayer"} ${extIcon()}</a>`}
                           ${!item.is_puzzle && !item.is_exclusive && amazonPill(amzn, {cls: "gc-card-amzn", stop: true})}
                         </div>
                         ${dRow && html`<div class="gc-card-deltas">
@@ -26797,8 +26825,9 @@ const PLAYMAT_MODE_KEY = "packsink:playmats:priceMode";
 // Price-derived, so it lives under AUX_EVICTABLE_PREFIXES and is wiped when a
 // newer price snapshot lands. v3: the section split (disney / ravensburger, the
 // Challenge tiers) and the Logos/playmats/ photos must not replay a row cached
-// before them.
-const PLAYMAT_CACHE_KEY = "packsink:playmatPrices:v3";
+// before them. v4: nor may Mother Knows Best's old "Top 32 prize" (it is the
+// Top 8 prize), which someone had just been shown and reported.
+const PLAYMAT_CACHE_KEY = "packsink:playmatPrices:v4";
 const PLAYMAT_CACHE_TTL = 12 * 3600 * 1000;
 let _playmatFetch = null;
 // → {rows} | {rows, stale} | {rows: [], unavailable: true}. `unavailable` is a
@@ -27053,7 +27082,7 @@ const PlaymatsView = ({user, sealedCollection, sealedMeta, updateSealedQty, upda
             : html`${lo != null && html`<span class="gc-card-raw-px"><span class="gc-card-raw-px-lbl">Low</span> ${fmt(lo)}</span>`}
                 ${mk != null && html`<span class="gc-card-raw-px gc-card-raw-px-secondary"><span class="gc-card-raw-px-lbl">Mkt</span> ${fmt(mk)}</span>`}`}
           ${url && html`<a class="gc-card-buy" href=${url} target="_blank" rel="noopener nofollow sponsored"
-            onClick=${e => e.stopPropagation()} title="Buy on TCGplayer (affiliate link)">TCGplayer ↗</a>`}
+            onClick=${e => e.stopPropagation()} title="Buy on TCGplayer (affiliate link)">TCGplayer ${extIcon()}</a>`}
         </div>
         ${stale && html`<div class="playmat-stale muted"
           title="The newest price we hold for this mat. TCGplayer has shown none since, or it falls in a gap in our record.">Price as of ${_pmDate(r.price_date)}</div>`}
@@ -27967,7 +27996,7 @@ const GradingQueueSection = ({submissions, cardById, onUpdate, onRemove, onGradu
         which graders can't safely open.
       </p>
       <a class="gq-supplies-link" href=${amazonSearchUrl("Card Saver 1 semi rigid card holders")}
-        target="_blank" rel="noopener nofollow sponsored">Submission supplies on Amazon ↗</a>
+        target="_blank" rel="noopener nofollow sponsored">Submission supplies on Amazon ${extIcon()}</a>
       <p class="gq-supplies-note muted">
         Affiliate link — as an Amazon Associate I earn from qualifying purchases,
         at no extra cost to you.
@@ -29293,7 +29322,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                           ${card.tcgplayer_product_id && !isCustomVariant && html`<a class="gc-card-buy" href=${tcgUrl(card.tcgplayer_product_id, card.tcg_printing||"Normal")}
                               target="_blank" rel="noopener nofollow sponsored"
                               onClick=${e=>e.stopPropagation()}
-                              title="Buy a raw copy on TCGplayer (affiliate link)">TCG ↗</a>`}
+                              title="Buy a raw copy on TCGplayer (affiliate link)">TCG ${extIcon()}</a>`}
                         </div>`}
                         <div class="gc-card-slots">
                           ${slots.map((s, si) => {
@@ -30874,20 +30903,31 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           address". In viewer mode the href keeps ?collection= so the copied
           link still points at whose collection you're looking at. */""}
     <div class="collection-section-tabs">
+      <nav class="cst-shelf" aria-label="Collection sections">
       ${COLLECTION_SECTIONS.map(k => {
         const vis = k === "cards" ? viewerVis.raw
           : (k === "sealed" || k === "pins" || k === "playmats") ? viewerVis.sealed : viewerVis.graded;
         if(isViewerMode && !vis) return null;
+        const label = COLLECTION_SECTION_LABELS[k], tab = COLLECTION_SECTION_TABS[k];
+        const on = effectiveSection === k;
         return html`<a key=${k}
-          class=${"collection-section-tab"+(effectiveSection===k?" active":"")}
+          class=${"collection-section-tab"+(on?" active":"")}
           href=${collectionSectionHref(k, isViewerMode ? viewerContext : null)}
-          onClick=${navHandler(()=>setSection(k))}>${COLLECTION_SECTION_LABELS[k]}</a>`;
+          aria-current=${on ? "page" : undefined}
+          onClick=${navHandler(()=>setSection(k))}>
+          <span class="cst-ico">${uiIcon(tab.icon, 18)}</span>
+          ${tab.lines
+            ? html`<span class="cst-label cst-label--lines"><span class="cst-line">${tab.lines[0]}</span> <span class="cst-line">${tab.lines[1]}</span></span>`
+            : html`<span class="cst-label">${label}</span>`}
+        </a>`;
       })}
+      </nav>
       ${!isViewerMode && user && ownerProfile && html`<div class="collection-share-wrap" ref=${shareRef}>
         <button class=${"collection-share-btn"+(shareOpen?" open":"")}
-          onClick=${()=>setShareOpen(o=>!o)}
-          title="Choose who can see each section of your collection">
-          Share ▾
+          onClick=${()=>setShareOpen(o=>!o)} aria-expanded=${shareOpen ? "true" : "false"}
+          aria-label="Share your collection" title="Choose who can see each section of your collection">
+          <span class="cst-ico">${uiIcon("share", 18)}</span>
+          <span class="cst-label">Share<span class="cst-caret" aria-hidden="true"> ▾</span></span>
         </button>
         ${shareOpen && html`<div class="collection-share-popover">
           <div class="settings-section-title" style=${{marginTop:0}}>Collection sharing</div>
@@ -33226,9 +33266,9 @@ function EloUpcomingSCs({canViewStore, canScout, onStoreClick, onPlayerClick, on
           ${canViewStore && !canScout && sel.event_id && html`<button class="sc-modal-cta sc-modal-cta--roster"
             onClick=${()=>{ const id = sel.event_id, meta = {store_name: sel.store_name, name: sel.name, capacity: sel.capacity}; setSel(null); setRosterMeta(meta); setRosterEventId(id); }}>${uiIcon("people")} Who's signed up + field Elo</button>`}
           <div class="sc-modal-actions">
-            ${safeHttpUrl(sel.url) && html`<a class="sc-modal-cta" href=${safeHttpUrl(sel.url)} target="_blank" rel="noopener noreferrer">Register on Ravensburger Play ↗</a>`}
-            <a class="sc-modal-link" href=${`https://www.google.com/maps/dir/?api=1&destination=${sel.latitude},${sel.longitude}`} target="_blank" rel="noopener noreferrer">Directions ↗</a>
-            ${safeHttpUrl(sel.store_website) && html`<a class="sc-modal-link" href=${safeHttpUrl(sel.store_website)} target="_blank" rel="noopener noreferrer">Store website ↗</a>`}
+            ${safeHttpUrl(sel.url) && html`<a class="sc-modal-cta" href=${safeHttpUrl(sel.url)} target="_blank" rel="noopener noreferrer">Register on Ravensburger Play ${extIcon()}</a>`}
+            <a class="sc-modal-link" href=${`https://www.google.com/maps/dir/?api=1&destination=${sel.latitude},${sel.longitude}`} target="_blank" rel="noopener noreferrer">Directions ${extIcon()}</a>
+            ${safeHttpUrl(sel.store_website) && html`<a class="sc-modal-link" href=${safeHttpUrl(sel.store_website)} target="_blank" rel="noopener noreferrer">Store website ${extIcon()}</a>`}
           </div>
         </div>
       </div>`;
@@ -34123,7 +34163,7 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <p><strong>Calendar</strong> — set releases, Challenges and qualifiers, plus the events at stores you follow, as a list, a month, a timeline or a map. Export any of it to your own calendar (.ics or Google).</p>
     <p><strong>Analytics</strong> — calculator-y tools: Expected Value (EV) per box, a Trade Compare tool that values both sides of a trade, a Set Breakdown of average card prices and where box value lives, Playset Cost, a pack/box Simulator with bulk odds, Swiss Odds (Monte Carlo cut-line odds for tournament Swiss rounds), a Lore Tracker and a Dice Tray for the table, and a Stream Ticker overlay for streamers. Its <em>Overview</em> tab lists every tool and what it answers. Sealed pricing lives in the Screener's Sealed mode.</p>
     <p><strong>Cards</strong> — browseable visual catalog of every card with filters for ink, rarity, set, and a free-text smart search.</p>
-    <p><strong>Collection</strong> — what you own. Four sections — Cards, Sealed, Graded, and Pins & Counters — with set-by-set completion tracking, value over time, and per-section sharing.</p>
+    <p><strong>Collection</strong> — what you own. Five sections — Cards, Sealed, Graded, Playmats, and Pins & Counters — with set-by-set completion tracking, value over time, and per-section sharing.</p>
     <p><strong>Decks</strong> — your decks, the people you follow, the Discover feed of public decks, and the Tournaments index.</p>
 
     <h2>Smart search (Cards & Screener)</h2>
@@ -34286,7 +34326,7 @@ function SetDetail({data,mult,activeRars,theme,onOpenCard}){
             ${url && html`<a href=${url} target="_blank" rel="noopener nofollow sponsored"
               onClick=${e=>e.stopPropagation()}
               class="playset-tcg-btn"
-              title="Open on TCGplayer">TCG ↗</a>`}
+              title="Open on TCGplayer">TCG ${extIcon()}</a>`}
           </td>
           <td><${Badge} rarity=${c.rarity} theme=${theme}/></td>
           <td style=${{fontWeight:600}}>${fmt((c.price||0)*mult)}</td>
@@ -34398,7 +34438,7 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode,user,collectio
       <tbody>${sets.map(s=>{const d=setData[s];if(!d) return null;const total=getTotal(s),isExp=expanded===s;
         return html`<${React.Fragment} key=${s}>
           <tr onClick=${()=>setExpanded(isExp?null:s)} style=${{cursor:"pointer",background:isExp?"var(--accent-glow)":"inherit"}}>
-            <td class="mkt-sticky-col" style=${{fontWeight:500,textAlign:"left"}}><span style=${{marginRight:6,fontSize:10,color:"var(--text-muted)"}}>${isExp?"▼":"▶"}</span>${s}</td>
+            <td class="mkt-sticky-col" style=${{fontWeight:500,textAlign:"left"}}><span style=${{marginRight:6,fontSize:10,color:"var(--text-muted)"}}>${isExp?"▾":"▸"}</span>${s}</td>
             <td style=${{fontWeight:600}}>${fmt(total)}</td>
             ${showOwned && html`<td style=${{fontWeight:600,color:"var(--accent)"}}>${fmt(getNeed(s))}</td>`}
             ${SET_RARS.map(r=>{const rv=(d.byRar[r]?.total||0)*mult;
@@ -34834,7 +34874,7 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
         <span class="trade-pr-mkt"><${Tip} text=${TIP_MARKET} class="trade-pr-tag">NM<//> ${tradeMoney(row["TCGPlayer Market"])}</span>
       </span>
       ${url && html`<span class="trade-pr-links">
-        <a class="trade-pr-link" href=${url} target="_blank" rel="noopener nofollow sponsored" title=${"View "+label+" on TCGplayer"}>↗</a>
+        <a class="trade-pr-link" href=${url} target="_blank" rel="noopener nofollow sponsored" title=${"View "+label+" on TCGplayer"}>${extIcon()}</a>
       </span>`}
     </div>`;
   };
@@ -37651,10 +37691,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return d > 3 ? d : null;
     };
     const lowCol = {key:"low", label:"Low",
-      th:()=>html`<th key="low" class="sortable th-num" title="TCGplayer's published Low Price. ⏱ marks a Low that hasn't changed in over 3 days." onClick=${(e)=>onSort("low", e)}>Low${arrow("low")}</th>`,
+      th:()=>html`<th key="low" class="sortable th-num" title="TCGplayer's published Low Price. A clock mark flags a Low that hasn't changed in over 3 days." onClick=${(e)=>onSort("low", e)}>Low${arrow("low")}</th>`,
       td:(r)=>{ const sd = lowStaleDays(r);
         return html`<td key="low" class="td-num">${fmtMoney(r.low_today)}${sd != null ? html`<span class="td-low-stale"
-          title=${"Low unchanged for "+sd+" days — not fresh signal"}>⏱</span>` : null}</td>`; }};
+          title=${"Low unchanged for "+sd+" days — not fresh signal"}>${uiIcon("clock", 11)}</span>` : null}</td>`; }};
     // Raw mode's PSA columns: the population of THIS printing (rawPopPick), all
     // hidden until the gear turns them on. Every one says PSA, for the reason
     // the graded headers do — graded_pop holds no CGC, BGS, SGC or TAG counts.
@@ -38401,7 +38441,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                     style=${{cursor:"pointer"}}>${r.name}${r.version ? " - " + r.version : ""}</span>
                   ${tcg && html`<a class="td-tcg-link" href=${tcg} target="_blank"
                     rel="noopener nofollow sponsored"
-                    title="Open on TCGplayer (affiliate link)">↗</a>`}
+                    title="Open on TCGplayer (affiliate link)">${extIcon()}</a>`}
                   ${tcg && isSealedRow && (() => {
                     const az = amazonForSealed(r._sealedProduct, setNameById[r.set_id] || null);
                     return az && az.url && html`<a class="td-tcg-link td-amzn-link" href=${az.url} target="_blank"
@@ -39806,7 +39846,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
         onClick=${navHandler(()=>setSub(k))}>${l}</a>`)}
       ${openScreenerSealed && html`<a class="market-subtab market-subtab-ext" href="/screener"
         title="Sealed product pricing lives in the Screener's Sealed mode now"
-        onClick=${navHandler(openScreenerSealed)}>Sealed ↗</a>`}
+        onClick=${navHandler(openScreenerSealed)}>Sealed ${extIcon()}</a>`}
     </div>
     ${sub==="overview" && html`<${AnalyticsOverview} subs=${subsList} onOpen=${setSub}
       onOpenSealed=${openScreenerSealed}/>`}
@@ -42521,7 +42561,7 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav
           <div class="num home-ev-strip-box">
             ${box
               ? (box.url
-                  ? html`<a href=${box.url} target="_blank" rel="noopener nofollow sponsored" class="home-ev-strip-box-link" title="Booster box on TCGplayer (affiliate link)">${fmt(box.price)}<span class="home-ev-strip-box-ext" aria-hidden="true">↗</span></a>`
+                  ? html`<a href=${box.url} target="_blank" rel="noopener nofollow sponsored" class="home-ev-strip-box-link" title="Booster box on TCGplayer (affiliate link)">${fmt(box.price)}<span class="home-ev-strip-box-ext" aria-hidden="true">${extIcon()}</span></a>`
                   : fmt(box.price))
               : html`<span class="muted">—</span>`}
           </div>
@@ -44679,7 +44719,7 @@ const CalendarAddMenu = ({ev, subs, compact}) => {
         flashToast(on ? "Removed from your calendar" : "Added to your calendar");
       }}>${uiIcon(on ? "close" : "calendarPlus", 13)} ${on ? "Remove from my calendar" : "Add to my calendar"}</button>`}
       ${gUrl && html`<a class="cal-add-item" href=${gUrl} target="_blank" rel="noopener noreferrer"
-        onClick=${() => setOpen(false)}>${uiIcon("link", 13)} Google Calendar ↗</a>`}
+        onClick=${() => setOpen(false)}>${uiIcon("link", 13)} Google Calendar ${extIcon()}</a>`}
       <button type="button" class="cal-add-item" onClick=${() => {
         setOpen(false);
         const done = downloadIcs([ev], `packsink-${fileSlug || "event"}.ics`, label);
@@ -45318,7 +45358,7 @@ const calProductLinks = (row, setName) => {
   if(!tcg && !(az && az.url)) return null;
   return html`<span class="cal-buy">
     ${tcg && html`<a class="cal-buy-link" href=${tcg} target="_blank"
-      rel="noopener nofollow sponsored">TCGplayer ↗</a>`}
+      rel="noopener nofollow sponsored">TCGplayer ${extIcon()}</a>`}
     ${amazonPill(az, {cls: "cal-buy-amzn", label: az && az.exact ? "Amazon" : "Find on Amazon"})}
   </span>`;
 };
@@ -45586,7 +45626,7 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art, backLabel}) 
 
       <div class="cal-modal-actions">
         ${link && html`<a class="cal-modal-cta" href=${link} target="_blank" rel="noopener noreferrer">
-          More details ↗</a>`}
+          More details ${extIcon()}</a>`}
         ${/* A prerelease date is only useful once you know where to play it, and
              the event finder is already on the home page in exactly that mode. */
           isPrerelease && onFindEvents && html`<button type="button" class="cal-modal-cta"
@@ -45594,9 +45634,9 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art, backLabel}) 
           ${uiIcon("pin", 13)} Find a prerelease near you</button>`}
         ${ev.kind === "store" && ev.latitude != null && html`<a class="cal-modal-link"
           href=${`https://www.google.com/maps/dir/?api=1&destination=${ev.latitude},${ev.longitude}`}
-          target="_blank" rel="noopener noreferrer">Directions ↗</a>`}
+          target="_blank" rel="noopener noreferrer">Directions ${extIcon()}</a>`}
         ${googleCalUrl(ev) && html`<a class="cal-modal-link" href=${googleCalUrl(ev)} target="_blank" rel="noopener noreferrer">
-          ${uiIcon("link", 13)} Google Calendar ↗</a>`}
+          ${uiIcon("link", 13)} Google Calendar ${extIcon()}</a>`}
         <button type="button" class="cal-modal-link" onClick=${() => {
           const done = downloadIcs([ev], `packsink-${slug || "event"}.ics`, title);
           flashToast(done ? "Calendar file downloaded" : "Couldn't download — try the Google Calendar link");
@@ -48127,7 +48167,7 @@ const ScCalendarButton = ({series, subs}) => {
       </div>`}
       ${entries[0] && googleCalUrl(entries[0]) && html`<a class="cal-add-item"
         href=${googleCalUrl(entries[0])} target="_blank" rel="noopener noreferrer"
-        onClick=${() => setOpen(false)}>${uiIcon("link", 13)} Google Calendar (next date) ↗</a>`}
+        onClick=${() => setOpen(false)}>${uiIcon("link", 13)} Google Calendar (next date) ${extIcon()}</a>`}
       ${entries.length > 0 && html`<button type="button" class="cal-add-item" onClick=${() => {
         setOpen(false);
         const slug = String(series.store_name || "events").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
@@ -48624,7 +48664,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
               aria-pressed=${mapHere}
               title=${inTile ? "Open the map full screen" : "Show these results on a map"}
               onClick=${() => { setMapOn(true); if(inTile) setExpanded(true); }}>
-              Map${inTile ? html` <span aria-hidden="true">⤴</span>` : ""}</button>
+              Map${inTile ? html` ${extIcon()}` : ""}</button>
           </div>
         </div>
         ${/* The map is a SIBLING of the list and the list is hidden by CSS rather
@@ -48748,9 +48788,9 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
                 start_datetime: o.start_datetime, timezone: s.timezone};
                 setSel(null); setScoutEv(ev); }}>${uiIcon("clipboard")} Scout this event</button>`}
           <div class="sc-modal-actions">
-            ${safeHttpUrl(o.url) && html`<a class="sc-modal-cta" href=${safeHttpUrl(o.url)} target="_blank" rel="noopener noreferrer">Register on Ravensburger Play ↗</a>`}
-            <a class="sc-modal-link" href=${`https://www.google.com/maps/dir/?api=1&destination=${s.latitude},${s.longitude}`} target="_blank" rel="noopener noreferrer">Directions ↗</a>
-            ${safeHttpUrl(s.store_website) && html`<a class="sc-modal-link" href=${safeHttpUrl(s.store_website)} target="_blank" rel="noopener noreferrer">Store website ↗</a>`}
+            ${safeHttpUrl(o.url) && html`<a class="sc-modal-cta" href=${safeHttpUrl(o.url)} target="_blank" rel="noopener noreferrer">Register on Ravensburger Play ${extIcon()}</a>`}
+            <a class="sc-modal-link" href=${`https://www.google.com/maps/dir/?api=1&destination=${s.latitude},${s.longitude}`} target="_blank" rel="noopener noreferrer">Directions ${extIcon()}</a>
+            ${safeHttpUrl(s.store_website) && html`<a class="sc-modal-link" href=${safeHttpUrl(s.store_website)} target="_blank" rel="noopener noreferrer">Store website ${extIcon()}</a>`}
             ${(() => {
               // This ONE date, not the series — the tile's ✚ is where you take
               // the whole recurring slot or follow the shop.
@@ -49564,9 +49604,9 @@ function GearView({sealedPrices, setsMeta}){
               <div class="gear-card-btns">
                 <a class="gear-btn gear-btn--amazon" href=${it.url} target="_blank" rel="noopener nofollow sponsored"
                   title=${it.search ? "Search Amazon (affiliate link)" : "This product on Amazon (affiliate link)"}>
-                  ${it.search ? "Find on Amazon" : "Buy on Amazon"} ↗</a>
+                  ${it.search ? "Find on Amazon" : "Buy on Amazon"} ${extIcon()}</a>
                 ${tcg && html`<a class="gear-btn" href=${tcg} target="_blank" rel="noopener nofollow sponsored"
-                  title=${it.search ? "The pictured product on TCGplayer (affiliate link)" : "This product on TCGplayer (affiliate link)"}>TCGplayer ↗</a>`}
+                  title=${it.search ? "The pictured product on TCGplayer (affiliate link)" : "This product on TCGplayer (affiliate link)"}>TCGplayer ${extIcon()}</a>`}
               </div>
             </div>
           </li>`;
@@ -50405,7 +50445,7 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
             href=${ev.eventUrl} target="_blank" rel="noopener noreferrer"
             title=${"Open " + ev.title + " event page (new tab)"}>
             <span>${ev.dateLabel}</span>
-            <span class="home-news-event-link-arrow" aria-hidden="true">↗</span>
+            <span class="home-news-event-link-arrow" aria-hidden="true">${extIcon()}</span>
           </a>` : ev.dateLabel ? html`<span class="home-news-event-link">
             <span>${ev.dateLabel}</span>
           </span>` : null}
@@ -57522,7 +57562,8 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       <span class="muted" style=${{fontSize:11}}>${inkColorsInDeck.join(" · ")}</span>
       ${/* Coconut keeps its badge even when the deck breaks the rules — the
             format is declared, not inferred, so it stays "Coconut" and just
-            picks up a ⚠. Warn-only: nothing here blocks saving. */""}
+            picks up the drawn warning glyph (never the ⚠ character: iOS
+            draws that as an emoji). Warn-only: nothing here blocks saving. */""}
       <span class=${"deck-legal-badge "+legality.format+(legality.format==="coconut" && !legality.legal ? " warn" : "")}
         title=${legality.format === "coconut"
                   ? (legality.legal
@@ -57531,7 +57572,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                 : legality.format === "invalid" ? legality.issues.join(" • ") :
                 legality.format === "core" ? "Legal in both Core Constructed and Infinity." :
                 "Legal in Infinity. Contains cards from rotated-out sets, so not Core Constructed."}>
-        ${legality.format === "coconut" ? (legality.legal ? "Coconut" : "Coconut ⚠")
+        ${legality.format === "coconut" ? (legality.legal ? "Coconut" : html`Coconut ${uiIcon("warn", 11)}`)
         : legality.format === "core" ? "Core Constructed"
         : legality.format === "infinity" ? "Infinity"
         : "Invalid Deck"}
@@ -57785,7 +57826,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                            : "Open the whole deck on TCGplayer in one mass-entry cart (affiliate link)"}>
               <div class="deck-stat-lbl">${user ? "Missing" : "Buy the deck"}</div>
               <div class="deck-stat-val">${fmtUSD(missingValue)}</div>
-              <div class="deck-stat-sub">Shop on TCGplayer ↗</div>
+              <div class="deck-stat-sub">Shop on TCGplayer ${extIcon()}</div>
             </a>`
           : html`<div class="deck-stat">
               <div class="deck-stat-lbl">${user ? "Missing" : "Buy the deck"}</div>
@@ -57820,7 +57861,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
               </div>`
             : (safeHttpUrl(deck.youtube_url) && html`<a href=${safeHttpUrl(deck.youtube_url)} target="_blank" rel="noopener noreferrer"
                 style=${{display:"block",marginTop:10,fontSize:12,color:"var(--accent)"}}>
-                ▶ ${deck.youtube_url}
+                ${uiIcon("play", 12)} ${deck.youtube_url}
               </a>`)}
         </div>`;
       })()}`;
