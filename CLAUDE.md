@@ -60,7 +60,7 @@ node scripts/build_dist.mjs && npx wrangler@4 deploy
   3. **RETIRED 2026-06-30 — there is no graded ETL.** The third-party graded feed was discontinued; the legacy client paths were deleted 2026-07-29 and `graded_prices_daily` / `graded_prices_latest` were **DROPPED 2026-08-22** (migration 112; archive on Desktop). All graded value comes from the in-house `graded_sales` scrape (see "Graded pricing: legacy vs current"). `scripts/etl_tcgpricelookup_daily.py`, `scripts/graded_overrides.json`, and the `probe_/backfill_/cleanup_*graded*` scripts remain on disk for reference but are **invoked nowhere and cannot run** (the API is gone). Don't wire them back up; don't chase "graded is stale" alerts.
 - **Card metadata**: Lorcast (`scripts/load_lorcast.py`).
 - **Sealed catalog**: `scripts/load_sealed_products.py`.
-- **MCP**: `.mcp.json` configures Supabase MCP server (`mcp.supabase.com/mcp?project_ref=...`). Loads on session start; gives the agent direct DB query/mutation access without paste-back.
+- **MCP**: Supabase, Sentry and Gmail are **claude.ai account connectors** (claude.ai → Customize → Connectors), so they reach desktop, cloud and phone sessions alike — direct DB query/mutation access without paste-back. **There is no project `.mcp.json`**: its `supabase` and `netlify` entries and a local-scope `sentry` were removed 2026-09-27. The CLI copies' sign-ins had lapsed, so every session opened with "need authorizing" (and signed in, they'd double every tool); Netlify never had a token and stopped building the site 2026-09-05. Don't re-add them — git history has the old file. ⚠ `claude mcp list` does not show the connectors even with the app's environment stripped, so their absence there proves nothing; per the docs a terminal session on the claude.ai login lists them under `/mcp`.
 
 ## Native app (Capacitor) — groundwork 2026-07-17
 
@@ -3991,6 +3991,21 @@ residual is reported, never guessed. `raw_load.py` is **dry-run by default**.
   different catalog cards; "Brave Little Tailor" alone returns The First Chapter
   #115 (a bulk rare), D23 Collection #1, and Promo Set 1 #1, whose graded copies
   pass $14,000.
+- **⚠ So the searches pair a name with a PROMO token, and they were MEASURED
+  (2026-09-27).** The first deep run of bare `"Lorcana" "Brave Little Tailor"`
+  hit the 60-page cap on bulk #115s and never reached the 2022 sales. Now: 8
+  set-wide nets (`C1`, `Top Prize`, `Prize Wall`, `Side Event`, `C2`,
+  `D23`+`2022`, `Expo`+`2022`, `Cruise`) plus per-card `<name>`+`Challenge` /
+  `D23` / `2022` / `P3`, 45 in all. Replayed against all 3,225 evidence-bearing
+  titles we hold for the 24 cards, they catch **3,201**, and every one of the 24
+  misses is a graded row on the wrong card or a typo. The old subtitle-only list
+  was WORSE on recall, not just noisier: of 184 Captain Hook P1 #7 sales only 41
+  say "Forceful Duelist". **Terapeak also matches item specifics** (a "Lorcana"
+  search returns PSA auto-titles with no "Lorcana" in them), so a title-only
+  replay is a floor. **⚠ A per-card search that is a subset of a net is
+  redundant** (`"Rapunzel" "C1"` ⊂ `"C1"`) and just adds ~67s of anti-captcha
+  wait; `test_raw_match.py` pins that every search names its card and that no
+  one-term search on a base-card name comes back.
 - **⚠ `terapeak_match.match_one` stays the ONLY matcher.** Measured over the
   8,253 corpus titles carrying a watchlist token, stripping every grading token
   out of a title (which is what a raw title looks like) changed the attributed

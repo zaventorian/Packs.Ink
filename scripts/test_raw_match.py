@@ -198,13 +198,30 @@ def main():
     if not any(e["require"] is not None for e in wl.values()):
         fails.append("  build_watchlist_index compiled no TWIN_REQUIRE patterns — gate 4 is inert")
 
-    # Every watchlist card must be reachable by some query, or it is on a list
-    # that nothing ever searches for.
-    qs = [q.lower() for q in queries()]
-    for st, cn, name, ver, q, _pr in WATCHLIST:
-        token = (ver or name).lower()
-        if not any(token in qq for qq in qs):
-            fails.append(f"  {st} #{cn}: no query covers token {token!r}")
+    # Every watchlist card must have searches of its own, each naming it, and
+    # every one of them must reach queries() -- or the card is on a list that
+    # nothing ever searches for.
+    from raw_watchlist import names_card, SET_NETS
+    qs = set(queries())
+    for st, cn, name, ver, searches, _pr in WATCHLIST:
+        if isinstance(searches, str) or not searches:
+            fails.append(f"  {st} #{cn}: searches must be a non-empty tuple, got {searches!r}")
+            continue
+        for s in searches:
+            if not names_card(s, name, ver):
+                fails.append(f"  {st} #{cn}: search {s!r} does not name this card")
+            if s not in qs:
+                fails.append(f"  {st} #{cn}: search {s!r} never reaches queries()")
+    # A bare subtitle drowns a promo in its base card (the Brave Little Tailor
+    # search hit the 60-page cap on bulk #115s). Every per-card search must carry
+    # a promo token unless the name itself is promo-only.
+    PROMO_ONLY = {'"Lorcana" "Ice Palace"', '"Lorcana" "Invited to the Ball"',
+                  '"Lorcana" "Expert Shipwright"', '"Lorcana" "Pirate Lookout"'}
+    for s in qs - set(SET_NETS):
+        if s.count('"') <= 4 and s not in PROMO_ONLY:
+            fails.append(f"  {s!r}: a one-term search pulls the base card's whole market")
+    if set(SET_NETS) - qs:
+        fails.append("  SET_NETS are not all searched")
 
     # The output directory contamination guard. A raw JSONL under
     # scripts/terapeak_output/ is loaded into graded_sales by the graded loader's

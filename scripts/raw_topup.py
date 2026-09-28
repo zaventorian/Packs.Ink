@@ -1,7 +1,7 @@
 """raw_topup.py — scrape RAW (ungraded) eBay sales for the raw_watchlist cards.
 
 The graded twin (terapeak_topup.py) sweeps six GRADER keywords. This sweeps the
-~22 CARD-NAME queries in scripts/raw_watchlist.py, which is the whole difference:
+~45 CARD + PROMO-TOKEN searches in scripts/raw_watchlist.py, which is the whole difference:
 a grader sweep finds slabs of every card, a name sweep finds every product
 wearing one card's name. scripts/raw_match.py is where that is dealt with; this
 file only has to fetch honestly.
