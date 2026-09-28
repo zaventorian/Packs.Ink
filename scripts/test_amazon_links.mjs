@@ -37,6 +37,11 @@ function grabLine(prefix) {
   return line;
 }
 
+// A stand-in retailer exclusive, spliced into the REAL SEALED_EXCLUSIVES `.map`
+// (see the exclusives section below for why the live list can't be used alone).
+const EXCL_FIXTURE_ENTRY = '{n: 999, name: "Test Retailer Bundle", retailer: "Costco", ' +
+  'date: "Sep 2026", type: "Bundle", art: "Logos/sealed/test.jpg", contents: "1 thing"}';
+
 const moduleSrc = [
   grabLine("const AMAZON_TAG = "),
   grab("const amazonUrl = (asin) => asin", ";" + NL),
@@ -53,6 +58,8 @@ const moduleSrc = [
   grab("function amazonForSealed(product, setName){", NL + "}"),
   grab("const SEALED_PUZZLES = [", "}));"),
   grab("const SEALED_EXCLUSIVES = [", "}));"),
+  grab("const SEALED_EXCLUSIVES = [", "}));").replace("const SEALED_EXCLUSIVES = [",
+    "const SEALED_EXCLUSIVES_FIXTURE = [" + EXCL_FIXTURE_ENTRY + ","),
   grabLine("const isUnpricedSealed = "),
   grab("const LORCANA_GEAR = [", NL + "];"),
   grabLine("const gearUrl = "),
@@ -83,7 +90,7 @@ const moduleSrc = [
   "  tcgProductImg, tcgImgSized, amazonSealedMatches,",
   "  amazonShelfItems, AMAZON_SHELF_MAX, amazonListingKey, amazonShelfPool,",
   "  AMAZON_PRICE_CEILING, amazonPriceCeiling, amazonListingHidden,",
-  "  SEALED_EXCLUSIVES, isUnpricedSealed};",
+  "  SEALED_EXCLUSIVES, SEALED_EXCLUSIVES_FIXTURE, isUnpricedSealed};",
 ].join(NL);
 
 const m = await import("data:text/javascript," + encodeURIComponent(moduleSrc));
@@ -224,24 +231,46 @@ check("a nameless product yields no link", m.amazonForSealed({name: ""}, "Fabled
 // synthetic pid, like the puzzles: TCGplayer has no page for one, so a TCG
 // link on its tile or in the Amazon shelf would be dead. Both failures are
 // silent -- the link renders and 404s -- so pin them.
+//
+// ⚠ The live list is EMPTY between exclusives (the Best Buddies Bundle became a
+// real TCGplayer row on 2026-09-24), and every `.every` below passes vacuously
+// on an empty array. So they run over EX: a fixture entry pushed through the
+// very same `.map` the page ships, spliced into the extracted source rather
+// than restated, followed by every live entry, so a real one added later is
+// held to the same rules.
+const EX = m.SEALED_EXCLUSIVES_FIXTURE;
+ok("the fixture rides the real .map, alongside every live entry",
+  EX.length === m.SEALED_EXCLUSIVES.length + 1 && EX[0].name === "Test Retailer Bundle",
+  JSON.stringify(EX.map(p => p.name)));
 ok("every exclusive is flagged and unpriced",
-  m.SEALED_EXCLUSIVES.length > 0 && m.SEALED_EXCLUSIVES.every(p =>
+  EX.every(p =>
     p.is_exclusive === true && p.low_price === null && p.market_price === null &&
     p.exclusive_retailer),
-  JSON.stringify(m.SEALED_EXCLUSIVES.map(p => p.name)));
+  JSON.stringify(EX.map(p => p.name)));
 // ⚠ A null set_id is what files it under "Other / Promo" with the portfolios.
 // Give it a real set and it claims to be part of that set's product line; give
 // it a synthetic one and it gets a section to itself, which is where this
 // started and is one product in an empty room.
 ok("…and carries no set, so the grouping files it under Other / Promo",
-  m.SEALED_EXCLUSIVES.every(p => p.set_id == null),
-  JSON.stringify(m.SEALED_EXCLUSIVES.map(p => p.set_id)));
+  EX.every(p => p.set_id == null),
+  JSON.stringify(EX.map(p => p.set_id)));
 ok("…on a pid band of their own, clear of puzzles and of isCollectiblePid",
-  m.SEALED_EXCLUSIVES.every(p => p.tcgplayer_product_id >= 930000000 &&
+  EX.every(p => p.tcgplayer_product_id >= 930000000 &&
     p.tcgplayer_product_id < 940000000),
-  JSON.stringify(m.SEALED_EXCLUSIVES.map(p => p.tcgplayer_product_id)));
+  JSON.stringify(EX.map(p => p.tcgplayer_product_id)));
 ok("…with distinct ids, since the id is what an owned mark is filed under",
-  new Set(m.SEALED_EXCLUSIVES.map(p => p.tcgplayer_product_id)).size === m.SEALED_EXCLUSIVES.length);
+  new Set(EX.map(p => p.tcgplayer_product_id)).size === EX.length);
+// ⚠ An exclusive that reached TCGplayer is a REAL sealed row now, and the static
+// entry must stay gone: back in the list it is a second tile for one box, next
+// to the row that carries the price. Its `n` is retired with it, because an old
+// owned mark filed under that id would otherwise attach itself to a new box.
+const RETIRED_EXCLUSIVES = [
+  {pid: 930000001, name: /best buddies/i},   // TCGplayer 719823 since 2026-09-24
+];
+ok("a graduated exclusive never comes back as a static row, nor its id reused",
+  !m.SEALED_EXCLUSIVES.some(p => RETIRED_EXCLUSIVES.some(r =>
+    p.tcgplayer_product_id === r.pid || r.name.test(p.name))),
+  JSON.stringify(m.SEALED_EXCLUSIVES.map(p => [p.tcgplayer_product_id, p.name])));
 for (const [label, row, want] of [
   ["a puzzle", {is_puzzle: true}, true],
   ["a collectible", {is_collectible: true}, true],
@@ -251,16 +280,18 @@ for (const [label, row, want] of [
 ]) check("isUnpricedSealed: " + label, m.isUnpricedSealed(row), want);
 // (amazonSealedMatches merges the static catalogs in itself, so the puzzles
 // come back too — pick our row out by its key rather than by count.)
-const exclKeys = new Set(m.SEALED_EXCLUSIVES.map(p => "amz:" + p.tcgplayer_product_id));
-const exclHits = [...m.amazonSealedMatches([], {}).values()].filter(it => exclKeys.has(it.key));
+// (The fixture rows go in as `sealedPrices`; a live entry also arrives through
+// the static merge inside, and the same URL dedupes to one item.)
+const exclKeys = new Set(EX.map(p => "amz:" + p.tcgplayer_product_id));
+const exclHits = [...m.amazonSealedMatches(EX, {}).values()].filter(it => exclKeys.has(it.key));
 ok("every exclusive reaches the Amazon shelf as a search, with no TCG twin",
-  exclHits.length === m.SEALED_EXCLUSIVES.length &&
+  exclHits.length === EX.length &&
   exclHits.every(it => it.tcg === null && it.exact === false &&
     it.sub.endsWith(" exclusive") && it.price === null),
   JSON.stringify(exclHits.map(it => [it.sub, it.tcg, it.exact, it.price])));
 ok("…and the shelf pool skips it — a search with no set is neither exact nor newest-set",
-  !m.amazonShelfPool(m.SEALED_EXCLUSIVES, {}).some(it => exclKeys.has(it.key)),
-  JSON.stringify(m.amazonShelfPool(m.SEALED_EXCLUSIVES, {}).map(it => it.key)));
+  !m.amazonShelfPool(EX, {}).some(it => exclKeys.has(it.key)),
+  JSON.stringify(m.amazonShelfPool(EX, {}).map(it => it.key)));
 
 check("no product yields no link", m.amazonForSealed(null, "Fabled"), null);
 

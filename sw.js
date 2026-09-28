@@ -1,6 +1,6 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v490';
+const CACHE_VERSION = 'packsink-v495';
 // Card art + other images live in their own cache that is NOT wiped on
 // deploys. Before this existed, every CACHE_VERSION bump threw away every
 // runtime-cached card image, so devices never accumulated art for offline
@@ -31,7 +31,7 @@ const CORE_ASSETS = [
   '/vendor/react-dom.production.min.js?v=254',
   '/vendor/htm.js?v=254',
   '/vendor/supabase.js?v=254',
-  '/styles.css?v=490',
+  '/styles.css?v=495',
   '/logo.js?v=348',
   // scanner*.js intentionally NOT precached: the scanner is a modal most
   // visits never open — it runtime-caches on first use instead of costing
@@ -72,6 +72,25 @@ self.addEventListener('activate', (event) => {
 // 404, which the next online revalidation overwrites.
 const cacheable = (res) => res && (res.ok || res.type === 'opaque');
 
+// The cross-origin hosts the site loads images from. A fetch() from a service
+// worker is checked against connect-src, not img-src, so every one of these
+// must be in connect-src in _headers — scripts/test_csp_headers.mjs holds this
+// list and _headers to each other. An image on any OTHER host is not ours (a
+// browser extension's, typically) and is left to the browser: re-fetched from
+// here it hits connect-src, breaks, and files a CSP report. That is what an
+// extension's product-images.tcgplayer.com images did on 2026-09-28.
+// api.qrserver.com is in img-src too, but skipped outright below.
+const SW_IMAGE_HOSTS = [
+  'umwqowkiatjjltologrd.supabase.co',
+  'cards.lorcast.io',
+  'tcgplayer-cdn.tcgplayer.com',
+  'ravensburger.cloud',
+  '*.ebayimg.com',
+  'lh3.googleusercontent.com',
+  'tile.openstreetmap.org',
+];
+const swImageHost = (host) => SW_IMAGE_HOSTS.some((h) => (h.startsWith('*.') ? host.endsWith(h.slice(1)) : host === h));
+
 // Fetch strategy:
 //   - Navigation requests (HTML): network-first, fall back to cached Index.html offline.
 //   - Images (card art on lorcast.io / tcgplayer-cdn / etc + same-origin art):
@@ -99,6 +118,8 @@ self.addEventListener('fetch', (event) => {
   // the data-API skip on purpose: prestaged card art is served from Supabase
   // storage, and PostgREST/data responses are never destination:"image" so
   // they still fall through to the skip below.
+  // Someone else's image: see SW_IMAGE_HOSTS.
+  if (req.destination === 'image' && url.origin !== self.location.origin && !swImageHost(url.hostname)) return;
   if (req.destination === 'image' || url.hostname.endsWith('lorcast.io')) {
     // ⚠ The cache is keyed by URL, not by request mode. Supabase-storage art
     // (prestaged cards, Coconut, collectibles) is the one card art NOT routed

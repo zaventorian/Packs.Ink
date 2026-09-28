@@ -60,7 +60,7 @@ node scripts/build_dist.mjs && npx wrangler@4 deploy
   3. **RETIRED 2026-06-30 — there is no graded ETL.** The third-party graded feed was discontinued; the legacy client paths were deleted 2026-07-29 and `graded_prices_daily` / `graded_prices_latest` were **DROPPED 2026-08-22** (migration 112; archive on Desktop). All graded value comes from the in-house `graded_sales` scrape (see "Graded pricing: legacy vs current"). `scripts/etl_tcgpricelookup_daily.py`, `scripts/graded_overrides.json`, and the `probe_/backfill_/cleanup_*graded*` scripts remain on disk for reference but are **invoked nowhere and cannot run** (the API is gone). Don't wire them back up; don't chase "graded is stale" alerts.
 - **Card metadata**: Lorcast (`scripts/load_lorcast.py`).
 - **Sealed catalog**: `scripts/load_sealed_products.py`.
-- **MCP**: `.mcp.json` configures Supabase MCP server (`mcp.supabase.com/mcp?project_ref=...`). Loads on session start; gives the agent direct DB query/mutation access without paste-back.
+- **MCP**: Supabase, Sentry and Gmail are **claude.ai account connectors** (claude.ai → Customize → Connectors), so they reach desktop, cloud and phone sessions alike — direct DB query/mutation access without paste-back. **There is no project `.mcp.json`**: its `supabase` and `netlify` entries and a local-scope `sentry` were removed 2026-09-27. The CLI copies' sign-ins had lapsed, so every session opened with "need authorizing" (and signed in, they'd double every tool); Netlify never had a token and stopped building the site 2026-09-05. Don't re-add them — git history has the old file. ⚠ `claude mcp list` does not show the connectors even with the app's environment stripped, so their absence there proves nothing; per the docs a terminal session on the claude.ai login lists them under `/mcp`.
 
 ## Native app (Capacitor) — groundwork 2026-07-17
 
@@ -618,10 +618,12 @@ section; until 2026-09-11 they were tiles at the foot of the Sealed tab), from t
 cut out and served from our own storage.
 
 **A pin can come in a RETAIL BOX**, not just an event kit / convention / prize wall — n:45 ships
-inside the Costco Best Buddies Bundle (`SEALED_EXCLUSIVES`), which is also where 18/PD1 and
-19/PD1 come from. Its photo is a cut from the announcement shot rather than a studio one and is
-worth re-cutting from a better source, which is a re-upload rather than a code edit — it sits at
-`pins/45.png` like every other entry. `EXPECTED_PINS` in `upload_collectible_photos.py` tracks
+inside the Costco Best Buddies Bundle (TCGplayer 719823; it began as a `SEALED_EXCLUSIVES` row),
+which is also where 18/PD1 and 19/PD1 come from. Its photo is a cut from the announcement shot
+rather than a studio one and is worth re-cutting from a better source, which is a re-upload
+rather than a code edit — it sits at `pins/45.png` like every other entry. **TCGplayer's bundle
+photo is NOT that source** (checked 2026-09-27): the pin sits behind the blister at ~80px there,
+no sharper than the cut we have. `EXPECTED_PINS` in `upload_collectible_photos.py` tracks
 the highest valid `n`, so it moves with the list (45 today, counters 25).
 
 **⚠ Do NOT credit a photo source anywhere user-facing.** The Help credits paragraph and
@@ -852,7 +854,7 @@ the test pins both, plus the newest migration's CHECK): **Retail** · **Disney E
 **Ravensburger Store** (`ravensburger`: online-store exclusives) · **Set Championship**
 (Champion / Participant) · **Disney Lorcana Challenge**, split into **Top Prize** and **Prize
 Wall** sub-grids (`tiers` on the section; `PLAYMAT_DLC_TIERS` = the loader's `DLC_TIERS`) ·
-**Events** (conventions, and Mother Knows Best — the Season 3 CCQ Top 32 prize, though TCGplayer
+**Events** (conventions, and Mother Knows Best — the Season 3 CCQ Top 8 prize, though TCGplayer
 lists it as a Challenge mat) · Other. Adding a section value needs a migration: 171 widened the
 CHECK for disney / ravensburger.
 
@@ -949,6 +951,32 @@ CHECK for disney / ravensburger.
 - Mats TCGplayer doesn't list (demo and youth mats, older one-offs) are out of scope; adding one
   would mean a static entry, the `SEALED_EXCLUSIVES` shape.
 
+## Collection's section strip is a SHELF — one row at every width (2026-09-27)
+
+Zaven, off his phone: *"make these options all fit on one shelf. Move pins to end. Also, stylize
+them, looks too sterile."* The fifth tab had pushed Playmats onto a second line beside Share, and
+the tabs were bare text.
+
+- **Order is `COLLECTION_SECTIONS`' order**: Cards · Sealed · Graded · Playmats · Pins & Counters.
+  Pins sits last by that ruling.
+- **One tray (`.cst-shelf`), a cubby per section**: a glyph over a Cinzel label
+  (`COLLECTION_SECTION_TABS` carries the glyph: `cards` / `box` / `slab` / `mat` / `pin`), and a
+  gold plate with a short gold lip under the tab you're on. Share is a cubby of its own at the far
+  end. Same face as the nav chips, but boxed in a tray so it doesn't read as a third nav row.
+- **⚠ It must not wrap.** Below 720px each cubby takes its label's width plus an even share of
+  what's left (`flex:1 1 auto`). Equal grid columns clipped "Playmats" at 360px while "Pins" had
+  room to spare.
+- **Pins & Counters keeps its full name and stacks as two lines on phones** (`lines` on its
+  `COLLECTION_SECTION_TABS` entry; one line from 721px up). It first shipped as a short "Pins";
+  Zaven asked for the full name. The cubbies top-align on phones so the five glyphs stay level
+  (centred, the two-line tab's glyph rode half a line high), and Share's top padding is the sum
+  that puts its glyph on the same line.
+- **Below 360px** the row is short of the full-size labels (19px short at 320, still 1px at 351),
+  so Share drops its word, the labels go to 9px and the tabs' side padding to 1px. Measured with
+  nothing clipped, the glyphs level and no sideways scroll at 320, 351, 359, 360, 375, 390, 412,
+  480, 719, 721 and 1280px.
+- The tour step (`.collection-section-tabs`) and the Help page say five sections now.
+
 ## Official Lorcana brand art (2026-09-12)
 
 Ravensburger distributes a **"Complete Bundle"** of brand assets — 890 files, 313 MB: all 13 set
@@ -1044,11 +1072,30 @@ text beside them**, which is why icon+label buttons never sat straight.
   the single global rule that makes inline glyphs sit on the cap height and never shrink in a
   tight button. Every icon in the set carries `focusable="false"`; nothing else does. It is inert
   inside flex/grid parents, so `NAV_ICONS` and the deck-action rows are unaffected.
-- **Typographic marks stay**: `✓ ✕ ★ ☆ ✦ ≡ ⚑ → ↴`. Those read as type, not as pictures.
-  `⚠` survives in exactly one place, the Coconut legality badge text, where it is a character in
-  a string rather than a rendered control.
+- **Typographic marks stay**: `✓ ✕ ★ ☆ ✦ ≡ ⚑ → ↴ ▸ ▾`. Those read as type, not as
+  pictures, and none of them is emoji-CAPABLE, which is the real test (next bullet).
+- **⚠ "No emoji" means no emoji-CAPABLE code point, not just the ones that look like one**
+  (2026-09-27). `↗` (the arrow after every outbound link), `↩`, `▶`, `⏱`, `⤴` and `⚠` all read
+  as plain type in the source, but Unicode marks them emoji-capable and the page font (Nunito Sans,
+  latin subset) carries none of them. So the browser falls back to another font, and on an iPhone
+  that font is Apple Color Emoji: "Buy on TCGplayer" ended in a blue sticker tile, 52 times across
+  the site, while every desktop drew a clean arrow. Reported off a Discord screenshot of the
+  Playmats modal.
+  - **`extIcon()`** draws the outbound-link arrow: the `ext` glyph at `1em`, so it takes the size of
+    whatever small type it trails (8px on a price badge, 14px on a printing row), and
+    `svg.ico-ext` lifts it to sit where the character did. The rest went to `undo` / `play` /
+    `clock` / `warn`, and the Playset Cost row toggle to `▸` / `▾`.
+  - **The Coconut badge's `⚠` is gone too.** It used to be the one documented exception here,
+    and it was an emoji tile on every iPhone.
+  - Guarded by `node scripts/test_no_emoji.mjs`: any Emoji / Extended_Pictographic code point outside
+    a comment in a served file fails it, except `© ® ™`, which ARE in the font. **It strips
+    comments in ONE left-to-right pass**: stripping block comments first read the `/*` inside a line
+    comment (`// proxied to /img-proxy/*`) as an opener and hid 1,900 lines of Index.html, two real
+    emoji included. It checks itself against planted samples, so a broken stripper goes red.
+  - Player names and other DATA keep whatever a person typed. This is about the site's own chrome.
 - **Two documents can't reach `uiIcon`** and hold literal SVG instead: the Artist Alley poster
-  (`window.open`) and the `/swiss` + `/ticker` standalone pages. In the poster the icon is a
+  (`window.open`) and the `/swiss` + `/ticker` standalone pages. `/picks` has its own `ICONS` map
+  and `glyph()` builder, and its arrow comes from there. In the poster the icon is a
   sibling of a `<span>` label, and the mid-render `textContent` swaps target the span — setting
   `btn.textContent` would wipe the glyph.
 - **Comments and CLAUDE.md still use emoji freely.** They are documentation, not UI.
@@ -1376,6 +1423,69 @@ over our already-dark palette.
 ## price_movers matview gotcha
 
 Computes Δ% across 6 windows (1D / 1W / 1M / 3M / 6M / 1Y) for both low and market. **`low_prev` is "most recent non-null low BEFORE low_today's own date"** — migration 26 fixes the original bug that collapsed pct_1d to 0 for sparse-listing chase cards.
+
+### ⚠ A move has to be OBSERVED inside its window (migration 172, 2026-09-27)
+
+Migration 26's anchoring had a second edge nobody saw for months: once a SKU stops
+updating, the matview reported the last change it ever had as its **1D move, every day,
+forever**. On 2026-09-26 Cruella De Vil - Miserable As Usual (Promo Set 1, Holofoil) read
+**+108% 1D** (a Jun 1 -> Aug 9 move, last market price 48 days old) and −99.98% on a
+junk $0.25 listing. It was the #1 tile of the home Promo Movers, #1 in the Screener's NM
+Market view, the #1 riser on any NM Market ticker reel, and led the Discord digest.
+
+- **The rule: a window's Δ% is null unless that side's latest observation falls INSIDE
+  the window — `date > newest - N`.** For 1D that means observed on the newest price date
+  itself. `abs_pct_1d` follows `pct_1d`. Prices (`low_today` / `market_today` and the
+  baselines) are untouched — the Screener still shows a SKU's last known price.
+- **`low_date` / `market_date`** carry each side's latest observation date, so a client
+  can tell a stale price from a live one.
+- **Only 1D ever showed a phantom.** The longer windows compare against the last
+  observation on or before `newest - N`; when the latest one is older than N days that
+  baseline IS the latest one and the window computed exactly 0% (which every movers
+  surface already drops). The guard turns those into null too.
+- **Measured: 34 of 5,893 rows** had a stale side, 19 with a nonzero 1D. After applying,
+  an exhaustive live check (all 70,704 row × side × window cells) found every present Δ%
+  arithmetically right, 275 withheld for age, and `low_date` / `market_date` equal to
+  `prices_daily` on every row.
+- **Deliberately NOT bounded: the PREVIOUS observation.** A fresh row whose prior price
+  is days old still compares against it (forward-filled, like every longer baseline). It
+  measured 0 rows that day, and it is a one-day misattribution rather than a daily repeat.
+- **The same flaw lived in both client Δ% helpers**, which anchored every window on the
+  series' own last sample — so the card page said Stitch - Rock Star moved **+102% in 1M**,
+  81 days after its last price. Both now take the same rule (guarded by
+  `node scripts/test_price_freshness.mjs`):
+  - **`computeSeriesDeltas(rows, field, asOf)`** (card page Price changes, its banner tile
+    and the image export) reads `asOf = catalogPriceDate()` — the catalog's newest
+    `price_date`, stamped by App wherever it sets the catalog. **⚠ It is that date and not
+    `lastRawPriceDate` on purpose**: the per-card history cache (`packsink:hist:`) is
+    wiped exactly when the catalog date advances, so the two can never disagree about
+    which day is "today". An asOf NEWER than the data it judges would blank 1D on every
+    fresh card.
+  - **`computeSealedDeltas(history, {asOf})`** floors asOf at the newest date in its own
+    input (the matview's `latest` CTE does the same), so every batch caller — Screener
+    Sealed, Sealed Movers, sealed tiles — guards itself with no argument. Only the
+    single-product sealed modal passes `catalogPriceDate()`, because it reads the same
+    wiped cache. **⚠ Never pass it to a batch whose history is cached separately**
+    (`_sealedMoverHist`): after an ETL the catalog date moves first and every product
+    in that batch would read "—" for an hour.
+  - **Neither is ever anchored BEFORE the data's own last sample** — an asOf older than
+    the data (a session that outlived an ETL) is ignored.
+  - **The card page's price-standing chip needs a price TODAY** (`seriesPricedOn`), the
+    rule `SealedDetailModal` already had: otherwise "near its 12-month high" judged a
+    price nobody could buy.
+- **The Discord digest checks the rule again itself** against `prices_daily`, so a
+  matview rebuilt from an older migration still can't put a stale move in a post. See
+  the digest section.
+- **The Discord bot follows it too** (added when this shipped, 2026-09-28): the bot
+  copies `computeSeriesDeltas` and `seriesPricedOn` from Index.html, and
+  `discord/src/data.js` `priceSummary(rows, asOf)` passes the card index's `priceDate` —
+  the bot's copy of `catalogPriceDate()`. The index is rebuilt daily after the ETL, and an
+  asOf older than the data is ignored, so a late index costs nothing. Guarded in
+  `test_discord_bot.mjs`.
+- **⚠ Re-running an older price_movers migration reverts all of this** — and migration
+  10 would also bring back the $5 gate 120 removed. The ETL's recovery hint used to say
+  "run supabase/10_price_movers_matview.sql"; it now names 172, which alone restores the
+  matview, its grants and the pinned `refresh_price_movers()`.
 
 ## Catalog merging — `transformSupabaseData` rules
 
@@ -2288,8 +2398,10 @@ Card detail modal's Graded tab:
 listing, no pid, no price and no `sealed_prices_latest` row. Same answer as `SEALED_PUZZLES`: a
 static client const shaped like a sealed_prices row, merged into the Sealed collection at the two
 sites that spread the puzzles. Ownership persists in `sealed_collection_items` — no FK on the
-product id, so a synthetic id is fine. First entry: the **Best Buddies Bundle** (Costco, Sep 2026)
-— portfolio, 6 Wilds Unknown packs, 18/PD1 + 19/PD1, and `LORCANA_PINS` n:45.
+product id, so a synthetic id is fine. The first entry was the **Best Buddies Bundle** (Costco,
+Sep 2026) — portfolio, 6 Wilds Unknown packs, 18/PD1 + 19/PD1, and `LORCANA_PINS` n:45 — and it
+**became a real TCGplayer row four days later** (below), so **the list is EMPTY today**. The
+const, `isUnpricedSealed` and the `is_exclusive` render branches stay, as infra for the next one.
 
 - **⚠ `set_id` is NULL, which files it under "Other / Promo"** with the portfolios and everything
   else TCGplayer gives no set (Zaven, 2026-09-20). It shipped with a synthetic `__exclusives__`
@@ -2302,11 +2414,26 @@ product id, so a synthetic id is fine. First entry: the **Best Buddies Bundle** 
   tab's unit and SKU counts, and these must NOT be, because a bundle is a box you own.
 - **⚠ `n` is a stable hand-assigned id.** Never renumber one — it is what somebody's owned mark
   is filed under. Same rule as the pins.
-- **⚠ This is the one static catalog whose rows can become REAL TCGplayer products.** A retailer
-  exclusive usually reaches the secondary market, and the daily loader would then bring in a
-  second row for the same box under its own set. When that happens **delete the entry here** —
-  two tiles for one product is worse than the owned marks it drops, and the real row is the one
-  with a price. `reconcile_catalog.py --watch` reports the new listing as `missing_sealed`.
+- **⚠ This is the one static catalog whose rows can become REAL TCGplayer products — and the
+  first one did, in four days.** TCGplayer listed the Best Buddies Bundle on 2026-09-24 as
+  **719823** (in its Wilds Unknown group; $69.90 Low / $72.77 Market on arrival), the daily
+  sealed loader took it that evening, and the site showed **two tiles for one box** — the static
+  one on a phone photo, the real one with TCGplayer's studio shot and a price — until Zaven noticed
+  the better photo on 2026-09-27. When that happens **delete the entry here**: the real row is
+  the one with a price. First check `sealed_collection_items` (and `watchlist_items`) for the
+  synthetic pid and move any owned mark onto the real pid rather than dropping it — nobody had
+  marked n:1, so nothing moved. **Retire the `n`**: reused, an old owned mark would attach itself
+  to a different box. `test_amazon_links.mjs` keeps the retired list and fails if one returns.
+- **⚠ NOTHING flags that moment.** This file used to say `reconcile_catalog.py --watch` reports
+  the listing as `missing_sealed` — it cannot: `load_sealed_products.py` runs inside the daily ETL
+  and absorbs a new SKU the day it appears, so by the watch's next run the product is in
+  `sealed_products` and nothing is missing. Whenever this list holds an entry, look for its name
+  in `sealed_products` from time to time.
+- **The real row files under TCGplayer's own group — Wilds Unknown — not "Other / Promo".** The
+  null-`set_id` rule below is about US not picking a set for a box that spans three; TCGplayer
+  has picked one (its name is "Disney Lorcana: Wilds Unknown Best Buddies Bundle"), and that is
+  left standing. Moving it back would take new loader code: `SEALED_SET_OVERRIDES` only FILLS a
+  set the group map left empty and cannot clear one.
 - **`isUnpricedSealed(p)`** is the one predicate for "static row, no TCGplayer SKU, no price" —
   puzzles, pins/counters and exclusives. Every surface that would otherwise build a TCGplayer buy
   link, fetch price history or multiply a price by a quantity asks it. **A missed call site is
@@ -2322,7 +2449,9 @@ product id, so a synthetic id is fine. First entry: the **Best Buddies Bundle** 
   is neither. Curate an ASIN for one and it WOULD join the shelf, which is the right outcome —
   by then there is a real listing to link to.
 - Guarded by the `SEALED_EXCLUSIVES` / `isUnpricedSealed` section of
-  `node scripts/test_amazon_links.mjs`.
+  `node scripts/test_amazon_links.mjs`. **⚠ It runs over a FIXTURE entry spliced into the real
+  `.map`**, followed by every live entry: with the list empty, each `.every` would otherwise pass
+  on nothing at all.
 
 ## Sealed enhancements (2026-06-05 — modal + Δ% + Screener)
 
@@ -2546,7 +2675,8 @@ so #7 there is five different cards.
   copies) links #9-16. #1-6 aren't indexed yet.
 - **PD1** — product/prerelease promos: #1-8 printed `/PD1` (checked 2026-09-18), #15 Pegasus
   (Lorebook), #16 With a Few Good Friends (Q3), #17 The Beanstalk, **#18 Sulley - Protective
-  Monster / #19 Violet Parr - Super Resilient** (Best Buddies Bundle, 2026-09-19).
+  Monster / #19 Violet Parr - Super Resilient** (Best Buddies Bundle, 2026-09-19; TCGplayer
+  719967 / 719968 since 2026-09-24).
 - **A promo TCGplayer has not listed yet is a `REPRINT_PROMOS` entry with a NULL pid** (2026-09-20).
   That tuple grew an optional 6th field: `(base_pid, set_id, cn, new_id, promo_pid[, art])`. A null
   `promo_pid` leaves the row unpriced — already the handled case, `NUMBERED_PROMO_SETS` emits one
@@ -2555,6 +2685,14 @@ so #7 there is five different cards.
   pid in later and deleting the art path updates the row **in place**: same `card_id`, so nobody's
   collection mark moves. That is the reason to use this script rather than a one-off migration —
   and it re-applies after every Lorcast load instead of being a single insert that can drift.
+  PD1 #18/#19 were the first to graduate (listed 2026-09-24, filled in 2026-09-27).
+  - **⚠ A filled-in pid reaches the `cards` rows only when the script runs FROM `main`.** The
+    21:00 UTC metadata job (etl.yml) re-runs it daily from `main`'s checkout, so a run from a
+    branch is reverted within the day — let the merge carry it, or run it by hand right after.
+  - **⚠ Delete a retired `art` file only AFTER the rows point at TCGplayer** — read
+    `cards.image_normal` for the ids first. Deleted in the same deploy, the image 404s from the
+    deploy until the next run. That is why `sulley-protective-monster-pd1-18.jpg` and
+    `violet-parr-super-resilient-pd1-19.jpg` were still in `Logos/cards/` after the switch.
 - **⚠ Check Lorcast before hand-writing any promo's stats.** #18/#19 turned out to be promo
   printings of Attack of the Vine! #128 and #176, so cloning those rows gave exact cost / ink /
   stats / lore / classifications / ability text instead of a blurry photo's best guess. A promo
@@ -3853,6 +3991,21 @@ residual is reported, never guessed. `raw_load.py` is **dry-run by default**.
   different catalog cards; "Brave Little Tailor" alone returns The First Chapter
   #115 (a bulk rare), D23 Collection #1, and Promo Set 1 #1, whose graded copies
   pass $14,000.
+- **⚠ So the searches pair a name with a PROMO token, and they were MEASURED
+  (2026-09-27).** The first deep run of bare `"Lorcana" "Brave Little Tailor"`
+  hit the 60-page cap on bulk #115s and never reached the 2022 sales. Now: 8
+  set-wide nets (`C1`, `Top Prize`, `Prize Wall`, `Side Event`, `C2`,
+  `D23`+`2022`, `Expo`+`2022`, `Cruise`) plus per-card `<name>`+`Challenge` /
+  `D23` / `2022` / `P3`, 45 in all. Replayed against all 3,225 evidence-bearing
+  titles we hold for the 24 cards, they catch **3,201**, and every one of the 24
+  misses is a graded row on the wrong card or a typo. The old subtitle-only list
+  was WORSE on recall, not just noisier: of 184 Captain Hook P1 #7 sales only 41
+  say "Forceful Duelist". **Terapeak also matches item specifics** (a "Lorcana"
+  search returns PSA auto-titles with no "Lorcana" in them), so a title-only
+  replay is a floor. **⚠ A per-card search that is a subset of a net is
+  redundant** (`"Rapunzel" "C1"` ⊂ `"C1"`) and just adds ~67s of anti-captcha
+  wait; `test_raw_match.py` pins that every search names its card and that no
+  one-term search on a base-card name comes back.
 - **⚠ `terapeak_match.match_one` stays the ONLY matcher.** Measured over the
   8,253 corpus titles carrying a watchlist token, stripping every grading token
   out of a title (which is what a raw title looks like) changed the attributed
@@ -4680,11 +4833,142 @@ migration 130 — retuning means a deliberate edit in both places.
   can post to that channel as us.
 - Discord's embed limits are hard failures, not truncations — 1024 chars per field value,
   25 fields, 6000 total. The test asserts all three against a synthetic worst case.
+- **⚠ A mover must have been PRICED inside its window** (2026-09-27). Before migration 172
+  the matview reported a SKU's last-ever change as its "1D" move forever, and a dry run led
+  "Heating up" with Cruella at +108% off a price 48 days old. The script checks the rule
+  again against `prices_daily` itself (`observed_in_window` / `keep_fresh`) rather than
+  trusting the matview, because a post cannot be taken back. It over-fetches 3x
+  (`OVERFETCH`), drops stale rows, THEN truncates — cut first and a stale row still costs
+  a real mover its slot — and logs each skip with its last-priced date. The test reads the
+  newest price_movers migration and fails if `WINDOW_DAYS` drifts from its guard, and runs
+  `main()` end to end against the pre-172 Cruella row.
+- **It has never posted** (as of 2026-09-27): the `DISCORD_WEBHOOK_URL` repo secret was
+  never created, so every run ends at the clean exit above.
 
-Guarded by `python scripts/test_discord_digest.py` (35 checks), which the workflow runs
+Guarded by `python scripts/test_discord_digest.py` (54 checks), which the workflow runs
 BEFORE the digest for the same reason `catalog-watch.yml` tests its ack layer first: a
 drifted constant or a blown embed limit fails by posting something wrong, not by failing.
 
+
+## Discord bot (`discord/`) — 2026-09-27
+
+Zaven's ask: call a card in Discord and get its picture and price history, plus
+trend reports, with **plain-English, typo-tolerant lookup as the main
+requirement** — "people will say mowgli and not know the subtitle, but there is
+one main one that is played, or spell mowgli slightly wrong". `/card`, `/price`,
+`/deck`, `/movers`, `/events`, `/calendar`, `/help`, `/reports` and a **Price
+check** message menu. Setup (the steps only Zaven can do) is `discord/README.md`.
+Guarded by `node scripts/test_discord_bot.mjs` (~800 checks) and
+`python scripts/test_discord_reports.py`.
+
+- **LIVE since 2026-09-28** (PR #149, site v493) at
+  `https://packs-ink-discord.packs-ink-app.workers.dev` (`/` is a health check,
+  `/invite` a server install). Discord app **packs.ink**, application id
+  `1553932826980782282`; install link
+  `https://discord.com/oauth2/authorize?client_id=1553932826980782282`. User and
+  Guild install are both on; Guild Install brings the bot with View Channels,
+  Send Messages and Embed Links, which `/reports` needs to post.
+- **A SEPARATE Worker, `packs-ink-discord`, on workers.dev.** Deploying it
+  cannot touch packs.ink, and it adds no route to the site's zone.
+  `.github/workflows/discord_bot.yml` deploys it **on a daily schedule (21:45
+  UTC)** — the one scheduled deploy in the repo, and deliberately: the card
+  index lives inside the Worker and has to follow the catalog. A Workers deploy
+  costs nothing; the push policy is about the SITE. Until the `DISCORD_*`
+  secrets exist the job builds, tests and stops, green.
+- **Slash commands, not @mentions.** Reading ordinary messages needs a 24/7
+  gateway connection — a server — which this deliberately is not. Discord
+  interactions over HTTP are all a Worker can answer.
+- **The card index is built by running the SITE's catalog code.**
+  `discord/tools/sitecode.mjs` parses Index.html's app script with acorn, takes
+  the transitive closure of the declarations a function needs, and runs it in a
+  Node vm; `build_index.mjs` feeds `transformSupabaseData` live rows, so every
+  catalog rule (Holofoil mislabel, connecting foils, C2 ghosts, regional
+  exclusives, variant clones, `printingBadge`) applies with no copy of it.
+  `card-index.json` is NOT committed; `check_index.mjs` refuses a build that
+  came out small. Popularity is recency-weighted tournament top-cut appearances
+  (half-life 120 days) grouped by `cardFamilyKey`; collector words (a chase
+  rarity, a grade) switch the tiebreak to graded sale volume.
+- **⚠ `discord/src/site.generated.js` is Index.html code copied VERBATIM**
+  (`computeSeriesDeltas`, `priceStanding`, `tcgUrl`, `amazonForSealed`, the
+  calendar derivation, the postal-code walk, `gradedSlotBucket`, `rawSaleMatch`
+  and their closure). The guard fails the moment a copied statement stops
+  matching Index.html, so **changing any of those functions on the site turns
+  the Discord guard red until you run `node discord/tools/extract_site.mjs`**.
+  That is the point: the bot must never say a different "1W" or "Cheapest in 12
+  months" than the site. The deploy workflow regenerates it from the commit it
+  ships, too.
+- **Every database read is DEFERRED.** Discord gives an interaction 3 seconds;
+  the Worker answers "thinking…" (type 5, or 6 for a button) at once and PATCHes
+  `@original` from `waitUntil`. Autocomplete and `/help` are local and answer
+  directly. **`allowed_mentions: {parse: []}` on every payload** — a reply can
+  echo what somebody typed, and that could be `@everyone`.
+- **Keys are `c|<card_id>|<N|C|H|F>` and `s|<pid>`** — pipes, because card ids
+  carry colons (`extras:647652`, `<base>::variant::text-error`). A button's
+  custom_id is `r|<range>|<view>|<grade|->|<key>`, key LAST; the grade token is
+  how a graded reply's buttons remember the slab. All fit Discord's 100 chars
+  (the guard checks every card in the fixture).
+- **Charts are drawn by the Worker** (`src/chart.js` rasteriser, glyphs baked
+  from Nunito Sans by `tools/bake_font.py`, `src/png.js` with its own fixed-
+  Huffman deflate, ~5 ms per 800×340 chart). The image URL carries `?d=<price
+  date>`: Discord caches by URL, so a new day needs a new URL.
+- **Card art is TCGplayer's JPEG** (`<pid>_in_1000x1000.jpg`) **or art baked for
+  the Worker — never Lorcast's AVIF.** Discord shows no AVIF, and it REJECTS a
+  whole reply whose image is a `data:` URI or a relative path, so the reply
+  never arrives. Until 2026-09-28 every printing TCGplayer hasn't listed (all of
+  Hyperia City before release, regional promos: 84 printings) came back with no
+  picture. `tools/bake_art.mjs` (sharp) converts them to WebP at deploy time
+  into `discord/public/art/` (gitignored), which wrangler's `[assets]` serves at
+  `/art/<id>.webp?v=<hash>` WITHOUT running the Worker; `cardImage()` in
+  embeds.js is the one accessor, and `check_index.mjs` refuses an index that
+  points at a missing file or an image Discord can't show. The `?v=` hash busts
+  Discord's image cache when Lorcast re-renders a card.
+- **Every TCGplayer link is the affiliate link** (`buyUrl()`: `tcgUrl` for a
+  listed printing, `tcgSetSearchUrl` — a TCGplayer search for the name — for one
+  that isn't). Card titles, the Buy/Find button, /movers, /deck and Price check
+  all go through it, and every message carrying one ends its footer with
+  "Links may earn packs.ink a commission". The guard fails a reply with a
+  non-affiliate TCGplayer link or without that line.
+- **`/movers` defaults to NM Market and drops stale rows.** Low produced a $7 →
+  $0.50 "crash" on the first live test. And `price_movers` repeats a SKU's last
+  change after its listing disappears, so a mover only counts when
+  `prices_daily` holds the same price for it on the newest date (`fetchMovers`).
+  The window floor is on the STARTING price, the home banners' rule.
+- **On a promo TCGplayer cannot price, eBay leads** — the site's raw-sales
+  rule (see "Raw eBay sales"): Last sold + Avg of last N come first, TCGplayer
+  Low / Mkt second, and the chart draws each eBay sale as a DOT over the Market
+  line with Low left off (`/chart/p/...?r=<card>&rb=<bucket>`), or the sales
+  alone (`/chart/r/...`) for a card with no TCGplayer product. The split bucket
+  goes through `gradedSlotBucket` / `rawSaleMatch`, copied from the site, so a
+  Challenge card's Top Prize and Prize Wall sales never share a chart.
+- **`/deck` opens a text box** (a modal, type 9) because a slash-command option
+  cannot hold line breaks, and **Price check on a message that is mostly
+  `N Name` lines totals it as a deck** (`looksLikeDeck`: ≥5 card lines and ≥60%
+  of the lines). Each card is priced at its CHEAPEST printing, NM Market and Low.
+  Three matching tiers, cheapest first: the exact normalized name; a full name
+  within 1–2 letters of exactly ONE card (`Be Prepard`, `Tinker Bel - Giant
+  Fairy`; close to two cards means neither); then the resolver, only when it is
+  unambiguous and sure (score ≥ 0.9, or a corrected typo ≥ 0.75). A guessed row
+  says `(closest match)`; an unknown line is listed as not counted, never
+  guessed. **⚠ The resolver runs at most `MAX_GUESSES` (8) times a list** — it is
+  ~1 ms a call, a real exported list needs none, and the Worker has a small CPU
+  budget. The name index is built at startup (`prepareDeckIndex`), not per request.
+- **`/reports`** stores (server, channel, cadence) in
+  `discord_report_subscriptions` (**migration 173, APPLIED 2026-09-28**) through the service
+  key; `scripts/discord_reports.py` posts the **digest's own embed** (built by
+  `discord_digest.py`'s functions) through the bot token, daily 21:20 + 23:20
+  UTC and on Mondays for weekly. Safe to run twice: today's-prices gate plus
+  `last_posted_on`. It adds the same stale-row filter the Worker uses. A 403/404
+  is written to `last_error`, which `/reports status` shows.
+- **Secrets live in GitHub and are synced into the Worker on every deploy**:
+  `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` (all set
+  2026-09-28), and for `/reports` the repo's own `SUPABASE_SERVICE_KEY`, reused
+  so nobody copies a service key by hand (Zaven, 2026-09-28). A
+  `DISCORD_BOT_SUPABASE_KEY` secret overrides it. The bot token is never logged
+  or pasted anywhere else.
+- **`node discord/tools/simulate.mjs` runs the real Worker in `wrangler dev`**
+  with a throwaway Ed25519 key pair, signs requests the way Discord does, and
+  captures the follow-ups into `discord/.wrangler/sim/`. That is how every reply
+  shape was checked before any Discord app existed.
 
 ## The guards RUN now — `.github/workflows/guards.yml` (2026-09-21)
 
@@ -7567,11 +7851,25 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
-- ~~`supabase/172_calendar_chattanooga_london_youth.sql`~~ — **APPLIED 2026-09-25 by Zaven; verified
+- ~~`supabase/174_calendar_chattanooga_london_youth.sql`~~ — **APPLIED 2026-09-25 by Zaven; verified
   via REST** (both rows read back: Chattanooga CCQ confirmed Nov 7-8, DLC London carries the Youth
-  Division notes). From two Ravensburger OP graphics. ⚠ It was applied under the name **169** and
-  renumbered to 172 before merge, because main's `169_tcgplayer_names.sql` took 169 first. Same SQL,
-  and re-running it is safe.
+  Division notes; re-checked 2026-09-28). From two Ravensburger OP graphics. ⚠ It was applied under
+  the name **169** and renumbered twice before merge (169 → 172 → 174), because main's
+  `169_tcgplayer_names.sql`, then `172_price_movers_freshness.sql` and `173_discord_reports.sql`,
+  took those numbers first. Same SQL, and re-running it is safe.
+- ~~`supabase/173_discord_reports.sql`~~ — **APPLIED 2026-09-28 by Zaven; verified** (an anon read answers `42501 permission denied`, i.e. the table exists and stays private).
+  Written as 172 and renumbered before any push: `172_price_movers_freshness.sql` (branch
+  `claude/suspicious-wilbur-7a848a`) took 172 and was APPLIED the same day.
+  `discord_report_subscriptions` (server, channel, cadence, last_posted_on, last_error); RLS on with
+  no policies, service_role only. The bot and `discord_reports.py` both treat a missing table as
+  "not switched on yet" and stay green. Pure ASCII, short header, per the 142 lesson.
+- ~~`supabase/172_price_movers_freshness.sql`~~ — **APPLIED 2026-09-27 by Zaven; verified
+  exhaustively on live data** (see "A move has to be OBSERVED inside its window"). Drops
+  and recreates `price_movers` with `low_date` / `market_date` and the in-window guard,
+  and re-asserts `refresh_price_movers()` with its function-level 5-minute timeout and
+  migration 10's anon lockdown. One read around then hit 57014 and the retry succeeded —
+  consistent with the rebuild holding the matview's lock, which blocks readers for the
+  ~40s a drop-and-recreate takes (not verified; the evening refresh fits too).
 - ~~`supabase/171_playmat_sections.sql`~~ — **APPLIED 2026-09-27** through the Supabase connector.
   Widens `playmats_section_chk` to allow `disney` and `ravensburger` (Zaven's own headers for the
   shop exclusives); nothing else. The catalog was reloaded under it the same day.

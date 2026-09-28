@@ -1,0 +1,154 @@
+name: Discord bot
+
+# Builds and deploys the Packs.Ink Discord bot — a SEPARATE Cloudflare Worker
+# (packs-ink-discord, on workers.dev) from the site. Deploying it cannot touch
+# packs.ink. See discord/README.md.
+#
+# Why a daily scheduled deploy, when the SITE deploys by hand only: the bot
+# carries its card index inside the Worker (that is what makes a lookup fast
+# enough to answer Discord in time), and the index has to follow the catalog —
+# new cards land daily during spoiler season. Live prices, graded sales,
+# movers and events are read at request time either way; the index is names,
+# printings and popularity. A Workers deploy costs nothing.
+#
+# Green before it is switched on: until the DISCORD_* secrets exist, the job
+# builds and tests the bot, says what is missing, and stops without deploying.
+
+on:
+  schedule:
+    - cron: "45 21 * * *"   # after the 20:30 ETL: the index picks up today's catalog
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and test only — don't deploy"
+        type: boolean
+        default: false
+      set_endpoint:
+        description: "Also point Discord's Interactions Endpoint URL at the Worker (first setup)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: discord-bot
+  cancel-in-progress: false
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: discord
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: discord/package-lock.json
+      - run: npm ci
+
+      # The Worker's copy of the site's price/link/calendar code, regenerated
+      # from THIS commit's Index.html, so what ships always matches the site.
+      - name: Copy the site's helpers
+        run: node tools/extract_site.mjs
+      - name: Build the card index (the site's own catalog code, live data)
+        run: node tools/build_index.mjs
+      - name: Test
+        run: |
+          node ../scripts/test_discord_bot.mjs
+          node tools/check_index.mjs
+
+      - name: Is the bot configured?
+        id: cfg
+        env:
+          HAS_PUBKEY: ${{ secrets.DISCORD_PUBLIC_KEY != '' }}
+          HAS_APPID: ${{ secrets.DISCORD_APPLICATION_ID != '' }}
+          HAS_CF: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+        run: |
+          if [ "$HAS_PUBKEY" != "true" ] || [ "$HAS_APPID" != "true" ] || [ "$HAS_CF" != "true" ]; then
+            echo "::notice::Discord bot not configured yet (needs DISCORD_PUBLIC_KEY, DISCORD_APPLICATION_ID and CLOUDFLARE_API_TOKEN secrets) — built and tested, not deployed. See discord/README.md."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy
+        id: deploy
+        if: steps.cfg.outputs.ready == 'true' && !inputs.dry_run
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler deploy 2>&1 | tee /tmp/deploy.log
+          url=$(grep -oE 'https://packs-ink-discord\.[a-z0-9-]+\.workers\.dev' /tmp/deploy.log | head -1)
+          if [ -z "$url" ]; then
+            echo "::error::Deployed, but no workers.dev URL in wrangler's output. Is a workers.dev subdomain registered for the account (Workers & Pages -> your subdomain)?"
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      # Secrets live in GitHub and are copied into the Worker on every deploy,
+      # so rotating one is a GitHub edit plus a re-run. Written to a temp file
+      # only long enough for wrangler to read it; never echoed.
+      - name: Sync the Worker's secrets
+        if: steps.deploy.outputs.url != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DISCORD_PUBLIC_KEY: ${{ secrets.DISCORD_PUBLIC_KEY }}
+          DISCORD_APPLICATION_ID: ${{ secrets.DISCORD_APPLICATION_ID }}
+          # Only /reports writes need it. It reuses the repo's own service key
+          # (the one the ETL runs on) so nobody copies a key by hand; set a
+          # DISCORD_BOT_SUPABASE_KEY secret to give the bot a different one.
+          DISCORD_BOT_SUPABASE_KEY: ${{ secrets.DISCORD_BOT_SUPABASE_KEY || secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          umask 077
+          f=$(mktemp)
+          node -e '
+            const o = { DISCORD_PUBLIC_KEY: process.env.DISCORD_PUBLIC_KEY, DISCORD_APPLICATION_ID: process.env.DISCORD_APPLICATION_ID };
+            if (process.env.DISCORD_BOT_SUPABASE_KEY) o.SUPABASE_SERVICE_KEY = process.env.DISCORD_BOT_SUPABASE_KEY;
+            require("fs").writeFileSync(process.argv[1], JSON.stringify(o));
+          ' "$f"
+          npx wrangler secret bulk "$f" > /dev/null
+          rm -f "$f"
+          echo "secrets synced"
+
+      - name: Register the slash commands
+        if: steps.deploy.outputs.url != ''
+        env:
+          DISCORD_APPLICATION_ID: ${{ secrets.DISCORD_APPLICATION_ID }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+        run: |
+          if [ -z "$DISCORD_BOT_TOKEN" ]; then
+            echo "::notice::No DISCORD_BOT_TOKEN secret — commands not registered."
+            exit 0
+          fi
+          if [ "${{ inputs.set_endpoint }}" = "true" ]; then
+            node tools/register_commands.mjs --endpoint "${{ steps.deploy.outputs.url }}/interactions"
+          else
+            node tools/register_commands.mjs
+          fi
+
+      # Proof it is live, not just uploaded: the health route reports the index
+      # this deploy carries, and an unsigned request to the interactions
+      # endpoint must be REFUSED — Discord checks exactly that before it will
+      # save the endpoint, and an endpoint that accepts it is one anyone can drive.
+      - name: Smoke test
+        if: steps.deploy.outputs.url != ''
+        run: |
+          url="${{ steps.deploy.outputs.url }}"
+          for i in 1 2 3 4 5 6; do
+            body=$(curl -fsS "$url/" || true)
+            echo "$body" | grep -q '"ok":true' && break
+            sleep 5
+          done
+          echo "health: $body"
+          echo "$body" | grep -q '"ok":true' || { echo "::error::health check failed"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$url/interactions" -H 'Content-Type: application/json' -d '{"type":1}')
+          [ "$code" = "401" ] || { echo "::error::unsigned interaction got HTTP $code, expected 401"; exit 1; }
+          echo "unsigned interaction refused (401) - good"
+          echo "### Discord bot live at $url" >> "$GITHUB_STEP_SUMMARY"
+          echo "$body" >> "$GITHUB_STEP_SUMMARY"

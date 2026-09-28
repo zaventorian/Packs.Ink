@@ -1,4 +1,4 @@
--- 172_calendar_chattanooga_london_youth.sql (2026-09-24)
+-- 174_calendar_chattanooga_london_youth.sql (2026-09-24; applied as 169, renumbered twice before merge)
 --
 -- Two updates from Ravensburger's Organized Play announcement graphics.
 --

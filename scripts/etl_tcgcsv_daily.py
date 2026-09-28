@@ -350,11 +350,15 @@ def _refresh_matviews(sb: "Supabase") -> None:
     (matview staleness is a real failure worth alerting on, unlike the
     duplicate-snapshot skip)."""
     refresh_failures: list[str] = []
+    # Each hint names the NEWEST migrations that define the view and pin its
+    # refresh's statement_timeout. Re-running an older file silently reverts
+    # the pin (the sealed refresh failed for weeks that way; see migration 109),
+    # and migration 10 would also bring back price_movers' $5 gate.
     for fn, hint in (
-        ("refresh_card_prices_latest",   "supabase/12_card_prices_latest_matview.sql"),
-        ("refresh_rarity_avg_daily",     "supabase/07_refresh_rpc.sql"),
-        ("refresh_price_movers",         "supabase/10_price_movers_matview.sql"),
-        ("refresh_sealed_prices_latest", "supabase/16_sealed_prices_latest.sql"),
+        ("refresh_card_prices_latest",   "supabase/12_card_prices_latest_matview.sql then 25_refresh_function_timeouts.sql"),
+        ("refresh_rarity_avg_daily",     "supabase/07_refresh_rpc.sql then 25_refresh_function_timeouts.sql"),
+        ("refresh_price_movers",         "supabase/172_price_movers_freshness.sql"),
+        ("refresh_sealed_prices_latest", "supabase/16_sealed_prices_latest.sql then 109_restore_sealed_refresh_timeout.sql"),
     ):
         try:
             sb.rpc(fn)

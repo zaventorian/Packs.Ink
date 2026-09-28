@@ -1,0 +1,31 @@
+# The Packs.Ink Discord bot. A SEPARATE Worker from the site (`packs-ink`),
+# on workers.dev: deploying it cannot touch packs.ink, and nothing here routes
+# through the site's zone. See discord/README.md for setup.
+name = "packs-ink-discord"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+preview_urls = false
+
+# The card index is ~1 MB of JSON. Imported as TEXT and JSON.parse'd once at
+# startup, which V8 does faster than it parses the same data as a JS literal.
+[[rules]]
+type = "Text"
+globs = ["**/card-index.json"]
+fallthrough = false
+
+# Card art Discord can show (WebP), baked by tools/bake_art.mjs at deploy time
+# for printings TCGplayer has no photo of. Served straight from Cloudflare's
+# asset store: /art/<id>.webp never runs the Worker, so it costs no CPU.
+[assets]
+directory = "./public"
+
+# Supabase URL + the publishable (anon) key have defaults in src/db.js — they
+# are the same public values the site ships in Index.html.
+#
+# Secrets (set once with `npx wrangler secret put NAME`, never in this file):
+#   DISCORD_PUBLIC_KEY       the application's public key (verifies requests)
+#   DISCORD_APPLICATION_ID   the application id (follow-up messages, /invite)
+#   SUPABASE_SERVICE_KEY     only for /reports subscriptions (optional)
+[observability]
+enabled = true
