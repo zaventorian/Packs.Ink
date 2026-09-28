@@ -1,7 +1,7 @@
 // embeds.js — Discord message payloads. Pure: every function takes data that
 // has already been fetched and returns {embeds, components} JSON, which is what
 // lets the guard test check a reply without a network.
-import { tcgUrl, amazonForSealed, calEventTitle, calEventSubtitle, scLocalTime12 } from "./site.generated.js";
+import { tcgUrl, tcgSetSearchUrl, amazonForSealed, calEventTitle, calEventSubtitle, scLocalTime12 } from "./site.generated.js";
 import { FIN_PRINTING, RANGES, DEFAULT_RANGE, MOVER_WINDOWS, MOVER_GROUPS } from "./data.js";
 
 export const SITE = "https://packs.ink";
@@ -32,16 +32,28 @@ const clip = (s, n) => { s = String(s || ""); return s.length <= n ? s : s.slice
 const hex = (h) => { const n = parseInt(String(h || "").replace("#", ""), 16); return Number.isFinite(n) ? n : BRAND_COLOR; };
 export const cardPageUrl = (cardId) => `${SITE}/cards?card=${encodeURIComponent(cardId)}`;
 
-// Card art Discord can actually show: TCGplayer's JPEG photo of the product
-// when there is a TCGplayer product (Discord's AVIF support is not something to
-// bet a whole feature on), else the art the index stored, else Lorcast.
-export function cardImage(printing) {
+// Card art Discord can actually show, and nothing else: Discord will not
+// display AVIF (Lorcast's only format) and REJECTS an embed whose image is a
+// data: URI or a relative path — the reply then never arrives. In order: art
+// the build baked for this Worker (/art/…, see tools/bake_art.mjs), a JPEG /
+// PNG / WebP we host, TCGplayer's photo of the product. Otherwise no picture.
+const SAFE_IMG = /^https:\/\/[^?#]+\.(?:jpe?g|png|webp|gif)(?:[?#].*)?$/i;
+export function cardImage(printing, origin) {
+  const img = printing.img || "";
+  if (img.startsWith("/art/")) return origin ? origin + img : null;
+  if (SAFE_IMG.test(img)) return img;
   const pid = (printing.f || []).map((f) => f[1]).find(Boolean);
-  if (printing.img) return printing.img;
-  if (pid) return `https://tcgplayer-cdn.tcgplayer.com/product/${pid}_in_1000x1000.jpg`;
-  if (/^crd_[0-9a-f]{32}$/.test(printing.id)) return `https://cards.lorcast.io/card/digital/large/${printing.id}.avif`;
-  return null;
+  return pid ? `https://tcgplayer-cdn.tcgplayer.com/product/${pid}_in_1000x1000.jpg` : null;
 }
+
+// Every card name links to TCGplayer through the affiliate program: the
+// product page when TCGplayer lists this printing, else a TCGplayer search for
+// the name, so a card from a set TCGplayer hasn't listed yet still gets one.
+export function buyUrl(name, pid, printing) {
+  return pid ? tcgUrl(pid, printing) : tcgSetSearchUrl(name);
+}
+// The disclosure that goes with those links, in every footer that has them.
+export const AFFILIATE_NOTE = "Links may earn packs.ink a commission";
 
 // ── keys carried in components ───────────────────────────────────────────
 // custom_id "r|<range>|<view>|<grade>|<key>". The key itself contains "|", so
@@ -138,10 +150,11 @@ export function cardMessage(ctx) {
     });
   }
 
-  const img = cardImage(p);
+  const img = cardImage(p, origin);
+  const buy = buyUrl(c.n, noListing ? null : pid, printingStr);
   const embed = {
     title: clip(c.n + (ctx.grade ? ` — ${ctx.grade.grader} ${ctx.grade.grade}` : ""), 256),
-    url: cardPageUrl(p.id),
+    url: buy,
     color: hex(c.i && c.i[0] && ctx.inkColors ? ctx.inkColors[c.i[0]] : null),
     description: clip(lines.join("\n"), 4000),
     fields: fields.slice(0, 12),
@@ -185,9 +198,10 @@ export function cardMessage(ctx) {
       options: opts.map((o) => ({ ...o, default: o.value === key })),
     }] });
   }
-  const links = [{ type: 2, style: 5, label: "packs.ink", url: cardPageUrl(p.id) }];
-  if (pid && !noListing) links.push({ type: 2, style: 5, label: "TCGplayer", url: tcgUrl(pid, printingStr) });
-  components.push({ type: 1, components: links });
+  components.push({ type: 1, components: [
+    { type: 2, style: 5, label: pid && !noListing ? "Buy on TCGplayer" : "Find on TCGplayer", url: buy },
+    { type: 2, style: 5, label: "packs.ink", url: cardPageUrl(p.id) },
+  ] });
   return { embeds: [embed], components };
 }
 
@@ -195,7 +209,7 @@ function footerText(ctx, price) {
   const bits = [];
   if (price && price.date) bits.push(`TCGplayer prices as of ${shortDate(price.date)}`);
   if ((ctx.graded && ctx.graded.length) || ctx.raw) bits.push("Sales from eBay sold listings");
-  bits.push("packs.ink");
+  bits.push(AFFILIATE_NOTE);
   return bits.join(" · ");
 }
 
@@ -254,7 +268,7 @@ export function sealedMessage(ctx) {
     url: tcgUrl(it.pid, "Normal"),
     color: BRAND_COLOR,
     description: lines.join("\n"),
-    footer: { text: (price && price.date ? `TCGplayer prices as of ${shortDate(price.date)} · ` : "") + "packs.ink" },
+    footer: { text: (price && price.date ? `TCGplayer prices as of ${shortDate(price.date)} · ` : "") + AFFILIATE_NOTE },
   };
   const date = ctx.chartDate || (price && price.date) || "";
   if (view === "card") { if (it.img) embed.image = { url: it.img }; }
@@ -313,12 +327,26 @@ export function compactCardEmbed(ctx) {
     [mkt != null ? `**${money(mkt)}** NM Market` : null, low != null ? `${money(low)} Low` : null].filter(Boolean).join(" · ") || "No TCGplayer price yet.",
     d ? [["1w", "1W"], ["1m", "1M"]].map(([k, l]) => (d[k] != null ? `${l} ${pct(d[k])}` : null)).filter(Boolean).join(" · ") : "",
   ].filter(Boolean);
-  const img = cardImage(p);
+  const img = cardImage(p, ctx.origin);
   return {
-    title: clip(c.n, 256), url: cardPageUrl(p.id),
+    title: clip(c.n, 256), url: buyUrl(c.n, f && !f[6] ? f[1] : null, (f && f[2]) || FIN_PRINTING[f && f[0]] || "Normal"),
     color: hex(c.i && c.i[0] && ctx.inkColors ? ctx.inkColors[c.i[0]] : null),
     description: lines.join("\n"),
     ...(img ? { thumbnail: { url: img } } : {}),
+  };
+}
+
+// "Price check" on a message: up to three compact embeds and a menu to open
+// one properly. Each title is an affiliate link, so the disclosure goes under
+// them, once (a sealed embed already carries it in its own footer).
+export function priceCheckMessage({ embeds, options, range = DEFAULT_RANGE }) {
+  const last = embeds[embeds.length - 1];
+  if (last && !(last.footer && last.footer.text)) last.footer = { text: AFFILIATE_NOTE };
+  return {
+    embeds,
+    components: options && options.length
+      ? [{ type: 1, components: [{ type: 3, custom_id: pickId("chart", range), placeholder: "Open one with its price chart", options }] }]
+      : [],
   };
 }
 
@@ -337,13 +365,13 @@ export function moversMessage({ result, win, dir, group, basis, min, R }) {
     const name = r.version ? `${r.name} - ${r.version}` : r.name;
     const fin = finishWord(R, r);
     const was = money(r[result.priorCol]), now = money(r[result.todayCol]);
-    return `\`${String(i + 1).padStart(2)}\` **${pct(Number(r[result.col]))}** [${clip(name, 60)}](${cardPageUrl(r.card_id)}) · ${r.rarity}${fin ? " · " + fin : ""} · ${was} → **${now}**`;
+    return `\`${String(i + 1).padStart(2)}\` **${pct(Number(r[result.col]))}** [${clip(name, 60)}](${buyUrl(name, r.tcgplayer_product_id, r.printing)}) · ${r.rarity}${fin ? " · " + fin : ""} · ${was} → **${now}**`;
   });
   const top = rows[0];
   const embed = {
     title, color: dir === "down" ? 0xe86868 : 0x5cc480,
     description: clip(lines.join("\n"), 4000),
-    footer: { text: `TCGplayer ${basis === "low" ? "Low" : "NM Market"} · starting price ≥ ${money(min)} · prices as of ${shortDate(result.latest)} · packs.ink` },
+    footer: { text: `TCGplayer ${basis === "low" ? "Low" : "NM Market"} · starting price ≥ ${money(min)} · prices as of ${shortDate(result.latest)} · ${AFFILIATE_NOTE}` },
   };
   if (top && top.tcgplayer_product_id) embed.thumbnail = { url: `https://tcgplayer-cdn.tcgplayer.com/product/${top.tcgplayer_product_id}_in_1000x1000.jpg` };
   return { embeds: [embed], components: [{ type: 1, components: [{ type: 2, style: 5, label: "Open the Screener", url: `${SITE}/screener` }] }] };
@@ -430,10 +458,12 @@ export function deckMessage({ result, priceDate }) {
   lines.push("");
   const shown = r.rows.slice(0, 15);
   for (const x of shown) {
-    const id = x.mktAt ? x.mktAt.p.id : x.card.p[0].id;
+    // The link buys the printing the price came from — the cheapest one.
+    const f = x.mktAt ? x.mktAt.f : null;
+    const url = buyUrl(x.card.n, f && !f[6] ? f[1] : null, f ? f[2] || FIN_PRINTING[f[0]] : "Normal");
     const each = x.mkt != null ? money(x.mkt) : "no price";
     const tot = x.mkt != null ? ` · **${money(x.mkt * x.qty)}**` : "";
-    lines.push(`\`${String(x.qty).padStart(2)}×\` [${clip(x.card.n, 48)}](${cardPageUrl(id)}) — ${each} ea${tot}${x.guessed ? " *(closest match)*" : ""}`);
+    lines.push(`\`${String(x.qty).padStart(2)}×\` [${clip(x.card.n, 48)}](${url}) — ${each} ea${tot}${x.guessed ? " *(closest match)*" : ""}`);
   }
   if (r.rows.length > shown.length) {
     const rest = r.rows.slice(shown.length);
@@ -448,7 +478,7 @@ export function deckMessage({ result, priceDate }) {
   if (r.unpricedMarket) lines.push(`${r.unpricedMarket} card${r.unpricedMarket === 1 ? " has" : "s have"} no NM Market price and count as $0.`);
   return { embeds: [{
     title: "Deck price", color: BRAND_COLOR, description: clip(lines.join("\n"), 4000),
-    footer: { text: `TCGplayer prices as of ${shortDate(priceDate)} · cheapest printing of each card · packs.ink` },
+    footer: { text: `TCGplayer prices as of ${shortDate(priceDate)} · cheapest printing of each card · ${AFFILIATE_NOTE}` },
   }], components: [] };
 }
 

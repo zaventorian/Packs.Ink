@@ -4791,9 +4791,24 @@ Guarded by `node scripts/test_discord_bot.mjs` (~800 checks) and
 - **Charts are drawn by the Worker** (`src/chart.js` rasteriser, glyphs baked
   from Nunito Sans by `tools/bake_font.py`, `src/png.js` with its own fixed-
   Huffman deflate, ~5 ms per 800×340 chart). The image URL carries `?d=<price
-  date>`: Discord caches by URL, so a new day needs a new URL. Card art is
-  **TCGplayer's JPEG** (`<pid>_in_1000x1000.jpg`), not Lorcast's AVIF, which
-  Discord cannot be relied on to show.
+  date>`: Discord caches by URL, so a new day needs a new URL.
+- **Card art is TCGplayer's JPEG** (`<pid>_in_1000x1000.jpg`) **or art baked for
+  the Worker — never Lorcast's AVIF.** Discord shows no AVIF, and it REJECTS a
+  whole reply whose image is a `data:` URI or a relative path, so the reply
+  never arrives. Until 2026-09-28 every printing TCGplayer hasn't listed (all of
+  Hyperia City before release, regional promos: 84 printings) came back with no
+  picture. `tools/bake_art.mjs` (sharp) converts them to WebP at deploy time
+  into `discord/public/art/` (gitignored), which wrangler's `[assets]` serves at
+  `/art/<id>.webp?v=<hash>` WITHOUT running the Worker; `cardImage()` in
+  embeds.js is the one accessor, and `check_index.mjs` refuses an index that
+  points at a missing file or an image Discord can't show. The `?v=` hash busts
+  Discord's image cache when Lorcast re-renders a card.
+- **Every TCGplayer link is the affiliate link** (`buyUrl()`: `tcgUrl` for a
+  listed printing, `tcgSetSearchUrl` — a TCGplayer search for the name — for one
+  that isn't). Card titles, the Buy/Find button, /movers, /deck and Price check
+  all go through it, and every message carrying one ends its footer with
+  "Links may earn packs.ink a commission". The guard fails a reply with a
+  non-affiliate TCGplayer link or without that line.
 - **`/movers` defaults to NM Market and drops stale rows.** Low produced a $7 →
   $0.50 "crash" on the first live test. And `price_movers` repeats a SKU's last
   change after its listing disappears, so a mover only counts when

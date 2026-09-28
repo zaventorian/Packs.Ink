@@ -268,6 +268,11 @@ const tcgUrl = (productId, printing) => {
   return TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(dest);
 };
 // ---- site ----
+const tcgSetSearchUrl = (setName) => {
+  const dest = `https://www.tcgplayer.com/search/lorcana/product?productLineName=lorcana&Language=English&q=${encodeURIComponent(setName)}`;
+  return TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(dest);
+};
+// ---- site ----
 const AMAZON_TAG = "packsink-20";
 // ---- site ----
 const amazonUrl = (asin) => asin
@@ -717,4 +722,4 @@ const scLocalTime12 = (hhmm) => {
   h = h % 12 || 12;
   return `${h}:${m[2]} ${ap}`;
 };
-export { AMAZON_ASIN_BY_SET, AMAZON_DEPT_DEFAULT, AMAZON_PUZZLE_ASINS, AMAZON_SEALED_RULES, AMAZON_TAG, CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_REGIONS, CAL_D, CAL_EST_SUFFIX, CARD_DELTA_WINDOWS, GRADED_FOIL_PRINTINGS, GRADED_NONFOIL_PRINTINGS, PRICE_STANDING_HIGH, PRICE_STANDING_LOW, PRICE_STANDING_MIN_POINTS, PRICE_STANDING_MIN_SPAN_RATIO, PRICE_STANDING_MIN_SPREAD, PRICE_STANDING_NEAR_LOW, PRICE_STANDING_WINDOWS, PRODUCT_RELEASE_DATES, SC_GEO_COUNTRIES, SC_GEO_TIMEOUT_MS, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, SC_POSTAL_FORMATS, SEALED_DISPLAY_TYPE_FOR, SET_CADENCE_DAYS, SET_LGS_WEEKDAY, SET_RELEASE_DATES, SET_RELEASE_LABELS, SET_RELEASE_PHASES, SET_RETAIL_LAG_DAYS, TCG_AFFILIATE_BASE, UPCOMING_SET_NAMES, _CAL_REGION_BY_CC, _amznNorm, _calKindRank, _calPhaseRank, _calSetKey, _calSetPhase, amazonForSealed, amazonSearchUrl, amazonUrl, calAddDays, calEndOf, calEstimated, calEventFullLabel, calEventSubtitle, calEventTitle, calRegionOf, calStoreEventName, calTodayYmd, calUTCToYmd, calYmdParts, calYmdToUTC, calendarEstimatedSetEntries, calendarMergeEvents, calendarProductEntries, calendarSetEntries, calendarSetEstimates, calendarSort, calendarUpcoming, cleanSealedName, computeSeriesDeltas, deriveSealedDisplayType, gradedSlotBucket, haversineMi, priceStanding, rawSaleMatch, scLocalTime12, scNormalizePostal, scPlaceLabel, scPostalCandidates, scPostalShape, scRankPlaces, scZippo, searchNorm, tcgUrl };
+export { AMAZON_ASIN_BY_SET, AMAZON_DEPT_DEFAULT, AMAZON_PUZZLE_ASINS, AMAZON_SEALED_RULES, AMAZON_TAG, CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_REGIONS, CAL_D, CAL_EST_SUFFIX, CARD_DELTA_WINDOWS, GRADED_FOIL_PRINTINGS, GRADED_NONFOIL_PRINTINGS, PRICE_STANDING_HIGH, PRICE_STANDING_LOW, PRICE_STANDING_MIN_POINTS, PRICE_STANDING_MIN_SPAN_RATIO, PRICE_STANDING_MIN_SPREAD, PRICE_STANDING_NEAR_LOW, PRICE_STANDING_WINDOWS, PRODUCT_RELEASE_DATES, SC_GEO_COUNTRIES, SC_GEO_TIMEOUT_MS, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, SC_POSTAL_FORMATS, SEALED_DISPLAY_TYPE_FOR, SET_CADENCE_DAYS, SET_LGS_WEEKDAY, SET_RELEASE_DATES, SET_RELEASE_LABELS, SET_RELEASE_PHASES, SET_RETAIL_LAG_DAYS, TCG_AFFILIATE_BASE, UPCOMING_SET_NAMES, _CAL_REGION_BY_CC, _amznNorm, _calKindRank, _calPhaseRank, _calSetKey, _calSetPhase, amazonForSealed, amazonSearchUrl, amazonUrl, calAddDays, calEndOf, calEstimated, calEventFullLabel, calEventSubtitle, calEventTitle, calRegionOf, calStoreEventName, calTodayYmd, calUTCToYmd, calYmdParts, calYmdToUTC, calendarEstimatedSetEntries, calendarMergeEvents, calendarProductEntries, calendarSetEntries, calendarSetEstimates, calendarSort, calendarUpcoming, cleanSealedName, computeSeriesDeltas, deriveSealedDisplayType, gradedSlotBucket, haversineMi, priceStanding, rawSaleMatch, scLocalTime12, scNormalizePostal, scPlaceLabel, scPostalCandidates, scPostalShape, scRankPlaces, scZippo, searchNorm, tcgSetSearchUrl, tcgUrl };

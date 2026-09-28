@@ -80,6 +80,8 @@ discord/
   src/site.generated.js the site's own helpers, copied verbatim (see below)
   src/card-index.json   built daily, not committed
   tools/build_index.mjs builds the index by running the SITE's catalog transform
+  tools/bake_art.mjs    card art Discord can show, for printings TCGplayer hasn't listed
+  public/art/           that art, served as the Worker's static assets (not committed)
   tools/extract_site.mjs regenerates site.generated.js from Index.html
   tools/bake_font.py    regenerates font.generated.js
   tools/commands.js     the slash commands; register_commands.mjs publishes them
@@ -104,6 +106,19 @@ discord/
 - **Movers drop stale rows.** `price_movers` repeats a SKU's last change after
   its listing disappears; a mover only counts when `prices_daily` holds the same
   price for it on the newest date. `scripts/discord_reports.py` does the same.
+- **Card art is TCGplayer's photo, or art baked for the Worker.** Discord shows
+  no AVIF (Lorcast's only format) and rejects a whole reply whose image is a
+  `data:` URI or a relative path, so a card TCGplayer hasn't listed yet (a new
+  set before release, a regional promo) used to arrive with no picture.
+  `bake_art.mjs` converts those to WebP at deploy time (sharp) into
+  `public/art/`, which wrangler serves at `/art/<id>.webp` without running the
+  Worker. `check_index.mjs` refuses an index that points at a missing file or an
+  image Discord can't show. `build_index.mjs --no-art` skips the download.
+- **Every TCGplayer link is the affiliate link** (`tcgUrl` / `tcgSetSearchUrl`,
+  copied from the site): the product page when TCGplayer lists the printing, a
+  TCGplayer search for the name when it doesn't. Every message carrying one
+  says "Links may earn packs.ink a commission" in its footer, and the guard
+  fails a reply that doesn't.
 - **Nothing it says can ping anyone** (`allowed_mentions: {parse: []}` on every
   message), because a reply can echo what somebody typed.
 

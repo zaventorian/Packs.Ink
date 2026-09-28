@@ -21,6 +21,9 @@
 //      "thinking…" forever.
 //   6. Signature verification refuses what it must refuse.
 //   7. The stale-mover guard drops a row whose "today" is not today.
+//   8. Every picture is one Discord shows (no AVIF, no data: URI, no relative
+//      path — the last two get the whole reply rejected), and every TCGplayer
+//      link is the affiliate link, with the disclosure beside it.
 import { readFileSync } from "node:fs";
 import { inflateSync } from "node:zlib";
 import { webcrypto } from "node:crypto";
@@ -159,6 +162,8 @@ const { renderChart, fmtAxisMoney, THEME } = await mod("discord/src/chart.js");
 }
 
 // ── 5. replies stay inside Discord's limits ──────────────────────────────
+const DISCORD_IMG = /^https:\/\/[^?#]+\.(?:jpe?g|png|webp|gif)(?:[?#].*)?$/i;
+const TCG_AFFILIATE = "https://partner.tcgplayer.com/c/7285926/1780961/21018?u=";
 function checkMessage(m, label) {
   const embeds = m.embeds || [];
   ok(embeds.length <= 10, `${label}: ≤10 embeds`);
@@ -173,8 +178,28 @@ function checkMessage(m, label) {
     }
     total += (e.title || "").length + (e.description || "").length + ((e.footer && e.footer.text) || "").length;
     for (const u of [e.url, e.image && e.image.url, e.thumbnail && e.thumbnail.url]) if (u) ok(/^https?:\/\//.test(u), `${label}: absolute URL ${u}`);
+    // Discord shows no AVIF, and a data: URI or a relative path gets the whole
+    // reply rejected — so a picture is an https JPEG / PNG / WebP / GIF or nothing.
+    for (const u of [e.image && e.image.url, e.thumbnail && e.thumbnail.url]) {
+      if (u) ok(DISCORD_IMG.test(u), `${label}: picture is in a format Discord shows (${String(u).slice(0, 90)})`);
+    }
   }
   ok(total <= 6000, `${label}: embeds total ≤6000 chars (${total})`);
+  // Every TCGplayer link earns through the affiliate program, and a message
+  // carrying one says so (the FTC wants the disclosure near the links).
+  const links = [];
+  for (const e of embeds) {
+    if (e.url) links.push(e.url);
+    for (const t of [e.description, ...(e.fields || []).map((f) => f.value)]) {
+      for (const mm of String(t || "").matchAll(/\]\((https?:\/\/[^)\s]+)\)/g)) links.push(mm[1]);
+    }
+  }
+  for (const row of m.components || []) for (const c of row.components) if (c.type === 2 && c.url) links.push(c.url);
+  const tcg = links.filter((u) => /tcgplayer\.com/.test(u) && !/^https:\/\/tcgplayer-cdn\./.test(u));
+  for (const u of tcg) ok(u.startsWith(TCG_AFFILIATE), `${label}: TCGplayer link goes through the affiliate program (${u.slice(0, 80)})`);
+  if (tcg.length) {
+    ok(embeds.some((e) => e.footer && String(e.footer.text).includes(E.AFFILIATE_NOTE)), `${label}: carries the affiliate disclosure`);
+  }
   const rows = m.components || [];
   ok(rows.length <= 5, `${label}: ≤5 component rows`);
   for (const row of rows) {
@@ -236,7 +261,41 @@ const D = await mod("discord/src/data.js");
   checkMessage(E.eventsMessage({ place: { city: "Chicago", state: "IL" }, radius: 50, kind: "all", series: [{ next_start: "2026-10-04T17:00:00Z", store_name: "A Shop", name: "Weekly", kind: "other", distance_mi: 3.2, dow: 6, local_time: "12:00", occurrence_count: 4, occurrences: [{ url: "https://tcg.ravensburgerplay.com/events/1" }] }] }), "events");
   // price check: three compact embeds + a select
   const three = R.findInText("mowgli and enchanted elsa and stitch", 3);
-  checkMessage({ embeds: three.map((res) => E.compactCardEmbed({ R, res, price, inkColors: index.inkColors })) }, "price check");
+  const pc = E.priceCheckMessage({ embeds: three.map((res) => E.compactCardEmbed({ R, res, price, inkColors: index.inkColors, origin: "https://bot.example" })),
+    options: three.map((res) => ({ label: res.card.n.slice(0, 100), value: R.cardKey(res.printing, res.fi) })) });
+  checkMessage(pc, "price check");
+  eq(pc.embeds.filter((e) => e.footer).length, 1, "price check: the disclosure is said once, under the last card");
+}
+
+// ── 8. card art Discord can show, and links that earn ────────────────────
+{
+  const O = "https://bot.example";
+  const pr = (img, pid) => ({ id: "crd_x", img, f: [["N", pid || null, "Normal"]] });
+  eq(E.cardImage(pr("/art/crd_x.webp?v=ab12cd34"), O), O + "/art/crd_x.webp?v=ab12cd34", "baked art is served from the Worker's own origin");
+  eq(E.cardImage(pr("/art/crd_x.webp?v=ab12cd34"), null), null, "baked art needs the Worker's origin to be a URL");
+  eq(E.cardImage(pr("https://cards.lorcast.io/card/digital/large/crd_x.avif")), null, "an AVIF is never sent — Discord doesn't show it");
+  eq(E.cardImage(pr("data:image/jpeg;base64,AAAA")), null, "a data: URI is never sent — Discord rejects the whole reply");
+  eq(E.cardImage(pr("Logos/cards/x.jpg")), null, "a relative path is never sent");
+  eq(E.cardImage(pr("https://cards.lorcast.io/card/digital/large/crd_x.avif", 123)), "https://tcgplayer-cdn.tcgplayer.com/product/123_in_1000x1000.jpg",
+    "a listed printing falls back to TCGplayer's photo");
+  eq(E.cardImage(pr("https://packs.ink/Logos/cards/x.jpg", 123)), "https://packs.ink/Logos/cards/x.jpg", "a JPEG we host is used as it is");
+  eq(E.cardImage(pr(null)), null, "nothing to show is nothing, not a broken picture");
+
+  const dest = (u) => decodeURIComponent(u.slice(TCG_AFFILIATE.length));
+  const prod = E.buyUrl("Mowgli - Man Cub", 659761, "Cold Foil");
+  ok(prod.startsWith(TCG_AFFILIATE) && /\/product\/659761\//.test(dest(prod)) && /Printing=Cold%20Foil/.test(dest(prod)),
+    `a listed printing links to its own TCGplayer page, through the affiliate program (${prod})`);
+  const search = E.buyUrl("Mickey Mouse - Best in Town", null, "Normal");
+  ok(search.startsWith(TCG_AFFILIATE) && /\/search\/lorcana\//.test(dest(search)) && dest(search).includes("q=Mickey%20Mouse%20-%20Best%20in%20Town"),
+    `a card TCGplayer hasn't listed links to a TCGplayer search for it, through the affiliate program (${search})`);
+
+  // The fixture is a slice of a real build: every printing in it has a picture
+  // Discord can show. A null here means the build stopped baking art, or a new
+  // image shape reached the index.
+  const blind = [];
+  for (const c of index.cards) for (const p of c.p) if (!E.cardImage(p, O)) blind.push(`${c.n} (${p.id})`);
+  ok(!blind.length, `every fixture printing has a picture — ${blind.length} without, first: ${blind.slice(0, 3).join("; ")}\n     refresh the fixture with: node discord/tools/build_index.mjs --fixture`);
+  ok(index.cards.some((c) => c.p.some((p) => String(p.img || "").startsWith("/art/"))), "the fixture carries baked art, so the replies above exercised it");
 }
 
 // ── decklists ────────────────────────────────────────────────────────────
