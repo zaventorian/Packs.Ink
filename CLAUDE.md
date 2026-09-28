@@ -2692,7 +2692,10 @@ so #7 there is five different cards.
   - **⚠ Delete a retired `art` file only AFTER the rows point at TCGplayer** — read
     `cards.image_normal` for the ids first. Deleted in the same deploy, the image 404s from the
     deploy until the next run. That is why `sulley-protective-monster-pd1-18.jpg` and
-    `violet-parr-super-resilient-pd1-19.jpg` were still in `Logos/cards/` after the switch.
+    `violet-parr-super-resilient-pd1-19.jpg` stayed in `Logos/cards/` after the switch; they
+    were deleted 2026-09-28, once a metadata run from main had pointed both rows at TCGplayer
+    (719967 / 719968, `image_normal` on tcgplayer-cdn, prices live). The scanner index's
+    `art_key` still names them, and that is fine: it is an identity key, not a URL.
 - **⚠ Check Lorcast before hand-writing any promo's stats.** #18/#19 turned out to be promo
   printings of Attack of the Vine! #128 and #176, so cloning those rows gave exact cost / ink /
   stats / lore / classifications / ability text instead of a blurry photo's best guess. A promo
