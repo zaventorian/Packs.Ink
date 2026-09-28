@@ -16,6 +16,7 @@ on workers.dev), so deploying it can never touch packs.ink.
 | `/trade` | Is a trade fair? Both sides priced (each card at the version named — `enchanted elsa` is the Enchanted), sealed and cash too, a verdict in words, and a button that opens it in the site's Trade Compare. Type both sides inline (`give:` / `get:`) or leave them empty for a box. |
 | `/deck` | Opens a box: paste a decklist, get what it costs to build (each card at its cheapest printing, NM Market and Low) and one TCGplayer cart for the whole list. |
 | `/set azurite` | A set at a glance: release dates, booster box price vs box EV (the site's own EV maths) with an open-or-hold verdict, chase cards, sealed prices. |
+| `/new` | The newest cards: everything added to packs.ink in the last four days (the site's reveal reel), grouped by when it landed, with a picture grid and a menu to open any of them. |
 | `/open` | Open a simulated booster pack — or `box: True`, a whole box — with the site's pull rates and real prices. |
 | `/movers` | A board of the biggest gains or drops: buttons switch 1D–1Y, gains/drops and NM Market/Low; a menu switches rarity group, or sealed product. |
 | `/meta` | The most-played cards in recent tournament top cuts, and the top four of the latest events with links to their decks. |
@@ -77,7 +78,7 @@ discord/
   src/resolver.js       plain-English fuzzy card/sealed/set lookup
   src/text.js           normalisation + bounded edit distance
   src/trade.js          /trade and trade posts: parse, price, verdict, site link
-  src/set.js            /set (overview, box EV) and /open (simulated packs)
+  src/set.js            /set (overview, box EV), /open (simulated packs) and /new (reveals)
   src/data.js           the Supabase reads (prices, graded, movers, events, calendar, tournaments)
   src/db.js             PostgREST over fetch
   src/embeds.js         Discord message payloads (pure)
@@ -138,6 +139,11 @@ discord/
 - **Box EV, sealed movers and the /meta play shares are computed in the daily
   index build** with the site's own code (`processData`/`calcEV`,
   `computeSealedDeltas`), so those replies need no database read.
+- **/new reads the site's reveal reel from the index**: the daily build runs the
+  site's `revealRotation` and stores each card's id and load time, so the reply
+  needs no database read. A card links to TCGplayer only when its printing has a
+  listing of its own: a card still being revealed has none, and a search link on
+  every line left room for 13 of 36 reveals.
 - **Boards are browsed, not re-typed**: /movers, /events and /calendar carry
   their state in each control's custom_id and redraw in place. Every control
   in a message has a DIFFERENT custom_id — Discord refuses a message with two

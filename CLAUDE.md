@@ -4841,10 +4841,10 @@ Zaven's ask: call a card in Discord and get its picture and price history, plus
 trend reports, with **plain-English, typo-tolerant lookup as the main
 requirement** — "people will say mowgli and not know the subtitle, but there is
 one main one that is played, or spell mowgli slightly wrong". `/card`, `/price`,
-`/trade`, `/deck`, `/set`, `/open`, `/movers`, `/meta`, `/events`, `/calendar`,
+`/trade`, `/deck`, `/set`, `/open`, `/new`, `/movers`, `/meta`, `/events`, `/calendar`,
 `/help`, `/reports` and a **Price check** message menu (v2 additions below).
 Setup (the steps only Zaven can do) is `discord/README.md`.
-Guarded by `node scripts/test_discord_bot.mjs` (~2,300 checks) and
+Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
 `python scripts/test_discord_reports.py`.
 
 - **LIVE since 2026-09-28** (PR #149, site v493) at
@@ -4976,7 +4976,8 @@ Guarded by `node scripts/test_discord_bot.mjs` (~2,300 checks) and
 - **⚠ Every component in a message needs a DIFFERENT custom_id** — Discord
   refuses the message otherwise. The boards highlight the current state on
   several controls at once, so each control carries a letter:
-  `m|<w|d|b|g>|…` (movers), `e|<k|r>|…` (events), `cl|<k|r>|…` (calendar).
+  `m|<w|d|b|g>|…` (movers), `e|<k|r>|…` (events), `cl|<k|r>|…` (calendar),
+  and a second card menu is `o|card|1` beside the first's `o|card`.
   `checkMessage` in the guard asserts uniqueness on every reply.
 - **`/trade` prices each card at the VERSION the words name** — "enchanted
   elsa" is the Enchanted — never at its cheapest printing (that is /deck's
@@ -5009,6 +5010,15 @@ Guarded by `node scripts/test_discord_bot.mjs` (~2,300 checks) and
   rates (e.g. 6.12 Legendaries / 2.52 Epics / 0.32 Enchanteds per Attack of the
   Vine! box against 6 / 2.5 / 0.333). A pack's pictures are up to four embeds
   sharing one `url`, which Discord draws as one image grid.
+- **`/new` is the site's reveal reel** (`revealRotation`: `added_at` within 96
+  hours, capped at `REVEAL_MAX_CARDS` 36, Extras and reprints left out), run in
+  the daily index build into `index.reveals` (`{id, t}`), `revealSet` and
+  `revealCap`. Grouped by load time, newest first, a picture grid of up to four,
+  and two menus past 25 cards. **⚠ A name links to TCGplayer only when that
+  printing has its own listing** (`f[1] && !f[6]`): a card of a set still being
+  revealed has none, and a ~250-character search link per line fit 13 of 36.
+  **⚠ `newRank` reads `RANK` at CALL time** — `RANK` is declared further down
+  set.js, and a module-level copy of it is a TDZ error at import.
 - **`/events` asks the RPC once PER KIND.** It returns the soonest series first,
   capped, so in a busy metro "everything" was sixty weekly nights and the Set
   Championship three weeks out never made the list. Prereleases sort nearest
