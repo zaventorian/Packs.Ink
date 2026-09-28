@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=493">
+<link rel="stylesheet" href="styles.css?v=494">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -5700,15 +5700,27 @@ const portfolioFallbackDates = (days) => [
 // their record has a months-long hole (TCGCSV's archive went offline before
 // the backfill could reach 2026-05-12..09-25), and without it every window up
 // to 3M compared today's price with the far side of that hole.
+// opts.asOf ("YYYY-MM-DD") → the newest price date the data is judged against.
+// The newest date anywhere in `history` is always a floor (the matview's own
+// `latest` CTE does the same), so a batch guards itself. ⚠ A window's move needs
+// its closing snapshot INSIDE the window (migration 172's rule): a product that
+// stopped being listed otherwise reports the last change it ever had as today's,
+// every day. A lone series is its own newest date, so a single-product caller
+// only gets that guard by passing asOf — and should only pass one its history
+// cannot be older than (catalogPriceDate() with fetchCardHistory's cache, which
+// is wiped exactly when that date advances).
 function computeSealedDeltas(history, opts){
   if(!history || !history.length) return [];
   const maxLag = opts && typeof opts.maxLagDays === "function" ? opts.maxLagDays : null;
   const byPid = new Map();
+  let newest = "";
   for(const h of history){
     const k = h.tcgplayer_product_id;
     if(!byPid.has(k)) byPid.set(k, []);
     byPid.get(k).push(h);
+    if(h.date > newest) newest = h.date;
   }
+  const asOf = opts && opts.asOf && opts.asOf > newest ? opts.asOf : newest;
   const DAY = 86400000;
   const WINDOWS = [["pct_1d",1],["pct_7d",7],["pct_30d",30],["pct_90d",90],["pct_180d",180],["pct_365d",365]];
   // Same accessor used everywhere in the catalog — coalesce(low_price_smoothed,
@@ -5739,14 +5751,16 @@ function computeSealedDeltas(history, opts){
     const lowToday = lowOf(latest);
     const mktToday = mktOf(latest);
     if(!Number.isFinite(lowToday) && !Number.isFinite(mktToday)) continue;
-    // ⚠ Windows are measured back from this product's OWN latest snapshot,
-    // never from the wall clock — the rule price_movers already follows
-    // ("low_prev = most recent before low_today's own date"). Measured from
-    // Date.now(), a snapshot is dated 00:00Z, so for the ~20 hours between
-    // midnight UTC and the day's ETL the newest row was itself "at least a day
-    // old": 1D compared the latest price with ITSELF and every sealed product
-    // read 0% until the evening, on the Screener, the tiles and the modal.
+    // ⚠ Windows are measured back from the newest SNAPSHOT date (asOf), never
+    // from the wall clock. Measured from Date.now(), a snapshot is dated 00:00Z,
+    // so for the ~20 hours between midnight UTC and the day's ETL the newest row
+    // was itself "at least a day old": 1D compared the latest price with ITSELF
+    // and every sealed product read 0% until the evening, on the Screener, the
+    // tiles and the modal.
     const latestMs = new Date(latest.date + "T00:00:00Z").getTime();
+    // Never anchored BEFORE this product's own snapshot: an asOf older than
+    // the data (a session that outlived an ETL) must not reach past it.
+    const anchorMs = Math.max(latestMs, new Date(asOf + "T00:00:00Z").getTime() || latestMs);
     const row = {
       tcgplayer_product_id: pid,
       printing: "Normal",
@@ -5756,8 +5770,12 @@ function computeSealedDeltas(history, opts){
       low_prev: null, market_prev: null,
     };
     for(const [k, days] of WINDOWS){
-      const lowPast = priceAtOrBefore(pts, latestMs - days * DAY, lowOf, days);
-      const mktPast = priceAtOrBefore(pts, latestMs - days * DAY, mktOf, days);
+      if(latestMs <= anchorMs - days * DAY){
+        row[k] = row[k.replace("pct_", "mkt_pct_")] = null;
+        continue;
+      }
+      const lowPast = priceAtOrBefore(pts, anchorMs - days * DAY, lowOf, days);
+      const mktPast = priceAtOrBefore(pts, anchorMs - days * DAY, mktOf, days);
       row[k]                           = (Number.isFinite(lowPast) && lowPast > 0 && Number.isFinite(lowToday))
         ? ((lowToday - lowPast) / lowPast * 100) : null;
       row[k.replace("pct_", "mkt_pct_")] = (Number.isFinite(mktPast) && mktPast > 0 && Number.isFinite(mktToday))
@@ -6260,7 +6278,14 @@ const CARD_DELTA_WINDOWS = [
 // (latest_date − N days) — the same "most recent prior sample" semantics the
 // price_movers matview uses (the 1D window resolves to the immediately
 // preceding daily sample). Returns {now, byWin:{<key>: pct|null}}.
-const computeSeriesDeltas = (rows, field) => {
+// asOf ("YYYY-MM-DD", normally catalogPriceDate()) moves the anchor from this
+// series' last sample to the catalog's newest price date, and then ⚠ a window
+// needs its closing sample INSIDE it (migration 172's rule for price_movers).
+// Anchored on its own last sample, a printing that stopped being listed kept
+// reporting the last change it ever had: Cruella De Vil - Miserable As Usual
+// read "1D +108%" off a Jun 1 -> Aug 9 move, and Stitch - Rock Star "1M +102%"
+// 81 days after its last market price. Without asOf, the old anchoring.
+const computeSeriesDeltas = (rows, field, asOf) => {
   const DAY = 86400000;
   const pts = (rows || [])
     .map(r => ({ t: Date.parse(r.date), v: (r[field] != null ? parseFloat(r[field]) : null) }))
@@ -6268,9 +6293,14 @@ const computeSeriesDeltas = (rows, field) => {
   if(!pts.length) return { now: null, byWin: {} };
   const last = pts[pts.length - 1];
   const now = last.v;
+  // Never anchored BEFORE the series' own last sample: an asOf older than the
+  // data (a session that outlived an ETL) must not reach past it.
+  const asOfMs = asOf ? Date.parse(asOf) : NaN;
+  const anchor = Number.isFinite(asOfMs) && asOfMs > last.t ? asOfMs : last.t;
   const byWin = {};
   for(const w of CARD_DELTA_WINDOWS){
-    const target = last.t - w.days * DAY;
+    const target = anchor - w.days * DAY;
+    if(last.t <= target){ byWin[w.key] = null; continue; }
     let ref = null;
     for(let i = pts.length - 1; i >= 0; i--){
       if(pts[i].t <= target){ ref = pts[i]; break; }
@@ -6278,6 +6308,25 @@ const computeSeriesDeltas = (rows, field) => {
     byWin[w.key] = (ref && ref.v) ? ((now - ref.v) / ref.v * 100) : null;
   }
   return { now, byWin };
+};
+// The newest price date the loaded catalog was built from (card_prices_latest's
+// max price_date). App stamps it wherever it sets the catalog, cache replay and
+// fresh fetch alike, so it advances exactly when the per-card history caches
+// are wiped and the two can never disagree about which day is "today". Null
+// until the catalog has loaded, which leaves every caller on the old anchoring.
+let _catalogPriceDate = null;
+const setCatalogPriceDate = (d) => { _catalogPriceDate = d || null; };
+const catalogPriceDate = () => _catalogPriceDate;
+// Was this series priced ON asOf? The price-standing chip judges today's price
+// against the card's own history; with no price today it would be judging one
+// nobody can buy. SealedDetailModal already refuses that claim. Unknown asOf →
+// true: say what we have rather than hide it.
+const seriesPricedOn = (rows, field, asOf) => {
+  if(!asOf) return true;
+  for(let i = (rows || []).length - 1; i >= 0; i--){
+    if(rows[i] && rows[i][field] != null) return String(rows[i].date).slice(0, 10) >= asOf;
+  }
+  return false;
 };
 
 // ── Price standing — "is this actually a good price?" ───────────────────
@@ -10181,6 +10230,10 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   // every other variant once expanded. Same array feeds the copy-image poster.
   const statRows = useMemo(() => {
     const rows = [];
+    // One "today" for every row: the catalog's newest price date. A printing
+    // last priced before it gets no move for a window that doesn't contain that
+    // price, and no standing chip (see computeSeriesDeltas / seriesPricedOn).
+    const asOf = catalogPriceDate();
     // Name a printing by its finish only when the card HAS the other one —
     // the rule the price boxes above already follow. A promo that exists only
     // in foil was labelled "Foil" here, a difference that does not exist.
@@ -10188,9 +10241,9 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       key:"__normal", label: group.foil ? "Non-Foil" : (group.Rarity || "Non-Foil"), color:"#1d8d4a", sub:null,
       productId: group.normal && group.normal.tcgplayer_product_id,
       printing: (group.normal && group.normal.tcg_printing) || "Normal",
-      low: computeSeriesDeltas(history.normal, "low_price"),
-      market: computeSeriesDeltas(history.normal, "market_price"),
-      standing: priceStanding(history.normal),
+      low: computeSeriesDeltas(history.normal, "low_price", asOf),
+      market: computeSeriesDeltas(history.normal, "market_price", asOf),
+      standing: seriesPricedOn(history.normal, "market_price", asOf) ? priceStanding(history.normal) : null,
       rawSale: rawSaleMatch(rawMap && rawMap.rollup.get(group.card_id),
         (group.normal && group.normal.tcg_printing) || "Normal"),
     });
@@ -10198,9 +10251,9 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       key:"__foil", label: group.isChase ? group.Rarity : (group.normal ? "Foil" : (group.Rarity || "Foil")), color:"#7e54c4", sub:null,
       productId: group.foil && group.foil.tcgplayer_product_id,
       printing: (group.foil && group.foil.tcg_printing) || "Foil",
-      low: computeSeriesDeltas(history.foil, "low_price"),
-      market: computeSeriesDeltas(history.foil, "market_price"),
-      standing: priceStanding(history.foil),
+      low: computeSeriesDeltas(history.foil, "low_price", asOf),
+      market: computeSeriesDeltas(history.foil, "market_price", asOf),
+      standing: seriesPricedOn(history.foil, "market_price", asOf) ? priceStanding(history.foil) : null,
       rawSale: rawSaleMatch(rawMap && rawMap.rollup.get(group.card_id),
         (group.foil && group.foil.tcg_printing) || "Foil"),
     });
@@ -10218,9 +10271,9 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           color: null,
           productId: v.row.tcgplayer_product_id,
           printing: v.printing,
-          standing: priceStanding(vr),
-          low: computeSeriesDeltas(vr, "low_price"),
-          market: computeSeriesDeltas(vr, "market_price"),
+          standing: seriesPricedOn(vr, "market_price", asOf) ? priceStanding(vr) : null,
+          low: computeSeriesDeltas(vr, "low_price", asOf),
+          market: computeSeriesDeltas(vr, "market_price", asOf),
           rawSale: rawSaleMatch(rawMap && rawMap.rollup.get(v.row.card_id), v.printing),
         });
       }
@@ -25123,7 +25176,8 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
   const deltaRow = useMemo(() => {
     if(!history || !history.length) return null;
     const rows = history.map(r => ({...r, tcgplayer_product_id: product.tcgplayer_product_id}));
-    return computeSealedDeltas(rows, isMat ? {maxLagDays: (d) => Math.max(14, d / 2)} : undefined)[0] || null;
+    return computeSealedDeltas(rows, {asOf: catalogPriceDate(),
+      ...(isMat ? {maxLagDays: (d) => Math.max(14, d / 2)} : {})})[0] || null;
   }, [history, product?.tcgplayer_product_id, isMat]);
   // Chart series — Low + NM Market overlaid on one chart. We use the same
   // LineChart component the rest of the site uses.
@@ -61462,6 +61516,8 @@ function App(){
     const cached = force ? null : await readCache();
     if(cached && cached.rows.length){
       const stamp = (cached.latestDate || "") + ":" + cached.rows.length + ":" + (cached.cardCount ?? "");
+      // The date the Δ% maths treats as "today" — see catalogPriceDate().
+      setCatalogPriceDate(cached.latestDate);
       if(catalogStampRef.current !== stamp){
         catalogStampRef.current = stamp;
         setPromoBaseSet(cached.rows);
@@ -61638,6 +61694,7 @@ function App(){
       for(const p of priceRows){
         if(p && p.price_date && (!maxPriceDate || p.price_date > maxPriceDate)) maxPriceDate = p.price_date;
       }
+      setCatalogPriceDate(maxPriceDate);
       writeCache(allRows, maxPriceDate, cardsRows.length);
       // The rows on screen ARE what was just cached — record that, or the next
       // re-probe reads them back and swaps in an identical copy.

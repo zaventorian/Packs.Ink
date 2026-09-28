@@ -1,6 +1,6 @@
 // data.js — what the bot asks the database, shaped the way the site shapes it.
 import {
-  computeSeriesDeltas, priceStanding, gradedSlotBucket, rawSaleMatch,
+  computeSeriesDeltas, priceStanding, seriesPricedOn, gradedSlotBucket, rawSaleMatch,
   calendarMergeEvents, calendarSetEntries, calendarEstimatedSetEntries, calendarSetEstimates,
   calendarProductEntries, calendarUpcoming, SET_RELEASE_DATES, UPCOMING_SET_NAMES,
   PRODUCT_RELEASE_DATES, calTodayYmd, calAddDays,
@@ -36,15 +36,21 @@ export async function priceHistory(db, pid, printing, { sinceDays = 400 } = {}) 
 }
 
 // Everything the card view says about a price, from one history fetch.
-export function priceSummary(rows) {
-  const mkt = computeSeriesDeltas(rows, "market_price");
-  const low = computeSeriesDeltas(rows, "low_price");
+// asOf is the card index's price date — the newest day the catalog was built
+// from, the bot's copy of the site's catalogPriceDate(). With it a printing
+// that stopped being listed gets no move for a window that doesn't contain its
+// last price (migration 172's rule), where it used to report the last change it
+// ever had as today's; and no "Cheapest in 12 months" for a price nobody can
+// buy today. The site's card page does exactly this.
+export function priceSummary(rows, asOf) {
+  const mkt = computeSeriesDeltas(rows, "market_price", asOf);
+  const low = computeSeriesDeltas(rows, "low_price", asOf);
   const last = rows.length ? rows[rows.length - 1] : null;
   return {
     date: last ? String(last.date).slice(0, 10) : null,
     market: mkt.now, low: low.now,
     mktDelta: mkt.byWin, lowDelta: low.byWin,
-    standing: priceStanding(rows),
+    standing: seriesPricedOn(rows, "market_price", asOf) ? priceStanding(rows) : null,
   };
 }
 

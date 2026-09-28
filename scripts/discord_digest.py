@@ -42,6 +42,14 @@ Operationally:
     than a stale digest presented as today's. That is why it also lives in its
     own workflow on ONE cron rather than chaining off the prices job.
   * The webhook URL is never logged. It is a bearer credential in a URL.
+  * ⚠ A MOVE HAS TO BE OBSERVED INSIDE ITS WINDOW. A SKU that stops updating
+    kept its last-ever change as its "1D" move in price_movers, every day:
+    on 2026-09-26 this digest led "Heating up" with Cruella De Vil - Miserable
+    As Usual at +108%, a Jun 1 -> Aug 9 move, and "Worth a look" with an
+    Ursula foil last priced in March. Migration 172 fixed the matview; this
+    checks the same rule again against prices_daily itself, because a post
+    cannot be taken back and the matview has been rebuilt from an old
+    migration before.
 """
 from __future__ import annotations
 
@@ -75,6 +83,13 @@ PCT_PREFIX = "mkt_pct_"
 MIN_PRICE = 5.0          # matches the Screener's default floor
 MOVERS_PER_SIDE = 12
 HISTORY_DAYS = 400       # a little past 365 so the 12-month window is coverable
+# A window's move counts only when the SKU's latest market price falls INSIDE
+# the window: observed after newest - N days, so for 1d on the newest date
+# itself. The same rule migration 172 puts on price_movers' mkt_pct_* columns;
+# test_discord_digest.py reads the migration back and fails if they drift.
+WINDOW_DAYS = {"1d": 1, "7d": 7, "30d": 30, "90d": 90}
+# Stale rows are dropped after the fetch, so ask for more than we keep.
+OVERFETCH = 3
 
 
 def price_standing(points):
@@ -133,15 +148,19 @@ def fetch_movers(sb, window, direction, limit):
 
 
 def fetch_history(sb, pids, since):
-    """market_price history for a pid list, bucketed by (pid, printing)."""
+    """market_price history for a pid list, bucketed by (pid, printing).
+
+    Only the rows price_movers itself is built from (tcgcsv / raw), so "the
+    latest observation" means the same thing here as in the matview."""
     if not pids:
         return {}
     ids = ",".join(str(p) for p in sorted(set(pids)))
     rows = sb.select(
         "prices_daily",
         columns="tcgplayer_product_id,printing,date,market_price",
-        filters={"tcgplayer_product_id": f"in.({ids})", "date": f"gte.{since}"},
-        order="tcgplayer_product_id.asc,date.asc",
+        filters={"tcgplayer_product_id": f"in.({ids})", "date": f"gte.{since}",
+                 "source": "eq.tcgcsv", "grade": "eq.raw"},
+        order="tcgplayer_product_id.asc,printing.asc,date.asc",
     )
     out: dict[tuple, list] = {}
     for r in rows:
@@ -153,6 +172,31 @@ def fetch_history(sb, pids, since):
     for v in out.values():
         v.sort(key=lambda p: p[0])
     return out
+
+
+def observed_in_window(last_obs, price_date, window):
+    """Does a SKU's latest market price fall inside the window?"""
+    if last_obs is None:
+        return False
+    return last_obs > price_date - dt.timedelta(days=WINDOW_DAYS[window])
+
+
+def keep_fresh(rows, hist, price_date, window, n):
+    """(kept, skipped): the first n movers whose latest market price is inside
+    the window, in rank order, and the (row, last_obs) pairs dropped on the way.
+
+    Truncating only AFTER the stale rows are gone is the point of over-fetching:
+    cut first and a stale row still costs a real mover its slot. A row with no
+    market price in the fetched history is stale by definition."""
+    kept, skipped = [], []
+    for r in rows:
+        pts = hist.get((r.get("tcgplayer_product_id"), r.get("printing") or "Normal"))
+        last = pts[-1][0] if pts else None
+        if not observed_in_window(last, price_date, window):
+            skipped.append((r, last))
+        elif len(kept) < n:
+            kept.append(r)
+    return kept, skipped
 
 
 def card_url(card_id):
@@ -265,8 +309,8 @@ def main():
               "the ETL has not landed yet. Skipping (use --allow-stale to override).")
         return 0
 
-    risers = fetch_movers(sb, args.window, "up", MOVERS_PER_SIDE)
-    fallers = fetch_movers(sb, args.window, "down", MOVERS_PER_SIDE)
+    risers = fetch_movers(sb, args.window, "up", MOVERS_PER_SIDE * OVERFETCH)
+    fallers = fetch_movers(sb, args.window, "down", MOVERS_PER_SIDE * OVERFETCH)
     if not risers and not fallers:
         print("No movers cleared the filters; nothing to say. Exiting 0.")
         return 0
@@ -275,9 +319,20 @@ def main():
     pids = [r["tcgplayer_product_id"] for r in risers + fallers
             if r.get("tcgplayer_product_id")]
     hist = fetch_history(sb, pids, since)
+    risers, skipped_up = keep_fresh(risers, hist, price_date, args.window, MOVERS_PER_SIDE)
+    fallers, skipped_down = keep_fresh(fallers, hist, price_date, args.window, MOVERS_PER_SIDE)
+    for r, last in skipped_up + skipped_down:
+        print(f"Skipped a stale mover: {r.get('name')} - {r.get('version')} "
+              f"[{r.get('printing')}] {fmt_pct(r[PCT_PREFIX + args.window])}, "
+              f"last market price {last or f'none in {HISTORY_DAYS} days'}")
+    if not risers and not fallers:
+        print("No mover was priced inside the window; nothing to say. Exiting 0.")
+        return 0
+
     standings = {}
-    for key, pts in hist.items():
-        st = price_standing(pts)
+    for r in risers + fallers:
+        key = (r.get("tcgplayer_product_id"), r.get("printing") or "Normal")
+        st = price_standing(hist.get(key, []))
         if st:
             standings[key] = st
 
@@ -292,8 +347,8 @@ def main():
         for f in embed["fields"]:
             print("\n" + f["name"])
             print(f["value"])
-        print(f"\n({len(standings)} of {len(hist)} tracked prices had a standing "
-              f"worth stating)")
+        print(f"\n({len(standings)} of {len(risers) + len(fallers)} movers had a standing "
+              f"worth stating; {len(skipped_up) + len(skipped_down)} stale skipped)")
         return 0
 
     r = requests.post(webhook, json={"embeds": [embed]}, timeout=30)
