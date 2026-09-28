@@ -4859,9 +4859,10 @@ Zaven's ask: call a card in Discord and get its picture and price history, plus
 trend reports, with **plain-English, typo-tolerant lookup as the main
 requirement** — "people will say mowgli and not know the subtitle, but there is
 one main one that is played, or spell mowgli slightly wrong". `/card`, `/price`,
-`/deck`, `/movers`, `/events`, `/calendar`, `/help`, `/reports` and a **Price
-check** message menu. Setup (the steps only Zaven can do) is `discord/README.md`.
-Guarded by `node scripts/test_discord_bot.mjs` (~800 checks) and
+`/trade`, `/deck`, `/set`, `/open`, `/new`, `/movers`, `/meta`, `/events`, `/calendar`,
+`/help`, `/reports` and a **Price check** message menu (v2 additions below).
+Setup (the steps only Zaven can do) is `discord/README.md`.
+Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
 `python scripts/test_discord_reports.py`.
 
 - **LIVE since 2026-09-28** (PR #149, site v493) at
@@ -4958,20 +4959,134 @@ Guarded by `node scripts/test_discord_bot.mjs` (~800 checks) and
 - **`/reports`** stores (server, channel, cadence) in
   `discord_report_subscriptions` (**migration 173, APPLIED 2026-09-28**) through the service
   key; `scripts/discord_reports.py` posts the **digest's own embed** (built by
-  `discord_digest.py`'s functions) through the bot token, daily 21:20 + 23:20
-  UTC and on Mondays for weekly. Safe to run twice: today's-prices gate plus
-  `last_posted_on`. It adds the same stale-row filter the Worker uses. A 403/404
-  is written to `last_error`, which `/reports status` shows.
-- **Secrets live in GitHub and are synced into the Worker on every deploy**:
-  `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` (all set
-  2026-09-28), and for `/reports` the repo's own `SUPABASE_SERVICE_KEY`, reused
-  so nobody copies a service key by hand (Zaven, 2026-09-28). A
-  `DISCORD_BOT_SUPABASE_KEY` secret overrides it. The bot token is never logged
-  or pasted anywhere else.
+  `discord_digest.py`'s functions) through the bot token, daily and on Mondays
+  for weekly. It adds the same stale-row filter the Worker uses. A 403/404 is
+  written to `last_error`, which `/reports status` shows.
+  - **⚠ It runs when an ETL run FINISHES** (`workflow_run` on "ETL", which
+    cron-job.org dispatches on time), with the 21:20 / 23:20 UTC schedule kept
+    only as a fallback. GitHub has started this repo's evening schedules 2-3
+    hours late — the 21:15 digest ran at 23:35-23:56 UTC every day that week —
+    so on the schedule alone the report landed near midnight, and the old
+    "newest prices must be dated today" rule skipped the whole day whenever a
+    run crossed it. Found 2026-09-28, the first day a report was due, when none
+    had arrived by 22:45 UTC.
+  - **A day's report may post until noon UTC the next day** (`LATE_GRACE_HOURS`),
+    never later, and `last_posted_on` holds the PRICE date a channel got — so the
+    many runs a day are safe: nothing posts twice, and no day-old report is sent
+    the next evening. The embed title carries its date, so a post after midnight
+    is still clearly that day's.
+- **Secrets live in GitHub**: `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`,
+  `DISCORD_BOT_TOKEN` (all set 2026-09-28). The deploy syncs the first two into
+  the Worker, plus, for `/reports`, the repo's own `SUPABASE_SERVICE_KEY`, reused
+  so nobody copies a service key by hand (Zaven, 2026-09-28; a
+  `DISCORD_BOT_SUPABASE_KEY` secret overrides it). **The bot token is NOT in the
+  Worker** — it stays in GitHub, used only to register commands and by
+  `discord_reports.yml` — and is never logged or pasted anywhere else.
 - **`node discord/tools/simulate.mjs` runs the real Worker in `wrangler dev`**
   with a throwaway Ed25519 key pair, signs requests the way Discord does, and
   captures the follow-ups into `discord/.wrangler/sim/`. That is how every reply
   shape was checked before any Discord app existed.
+
+### v2 (2026-09-28): /trade, /set, /open, /meta, boards you browse
+
+- **The free plan's 10 ms of CPU is the binding constraint, and v1 was over it
+  on two paths**: a cold first lookup (~11 ms) and Price check on a long chat
+  message (~15–17 ms) — over the limit the reply simply never arrives. The
+  resolver now precomputes the popularity priors and each character's versions,
+  skips an edit distance when the two tokens' LETTER SETS differ by more than
+  2 per allowed edit (exact: one edit changes the set by at most two symbols —
+  property-tested in the guard), and `findInText` skips a message window whose
+  best possible coverage is under the 0.9 a clean match needs. The isolate is
+  warmed at startup. Lookup ~0.98 → ~0.12 ms, long message ~15 → ~4 ms, cold
+  lookup ~11 → ~4 ms. **Proven answer-identical**: 22,612 answers over the
+  live index (every card name, typos, rarity/foil/grade phrasings, autocomplete
+  prefixes, 810 chat messages, 40 decklists) diffed before and after, 0
+  changes. Re-run that kind of harness before touching the resolver's speed.
+- **A reply Discord refuses (400) is re-sent as plain text** (`plainFallback`);
+  a button's failed update goes to the clicker as a private follow-up.
+- **⚠ Every component in a message needs a DIFFERENT custom_id** — Discord
+  refuses the message otherwise. The boards highlight the current state on
+  several controls at once, so each control carries a letter:
+  `m|<w|d|b|g>|…` (movers), `e|<k|r>|…` (events), `cl|<k|r>|…` (calendar),
+  and a second card menu is `o|card|1` beside the first's `o|card`.
+  `checkMessage` in the guard asserts uniqueness on every reply.
+- **`/trade` prices each card at the VERSION the words name** — "enchanted
+  elsa" is the Enchanted — never at its cheapest printing (that is /deck's
+  question, not a trade's). Prices come from the index (rebuilt daily after
+  the ETL), so the reply needs no database read. Commas split items EXCEPT
+  between the word pairs real card names hold ("Fix-It Felix, Jr.", "Wake Up,
+  Alice!" — built from the index); "and", "&" and "for" never split (55 names
+  hold "and"/"&", 20 hold "for"). A whole line that is an exact card name wins
+  over reading its first number as a count ("99 Puppies"). Capped at 15 items
+  a side and 24 resolver calls a trade.
+- **The trade hands off to the site's Trade Compare through its ORIGINAL inline
+  form, `?trade=<base64url JSON>`** — still decoded by `decodeTrade` — rather
+  than `create_trade`: no database write, and that RPC's per-IP rate limit
+  would see every bot user as one Worker. Keys are the site's `tradeGroupKey`,
+  so a Challenge Promo (C1) card carries its printing (`sets[].sp` in the index).
+- **Price check reads a trade post as a trade** (`H:`/`Have:`/`W:`/`Want:`/`LF`/
+  `FT`/`ISO` markers, one-line or multi-line, markdown-bold or bulleted), then
+  a decklist as a deck, then free text card by card (only that last path is
+  capped at 1,200 characters).
+- **Box EV, sealed movers and play shares are computed in the daily index
+  build** with the site's own code: `processData` + `calcEV` (the EV tool's
+  defaults — nothing excluded, Low and NM Market), `computeSealedDeltas` as of
+  the index's price date (so a delisted product reports no move), and
+  `playDecks` (the recency-weighted count of top-cut decks, so a card's `pl`
+  reads as "in 38% of decks"). An unreleased set shows no box EV — its prices
+  are pre-sale.
+- **`/open` is the site's `simPack` with `getPull`** (copied by
+  `extract_site.mjs`), over pools built from the index; named variants are not
+  a pack slot. Averaged over 200 simulated boxes it reproduces the site's pull
+  rates (e.g. 6.12 Legendaries / 2.52 Epics / 0.32 Enchanteds per Attack of the
+  Vine! box against 6 / 2.5 / 0.333). A pack's pictures are up to four embeds
+  sharing one `url`, which Discord draws as one image grid.
+- **`/new` is the site's reveal reel** (`revealRotation`: `added_at` within 96
+  hours, capped at `REVEAL_MAX_CARDS` 36, Extras and reprints left out), **run
+  when someone asks, not at build time** (2026-09-28). Reveals land all day
+  (prestaged art through the afternoon, Lorcast's load in the evening) and the
+  index is built once, so a reel frozen in the index ran up to a day behind the
+  site's. The build stores the reel's INPUTS in `index.reveals` — every card
+  inside the window, uncapped, `{id, t, n, s, no, f?}`, where `f` is when the
+  card's NAME was first seen (a card leaves the site's reel once its name is
+  older than the window) — plus `index.catalogAt`. The Worker runs the site's
+  `revealRotation` over those plus any card inserted since `catalogAt - 2h`
+  (`freshRevealRows`: one read of `cards` with `sets(name)`, put through the
+  transform's rules — display names, promo rarity, suppressed rows, pid
+  overrides, companion and Extras-only products), so /new is DEFERRED.
+  **⚠ The reprint check is a second read, and if it fails nothing just added is
+  shown** (fail closed); if the first read fails the reply comes from the index.
+  `revealInputs` (set.js) is the one derivation; the build warns if its entries
+  stop reproducing the site's reel, and the guard proves they give the site's
+  reel at the build moment and at every later moment. A just-added card is
+  listed but kept out of the menus until the next build. Headings are DAYS back
+  from the moment of asking ("Added in the last 24 hours", "Added 1–2 days
+  ago"): reveals trickle in one or two at a time, so a heading per load was a
+  heading per card. Newest first, a picture grid of up to four, and two menus
+  past 25 cards. **⚠ A name links to TCGplayer only when that
+  printing has its own listing** (`f[1] && !f[6]`): a card of a set still being
+  revealed has none, and a ~250-character search link per line fit 13 of 36.
+  **⚠ `newRank` reads `RANK` at CALL time** — `RANK` is declared further down
+  set.js, and a module-level copy of it is a TDZ error at import.
+- **`/events` asks the RPC once PER KIND.** It returns the soonest series first,
+  capped, so in a busy metro "everything" was sixty weekly nights and the Set
+  Championship three weeks out never made the list. Prereleases sort nearest
+  first (they share a weekend); weekly play is one line per store.
+- **`/set`'s chase list is its own embed's description, not a field**: every
+  name is a ~220-character affiliate link and a field's 1,024 clipped the list
+  mid-link. Same reason `/deck`'s one-cart TCGplayer link (the site's
+  `tcgMassEntryParts` + `tcgMassName`, with `tcgplayer_names` carried in the
+  index) is a second embed.
+- **Commands are registered BEFORE the deploy** (`register_commands.mjs --ids
+  src/command-ids.json`) so their ids are bundled and /help shows them as
+  clickable `</name:id>` mentions; the interactions endpoint is set AFTER
+  (`--endpoint-only`). A failed registration still deploys the day's index,
+  then a last step turns the run red. `build_index.mjs` leaves `{}` for local runs.
+- **No `-#` subtext inside embeds** — it isn't reliably drawn there; secondary
+  lines are italics. Plain message content (the fallback) keeps it.
+- **The channel report is dressed in `discord_reports.py` only** (the lead
+  card's picture, "week to …" on weekly, a footer naming /reports); the
+  digest's own layout, shared with the site's webhook, is untouched.
 
 ## The guards RUN now — `.github/workflows/guards.yml` (2026-09-21)
 

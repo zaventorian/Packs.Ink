@@ -5,14 +5,24 @@ name: Discord reports
 # 173). The report is the daily digest's embed, built by the same code — see
 # scripts/discord_reports.py.
 #
-# Two runs a day, and that is safe: the script refuses to post unless the
-# newest price date is today, and each channel records last_posted_on, so the
-# second run only reaches a channel the first one missed (a late ETL day).
+# It runs when an ETL run FINISHES — the ETL is dispatched on time by
+# cron-job.org — with GitHub's schedule kept as the fallback. GitHub has
+# started this repo's evening schedules 2-3 hours late, so on the schedule
+# alone a 21:20 UTC report landed near midnight — and the old "prices must be
+# dated today" rule skipped any run that crossed it. Found 2026-09-28, the
+# first day a report was due, when none had arrived by 22:45 UTC. Running many
+# times a day is safe: nothing posts
+# before the day's prices land, a day's report may post until noon UTC the
+# next day and no later, and each channel records the price date it last got,
+# so no channel is sent a report twice.
 #
 # Green before it is switched on: with no DISCORD_BOT_TOKEN secret, or before
 # migration 173 is applied, the script says so and exits 0.
 
 on:
+  workflow_run:
+    workflows: ["ETL"]
+    types: [completed]
   schedule:
     - cron: "20 21 * * *"   # after the 20:30 ETL and the 21:15 digest
     - cron: "20 23 * * *"   # the late-ETL retry
@@ -54,5 +64,5 @@ jobs:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
         run: |
           python scripts/discord_reports.py \
-            ${{ (github.event_name == 'schedule' || !inputs.dry_run) && '--post' || '' }} \
+            ${{ (github.event_name != 'workflow_dispatch' || !inputs.dry_run) && '--post' || '' }} \
             ${{ inputs.force_weekly && '--force-weekly' || '' }}

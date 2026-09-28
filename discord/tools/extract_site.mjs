@@ -29,6 +29,18 @@ export const WANT = [
   "scLocalTime12",
   // graded + raw eBay sales: which rollup row belongs to which printing
   "gradedSlotBucket", "rawSaleMatch",
+  // /open: the site's pack slots and pull rates, so a simulated pack is the
+  // same pack Analytics » Simulator opens
+  "simPack", "getPull",
+  // /deck: one TCGplayer cart for the whole list, spelled TCGplayer's way
+  "tcgMassEntryParts", "tcgMassName",
+  // /new: the reveal reel, run when someone asks — over the daily index plus
+  // any card that has landed since — and the catalog rules a card that landed
+  // after the build still has to pass (display names, promo rarity,
+  // suppressed rows, pid overrides, the cards that are not cards of their own)
+  "revealRotation", "revealSetLabel", "REVEAL_WINDOW_HOURS", "REVEAL_MAX_CARDS",
+  "SET_DISPLAY_NAMES", "SET_ORDER", "PROMO_RARITY_SETS", "normalizeRarity",
+  "SUPPRESSED_CARD_IDS", "TCG_PID_OVERRIDES", "COLLECTOR_NUMBER_OVERRIDES", "EXTRAS_MAP", "CONNECTING_FOILS",
 ];
 // Browser-derived constants the closure would otherwise drag in. SITE_ORIGIN
 // reads window.Capacitor for the native app; the bot is always the web.

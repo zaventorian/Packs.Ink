@@ -15,11 +15,18 @@ every row in discord_report_subscriptions (migration 173).
   * DRY RUN BY DEFAULT, like the digest. `--post` is the deliberate act.
   * No bot token, or migration 173 not applied: a clean exit 0 that says so —
     the workflow stays green until the feature is switched on.
-  * ⚠ Freshness gate: nothing posts unless the newest price date is today, so
-    the retry run cannot post yesterday's numbers as today's. And each row
-    records last_posted_on, so a second run on the same day skips a channel
-    that already has its report — the retry is safe BY CONSTRUCTION, not by
-    timing.
+  * ⚠ Freshness gate: a report for price date D posts on D, or in the first
+    LATE_GRACE_HOURS of D+1 (UTC), and never later — so an evening run that
+    slips past midnight still sends the day's report, and nothing posts a
+    day-old report the next evening. Each row records last_posted_on (the price
+    date it got), so a second run skips a channel that already has its report —
+    safe BY CONSTRUCTION, not by timing.
+  * It runs when an ETL run finishes (the workflow's workflow_run trigger), not
+    only on GitHub's schedule, which has started this repo's evening jobs 2-3
+    hours late: a 21:20 UTC run landed near midnight, and the old "prices must
+    be dated today" rule skipped the whole day when it crossed it. Found
+    2026-09-28, the first day a report was due, when none had arrived by 22:45
+    UTC.
   * ⚠ Stale rows are dropped before anything is posted. price_movers carries a
     SKU's last change forever once its listing disappears, so "today's" move
     can be months old; a mover only counts when prices_daily holds the same
@@ -47,6 +54,10 @@ from supabase_client import Supabase  # noqa: E402
 API = "https://discord.com/api/v10"
 TABLE = "discord_report_subscriptions"
 WINDOW = {"daily": "1d", "weekly": "7d"}
+# How far into the next UTC day a report may still post. The ETL lands a
+# day's prices from about 20:30 UTC; runs after midnight (a late schedule, the
+# 01:00 ETL retry) still owe that day's report, and by noon it is stale.
+LATE_GRACE_HOURS = 12
 
 
 def load_subscriptions(sb):
@@ -72,6 +83,14 @@ def due(sub, today, force_weekly=False):
             return False
         return last is None or (today - last).days >= 6
     return False
+
+
+def fresh_enough(price_date, now):
+    """May a report for price_date post at `now` (UTC)?"""
+    today = now.date()
+    if price_date == today:
+        return True
+    return price_date == today - dt.timedelta(days=1) and now.hour < LATE_GRACE_HOURS
 
 
 def drop_stale(sb, rows, price_date):
@@ -108,7 +127,32 @@ def build_report(sb, price_date, window):
     hist = digest.fetch_history(sb, pids, since)
     standings = {k: s for k, s in ((k, digest.price_standing(p)) for k, p in hist.items()) if s}
     embed = digest.build_embed(price_date, window, risers, fallers, standings)
-    return embed if embed.get("fields") else None
+    if not embed.get("fields"):
+        return None
+    return dress_report(embed, price_date, window, risers, fallers, standings)
+
+
+def dress_report(embed, price_date, window, risers, fallers, standings):
+    """The digest's embed, dressed for a server channel: the card the report
+    leads with as its picture, a title that says when a WEEKLY report covers
+    a week, and a footer naming the command that put it there — so a member
+    who has never seen it knows where it comes from. Only the wrapper changes;
+    the digest's own layout (shared with the site's webhook) is untouched."""
+    out = dict(embed)
+    if window != "1d":
+        out["title"] = f"Lorcana movers — week to {price_date:%b} {price_date.day}, {price_date:%Y}"
+
+    def worth(r):
+        s = standings.get((r.get("tcgplayer_product_id"), r.get("printing") or "Normal"))
+        return bool(s) and s[0] in ("low", "near-low")
+
+    lead = next((r for r in fallers if worth(r)), None) or (risers[0] if risers else None) or (fallers[0] if fallers else None)
+    pid = lead and lead.get("tcgplayer_product_id")
+    if pid:
+        out["thumbnail"] = {"url": f"https://tcgplayer-cdn.tcgplayer.com/product/{int(pid)}_in_1000x1000.jpg"}
+    foot = (out.get("footer") or {}).get("text") or ""
+    out["footer"] = {"text": (foot + " · " if foot else "") + "posted by the packs.ink bot — /reports"}
+    return out
 
 
 def post(token, channel_id, embed, session=requests):
@@ -120,7 +164,7 @@ def post(token, channel_id, embed, session=requests):
     )
 
 
-def run(args, sb=None, session=requests, today=None):
+def run(args, sb=None, session=requests, now=None):
     token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
     if args.post and not token:
         print("No DISCORD_BOT_TOKEN set — nothing can be posted. Exiting 0.")
@@ -134,12 +178,12 @@ def run(args, sb=None, session=requests, today=None):
         print("No servers have asked for reports. Exiting 0.")
         return 0
     price_date = digest.latest_price_date(sb)
-    today = today or dt.datetime.now(dt.timezone.utc).date()
+    now = now or dt.datetime.now(dt.timezone.utc)
     if not price_date:
         print("No price date available; refusing to post.")
         return 0
-    if price_date != today and not args.allow_stale:
-        print(f"Newest price date is {price_date}, not {today} — the ETL has not landed yet. Skipping.")
+    if not fresh_enough(price_date, now) and not args.allow_stale:
+        print(f"Newest price date is {price_date}, too old at {now:%Y-%m-%d %H:%M} UTC — today's ETL has not landed yet. Skipping.")
         return 0
 
     owed = [s for s in subs if due(s, price_date, args.force_weekly)]

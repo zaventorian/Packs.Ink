@@ -90,6 +90,27 @@ const varWords = (label) => tokens(label).filter((t) => !STOP.has(t) && !GENERIC
 // only ever match exactly.
 const FIELD_W = { C: 1, J: 1, V: 0.92, A: 0.9, X: 0.36 };
 
+// Which of a-z (lo) and 0-9 (hi) a token contains. One edit changes that set
+// by at most two symbols (a substitution drops one and adds one; a
+// transposition changes nothing), so two tokens whose sets differ by more
+// than 2k symbols cannot be within k edits — a test that costs two XORs,
+// where the edit distance it saves costs a table. It only ever skips words
+// dl() would have rejected, so no answer changes.
+export function letterMask(t) {
+  let lo = 0, hi = 0;
+  for (let i = 0; i < t.length; i++) {
+    const c = t.charCodeAt(i);
+    if (c >= 97 && c <= 122) lo |= 1 << (c - 97);
+    else if (c >= 48 && c <= 57) hi |= 1 << (c - 48);
+  }
+  return [lo, hi];
+}
+export function popcount(x) {
+  x -= (x >>> 1) & 0x55555555;
+  x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
+  return (((x + (x >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24;
+}
+
 export function createResolver(index) {
   const sets = index.sets || [];
   const cards = index.cards || [];
@@ -147,7 +168,7 @@ export function createResolver(index) {
     const charSig = ct.filter((t) => !STOP.has(t));
     meta[i] = {
       ct, vt, charSig: charSig.length ? charSig : ct, verSig: sigV,
-      nameN: norm(c.n), rar, sets: setsOf, inks: new Set(c.i || []), nums,
+      nameN: norm(c.n), charN: norm(c.c), rar, sets: setsOf, inks: new Set(c.i || []), nums,
     };
   }
   const idf = (tok) => Math.log(1 + N / (df.get(tok) || 1));
@@ -158,13 +179,27 @@ export function createResolver(index) {
   for (const [t, posts] of vocab) if (posts.some((p) => p.f !== "A")) fuzzToks.push(t);
   const sorted = fuzzToks.sort();
   const byLen = new Map();
-  for (const t of sorted) { let b = byLen.get(t.length); if (!b) { b = []; byLen.set(t.length, b); } b.push(t); }
+  for (const t of sorted) {
+    let b = byLen.get(t.length);
+    if (!b) { b = { toks: [], lo: [], hi: [] }; byLen.set(t.length, b); }
+    const [lo, hi] = letterMask(t);
+    b.toks.push(t); b.lo.push(lo); b.hi.push(hi);
+  }
   const lowerBound = (s) => { let lo = 0, hi = sorted.length; while (lo < hi) { const m = (lo + hi) >> 1; if (sorted[m] < s) lo = m + 1; else hi = m; } return lo; };
 
+  // Popularity never changes after startup, so the priors are computed once
+  // here rather than for every candidate of every query.
   const maxPl = Math.max(1, ...cards.map((c) => c.pl || 0));
   const maxGs = Math.max(1, ...cards.map((c) => c.gs || 0));
-  const playPrior = (c) => Math.log1p(c.pl || 0) / Math.log1p(maxPl);
-  const collPrior = (c) => Math.log1p(c.gs || 0) / Math.log1p(maxGs);
+  const playP = cards.map((c) => Math.log1p(c.pl || 0) / Math.log1p(maxPl));
+  const collP = cards.map((c) => Math.log1p(c.gs || 0) / Math.log1p(maxGs));
+
+  // Every version of a character, most-played first — what "the other
+  // versions" menu lists. Sorted once (stable, so ties keep index order);
+  // leaving one card out of a stably sorted list keeps everyone else's order.
+  const byChar = new Map();
+  meta.forEach((m, i) => { let g = byChar.get(m.charN); if (!g) { g = []; byChar.set(m.charN, g); } g.push(i); });
+  for (const g of byChar.values()) g.sort((a, b) => (cards[b].pl || 0) - (cards[a].pl || 0) || (cards[b].gs || 0) - (cards[a].gs || 0));
 
   // ── dimension phrase table ────────────────────────────────────────────
   // phrase (normalised) -> {type, value, soft}. A single word that is also a
@@ -272,10 +307,19 @@ export function createResolver(index) {
     }
     // Typos: 1 edit from 4 letters, 2 from 6.
     const maxD = t.length >= 6 ? 2 : t.length >= 4 ? 1 : 0;
-    for (let L = t.length - maxD; L <= t.length + maxD && maxD; L++) {
-      for (const v of byLen.get(L) || []) {
-        const d = dl(t, v, maxD);
-        if (d >= 1 && d <= maxD) put2(v, d === 1 ? 0.8 : t.length >= 8 ? 0.6 : 0.55);
+    if (maxD) {
+      const [tlo, thi] = letterMask(t);
+      const lim = 2 * maxD;
+      for (let L = t.length - maxD; L <= t.length + maxD; L++) {
+        const b = byLen.get(L);
+        if (!b) continue;
+        const { toks, lo, hi } = b;
+        for (let k = 0; k < toks.length; k++) {
+          if (popcount(lo[k] ^ tlo) + popcount(hi[k] ^ thi) > lim) continue;
+          const v = toks[k];
+          const d = dl(t, v, maxD);
+          if (d >= 1 && d <= maxD) put2(v, d === 1 ? 0.8 : t.length >= 8 ? 0.6 : 0.55);
+        }
       }
     }
     // Still typing AND already mistyped: "mogl" against "mowgli". Same first
@@ -404,16 +448,24 @@ export function createResolver(index) {
     return { printing: best, fi };
   }
 
-  function rankCards(name, dims, opts = {}) {
+  function rankAll(name, dims, opts = {}) {
     const scored = scoreName(name, opts);
     const collector = isCollector(dims);
     for (const r of scored) {
-      const c = cards[r.i];
-      r.prior = collector ? 0.03 * playPrior(c) + 0.1 * collPrior(c) : 0.12 * playPrior(c) + 0.03 * collPrior(c);
+      r.prior = collector ? 0.03 * playP[r.i] + 0.1 * collP[r.i] : 0.12 * playP[r.i] + 0.03 * collP[r.i];
       r.rank = r.score + r.prior;
     }
-    scored.sort((a, b) => b.rank - a.rank);
     return scored;
+  }
+  function rankCards(name, dims, opts = {}) {
+    return rankAll(name, dims, opts).sort((a, b) => b.rank - a.rank);
+  }
+  // rankCards(...)[0] without sorting every candidate: the FIRST of the
+  // highest rank, which is what a stable sort puts first.
+  function topCard(name, dims, opts = {}) {
+    let best = null;
+    for (const r of rankAll(name, dims, opts)) if (!best || r.rank > best.rank) best = r;
+    return best;
   }
 
   function applyDims(list, dims, notes) {
@@ -529,8 +581,9 @@ export function createResolver(index) {
     for (let k = notes.length - 1; k >= 0; k--) if (notes.indexOf(notes[k]) !== k) notes.splice(k, 1);
     // Other versions of the same character first (by popularity), then other
     // close matches; the card's own other printings are offered separately.
-    const sameChar = pick.ranked.filter((r) => r.i !== best.i && norm(cards[r.i].c) === norm(c.c));
-    const others = pick.ranked.filter((r) => r.i !== best.i && norm(cards[r.i].c) !== norm(c.c) && r.score >= best.score * 0.8);
+    const charN = meta[best.i].charN;
+    const sameChar = pick.ranked.filter((r) => r.i !== best.i && meta[r.i].charN === charN);
+    const others = pick.ranked.filter((r) => r.i !== best.i && meta[r.i].charN !== charN && r.score >= best.score * 0.8);
     const ambiguous = sameChar.length > 0 && best.verCov === 0 && sameChar.some((r) => Math.abs(r.score - best.score) < 0.05);
     return {
       kind: "card", card: c, index: best.i, printing, fi, dims: pick.dims, notes,
@@ -548,9 +601,7 @@ export function createResolver(index) {
   cards.forEach((c, i) => c.p.forEach((p) => byCardId.set(p.id, { i, p })));
   const sealedByPid = new Map(sealed.map((p, k) => [String(p.pid), k]));
   function sameCharAlts(i) {
-    const key = norm(cards[i].c);
-    return cards.map((x, j) => j).filter((j) => j !== i && norm(cards[j].c) === key)
-      .sort((a, b) => (cards[b].pl || 0) - (cards[a].pl || 0) || (cards[b].gs || 0) - (cards[a].gs || 0)).slice(0, 24);
+    return (byChar.get(meta[i].charN) || []).filter((j) => j !== i).slice(0, 24);
   }
   const cardKey = (p, fi) => "c|" + p.id + "|" + ((p.f[fi] || p.f[0] || ["N"])[0]);
   const sealedKey = (it) => "s|" + it.pid;
@@ -654,6 +705,36 @@ export function createResolver(index) {
     const { A } = parse(raw);
     const toks = A.name;
     const cache = new Map();
+    // What each word can contribute to ANY card's coverage: its weight when
+    // it can match cleanly, 0 when it can't. A word with no match at all
+    // adds nothing to any card; a short word that only matches loosely makes
+    // whichever card it matches "looseShort", which is rejected below — so a
+    // winning card must leave it out. Summed over a window, that is a ceiling
+    // on the coverage any card can reach, and a window whose ceiling is under
+    // the 0.9 a clean match needs is skipped before it is scored. Ordinary
+    // chat is mostly such windows. Same weights scoreName uses.
+    const wordCache = new Map();
+    const wordInfo = (t) => {
+      let w = wordCache.get(t);
+      if (w) return w;
+      const exps = expand(t, false, cache);
+      let best = null, bq = 0, exact = false;
+      for (const [tok, q] of exps) { if (q > bq) { bq = q; best = tok; } if (q >= 1) exact = true; }
+      const weight = STOP.has(t) ? 0.12 : best ? Math.min(3, idf(best)) : 1.2;
+      const usable = exps.size > 0 && (exact || t.length >= 6);
+      w = { weight, usable };
+      wordCache.set(t, w);
+      return w;
+    };
+    const couldBeClean = (words) => {
+      let total = 0, possible = 0;
+      for (const t of joinPairs(words)) {
+        const w = wordInfo(t);
+        total += w.weight;
+        if (w.usable) possible += w.weight;
+      }
+      return total > 0 && possible / total >= 0.9 - 1e-9;
+    };
     const hits = [];
     for (let len = Math.min(6, toks.length); len >= 1; len--) {
       for (let s = 0; s + len <= toks.length; s++) {
@@ -661,8 +742,8 @@ export function createResolver(index) {
         const words = win.filter((t) => !FILLER.has(t));
         if (!words.length || words.every((t) => STOP.has(t))) continue;
         if (STOP.has(words[0]) && len > 1) continue;   // let the shorter window own it
-        const ranked = rankCards(words, A.dims, { cache });
-        const top = ranked[0];
+        if (!couldBeClean(words)) continue;
+        const top = topCard(words, A.dims, { cache });
         if (!top) continue;
         const m = meta[top.i];
         const strong = top.coverage >= 0.9 && (top.charCov >= 0.99 || top.verCov >= 0.99);
@@ -710,6 +791,43 @@ export function createResolver(index) {
     });
   }
 
+  // ── sets ──────────────────────────────────────────────────────────────
+  // "/set hyperia", "set 5", "azurite", "rotf", "ursulas return": the set's
+  // index, or -1. The names and nicknames are the same phrase table the card
+  // lookup filters with, so a set is called the same thing in both places.
+  function setScore(q, p) {
+    if (p === q) return 2;
+    if (p.startsWith(q)) return 1 + q.length / p.length / 10;
+    if (q.length >= 4 && p.includes(q)) return 0.7 + q.length / p.length / 10;
+    const d = dl(q, p, q.length >= 8 ? 2 : 1);
+    return d <= (q.length >= 8 ? 2 : 1) && q.length >= 4 ? 0.8 - d * 0.1 : 0;
+  }
+  function resolveSet(raw) {
+    const q = norm(String(raw || "").replace(/^set\s+(?=\D)/i, ""));
+    if (!q) return -1;
+    let best = -1, bestScore = 0;
+    for (const [p, ph] of phrases) {
+      if (ph.type !== "set") continue;
+      const s = setScore(q, p);
+      if (s > bestScore) { bestScore = s; best = ph.value; }
+    }
+    return best;
+  }
+  // Autocomplete for a set option: booster sets newest first when nothing is
+  // typed, otherwise the best matches.
+  function suggestSets(raw, limit = 25) {
+    const q = norm(raw);
+    const order = sets.map((s, i) => i).sort((a, b) => (sets[b].main || 0) - (sets[a].main || 0) || a - b);
+    if (!q) return order.slice(0, limit);
+    const scored = new Map();
+    for (const [p, ph] of phrases) {
+      if (ph.type !== "set") continue;
+      const s = setScore(q, p);
+      if (s > 0 && s > (scored.get(ph.value) || 0)) scored.set(ph.value, s);
+    }
+    return [...scored.entries()].sort((a, b) => b[1] - a[1] || (sets[b[0]].main || 0) - (sets[a[0]].main || 0)).map((e) => e[0]).slice(0, limit);
+  }
+
   // ── labels ────────────────────────────────────────────────────────────
   const money = (v) => (v == null ? null : v >= 1000 ? "$" + Math.round(v).toLocaleString("en-US") : "$" + Number(v).toFixed(2));
   function finishLabel(p, fi) {
@@ -737,7 +855,7 @@ export function createResolver(index) {
   }
 
   return {
-    resolve, suggest, findInText, parse, cardLabel, sealedLabel, finishLabel, sameCharAlts,
+    resolve, suggest, findInText, parse, cardLabel, sealedLabel, finishLabel, sameCharAlts, resolveSet, suggestSets,
     pickPrinting: (i, dims = {}, words = []) => pickPrinting(cards[i], dims, [], words),
     cardKey, sealedKey, cards, sets, sealed, byCardId, sealedByPid, newestMainIdx, meta,
   };

@@ -7,6 +7,9 @@
 import * as E from "./embeds.js";
 import * as D from "./data.js";
 import { parseDeckList, looksLikeDeck, priceDeck } from "./deck.js";
+import { parseTradePost, priceTrade, tradeMessage, tradeModal, tradeSiteUrl } from "./trade.js";
+import { setOverview, setMessage, openPacks, packMessage, parsePackId, newCards, newCardsMessage, freshRevealRows } from "./set.js";
+import { CALENDAR_REGIONS } from "./site.generated.js";
 
 export const T = { PING: 1, COMMAND: 2, COMPONENT: 3, AUTOCOMPLETE: 4, MODAL_SUBMIT: 5 };
 export const R_ = { PONG: 1, MESSAGE: 4, DEFERRED: 5, DEFERRED_UPDATE: 6, AUTOCOMPLETE: 8, MODAL: 9 };
@@ -34,6 +37,10 @@ function autocomplete(it, { R }) {
   const focused = (it.data.options || []).find((o) => o.focused)
     || (it.data.options || []).flatMap((o) => o.options || []).find((o) => o.focused);
   const q = focused ? String(focused.value || "") : "";
+  if (focused && focused.name === "set") {
+    const choices = R.suggestSets(q, 25).map((si) => ({ name: setChoiceLabel(R.sets[si]).slice(0, 100), value: R.sets[si].n.slice(0, 100) }));
+    return { type: R_.AUTOCOMPLETE, data: { choices } };
+  }
   const choices = R.suggest(q, 25).map((s) => ({ name: s.label.slice(0, 100), value: s.value.slice(0, 100) }));
   return { type: R_.AUTOCOMPLETE, data: { choices } };
 }
@@ -50,14 +57,29 @@ function command(it, deps) {
     case "movers": return deferred(it, deps, priv, () => movers(o, deps));
     case "events": return deferred(it, deps, priv, () => events(o, deps));
     case "calendar": return deferred(it, deps, priv, () => calendar(deps));
-    case "help": return { type: R_.MESSAGE, data: { ...E.helpMessage(), flags: EPHEMERAL, allowed_mentions: QUIET } };
+    case "meta": return deferred(it, deps, priv, () => meta(deps));
+    case "new": return deferred(it, deps, priv, () => newReply(deps));
+    case "help": return { type: R_.MESSAGE, data: { ...E.helpMessage(deps.commandIds), flags: EPHEMERAL, allowed_mentions: QUIET } };
     // A decklist has line breaks, which a slash-command option cannot hold —
     // so /deck opens a text box instead.
     case "deck": return { type: R_.MODAL, data: E.deckModal(priv) };
+    // Both sides typed inline ("give: 2 mowgli, $20") answer at once; anything
+    // less opens the box, holding whatever was typed. Prices come from the
+    // index, so there is nothing to wait for.
+    case "trade": {
+      const give = String(optVal(o, "give", "")).trim(), get = String(optVal(o, "get", "")).trim();
+      if (!give || !get) return { type: R_.MODAL, data: tradeModal(priv, give, get) };
+      return { type: R_.MESSAGE, data: { ...tradeReply(give, get, "you", deps), allowed_mentions: QUIET, ...(priv ? { flags: EPHEMERAL } : {}) } };
+    }
     case "reports": return deferred(it, deps, true, () => reports(it, deps));
+    // Both answer from the index alone, so at once.
+    case "set": return instant(setReply(String(optVal(o, "set", "")), deps), priv);
+    case "open": return instant(packReply(String(optVal(o, "set", "")), optVal(o, "box", false) ? 24 : 1, it, deps), priv);
     default: return { type: R_.MESSAGE, data: { content: "Unknown command.", flags: EPHEMERAL } };
   }
 }
+
+const instant = (payload, ephemeral) => ({ type: R_.MESSAGE, data: { ...payload, allowed_mentions: QUIET, ...(ephemeral ? { flags: EPHEMERAL } : {}) } });
 
 // Answer "thinking…" now; build the real message after.
 function deferred(it, deps, ephemeral, build) {
@@ -81,25 +103,55 @@ function deferredUpdate(it, deps, build) {
       deps.log && deps.log("component failed", e && e.stack || e);
       return;   // leave the message as it was rather than replace it with an error
     }
-    await patchOriginal(it, deps, payload);
+    await patchOriginal(it, deps, payload, { update: true });
   })());
   return { type: R_.DEFERRED_UPDATE };
 }
 
-async function patchOriginal(it, deps, payload) {
-  const url = `${deps.discordApi || DISCORD_API}/webhooks/${deps.appId || it.application_id}/${it.token}/messages/@original`;
-  const r = await deps.fetch(url, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ allowed_mentions: QUIET, ...payload }),
+const webhookUrl = (it, deps) => `${deps.discordApi || DISCORD_API}/webhooks/${deps.appId || it.application_id}/${it.token}`;
+
+async function patchOriginal(it, deps, payload, { update = false } = {}) {
+  const send = (method, url, body) => deps.fetch(url, {
+    method, headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ allowed_mentions: QUIET, ...body }),
   });
-  if (!r.ok && deps.log) deps.log("patch failed", r.status, await r.text().catch(() => ""));
+  const r = await send("PATCH", webhookUrl(it, deps) + "/messages/@original", payload);
+  if (r.ok) return;
+  if (deps.log) deps.log("patch failed", r.status, (await r.text().catch(() => "")).slice(0, 800));
+  // ⚠ A 400 is Discord refusing the SHAPE of the reply (a limit, a field it
+  // won't take). Left there, the person who asked sees "thinking…" forever —
+  // the worst answer the bot can give. So the same content goes again as
+  // plain text, which has one limit (2000 characters) and nothing to refuse.
+  // A button's update that fails leaves the old message standing; the plain
+  // version then goes to the clicker alone, as a private follow-up.
+  if (r.status !== 400) return;
+  const plain = plainFallback(payload);
+  const r2 = update
+    ? await send("POST", webhookUrl(it, deps), { ...plain, flags: EPHEMERAL })
+    : await send("PATCH", webhookUrl(it, deps) + "/messages/@original", plain);
+  if (!r2.ok && deps.log) deps.log("fallback failed", r2.status);
+}
+
+// A reply reduced to text: every embed's title, lines and fields, no
+// components. Markdown links survive (message content takes them too).
+export function plainFallback(payload) {
+  const out = [];
+  if (payload && payload.content) out.push(String(payload.content));
+  for (const e of (payload && payload.embeds) || []) {
+    if (e.title) out.push("**" + e.title + "**" + (e.url && /^https:\/\//.test(e.url) ? ` — <${e.url}>` : ""));
+    if (e.description) out.push(e.description);
+    for (const f of e.fields || []) out.push(`**${f.name}** ${String(f.value).replace(/\n/g, " · ")}`);
+    if (e.footer && e.footer.text) out.push("-# " + e.footer.text);
+  }
+  let text = out.join("\n").trim() || "Here's what I found, but Discord wouldn't show it — try again in a moment.";
+  if (text.length > 2000) text = text.slice(0, 1990).replace(/\n[^\n]*$/, "") + "\n…";
+  return { content: text, embeds: [], components: [] };
 }
 
 // ── /card and /price ─────────────────────────────────────────────────────
 export async function lookup(query, view, range, deps) {
   const res = deps.R.resolve(query);
-  if (res.kind === "none") return E.notFoundMessage(deps.R, res, query);
+  if (res.kind === "none") return E.notFoundMessage(deps.R, res, query, deps.commandIds);
   if (!D.RANGES[range]) range = D.DEFAULT_RANGE;
   return res.kind === "sealed"
     ? sealedPayload(res, { view, range }, deps)
@@ -138,7 +190,7 @@ export async function cardPayload(res, { view, range, query }, deps) {
     raw: D.rawRowFor(rawRows || [], printingStr),
     rawTarget: { cardId: gt.cardId, bucket: rawSingle ? "" : gt.bucket },
     grade, gradedTarget: { cardId: gt.cardId, bucket: single ? "" : gt.bucket },
-    origin: deps.origin, inkColors: deps.index.inkColors,
+    origin: deps.origin, inkColors: deps.index.inkColors, playDecks: deps.index.playDecks,
   });
 }
 
@@ -147,16 +199,34 @@ async function sealedPayload(res, { view, range }, deps) {
   return E.sealedMessage({ R: deps.R, res, price, view, range, origin: deps.origin });
 }
 
+// ── /trade ───────────────────────────────────────────────────────────────
+export function tradeReply(give, get, mode, deps) {
+  const t = priceTrade(deps.R, give, get);
+  const names = mode === "post" ? ["Has", "Wants"] : ["You give", "You get"];
+  return tradeMessage(t, { mode, priceDate: deps.index.priceDate, siteUrl: tradeSiteUrl(deps.R, t, names) });
+}
+
 // ── "Price check" on a message ───────────────────────────────────────────
+// Searching free text for card names is read only this far: every window of
+// it is a candidate name, and the free plan gives a request 10 ms of CPU. A
+// trade post or a decklist is parsed line by line under its own caps, so it
+// gets the whole message.
+const PRICE_CHECK_MAX_CHARS = 1200;
 async function priceCheck(it, deps) {
   const msg = it.data.resolved && it.data.resolved.messages && it.data.resolved.messages[it.data.target_id];
   const text = [msg && msg.content, ...((msg && msg.embeds) || []).map((e) => [e.title, e.description].filter(Boolean).join(" "))]
-    .filter(Boolean).join("\n");
+    .filter(Boolean).join("\n").slice(0, 6000);
+  // A trade post ("H: … W: …") is priced as a TRADE: both sides, compared.
+  const post = parseTradePost(text);
+  if (post) {
+    const m = tradeReply(post.has, post.wants, "post", deps);
+    if (m.embeds[0].fields.every((f) => !/\*nothing I recognised\*/.test(f.value))) return m;
+  }
   // A posted decklist is priced as a DECK, not as the first three names in it.
   if (looksLikeDeck(text)) {
-    return E.deckMessage({ result: priceDeck(deps.R, parseDeckList(text)), priceDate: deps.index.priceDate });
+    return E.deckMessage({ result: priceDeck(deps.R, parseDeckList(text)), priceDate: deps.index.priceDate, tcgNames: E.tcgNameMap(deps.index.tcgNames) });
   }
-  const found = deps.R.findInText(text, 3).filter((r) => r.kind === "card" || r.kind === "sealed");
+  const found = deps.R.findInText(text.slice(0, PRICE_CHECK_MAX_CHARS), 3).filter((r) => r.kind === "card" || r.kind === "sealed");
   if (!found.length) {
     return { content: "No Lorcana cards in that message that I can recognise. Try `/price` with the name.", embeds: [], components: [] };
   }
@@ -180,23 +250,66 @@ async function priceCheck(it, deps) {
 
 // ── /deck's text box ─────────────────────────────────────────────────────
 // Everything it needs is in the card index, so it answers at once.
+// Rows come back as sent (action rows); a Label wrapper holds one `component`.
+const modalValue = (it, id) => {
+  const c = (it.data.components || []).flatMap((r) => r.components || (r.component ? [r.component] : [])).find((x) => x.custom_id === id);
+  return c && c.value != null ? String(c.value) : "";
+};
 function modalSubmit(it, deps) {
+  const tr = /^trade\|([p-])$/.exec(it.data.custom_id || "");
+  if (tr) {
+    const msg = tradeReply(modalValue(it, "give"), modalValue(it, "get"), "you", deps);
+    return { type: R_.MESSAGE, data: { ...msg, allowed_mentions: QUIET, ...(tr[1] === "p" ? { flags: EPHEMERAL } : {}) } };
+  }
   const m = /^deck\|([p-])$/.exec(it.data.custom_id || "");
   if (!m) return { type: R_.MESSAGE, data: { content: "That form has expired.", flags: EPHEMERAL } };
-  // Rows come back as sent (action rows); a Label wrapper holds one `component`.
-  const input = (it.data.components || []).flatMap((r) => r.components || (r.component ? [r.component] : [])).find((c) => c.custom_id === "list");
-  const entries = parseDeckList(input ? input.value : "");
+  const entries = parseDeckList(modalValue(it, "list"));
   if (!entries.length) {
     return { type: R_.MESSAGE, data: { flags: EPHEMERAL, allowed_mentions: QUIET,
       content: "That doesn't look like a decklist — one card per line with its count, like `4 Mowgli - Man Cub`." } };
   }
-  const msg = E.deckMessage({ result: priceDeck(deps.R, entries), priceDate: deps.index.priceDate });
+  const msg = E.deckMessage({ result: priceDeck(deps.R, entries), priceDate: deps.index.priceDate, tcgNames: E.tcgNameMap(deps.index.tcgNames) });
   return { type: R_.MESSAGE, data: { ...msg, allowed_mentions: QUIET, ...(m[1] === "p" ? { flags: EPHEMERAL } : {}) } };
 }
 
 // ── buttons + menus ──────────────────────────────────────────────────────
 function component(it, deps) {
   const id = it.data.custom_id;
+  const mv = E.parseMoversId(id);
+  if (mv) {
+    if (id.startsWith("m|g|")) {
+      const g = (it.data.values || [])[0];
+      if (!D.MOVER_GROUPS[g]) return { type: R_.DEFERRED_UPDATE };
+      mv.group = g;
+    }
+    return deferredUpdate(it, deps, () => moversBoard(mv, deps));
+  }
+  // /help's "Try it" buttons: the real reply, shown only to whoever asked.
+  const tryWhat = E.parseHelpTryId(id);
+  if (tryWhat) return helpTry(tryWhat, it, deps);
+  // "Open another pack" / "Open a box": a NEW message each time, so every
+  // opening stands — private when the one it came from was.
+  const pk2 = parsePackId(id);
+  if (pk2) {
+    const eph = it.message && (Number(it.message.flags) & EPHEMERAL);
+    const set = deps.R.sets[pk2.si];
+    if (!set) return { type: R_.MESSAGE, data: { content: "That set is gone from the catalog.", flags: EPHEMERAL } };
+    return instant(packReply(set.n, pk2.n, it, deps), eph);
+  }
+  const cal = E.parseCalendarId(id);
+  if (cal) {
+    if (id.startsWith("cl|r|")) {
+      const r = (it.data.values || [])[0];
+      if (!(r === "all" || CALENDAR_REGIONS.some((x) => x.key === r))) return { type: R_.DEFERRED_UPDATE };
+      cal.region = r;
+    }
+    return deferredUpdate(it, deps, () => calendar(deps, cal.kind, cal.region));
+  }
+  const ev = E.parseEventsId(id);
+  if (ev) {
+    const place = { lat: ev.lat, lng: ev.lng, city: ev.label };
+    return deferredUpdate(it, deps, () => eventsBoard({ place, radius: ev.radius, kind: ev.kind, query: ev.label }, deps));
+  }
   const rg = E.parseRangeId(id);
   if (rg) return deferredUpdate(it, deps, () => byKey(rg.key, rg.view, rg.range, deps, rg.grade));
   const pk = E.parsePickId(id);
@@ -204,6 +317,14 @@ function component(it, deps) {
     const key = (it.data.values || [])[0];
     if (!key) return { type: R_.DEFERRED_UPDATE };
     return deferredUpdate(it, deps, () => byKey(key, pk.view === "graded" ? "chart" : pk.view, pk.range, deps));
+  }
+  // "Look at a card" from a trade, deck, set or movers list: a NEW reply that
+  // only the person who asked sees, so the list stays put for everyone else.
+  const op = E.parseOpenId(id);
+  if (op) {
+    const key = (it.data.values || [])[0];
+    if (!key) return { type: R_.DEFERRED_UPDATE };
+    return deferred(it, deps, true, () => byKey(key, op.view, D.DEFAULT_RANGE, deps));
   }
   return { type: R_.MESSAGE, data: { content: "That button has expired.", flags: EPHEMERAL } };
 }
@@ -220,30 +341,59 @@ async function byKey(key, view, range, deps, grade) {
 
 // ── /movers ──────────────────────────────────────────────────────────────
 async function movers(o, deps) {
-  const win = String(optVal(o, "window", "1d"));
-  const dir = String(optVal(o, "direction", "up"));
-  const group = String(optVal(o, "rarity", "all"));
-  const basis = String(optVal(o, "basis", "market"));
-  const min = Math.max(0, Number(optVal(o, "min_price", 5)) || 0);
-  const result = await D.fetchMovers(deps.db, { win, dir, group, basis, min, limit: 10 });
-  return E.moversMessage({ result, win, dir, group, basis, min, R: deps.R });
+  return moversBoard({
+    win: String(optVal(o, "window", "1d")),
+    dir: String(optVal(o, "direction", "up")),
+    group: String(optVal(o, "rarity", "all")),
+    basis: String(optVal(o, "basis", "market")),
+    min: Math.round(Math.min(10000, Math.max(0, Number(optVal(o, "min_price", 5)) || 0)) * 100) / 100,
+  }, deps);
+}
+// One board for the command and every button on it.
+async function moversBoard(s, deps) {
+  if (!D.MOVER_WINDOWS[s.win]) s.win = "1d";
+  if (!D.MOVER_GROUPS[s.group]) s.group = "all";
+  const result = D.MOVER_GROUPS[s.group].sealed
+    ? D.sealedMovers(deps.index, { ...s, limit: 10 })
+    : await D.fetchMovers(deps.db, { win: s.win, dir: s.dir, group: s.group, basis: s.basis, min: s.min, limit: 10 });
+  return E.moversMessage({ result, ...s, R: deps.R });
 }
 
 // ── /events ──────────────────────────────────────────────────────────────
 async function events(o, deps) {
   const near = String(optVal(o, "near", "")).trim();
   const radius = Math.min(250, Math.max(5, Number(optVal(o, "radius", 50)) || 50));
-  const kind = String(optVal(o, "kind", "all"));
+  const kind = D.EVENT_KINDS.includes(String(optVal(o, "kind", "all"))) ? String(optVal(o, "kind", "all")) : "all";
   const place = await D.resolvePlace(deps.db, near);
   if (!place) return { content: `Couldn't place “${near.slice(0, 60)}”. Try a postal code, or a town name.`, embeds: [], components: [] };
-  const series = await D.nearbyEvents(deps.db, place, { radius, kind });
-  return E.eventsMessage({ place, series, radius, kind });
+  return eventsBoard({ place, radius, kind, query: near }, deps);
+}
+async function eventsBoard({ place, radius, kind, query }, deps) {
+  const byKind = await D.nearbyByKind(deps.db, place, { radius, kind });
+  return E.eventsMessage({ place, byKind, radius, kind, query });
+}
+
+// ── /new ─────────────────────────────────────────────────────────────────
+// The reel from the index plus whatever reached the catalog since it was
+// built. If that read fails the reply comes from the index alone — a day
+// behind at worst, never nothing.
+async function newReply(deps) {
+  const now = Date.now();
+  const fresh = await freshRevealRows(deps.db, deps.R, deps.index, now)
+    .catch((e) => { deps.log && deps.log("new: fresh reveals failed", e && e.message); return []; });
+  return newCardsMessage(deps.R, deps.index, newCards(deps.R, deps.index, now, fresh), { origin: deps.origin, now });
+}
+
+// ── /meta ────────────────────────────────────────────────────────────────
+async function meta(deps) {
+  const results = await D.recentResults(deps.db, { events: 3, places: 4 }).catch((e) => { deps.log && deps.log("results failed", e && e.message); return []; });
+  return E.metaMessage({ R: deps.R, index: deps.index, results });
 }
 
 // ── /calendar ────────────────────────────────────────────────────────────
-async function calendar(deps) {
+async function calendar(deps, kind = "all", region = "all") {
   const all = await D.calendarEvents(deps.db);
-  return E.calendarMessage({ events: D.upcoming(all, 10) });
+  return E.calendarMessage({ events: D.upcomingFiltered(all, { kind, region, n: 12 }), kind, region, regions: CALENDAR_REGIONS });
 }
 
 // ── /reports (server managers) ───────────────────────────────────────────
@@ -282,4 +432,43 @@ async function reports(it, deps) {
   }], "guild_id,channel_id,cadence");
   return { content: `Done — a ${sub.name} movers report will post in <#${channel}> ${CADENCE[sub.name]}. ` +
     "The bot needs to be in this server with permission to send messages and embed links in that channel.", embeds: [], components: [] };
+}
+
+// ── /set and /open ───────────────────────────────────────────────────────
+const setChoiceLabel = (s) => [s.n, s.main ? `Set ${s.main}` : null, s.rel && s.rel.lgs ? E.shortDate(s.rel.lgs) : null].filter(Boolean).join(" · ");
+// No name: the newest booster set — for /open the newest one that is OUT, since
+// a pack from a set with no prices yet is worth "$0.00" and says nothing.
+function pickSet(R, index, name, { released = false } = {}) {
+  if (name) return R.resolveSet(name);
+  const today = new Date().toISOString().slice(0, 10);
+  const mains = R.sets.map((s, i) => i).filter((i) => R.sets[i].main).sort((a, b) => R.sets[b].main - R.sets[a].main);
+  return (released ? mains.find((i) => !(R.sets[i].rel && R.sets[i].rel.lgs > today)) : mains[0]) ?? -1;
+}
+const noSet = (name) => ({ content: `No set called “${String(name).slice(0, 60)}”. Try a name or a number — \`hyperia city\`, \`azurite\`, \`set 5\`.`, embeds: [], components: [] });
+
+export function setReply(name, deps) {
+  const si = pickSet(deps.R, deps.index, name);
+  if (si < 0) return noSet(name);
+  return setMessage(setOverview(deps.R, deps.index, si), { origin: deps.origin });
+}
+
+export function packReply(name, n, it, deps) {
+  const si = pickSet(deps.R, deps.index, name, { released: true });
+  if (si < 0) return noSet(name);
+  const set = deps.R.sets[si];
+  if (!set.main) return { content: `${set.n} isn't sold in booster packs — try a main set, like \`${deps.index.newestMain}\`.`, embeds: [], components: [] };
+  const u = (it && ((it.member && it.member.user) || it.user)) || {};
+  const who = String(u.global_name || u.username || "").slice(0, 32).replace(/[*_~`|>\\]/g, "\\$&");
+  return packMessage(deps.R, deps.index, si, openPacks(deps.R, si, n), { origin: deps.origin, who });
+}
+
+// ── /help's examples ─────────────────────────────────────────────────────
+const TRY_TRADE = { give: "4 mowgli, 2 be prepared, $10", get: "elsa spirit of winter foil" };
+function helpTry(what, it, deps) {
+  const note = (text, m) => ({ ...m, content: text });
+  if (what === "card") return deferred(it, deps, true, async () => note("Example: `/card mowgli`", await lookup("mowgli", "card", D.DEFAULT_RANGE, deps)));
+  if (what === "movers") return deferred(it, deps, true, async () => note("Example: `/movers` — the buttons change the window and the cards", await moversBoard({ win: "1d", dir: "up", group: "all", basis: "market", min: 5 }, deps)));
+  if (what === "trade") return instant(note(`Example: \`/trade give: ${TRY_TRADE.give} get: ${TRY_TRADE.get}\``, tradeReply(TRY_TRADE.give, TRY_TRADE.get, "you", deps)), true);
+  if (what === "open") return instant(note("Example: `/open` — add `box: True` for a whole box", packReply("", 1, it, deps)), true);
+  return instant(note("Example: `/set`", setReply("", deps)), true);
 }

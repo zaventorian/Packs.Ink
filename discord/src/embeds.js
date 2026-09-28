@@ -1,12 +1,13 @@
 // embeds.js — Discord message payloads. Pure: every function takes data that
 // has already been fetched and returns {embeds, components} JSON, which is what
 // lets the guard test check a reply without a network.
-import { tcgUrl, tcgSetSearchUrl, amazonForSealed, calEventTitle, calEventSubtitle, scLocalTime12 } from "./site.generated.js";
-import { FIN_PRINTING, RANGES, DEFAULT_RANGE, MOVER_WINDOWS, MOVER_GROUPS } from "./data.js";
+import { tcgUrl, tcgSetSearchUrl, amazonForSealed, calEventTitle, calEventSubtitle, scLocalTime12, tcgMassEntryParts, tcgMassName } from "./site.generated.js";
+import { FIN_PRINTING, RANGES, DEFAULT_RANGE, MOVER_WINDOWS, MOVER_GROUPS, CAL_FILTERS } from "./data.js";
 
 export const SITE = "https://packs.ink";
 export const BRAND_COLOR = 0xe3b341;
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
 // ── formatting ───────────────────────────────────────────────────────────
 export function money(v) {
@@ -29,6 +30,20 @@ export const shortDate = (ymd) => {
   return m ? `${MONTHS[+m[2] - 1]} ${+m[3]}` + (new Date().getUTCFullYear() !== +m[1] ? `, ${m[1]}` : "") : "";
 };
 const clip = (s, n) => { s = String(s || ""); return s.length <= n ? s : s.slice(0, n - 1) + "…"; };
+// As many WHOLE lines as fit in `budget` characters, then "…and N more". Any
+// text holding links goes through this, never clip(): a line cut mid-way is a
+// broken markdown link, which Discord shows as raw brackets and a URL.
+export function fitLines(lines, budget, more = (n) => `*…and ${n} more*`) {
+  const out = [];
+  let used = 0;
+  for (const l of lines) {
+    if (used + l.length + 1 > budget - 40) break;
+    out.push(l);
+    used += l.length + 1;
+  }
+  if (out.length < lines.length) out.push(more(lines.length - out.length));
+  return out.join("\n");
+}
 const hex = (h) => { const n = parseInt(String(h || "").replace("#", ""), 16); return Number.isFinite(n) ? n : BRAND_COLOR; };
 export const cardPageUrl = (cardId) => `${SITE}/cards?card=${encodeURIComponent(cardId)}`;
 
@@ -75,6 +90,15 @@ export function parsePickId(id) {
   if (!m || !VIEWS.includes(m[1]) || !RANGES[m[2]]) return null;
   return { view: m[1], range: m[2] };
 }
+// A menu that OPENS a card in a new private reply, where pickId replaces the
+// message it sits on: a trade, a deck, a set's chase list or a movers board
+// must stay where it is when someone looks at one of its cards.
+// A second menu in one message needs its own custom_id, so a number may follow.
+export const openId = (view, n = 0) => (n ? `o|${view}|${n}` : `o|${view}`);
+export function parseOpenId(id) {
+  const m = /^o\|([a-z]+)(?:\|\d)?$/.exec(String(id || ""));
+  return m && VIEWS.includes(m[1]) ? { view: m[1] } : null;
+}
 
 // ── one card ─────────────────────────────────────────────────────────────
 // ctx: { R (resolver), res (resolve() result), price (priceSummary or null),
@@ -102,6 +126,13 @@ export function cardMessage(ctx) {
   if (lead.length) lines.push("*" + lead.join(" ") + "*");
 
   lines.push([set.n, p.no ? "#" + p.no : null, p.r, p.var, fin && fin !== p.var ? fin : null].filter(Boolean).join(" · "));
+  // What a player needs to place the card (its ink, cost, type) and how much
+  // it is played — measured from recent tournament top cuts, the same number
+  // that decides which version "mowgli" means.
+  const ident = gameplayLine(c);
+  if (ident) lines.push(`*${ident}*`);
+  const play = playLine(R, res.index, ctx.playDecks);
+  if (play) lines.push(play);
   lines.push("");
 
   const mkt = price ? price.market : (f ? f[5] : null);
@@ -205,6 +236,42 @@ export function cardMessage(ctx) {
   return { embeds: [embed], components };
 }
 
+// ── a card's identity and play ───────────────────────────────────────────
+// The six inks as Discord's coloured squares: the nearest colour Discord can
+// draw inline, and they read at a glance in a list.
+export const INK_MARK = { Amber: "🟨", Amethyst: "🟪", Emerald: "🟩", Ruby: "🟥", Sapphire: "🟦", Steel: "⬜" };
+export const inkMarks = (inks) => (inks || []).map((k) => INK_MARK[k] || "").join("");
+
+export function gameplayLine(c) {
+  const bits = [];
+  if (c.i && c.i.length) bits.push(`${inkMarks(c.i)} ${c.i.join("/")}`);
+  if (c.cost != null) bits.push(`${c.cost} cost`);
+  if (c.t) bits.push(c.t + (c.k && c.k.length ? " — " + c.k.slice(0, 4).join(", ") : ""));
+  return bits.join(" · ");
+}
+
+// Rank among every card with a recent top-cut appearance, most played first.
+const PLAY_RANK = new WeakMap();
+export function playRankOf(R, i) {
+  let m = PLAY_RANK.get(R);
+  if (!m) {
+    m = new Map();
+    R.cards.map((c, k) => [k, c.pl || 0]).filter((x) => x[1] > 0).sort((a, b) => b[1] - a[1] || a[0] - b[0])
+      .forEach(([k], pos) => m.set(k, pos + 1));
+    PLAY_RANK.set(R, m);
+  }
+  return m.get(i) || null;
+}
+export function playLine(R, i, playDecks) {
+  const c = R.cards[i];
+  const rank = playRankOf(R, i);
+  if (!rank || !(c.pl > 0)) return null;
+  const share = playDecks > 0 ? c.pl / playDecks : null;
+  if (share != null && share < 0.02 && rank > 100) return null;
+  return `🏆 ${share != null && share >= 0.01 ? `In ${Math.round(share * 100)}% of recent tournament top-cut decks` : "Played in recent tournament top cuts"}` +
+    (rank <= 100 ? ` · #${rank} most played` : "");
+}
+
 function footerText(ctx, price) {
   const bits = [];
   if (price && price.date) bits.push(`TCGplayer prices as of ${shortDate(price.date)}`);
@@ -297,11 +364,18 @@ export function sealedMessage(ctx) {
 }
 
 // ── nothing found ────────────────────────────────────────────────────────
-export function notFoundMessage(R, res, query) {
+export function notFoundMessage(R, res, query, ids) {
   const sug = (res.suggestions || []).slice(0, 5);
   const lines = [res.dimsOnly
     ? `“${clip(query, 60)}” narrows it down but doesn't name a card — add the card's name, e.g. \`elsa ${clip(query, 30)}\`.`
     : `No card or product matched “${clip(query, 60)}”.`];
+  // What someone probably meant when the words aren't a card at all.
+  const q = String(query || "").trim();
+  if (/^(?:\d{5}(?:-\d{4})?|[a-z]\d[a-z] ?\d[a-z]\d|[a-z]{1,2}\d[a-z\d]? ?\d[a-z]{2})$/i.test(q)) {
+    lines.push(`Looks like a postal code — for events near there, try ${cmdMention(ids, "events")} \`${clip(q, 12)}\`.`);
+  } else if (R.resolveSet && R.resolveSet(q) >= 0 && /\S/.test(q)) {
+    lines.push(`For a whole set, try ${cmdMention(ids, "set")} \`${clip(q, 30)}\`.`);
+  }
   const embed = { title: "No match", color: 0x6b6480, description: lines.join("\n") };
   const components = [];
   if (sug.length) {
@@ -351,30 +425,84 @@ export function priceCheckMessage({ embeds, options, range = DEFAULT_RANGE }) {
 }
 
 // ── movers ───────────────────────────────────────────────────────────────
+// The board is browsed, not re-typed: every control below redraws THIS
+// message. The state rides in each control's custom_id —
+//   m|<control>|<window>|<up|down>|<group>|<market|low>|<min>
+// ⚠ The <control> letter is what keeps custom_ids unique: the highlighted
+// window button, the highlighted direction and the highlighted basis all
+// describe the CURRENT board, and Discord refuses a message in which two
+// components share a custom_id.
+const MOVER_BUTTON_WINDOWS = ["1d", "1w", "1m", "3m", "1y"];
+export const moversId = (ctl, s) => `m|${ctl}|${s.win}|${s.dir}|${s.group}|${s.basis}|${s.min}`;
+export function parseMoversId(id) {
+  const m = /^m\|([wdbg])\|([a-z0-9]+)\|(up|down)\|([a-z]+)\|(market|low)\|(\d{1,5}(?:\.\d{1,2})?)$/.exec(String(id || ""));
+  if (!m || !MOVER_WINDOWS[m[2]] || !MOVER_GROUPS[m[4]]) return null;
+  return { win: m[2], dir: m[3], group: m[4], basis: m[5], min: Number(m[6]) };
+}
+const SEALED_SINGULAR = {
+  "Booster Boxes": "Booster Box", "Illumineer's Troves": "Trove", "Gift Sets": "Gift Set",
+  "Collector's Edition": "Collector's Edition", "Bundles": "Bundle", "Quests": "Quest",
+};
+const FIN_CODE = { "Normal": "N", "Cold Foil": "C", "Holofoil": "H", "Foil": "F" };
+
 export function moversMessage({ result, win, dir, group, basis, min, R }) {
   const w = MOVER_WINDOWS[win] || MOVER_WINDOWS["1d"];
   const g = MOVER_GROUPS[group] || MOVER_GROUPS.all;
+  const state = { win, dir, group, basis, min };
   const rows = result.rows || [];
-  const title = `${dir === "down" ? "Biggest drops" : "Biggest gains"} · ${w.label} · ${g.label}`;
-  if (!rows.length) {
-    return { embeds: [{ title, color: BRAND_COLOR,
-      description: "Nothing cleared the filters today. Try a longer window, another rarity group, or a lower price floor.",
-      footer: { text: "packs.ink" } }] };
-  }
+  const title = `${dir === "down" ? "Biggest drops" : "Biggest gains"} · ${w.label} · ${g.sealed ? "Sealed product" : g.label}`;
+  const picks = [];
+  let topImg = null;
   const lines = rows.map((r, i) => {
-    const name = r.version ? `${r.name} - ${r.version}` : r.name;
-    const fin = finishWord(R, r);
-    const was = money(r[result.priorCol]), now = money(r[result.todayCol]);
-    return `\`${String(i + 1).padStart(2)}\` **${pct(Number(r[result.col]))}** [${clip(name, 60)}](${buyUrl(name, r.tcgplayer_product_id, r.printing)}) · ${r.rarity}${fin ? " · " + fin : ""} · ${was} → **${now}**`;
+    let name, url, what, was, now, change, key, img;
+    if (result.sealed) {
+      const s = r.s;
+      name = s.n; url = tcgUrl(s.pid, "Normal");
+      what = [SEALED_SINGULAR[s.ty] || s.ty, s.sn].filter(Boolean).join(" · ");
+      was = money(r.prior); now = money(r.now); change = r.pct;
+      key = R.sealedKey(s); img = s.img;
+    } else {
+      name = r.version ? `${r.name} - ${r.version}` : r.name;
+      url = buyUrl(name, r.tcgplayer_product_id, r.printing);
+      const fin = finishWord(R, r);
+      what = r.rarity + (fin ? " · " + fin : "");
+      was = money(r[result.priorCol]); now = money(r[result.todayCol]); change = Number(r[result.col]);
+      key = R.byCardId.has(r.card_id) ? `c|${r.card_id}|${FIN_CODE[r.printing] || "N"}` : null;
+      img = r.tcgplayer_product_id ? `https://tcgplayer-cdn.tcgplayer.com/product/${r.tcgplayer_product_id}_in_1000x1000.jpg` : null;
+    }
+    if (key && !picks.some((p) => p.value === key)) {
+      picks.push({ label: clip(name, 100), value: key, description: clip(`${pct(change)} · ${what} · ${now}`, 100) });
+    }
+    if (i === 0) topImg = img;
+    return `\`${String(i + 1).padStart(2)}\` **${pct(change)}** [${clip(name, 60)}](${url}) · ${what} · ${was} → **${now}**`;
   });
-  const top = rows[0];
   const embed = {
-    title, color: dir === "down" ? 0xe86868 : 0x5cc480,
-    description: clip(lines.join("\n"), 4000),
-    footer: { text: `TCGplayer ${basis === "low" ? "Low" : "NM Market"} · starting price ≥ ${money(min)} · prices as of ${shortDate(result.latest)} · ${AFFILIATE_NOTE}` },
+    title, color: rows.length ? (dir === "down" ? 0xe86868 : 0x5cc480) : BRAND_COLOR,
+    description: rows.length ? fitLines(lines, 4000)
+      : "Nothing cleared the filters. Try a longer window or another group below" + (min > 0 ? `, or a lower price floor than ${money(min)} with \`/movers min_price\`.` : "."),
+    footer: { text: [`TCGplayer ${basis === "low" ? "Low" : g.sealed ? "Market" : "NM Market"}`, `starting price ≥ ${money(min)}`,
+      result.latest ? `prices as of ${shortDate(result.latest)}` : null, rows.length ? AFFILIATE_NOTE : null].filter(Boolean).join(" · ") },
   };
-  if (top && top.tcgplayer_product_id) embed.thumbnail = { url: `https://tcgplayer-cdn.tcgplayer.com/product/${top.tcgplayer_product_id}_in_1000x1000.jpg` };
-  return { embeds: [embed], components: [{ type: 1, components: [{ type: 2, style: 5, label: "Open the Screener", url: `${SITE}/screener` }] }] };
+  if (topImg) embed.thumbnail = { url: topImg };
+
+  const btn = (label, ctl, s, on) => ({ type: 2, style: on ? 1 : 2, label, custom_id: moversId(ctl, s), disabled: !!on });
+  const wins = MOVER_BUTTON_WINDOWS.includes(win) ? MOVER_BUTTON_WINDOWS : MOVER_BUTTON_WINDOWS.map((k) => (k === "3m" ? win : k));
+  const components = [
+    { type: 1, components: wins.map((k) => btn(MOVER_WINDOWS[k].label, "w", { ...state, win: k }, k === win)) },
+    { type: 1, components: [
+      btn("▲ Gains", "d", { ...state, dir: "up" }, dir === "up"),
+      btn("▼ Drops", "d", { ...state, dir: "down" }, dir === "down"),
+      btn(g.sealed ? "Market" : "NM Market", "b", { ...state, basis: "market" }, basis === "market"),
+      btn("Low", "b", { ...state, basis: "low" }, basis === "low"),
+    ] },
+    { type: 1, components: [{
+      type: 3, custom_id: moversId("g", state), placeholder: "Which cards",
+      options: Object.entries(MOVER_GROUPS).map(([k, v]) => ({ label: clip(v.label, 100), value: k, default: k === group })),
+    }] },
+  ];
+  if (picks.length) components.push({ type: 1, components: [{ type: 3, custom_id: openId("chart"), placeholder: "Look at one of these", options: picks.slice(0, 25) }] });
+  components.push({ type: 1, components: [{ type: 2, style: 5, label: "Open the Screener", url: `${SITE}/screener${g.sealed ? "?m=sealed" : ""}` }] });
+  return { embeds: [embed], components };
 }
 
 // A finish word only when the card really has two printings — the site's
@@ -387,68 +515,304 @@ function finishWord(R, row) {
 }
 
 // ── events near a place ──────────────────────────────────────────────────
-const KIND_LABEL = { sc: "Set Championship", prerelease: "Prerelease", other: "Store event" };
-export function eventsMessage({ place, series, radius, kind }) {
-  const where = [place.city, place.state || place.country].filter(Boolean).join(", ");
-  const title = `${kind === "sc" ? "Set Championships" : kind === "prerelease" ? "Prereleases" : "Lorcana events"} near ${where}`;
-  const list = (series || []).slice().sort((a, b) => String(a.next_start).localeCompare(String(b.next_start))).slice(0, 12);
-  if (!list.length) {
-    return { embeds: [{ title, color: BRAND_COLOR,
-      description: `Nothing listed within ${radius} miles yet. Try a wider radius, or check back — stores post events a few weeks out.`,
-      footer: { text: "From Ravensburger Play · packs.ink" } }] };
-  }
-  const lines = list.map((s) => {
+// Three sections, rarest first: Set Championships, prereleases, then the
+// weekly play grouped BY STORE (one line a shop, its nights listed), because
+// "every Monday at Pixel and Packs" is one fact, not four list rows.
+// custom_id "e|<control>|<lat>|<lng>|<radius>|<kind>|<place label>" — the
+// label is last because it is free text.
+export const EVENT_RADII = [10, 25, 50, 100];
+const EVENT_KIND_BUTTONS = [["all", "Everything"], ["sc", "Set Champs"], ["prerelease", "Prereleases"], ["other", "Weekly play"]];
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const FORMAT_SHORT = { "Core Constructed": "", "Infinity Constructed": "Infinity", "[Format Coconut]": "Coconut" };
+export const eventsId = (ctl, s) => `e|${ctl}|${Number(s.lat).toFixed(3)}|${Number(s.lng).toFixed(3)}|${s.radius}|${s.kind}|${clip(s.label, 40)}`;
+export function parseEventsId(id) {
+  const m = /^e\|([kr])\|(-?\d{1,3}\.\d{1,3})\|(-?\d{1,3}\.\d{1,3})\|(\d{1,3})\|(all|sc|prerelease|other)\|(.*)$/.exec(String(id || ""));
+  if (!m) return null;
+  return { lat: Number(m[2]), lng: Number(m[3]), radius: Number(m[4]), kind: m[5], label: m[6] };
+}
+
+export function eventsMessage({ place, byKind, radius, kind = "all", query }) {
+  const where = [place.city, place.state || place.country].filter(Boolean).join(", ") || clip(query, 40);
+  const heading = { all: "Lorcana events", sc: "Set Championships", prerelease: "Prereleases", other: "Weekly Lorcana" }[kind] || "Lorcana events";
+  const byTime = (a, b) => String(a.next_start).localeCompare(String(b.next_start));
+  const fields = [];
+  const within = `within ${radius} mi`;
+  const oneOff = (s) => {
     const occ = (s.occurrences || [])[0] || {};
-    const unix = Math.floor(Date.parse(s.next_start) / 1000);
+    const unix = Math.floor(Date.parse(occ.start_datetime || s.next_start) / 1000);
     const when = Number.isFinite(unix) ? `<t:${unix}:f>` : shortDate(s.next_start);
-    const more = s.occurrence_count > 1 ? ` · every ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][s.dow] || ""} ${scLocalTime12(s.local_time)}`.replace(/\s+$/, "") : "";
-    const store = occ.url ? `[${clip(s.store_name || s.name, 60)}](${occ.url})` : clip(s.store_name || s.name, 60);
-    return `**${when}** · ${store} · ${(s.distance_mi || 0).toFixed(0)} mi · ${KIND_LABEL[s.kind] || "Event"}${more}`;
-  });
-  return { embeds: [{
-    title, color: BRAND_COLOR, description: clip(lines.join("\n"), 4000),
-    footer: { text: `Within ${radius} mi · times in your time zone · from Ravensburger Play · packs.ink` },
-  }], components: [{ type: 1, components: [{ type: 2, style: 5, label: "Open the event finder", url: `${SITE}/calendar` }] }] };
+    const name = clip(s.store_name || s.name, 48);
+    const store = occ.url ? `[${name}](${occ.url})` : name;
+    const bits = [`**${when}**`, store, `${Math.round(s.distance_mi || 0)} mi`];
+    const fmt = FORMAT_SHORT[s.gameplay_format] ?? s.gameplay_format;
+    if (fmt && s.kind !== "sc") bits.push(fmt);
+    if (occ.registered_user_count != null && occ.capacity) {
+      bits.push(occ.registered_user_count >= occ.capacity ? `**full** (${occ.capacity})` : `${occ.registered_user_count}/${occ.capacity} signed up`);
+    }
+    else if (occ.registered_user_count) bits.push(`${occ.registered_user_count} signed up`);
+    if (occ.cost_cents > 0) bits.push((occ.currency || "USD").toUpperCase() === "USD" ? money(occ.cost_cents / 100).replace(/\.00$/, "") : `${(occ.cost_cents / 100).toFixed(0)} ${occ.currency}`);
+    return bits.join(" · ");
+  };
+  const listField = (title, rows, cap, empty) => {
+    const lines = [];
+    for (const s of rows.slice(0, cap)) {
+      const line = oneOff(s);
+      if (lines.join("\n").length + line.length + 1 > 1000) break;
+      lines.push(line);
+    }
+    const rest = rows.length - lines.length;
+    if (rest > 0) lines.push(`*…and ${rest} more ${within}*`);
+    return { name: title + (rows.length ? ` · ${rows.length}` : ""), value: lines.length ? lines.join("\n") : empty };
+  };
+  if (kind === "all" || kind === "sc") {
+    const rows = (byKind.sc || []).slice().sort(byTime);
+    fields.push(listField("🏆 Set Championships", rows, kind === "sc" ? 12 : 5,
+      byKind.sc == null ? "*Couldn't load these just now.*" : `None listed ${within} yet — stores post them a few weeks ahead.`));
+  }
+  // A set's prereleases all fall on one weekend, so the question is WHERE:
+  // nearest first. Set Championships spread over months: soonest first.
+  if (kind === "all" || kind === "prerelease") {
+    const rows = (byKind.prerelease || []).slice().sort((a, b) => (a.distance_mi || 0) - (b.distance_mi || 0) || byTime(a, b));
+    if (rows.length || kind === "prerelease") {
+      fields.push(listField("✨ Prereleases", rows, kind === "prerelease" ? 12 : 5,
+        byKind.prerelease == null ? "*Couldn't load these just now.*" : `None listed ${within} right now.`));
+    }
+  }
+  if (kind === "all" || kind === "other") {
+    const stores = new Map();
+    for (const s of byKind.other || []) {
+      const k = s.store_id != null ? "id:" + s.store_id : "n:" + (s.store_name || s.name);
+      let g = stores.get(k);
+      if (!g) { g = { name: s.store_name || s.name, mi: s.distance_mi || 0, url: null, first: s.next_start, slots: new Map() }; stores.set(k, g); }
+      g.mi = Math.min(g.mi, s.distance_mi || 0);
+      const occ = (s.occurrences || [])[0] || {};
+      if (occ.url && (!g.url || String(s.next_start) < String(g.first))) { g.url = occ.url; g.first = s.next_start; }
+      // One slot per night and time; a store running Core and Infinity at
+      // the same hour is one night with two formats, not two nights.
+      const fmt = FORMAT_SHORT[s.gameplay_format] ?? s.gameplay_format ?? "";
+      const sk = `${s.dow}|${s.local_time}`;
+      const slot = g.slots.get(sk) || { dow: s.dow, time: s.local_time, fmts: new Set() };
+      slot.fmts.add(fmt);
+      g.slots.set(sk, slot);
+    }
+    const list = [...stores.values()].sort((a, b) => a.mi - b.mi);
+    const lines = [];
+    for (const g of list) {
+      const slots = [...g.slots.values()].sort((a, b) => ((a.dow + 6) % 7) - ((b.dow + 6) % 7) || String(a.time).localeCompare(String(b.time)))
+        .slice(0, 4).map((x) => {
+          const f = [...x.fmts];
+          const label = f.length > 1 ? " (" + f.map((v) => v || "Core").join(" + ") + ")" : f[0] ? " " + f[0] : "";
+          return `${DOW[x.dow] || ""} ${scLocalTime12(x.time)}${label}`.trim();
+        });
+      const name = clip(g.name, 40);
+      const line = `${g.url ? `[${name}](${g.url})` : `**${name}**`} · ${Math.round(g.mi)} mi — ${slots.join(", ")}`;
+      if (lines.join("\n").length + line.length + 1 > 1000 || lines.length >= (kind === "other" ? 12 : 6)) break;
+      lines.push(line);
+    }
+    if (list.length > lines.length) lines.push(`*…and ${list.length - lines.length} more stores ${within}*`);
+    fields.push({ name: `🗓️ Weekly play${list.length ? ` · ${list.length} store${list.length === 1 ? "" : "s"}` : ""}`,
+      value: lines.length ? lines.join("\n") : (byKind.other == null ? "*Couldn't load these just now.*" : `No weekly events listed ${within}.`) });
+  }
+  const state = { lat: place.lat, lng: place.lng, radius, kind, label: where };
+  const finder = new URL(SITE + "/");
+  finder.searchParams.set("sczip", clip(query || where, 60));
+  finder.searchParams.set("scdist", String(radius));
+  if (kind !== "all") finder.searchParams.set("scmode", kind);
+  return {
+    embeds: [{
+      title: clip(`${heading} near ${where}`, 256), color: BRAND_COLOR, fields,
+      footer: { text: `Within ${radius} mi · dates in your time zone, weekly times in the store's · from Ravensburger Play · packs.ink` },
+    }],
+    components: [
+      { type: 1, components: EVENT_KIND_BUTTONS.map(([k, l]) => ({ type: 2, style: k === kind ? 1 : 2, label: l, custom_id: eventsId("k", { ...state, kind: k }), disabled: k === kind })) },
+      { type: 1, components: EVENT_RADII.map((r) => ({ type: 2, style: r === radius ? 1 : 2, label: `${r} mi`, custom_id: eventsId("r", { ...state, radius: r }), disabled: r === radius })) },
+      { type: 1, components: [
+        { type: 2, style: 5, label: "Open the event finder", url: finder.toString() },
+        { type: 2, style: 5, label: "Lorcana calendar", url: `${SITE}/calendar` },
+      ] },
+    ],
+  };
 }
 
 // ── the calendar ─────────────────────────────────────────────────────────
-export function calendarMessage({ events }) {
-  const lines = (events || []).map((e) => {
+// Grouped by month, one line an event, marked by kind; buttons narrow the
+// kind and a menu the region. custom_id "cl|<control>|<kind>|<region>".
+const CAL_MARK = { set: "📦", product: "🎁", dlc: "🏆", ccq: "🎟️" };
+const CAL_KIND_BUTTONS = [["all", "Everything"], ["release", "Releases"], ["dlc", "Challenges"], ["ccq", "Qualifiers"]];
+export const calendarId = (ctl, s) => `cl|${ctl}|${s.kind}|${s.region}`;
+export function parseCalendarId(id) {
+  const m = /^cl\|([kr])\|(all|release|dlc|ccq)\|([a-z]{2,6})$/.exec(String(id || ""));
+  return m ? { kind: m[2], region: m[3] } : null;
+}
+// "Charlie's Collectible Show · 3801 Sumner Blvd, Raleigh, NC 27616" -> the
+// part a reader places an event by: the last "·" segment, its last two
+// comma parts.
+export function shortPlace(loc) {
+  const seg = String(loc || "").split("·").pop().trim();
+  const parts = seg.split(",").map((s) => s.trim()).filter(Boolean);
+  return clip(parts.length > 2 ? parts.slice(-2).join(", ") : seg, 40);
+}
+export function calendarMessage({ events, kind = "all", region = "all", regions = [] }) {
+  const months = new Map();
+  (events || []).forEach((e, k) => {
+    const m = /^(\d{4})-(\d{2})/.exec(String(e.starts_on || ""));
+    const key = m ? `${MONTH_NAMES[+m[2] - 1]} ${m[1]}` : "Later";
+    if (!months.has(key)) months.set(key, []);
     const t = Date.parse(String(e.starts_on) + "T12:00:00Z");
-    const when = Number.isFinite(t) ? `<t:${Math.floor(t / 1000)}:D> (<t:${Math.floor(t / 1000)}:R>)` : shortDate(e.starts_on);
-    const sub = calEventSubtitle(e);
-    return `**${clip(calEventTitle(e), 70)}**${e.estimated ? " *(estimated)*" : ""}${sub ? " · " + clip(sub, 60) : ""}${e.location ? " · " + clip(e.location, 50) : ""}\n${when}`;
+    const when = Number.isFinite(t) ? `<t:${Math.floor(t / 1000)}:D>` : shortDate(e.starts_on);
+    // The countdown on the first entry only — "in 3 weeks" beside every line
+    // is noise, beside the next thing it is the answer.
+    const rel = k === 0 && Number.isFinite(t) ? ` (<t:${Math.floor(t / 1000)}:R>)` : "";
+    const name = clip(calEventTitle(e), 60);
+    const title = e.url && /^https:\/\//.test(e.url) && e.url.length <= 300 ? `[${name}](${e.url})` : `**${name}**`;
+    const where = (e.kind === "dlc" || e.kind === "ccq") && e.location ? " · " + shortPlace(e.location) : "";
+    months.get(key).push(`${CAL_MARK[e.kind] || "•"} ${title}${e.estimated ? " *(estimated)*" : ""}${where} — ${when}${rel}`);
   });
-  return { embeds: [{
-    title: "Coming up in Lorcana", color: BRAND_COLOR,
-    description: clip(lines.join("\n") || "Nothing on the calendar right now.", 4000),
-    footer: { text: "Set releases, Challenges and qualifiers · packs.ink/calendar" },
-  }], components: [{ type: 1, components: [{ type: 2, style: 5, label: "Full calendar", url: `${SITE}/calendar` }] }] };
+  const fields = [];
+  for (const [name, lines] of months) {
+    if (fields.length >= 12) break;
+    // Whole lines only: a line clipped mid-way is a broken link or a raw
+    // <t:…> tag on screen.
+    const kept = [];
+    let used = 0;
+    for (const l of lines) {
+      if (used + l.length + 1 > 990) break;
+      kept.push(l);
+      used += l.length + 1;
+    }
+    if (kept.length < lines.length) kept.push(`*…and ${lines.length - kept.length} more*`);
+    fields.push({ name, value: kept.join("\n") });
+  }
+  const label = { all: "Coming up in Lorcana", release: "Set and product releases", dlc: "Disney Lorcana Challenges", ccq: "Challenge qualifiers" }[kind];
+  const regionName = region !== "all" ? (regions.find((r) => r.key === region) || {}).label : null;
+  const site = new URL(SITE + "/calendar");
+  if (kind !== "all") site.searchParams.set("ck", (CAL_FILTERS[kind] || []).join(","));
+  if (region !== "all") site.searchParams.set("cr", region);
+  return {
+    embeds: [{
+      title: label + (regionName ? ` · ${regionName}` : ""), color: BRAND_COLOR, url: site.toString(),
+      ...(fields.length ? { fields } : { description: "Nothing on the calendar for that — try Everything, or another region." }),
+      footer: { text: "📦 release · 🎁 product · 🏆 Challenge · 🎟️ qualifier · dates in your time zone · packs.ink/calendar" },
+    }],
+    components: [
+      { type: 1, components: CAL_KIND_BUTTONS.map(([k, l]) => ({ type: 2, style: k === kind ? 1 : 2, label: l, custom_id: calendarId("k", { kind: k, region }), disabled: k === kind })) },
+      { type: 1, components: [{ type: 3, custom_id: calendarId("r", { kind, region }), placeholder: "Region",
+        options: [{ key: "all", label: "Everywhere" }, ...regions].slice(0, 25).map((r) => ({ label: r.label, value: r.key, default: r.key === region })) }] },
+      { type: 1, components: [{ type: 2, style: 5, label: "Full calendar", url: site.toString() }] },
+    ],
+  };
 }
 
 // ── help ─────────────────────────────────────────────────────────────────
-export function helpMessage() {
-  return { embeds: [{
-    title: "Packs.Ink bot", color: BRAND_COLOR,
-    description: [
-      "**/card** `name` — the card, big, with its price.",
-      "**/price** `name` — prices, changes and a price chart.",
-      "Type it however you say it: `mowgli`, `enchanted elsa`, `elsa psa 10`, `stich`, `azurite sea box`. With no subtitle you get the version people actually play; pick another from the menu under the reply.",
-      "",
-      "**/deck** — paste a decklist and see what it costs to build.",
-      "**/movers** — today's biggest gains and drops.",
-      "**/events** `zip or town` — Lorcana events near you.",
-      "**/calendar** — set releases, Challenges and qualifiers coming up.",
-      "Right-click any message → **Apps → Price check** to price every card it mentions, or a whole posted decklist.",
-      "",
-      "**/reports** (server managers) — a daily or weekly movers report in a channel.",
-    ].join("\n"),
-    footer: { text: "Prices from TCGplayer, graded and raw sales from eBay · packs.ink" },
-  }] };
+// A command written as </name:id> is one a person can CLICK to start typing
+// it. The ids come from registering the commands (tools/register_commands.mjs
+// writes src/command-ids.json before each deploy); without them — a local
+// run, a first deploy — it falls back to plain bold text.
+export const cmdMention = (ids, name) => {
+  const top = name.split(" ")[0];
+  return ids && /^\d{5,25}$/.test(String(ids[top] || "")) ? `</${name}:${ids[top]}>` : `**/${name}**`;
+};
+export const helpTryId = (what) => `h|${what}`;
+export function parseHelpTryId(id) {
+  const m = /^h\|(card|trade|open|set|movers)$/.exec(String(id || ""));
+  return m ? m[1] : null;
+}
+export function helpMessage(ids) {
+  const c = (n) => cmdMention(ids, n);
+  return {
+    embeds: [{
+      title: "packs.ink — Lorcana prices, trades and events", color: BRAND_COLOR, url: SITE,
+      description: "Type names the way you'd say them: `mowgli`, `enchanted elsa`, `elsa psa 10`, `stich`, `azurite box`. " +
+        "No subtitle? You get the version people actually play — switch versions from the menu under any card.",
+      fields: [
+        { name: "Look something up", value: [
+          `${c("card")} \`mowgli\` — the card and what it's worth`,
+          `${c("price")} \`elsa psa 10\` — price chart, graded and eBay sales`,
+          `${c("set")} \`azurite\` — box price vs box EV, chase cards`,
+          `${c("new")} — the newest cards, as they're revealed`,
+        ].join("\n") },
+        { name: "Trading", value: [
+          `${c("trade")} — is a trade fair? Both sides priced, cash too`,
+          `${c("deck")} — paste a decklist, see what it costs to build`,
+          "Right-click a message → **Apps → Price check** — prices a trade post (H: / W:), a decklist, or any cards it mentions",
+        ].join("\n") },
+        { name: "Market", value: `${c("movers")} — biggest gains and drops, cards or sealed; flip windows with the buttons` },
+        { name: "Play", value: [
+          `${c("events")} \`60614\` — Set Championships, prereleases and weekly play near you`,
+          `${c("meta")} — the most-played cards and the latest tournament winners`,
+          `${c("calendar")} — set releases, Challenges and qualifiers coming up`,
+        ].join("\n") },
+        { name: "For fun", value: `${c("open")} — open a booster pack (or a box) at real prices` },
+        { name: "Server managers", value: `${c("reports daily")} — the day's movers posted in a channel` },
+      ],
+      footer: { text: "Add private: True to a command to see the reply alone · prices from TCGplayer, sales from eBay · packs.ink" },
+    }],
+    components: [{ type: 1, components: [
+      { type: 2, style: 1, label: "Try a card", custom_id: helpTryId("card") },
+      { type: 2, style: 2, label: "Try a trade", custom_id: helpTryId("trade") },
+      { type: 2, style: 2, label: "Open a pack", custom_id: helpTryId("open") },
+      { type: 2, style: 2, label: "Today's movers", custom_id: helpTryId("movers") },
+      { type: 2, style: 5, label: "packs.ink", url: SITE },
+    ] }],
+  };
+}
+
+// ── the meta ─────────────────────────────────────────────────────────────
+// What is being played (the index's recency-weighted top-cut appearances —
+// the number that picks "the version people play") and who won lately.
+const PLACE_MARK = { 1: "🥇", 2: "🥈", 3: "🥉" };
+// Player and deck names are free text: escape what Discord would read as
+// markdown, or "[OSA] Moluk" and a name with an underscore render wrong.
+export const escMd = (s) => String(s || "").replace(/[\\*_~`|>[\]()]/g, "\\$&");
+export function deckPageUrl(r) {
+  const u = new URL(SITE + "/decks");
+  u.searchParams.set("deck", r.deck_id);
+  if (r.deck_visibility !== "public" && r.deck_share_token) u.searchParams.set("token", r.deck_share_token);
+  return u.toString();
+}
+export function metaMessage({ R, index, results }) {
+  const ranked = R.cards.map((c, i) => ({ c, i })).filter((x) => x.c.pl > 0)
+    .sort((a, b) => b.c.pl - a.c.pl || a.i - b.i).slice(0, 12);
+  const total = index.playDecks || 0;
+  const picks = [];
+  const lines = ranked.map((x, k) => {
+    const { printing, fi } = R.pickPrinting(x.i);
+    const f = printing.f[fi] || printing.f[0] || [];
+    const listed = !f[6];
+    const px = listed ? (f[5] ?? f[4]) : null;
+    const share = total > 0 ? ` · in ${Math.round((x.c.pl / total) * 100)}% of decks` : "";
+    picks.push({ label: clip(x.c.n, 100), value: R.cardKey(printing, fi), description: clip(`#${k + 1} most played${px != null ? " · " + money(px) : ""}`, 100) });
+    return `\`${String(k + 1).padStart(2)}\` ${inkMarks(x.c.i)} [${clip(x.c.n, 44)}](${buyUrl(x.c.n, listed ? f[1] : null, f[2] || FIN_PRINTING[f[0]])})${share}${px != null ? ` · ${money(px)}` : ""}`;
+  });
+  const played = {
+    title: "Most played in recent tournaments", color: BRAND_COLOR, url: `${SITE}/decks?s=tournaments`,
+    description: fitLines(lines, 4000) || "No tournament decks on record yet.",
+  };
+  const fields = [];
+  for (const t of results || []) {
+    if (!t.top || !t.top.length) continue;
+    const rows = t.top.map((r) => {
+      const inks = (r.deck_inks || []).filter(Boolean);
+      const deck = clip(r.deck_name || inks.join("/") || "Deck", 40);
+      const link = r.deck_id ? `[${escMd(deck)}](${deckPageUrl(r)})` : escMd(deck);
+      return `${PLACE_MARK[r.place_rank] || "▫️"} ${escMd(clip(r.player_name || "?", 28))} — ${inkMarks(inks)} ${link}${PLACE_MARK[r.place_rank] ? "" : ` *(${escMd(r.place || "top " + r.place_rank)})*`}`;
+    });
+    const meta = [shortDate(t.event_date), t.num_players ? `${t.num_players} players` : null].filter(Boolean).join(" · ");
+    fields.push({ name: clip(`${t.name}${meta ? " — " + meta : ""}`, 256), value: fitLines(rows, 1024) });
+  }
+  const results_ = {
+    title: "Latest results", color: BRAND_COLOR, url: `${SITE}/decks?s=tournaments`,
+    ...(fields.length ? { fields } : { description: "No recent results on record." }),
+    footer: { text: `Play share is recency-weighted across recent top-cut decks · TCGplayer NM Market as of ${shortDate(index.priceDate)} · ${AFFILIATE_NOTE}` },
+  };
+  const components = [];
+  if (picks.length) components.push({ type: 1, components: [{ type: 3, custom_id: openId("card"), placeholder: "Look at a card", options: picks.slice(0, 25) }] });
+  components.push({ type: 1, components: [{ type: 2, style: 5, label: "All tournament results", url: `${SITE}/decks?s=tournaments` }] });
+  return { embeds: [played, results_], components };
 }
 
 // ── a whole decklist ─────────────────────────────────────────────────────
-export function deckMessage({ result, priceDate }) {
+export function deckMessage({ result, priceDate, tcgNames }) {
   const r = result;
   const lines = [
     `**${money(r.totalMarket) || "$0.00"}** at NM Market · ${money(r.totalLow) || "$0.00"} at Low`,
@@ -456,30 +820,73 @@ export function deckMessage({ result, priceDate }) {
   ];
   if (r.count !== 60) lines.push(`Note: that's ${r.count} cards — a Lorcana deck is 60.`);
   lines.push("");
-  const shown = r.rows.slice(0, 15);
-  for (const x of shown) {
+  const tail = [];
+  if (r.unmatched.length) {
+    tail.push("", "Couldn't find: " + r.unmatched.slice(0, 8).map((e) => `“${clip(e.name, 40)}”`).join(", ") +
+      (r.unmatched.length > 8 ? ` and ${r.unmatched.length - 8} more` : "") + " — not counted.");
+  }
+  if (r.unpricedMarket) tail.push(`${r.unpricedMarket} card${r.unpricedMarket === 1 ? " has" : "s have"} no NM Market price and count as $0.`);
+  // Most valuable first, as many WHOLE lines as fit beside the header and the
+  // notes (each is an affiliate link of ~200 characters; clipping one mid-way
+  // would show a broken link), and the rest summed in one line.
+  const rowLine = (x) => {
     // The link buys the printing the price came from — the cheapest one.
     const f = x.mktAt ? x.mktAt.f : null;
     const url = buyUrl(x.card.n, f && !f[6] ? f[1] : null, f ? f[2] || FIN_PRINTING[f[0]] : "Normal");
     const each = x.mkt != null ? money(x.mkt) : "no price";
     const tot = x.mkt != null ? ` · **${money(x.mkt * x.qty)}**` : "";
-    lines.push(`\`${String(x.qty).padStart(2)}×\` [${clip(x.card.n, 48)}](${url}) — ${each} ea${tot}${x.guessed ? " *(closest match)*" : ""}`);
+    return `\`${String(x.qty).padStart(2)}×\` [${clip(x.card.n, 48)}](${url}) — ${each} ea${tot}${x.guessed ? " *(closest match)*" : ""}`;
+  };
+  let budget = 3900 - lines.join("\n").length - tail.join("\n").length - 120;
+  let shown = 0;
+  for (const x of r.rows.slice(0, 15)) {
+    const l = rowLine(x);
+    if (l.length + 1 > budget) break;
+    lines.push(l);
+    budget -= l.length + 1;
+    shown++;
   }
-  if (r.rows.length > shown.length) {
-    const rest = r.rows.slice(shown.length);
+  if (r.rows.length > shown) {
+    const rest = r.rows.slice(shown);
     const restTotal = rest.reduce((s, x) => s + (x.mkt != null ? x.mkt * x.qty : 0), 0);
     const restCount = rest.reduce((s, x) => s + x.qty, 0);
     lines.push(`…and ${restCount} more card${restCount === 1 ? "" : "s"} (${rest.length} line${rest.length === 1 ? "" : "s"}) worth ${money(restTotal) || "$0.00"} together.`);
   }
-  if (r.unmatched.length) {
-    lines.push("", "Couldn't find: " + r.unmatched.slice(0, 8).map((e) => `“${clip(e.name, 40)}”`).join(", ") +
-      (r.unmatched.length > 8 ? ` and ${r.unmatched.length - 8} more` : "") + " — not counted.");
-  }
-  if (r.unpricedMarket) lines.push(`${r.unpricedMarket} card${r.unpricedMarket === 1 ? " has" : "s have"} no NM Market price and count as $0.`);
-  return { embeds: [{
-    title: "Deck price", color: BRAND_COLOR, description: clip(lines.join("\n"), 4000),
+  lines.push(...tail);
+  const embeds = [{
+    title: "Deck price", color: BRAND_COLOR, description: lines.join("\n"),
     footer: { text: `TCGplayer prices as of ${shortDate(priceDate)} · cheapest printing of each card · ${AFFILIATE_NOTE}` },
-  }], components: [] };
+  }];
+  // The whole list as ONE TCGplayer cart (mass entry), each card spelled the
+  // way TCGplayer spells it — the site's own builder. A 60-card list is always
+  // one cart. Its own embed: the cart URL runs to a couple of thousand
+  // characters, and the list above already uses most of its 4,096.
+  const cart = deckCartUrl(r, tcgNames);
+  if (cart) {
+    embeds.push({ color: BRAND_COLOR,
+      description: `🛒 [**Buy the whole deck on TCGplayer** — one cart, ${r.rows.reduce((s, x) => s + x.qty, 0)} cards](${cart})\n*Each card by name at its base printing; pick foils in the cart.*` });
+  }
+  return { embeds, components: [] };
+}
+
+const MASS_NAMES = new WeakMap();
+export function tcgNameMap(obj) {
+  if (!obj) return null;
+  let m = MASS_NAMES.get(obj);
+  if (!m) { m = new Map(Object.entries(obj).map(([k, v]) => [Number(k), v])); MASS_NAMES.set(obj, m); }
+  return m;
+}
+export function deckCartUrl(r, tcgNames) {
+  const byName = new Map();
+  for (const x of r.rows || []) {
+    const f = x.mktAt ? x.mktAt.f : null;
+    const name = tcgMassName(tcgNames, f && !f[6] ? f[1] : null, x.card.n);
+    if (name) byName.set(name, (byName.get(name) || 0) + x.qty);
+  }
+  if (!byName.size) return null;
+  const parts = tcgMassEntryParts([...byName].map(([name, qty]) => `${qty} ${name}`));
+  const url = parts[0] && parts[0].url;
+  return url && url.length <= 3800 ? url : null;
 }
 
 export const DECK_MODAL_ID = (priv) => `deck|${priv ? "p" : "-"}`;

@@ -20,10 +20,11 @@
 // parsing it on a cold request would eat most of the 10 ms free-plan budget.
 // Prices here are only a build-time snapshot for autocomplete labels — every
 // card lookup fetches live prices.
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { loadSite } from "./sitecode.mjs";
 import { fileURLToPath } from "node:url";
 import { bakeArt, SAFE_IMG } from "./bake_art.mjs";
+import { indexRevealRows, revealInputs } from "../src/set.js";
 
 const SB_URL = process.env.SUPABASE_URL || "https://umwqowkiatjjltologrd.supabase.co";
 // Public publishable key — the same one Index.html and worker/index.js ship.
@@ -57,14 +58,23 @@ const site = loadSite([
   "deriveSealedDisplayType", "isHiddenSealedListing", "isUnpricedSealed", "cleanSealedName",
   "SET_NICKNAMES", "MAINLINE_SETS", "SET_ORDER", "SET_RELEASE_DATES", "UPCOMING_SET_NAMES",
   "SPLIT_BY_PRINTING_SETS_GLOBAL", "SET_DISPLAY_NAMES", "INK_COLORS", "RARITY_ALIASES", "cardFamilyKey",
+  // /set's box EV and /movers' sealed movers: the site's own maths, run here
+  // once a day so the Worker answers from the index with no database read.
+  "processData", "calcEV", "computeSealedDeltas", "SEALED_MOVER_KIND_OF_TYPE", "lorcanaSetArt",
+  // /new: the site's own reveal reel, to check the inputs stored below still
+  // reproduce it.
+  "revealRotation", "REVEAL_WINDOW_HOURS",
 ]);
 
 const CARDS_COLS = "id,set_id,name,version,rarity,ink,inks,collector_number,cost,inkable,card_type,"
   + "classifications,text,image_small,image_normal,image_large,tcgplayer_product_id,inserted_at";
 const PRICE_COLS = "tcgplayer_product_id,printing,low_price,market_price,price_date";
-const SEALED_COLS = "tcgplayer_product_id,set_id,product_type,name,clean_name,low_price,market_price,image_url,printing,price_date";
+const SEALED_COLS = "tcgplayer_product_id,set_id,product_type,name,clean_name,low_price,market_price,image_url,printing,price_date,is_stale";
 
 console.log("fetching catalog…");
+// When the catalog was read. A card inserted after this is not in the index,
+// and the Worker asks the database for exactly those when /new is run.
+const catalogAt = new Date().toISOString();
 const [sets, prices, cards, sealed, tournaments, tdecks, gradedRoll, rawRoll] = await Promise.all([
   sbAll("sets", { select: "id,name,code,released_at", order: "id.asc" }),
   sbAll("card_prices_latest", { select: PRICE_COLS, order: "tcgplayer_product_id.asc,printing.asc" }),
@@ -75,6 +85,9 @@ const [sets, prices, cards, sealed, tournaments, tdecks, gradedRoll, rawRoll] = 
   sbAll("graded_sales_rollup", { select: "card_id,sale_count", order: "card_id.asc,grader.asc,grade.asc,printing.asc" }),
   sbAll("raw_sales_rollup", { select: "card_id", order: "card_id.asc" }).catch(() => []),
 ]);
+// TCGplayer's own spelling of a product where it differs from ours (migration
+// 169): mass entry matches names exactly, so /deck's one-cart link needs them.
+const tcgNames = await sbAll("tcgplayer_names", { select: "product_id,name", order: "product_id.asc" }).catch(() => []);
 console.log(`  ${cards.length} cards, ${prices.length} prices, ${sets.length} sets, ${sealed.length} sealed, `
   + `${tournaments.length} tournaments / ${tdecks.length} top decks`);
 
@@ -117,6 +130,26 @@ const liveSets = new Set(rows.filter((r) => !r.isCoconut).map((r) => r.Set));
 for (const p of sealed) if (p.set_id != null) liveSets.add(site.SET_DISPLAY_NAMES[setNameById[p.set_id]] || setNameById[p.set_id]);
 for (let i = setNames.length - 1; i >= 0; i--) if (!liveSets.has(setNames[i])) setNames.splice(i, 1);
 const setIdx = new Map(setNames.map((n, i) => [n, i]));
+// Box EV per booster set, exactly as Analytics » Expected Value computes it:
+// the average price of each rarity slot times how many a box holds. Nothing
+// excluded and every card counted (the site's defaults), at Low and at NM
+// Market; `nc` is the "cards under $1 count as $0" reading beside each.
+const { avgs } = site.processData(rows);
+const cents = (v) => (v == null || !Number.isFinite(v) || v <= 0 ? null : Math.round(v * 100) / 100);
+const evOf = (name) => {
+  if (!avgs[name]) return null;
+  const none = new Set();
+  return {
+    low: cents(site.calcEV(avgs, name, false, none, "low")), mkt: cents(site.calcEV(avgs, name, false, none, "market")),
+    lowNC: cents(site.calcEV(avgs, name, true, none, "low")), mktNC: cents(site.calcEV(avgs, name, true, none, "market")),
+  };
+};
+// Logos Discord can show: the WebP wordmarks (The First Chapter's is an SVG,
+// and Discord shows no SVG).
+const logoOf = (name) => {
+  const art = site.lorcanaSetArt(name);
+  return art && /\.(?:webp|png|jpe?g)$/i.test(art.src) ? "https://packs.ink/" + art.src : null;
+};
 const setsOut = setNames.map((name) => {
   const m = setMeta.get(name) || {};
   const main = mainOrder.has(name);
@@ -125,9 +158,16 @@ const setsOut = setNames.map((name) => {
     const n = mainOrder.get(name) + 1;
     for (const a of [`set ${n}`, `s${n}`, `set${n}`, `chapter ${n}`, `ch${n}`, `ch ${n}`]) alias.add(a);
   }
+  const rd = site.SET_RELEASE_DATES[name] || {};
   return {
     n: name, id: m.id || null, code: m.code || null, date: releaseOf(name),
     main: main ? mainOrder.get(name) + 1 : 0, alias: [...alias],
+    ...(rd.prerelease || rd.lgs || rd.retail ? { rel: { pre: rd.prerelease || null, lgs: rd.lgs || null, retail: rd.retail || null } } : {}),
+    ...(main && evOf(name) ? { ev: evOf(name) } : {}),
+    ...(logoOf(name) ? { logo: logoOf(name) } : {}),
+    // Foil and non-foil share one card_id but are two markets (and two tiles
+    // on the site): Challenge Promo (C1).
+    ...(site.SPLIT_BY_PRINTING_SETS_GLOBAL.has(name) ? { sp: 1 } : {}),
   };
 });
 
@@ -166,6 +206,10 @@ for (const dc of deckCards) {
   plays.set(fam, (plays.get(fam) || 0) + (deckWeight.get(dc.deck_id) || 0));
 }
 console.log(`  plays: ${deckCards.length} deck rows across ${deckWeight.size} decks -> ${plays.size} played cards`);
+// The same weights summed over every deck that has cards: a card's `pl` over
+// this is the share of recent top-cut decks that play it ("in 38% of decks").
+const decksWithCards = new Set(deckCards.map((d) => d.deck_id));
+const playDecks = Math.round([...decksWithCards].reduce((s, id) => s + (deckWeight.get(id) || 0), 0) * 1000) / 1000;
 
 const gradedCount = new Map();
 for (const g of gradedRoll) gradedCount.set(g.card_id, (gradedCount.get(g.card_id) || 0) + (g.sale_count || 0));
@@ -191,6 +235,11 @@ const artUrl = (r) => {
   const m = u.match(LORCAST_ART);
   return m && m[1] === r.card_id ? null : u;
 };
+// The day each card first reached our catalog — for a card from a set not out
+// yet, the day it was revealed (prestaged from the reveal, within a day or so).
+// A variant clone ("<base>::variant::…") carries its base card's date.
+const insertedOn = new Map(cards.map((c) => [c.id, c.inserted_at ? String(c.inserted_at).slice(0, 10) : null]));
+const insOf = (id) => insertedOn.get(id) || insertedOn.get(String(id).split("::")[0]) || null;
 const byName = new Map();
 let skipped = 0;
 for (const r of rows) {
@@ -233,6 +282,7 @@ for (const r of rows) {
       img: artUrl(r),
       raw: rawSales.has(r.card_id) ? 1 : 0,
       g: gradedCount.get(String(r.card_id).split("::")[0]) || 0,
+      ins: insOf(r.card_id),
       f: [],
     };
     ident.p.set(r.card_id, pr);
@@ -262,6 +312,24 @@ const identities = [...byName.values()].map((ident) => {
 });
 identities.sort((a, b) => a.n.localeCompare(b.n));
 
+// ── /new: the reel's inputs, not its answer ─────────────────────────────
+// The Worker runs the site's revealRotation when someone asks, over these and
+// any card that has landed since (see revealInputs in src/set.js).
+const revealNow = Date.now();
+const indexedIds = new Set(identities.flatMap((c) => c.p.map((p) => p.id)));
+const reveals = revealInputs(rows, { now: revealNow, indexed: indexedIds });
+// ⚠ The same inputs, run the way the Worker runs them, must give the site's
+// reel. A difference means this derivation drifted from revealRotation.
+{
+  const noR = { byCardId: new Map(), cards: [], sets: [] };
+  const mine = site.revealRotation(indexRevealRows(noR, { reveals }), revealNow).map((c) => c.card_id);
+  const theirs = site.revealRotation(rows, revealNow).map((c) => c.card_id).filter((id) => indexedIds.has(id));
+  if (mine.slice(0, theirs.length).join() !== theirs.join()) {
+    console.log(`::warning::/new inputs no longer reproduce the site's reel (${mine.length} vs ${theirs.length} cards)`);
+  }
+  console.log(`  reveals: ${reveals.length} card(s) inside the ${site.REVEAL_WINDOW_HOURS}-hour window; the site's reel shows ${theirs.length}`);
+}
+
 // ── Sealed ──────────────────────────────────────────────────────────────
 // Same admission rule as the site's searchSealedProducts: priced rows only,
 // never a promo single or a hidden multi-unit listing.
@@ -271,17 +339,56 @@ for (const p of sealed) {
   if (site.isUnpricedSealed(p) || site.isHiddenSealedListing(p)) continue;
   if (p.low_price == null && p.market_price == null) continue;
   const setName = p.set_id != null ? (site.SET_DISPLAY_NAMES[setNameById[p.set_id]] || setNameById[p.set_id] || null) : null;
+  const ty = site.deriveSealedDisplayType(p);
   sealedOut.push({
     n: site.cleanSealedName(p.name || ""),
     s: setName != null && setIdx.has(setName) ? setIdx.get(setName) : -1,
     sn: setName,
-    ty: site.deriveSealedDisplayType(p),
+    ty,
     pid: p.tcgplayer_product_id,
     low: num(p.low_price), mkt: num(p.market_price),
     img: p.image_url ? p.image_url.replace(/_200w\.jpg$/, "_in_1000x1000.jpg") : null,
+    // Boxes / troves / specials — the site's Sealed Movers row. A stale row
+    // (gone from today's snapshot) never moves: its "today" is whatever
+    // TCGplayer last published.
+    ...(site.SEALED_MOVER_KIND_OF_TYPE[ty] && !p.is_stale ? { k: site.SEALED_MOVER_KIND_OF_TYPE[ty] } : {}),
   });
 }
 sealedOut.sort((a, b) => a.n.localeCompare(b.n));
+
+// ── Sealed price changes ────────────────────────────────────────────────
+// computeSealedDeltas is the site's own (Screener sealed mode, Sealed Movers),
+// run over a year of history for the mover candidates, as of the index's price
+// date — so a product that stopped being listed reports no move (migration
+// 172's rule). Stored as {window: [Low %, NM Market %]}.
+{
+  const movers = sealedOut.filter((s) => s.k);
+  const since = new Date(Date.parse(priceDate + "T00:00:00Z") - 380 * 86400000).toISOString().slice(0, 10);
+  const hist = [];
+  for (const ids of chunk(movers.map((s) => s.pid), 40)) {
+    hist.push(...await sbAll("prices_daily", {
+      select: "tcgplayer_product_id,printing,date,low_price,low_price_smoothed,market_price",
+      source: "eq.tcgcsv", grade: "eq.raw", printing: "eq.Normal",
+      tcgplayer_product_id: `in.(${ids.join(",")})`, date: "gte." + since,
+      order: "tcgplayer_product_id.asc,date.asc",
+    }));
+  }
+  const byPid = new Map(site.computeSealedDeltas(hist, { asOf: priceDate }).map((d) => [d.tcgplayer_product_id, d]));
+  const W = [["1d", "1d"], ["1w", "7d"], ["1m", "30d"], ["3m", "90d"], ["6m", "180d"], ["1y", "365d"]];
+  const pct = (v) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10) / 10);
+  let withMoves = 0;
+  for (const s of movers) {
+    const d = byPid.get(s.pid);
+    if (!d) continue;
+    const out = {};
+    for (const [k, col] of W) {
+      const lo = pct(d["pct_" + col]), mk = pct(d["mkt_pct_" + col]);
+      if (lo != null || mk != null) out[k] = [lo, mk];
+    }
+    if (Object.keys(out).length) { s.d = out; withMoves++; }
+  }
+  console.log(`  sealed movers: ${withMoves} of ${movers.length} candidates carry price changes (${hist.length} history rows)`);
+}
 
 // ── Art Discord can show ────────────────────────────────────────────────
 // See bake_art.mjs. --no-art skips the download (a quick local build) and
@@ -300,9 +407,14 @@ if (process.argv.includes("--no-art")) {
 
 const inkColors = Object.fromEntries(Object.entries(site.INK_COLORS).map(([k, v]) => [k, v.border]));
 const out = {
-  v: 1,
+  v: 2,
   built: new Date().toISOString(),
+  catalogAt,
   priceDate,
+  playDecks,
+  // The reel's inputs (see above), newest first.
+  reveals,
+  tcgNames: Object.fromEntries(tcgNames.map((r) => [String(r.product_id), r.name])),
   newestMain: site.MAINLINE_SETS[site.MAINLINE_SETS.length - 1],
   sets: setsOut,
   cards: identities,
@@ -313,6 +425,10 @@ const out = {
 const json = JSON.stringify(out);
 mkdirSync(new URL("../src/", import.meta.url), { recursive: true });
 writeFileSync(OUT, json);
+// The Worker imports src/command-ids.json (see src/index.js); registering the
+// commands fills it in. Never overwrite a real one — only make sure it exists.
+const IDS = new URL("../src/command-ids.json", import.meta.url);
+if (!existsSync(IDS)) writeFileSync(IDS, "{}");
 const played = identities.filter((i) => i.pl > 0).length;
 console.log(`wrote ${OUT.pathname}: ${identities.length} cards (${played} played), ${sealedOut.length} sealed, `
   + `${(json.length / 1024).toFixed(0)} KB (skipped ${skipped} rows)`);
@@ -324,8 +440,13 @@ if (process.argv.includes("--fixture")) {
     "Go Go Tomago", "Let It Go", "Be Prepared", "Tipo", "Peter Pan", "Genie", "Maleficent", "Hades", "Ariel",
     "Heart of Te Fiti", "A Whole New World", "Friends on the Other Side", "Moana", "Belle", "Gaston",
     "Cruella De Vil", "HeiHei", "Heihei", "Grandmother Willow", "Ursula", "Scar", "Flounder", "The Queen"]);
-  const fx = { ...out, cards: identities.filter((i) => WANT.has(i.c)),
-    sealed: sealedOut.filter((s) => s.sn === "Azurite Sea" || s.sn === out.newestMain) };
+  const fxCards = identities.filter((i) => WANT.has(i.c));
+  const fxPids = new Set(fxCards.flatMap((c) => c.p.flatMap((p) => p.f.map((f) => String(f[1])))));
+  const fxIds = new Set(fxCards.flatMap((c) => c.p.map((p) => p.id)));
+  const fx = { ...out, cards: fxCards,
+    reveals: out.reveals.filter((r) => fxIds.has(r.id)),
+    sealed: sealedOut.filter((s) => s.sn === "Azurite Sea" || s.sn === out.newestMain),
+    tcgNames: Object.fromEntries(Object.entries(out.tcgNames).filter(([pid]) => fxPids.has(pid))) };
   mkdirSync(new URL("../test/", import.meta.url), { recursive: true });
   writeFileSync(FIXTURE, JSON.stringify(fx));
   console.log(`wrote fixture: ${fx.cards.length} cards, ${fx.sealed.length} sealed`);

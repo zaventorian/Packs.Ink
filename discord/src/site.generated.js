@@ -25,6 +25,277 @@ const rawSaleMatch = (rows, printing) => {
   return b ? (rows.find(r => r.printing === b) || null) : null;
 };
 // ---- site ----
+const EXTRAS_SET_NAME = "Extras & Oddities";
+// ---- site ----
+const MAINLINE_SETS = [
+  "The First Chapter","Rise of the Floodborn","Into the Inklands",
+  "Ursula's Return","Shimmering Skies","Azurite Sea","Archazia's Island",
+  "Reign of Jafar","Fabled","Whispers in the Well","Winterspell",
+  "Wilds Unknown","Attack of the Vine!","Hyperia City"
+];
+// ---- site ----
+const SET_ORDER = [
+  EXTRAS_SET_NAME,
+  // Yearly promo sets — appear below mainline sets in the Collection grid
+  // (reverse() in the renderer puts them between mainlines and EXTRAS).
+  "Promo Set 1","Promo Set 2","Promo Set 3",
+  // Special / non-mainline sets that Lorcast indexes separately. Names
+  // must match what Lorcast returns in /sets so the loader picks them up.
+  "Lorcana Challenge Promo (C1)",       // 2024-05-17 — Cinderella Stouthearted, Baymax, etc.
+  "D23 Collection",             // 2024-08-09 — Mickey Brave Little Tailor, etc.
+  "Lorcana Challenge Promo (C2)",   // 2026-01-16 — Pegasus, Mulan Charging Ahead, etc.
+  "Magical Places Promos", // 2026-01-16 — Ravensburger's "N/DIS" promo line. Not every
+  // card in it is an EPCOT Festival of the Arts card — that's a sub-label inside this
+  // set (like a grading sub), not a set of its own.
+  "Curator's Collection: Heroines", // 2026-07-17 — premium 6-card promo set (CC1)
+  "Promo Set 4",                    // 2026-07-17 — P4, Lorcast-indexed
+  "PD1",                            // 2026-07-28 — Lorcast's rolling product-promo set (5/PD1, 16/PD1 …)
+  "Curator's Collection: Beauty and the Beast", // 2026-10-01 — premium 6-card promo set (CC2)
+  ...MAINLINE_SETS,
+];
+// ---- site ----
+const SUPPRESSED_CARD_IDS = new Set([
+  "crd_3649235bb31d4cf09fcdfa873f660fe3",  // "Promo Set 4" #7 Daisy Duck
+  "crd_1923db6966fd4f2991e4dd850de4c627",  // "Promo Set 4" #8 Daisy Duck
+]);
+// ---- site ----
+const PROMO_RARITY_SETS = new Set([
+  "Promo Set 1", "Promo Set 2", "Promo Set 3",
+  "Lorcana Challenge Promo (C1)",
+  "D23 Collection",
+  "Lorcana Challenge Promo (C2)",
+  "Magical Places Promos",
+  "Curator's Collection: Heroines",
+  "Curator's Collection: Beauty and the Beast",
+  "Promo Set 4",
+  "PD1",
+]);
+// ---- site ----
+const SET_DISPLAY_NAMES = {
+  "Challenge Promo":          "Lorcana Challenge Promo (C1)",
+  "Lorcana Challenge Year 3": "Lorcana Challenge Promo (C2)",
+  // Lorcast names this set after its first three cards (the EPCOT Festival of
+  // the Arts drop), but "N/DIS" is the whole promo LINE — Mickey/Elsa/Buzz
+  // Lightyear's Magical Places promos share the set and aren't EPCOT cards.
+  // EPCOT is a sub-label inside it, not a set of its own.
+  "EPCOT Festival of the Arts": "Magical Places Promos",
+};
+// ---- site ----
+const COLLECTOR_NUMBER_OVERRIDES = {
+  "set_e0eb34fc0fbb446886f84c34381d4dce|25":  "1",  // Dragon Fire
+  "set_e0eb34fc0fbb446886f84c34381d4dce|41":  "2",  // Let It Go
+  "set_e0eb34fc0fbb446886f84c34381d4dce|42":  "3",  // Cinderella - Stouthearted
+  "set_e0eb34fc0fbb446886f84c34381d4dce|43":  "4",  // Rapunzel - Gifted with Healing
+};
+// ---- site ----
+const EXTRAS_MAP = {
+  // Wilds Unknown starter-deck-exclusive foils
+  678236: {originSet:"Wilds Unknown",        variantLabel:"Starter Deck Exclusive Foil"}, // Buzz Lightyear - On the Way
+  678237: {originSet:"Wilds Unknown",        variantLabel:"Starter Deck Exclusive Foil"}, // Mrs. Incredible - Super Stretchy
+  678238: {originSet:"Wilds Unknown",        variantLabel:"Starter Deck Exclusive Foil"}, // Jack-Jack Parr - Incredible Potential
+  690204: {originSet:"Wilds Unknown",        variantLabel:"Starter Deck Exclusive Foil"}, // Jessie - Lively Cowgirl
+  // Fabled starter-deck-exclusive foils
+  647652: {originSet:"Fabled",               variantLabel:"Starter Deck Exclusive Foil"}, // Ariel - Singing Mermaid
+  647681: {originSet:"Fabled",               variantLabel:"Starter Deck Exclusive Foil"}, // Max Goof - Rebellious Teen
+  649224: {originSet:"Fabled",               variantLabel:"Starter Deck Exclusive Foil"}, // Powerline - World's Greatest Rock Star
+  650077: {originSet:"Fabled",               variantLabel:"Starter Deck Exclusive Foil"}, // Mulan - Considerate Diplomat
+  // Whispers in the Well starter-deck-exclusive foils
+  653916: {originSet:"Whispers in the Well", variantLabel:"Starter Deck Exclusive Foil"}, // Judy Hopps - Uncovering Clues
+  657892: {originSet:"Whispers in the Well", variantLabel:"Starter Deck Exclusive Foil"}, // Megara - Secret Keeper
+  657893: {originSet:"Whispers in the Well", variantLabel:"Starter Deck Exclusive Foil"}, // Robin Hood - Ephemeral Archer
+  657894: {originSet:"Whispers in the Well", variantLabel:"Starter Deck Exclusive Foil"}, // Simba - King in the Making
+  // Gift-set oversized jumbo cards (TFC + Into the Inklands gift sets). Their
+  // TCGCSV listing is the Cold Foil printing; excludeFromBaseSet keeps the jumbo
+  // out of its origin set so only the normal print shows there.
+  516778: {originSet:"The First Chapter", variantLabel:"Gift Set Oversized Cards", excludeFromBaseSet:true}, // Mulan - Imperial Soldier
+  516775: {originSet:"The First Chapter", variantLabel:"Gift Set Oversized Cards", excludeFromBaseSet:true}, // Hades - King of Olympus
+  539145: {originSet:"Into the Inklands", variantLabel:"Gift Set Oversized Cards", excludeFromBaseSet:true}, // Stitch - Covert Agent
+  539148: {originSet:"Into the Inklands", variantLabel:"Gift Set Oversized Cards", excludeFromBaseSet:true}, // Tinker Bell - Very Clever Fairy
+  // Illumineer's Quest: Deep Trouble — event-only / quest-reward cards.
+  // Lorcast files some of these under Ursula's Return; we lift them out to
+  // their own bucket here. All `excludeFromBaseSet:true` so they don't
+  // inflate the parent set's denominators.
+  //
+  // `standalone` carries metadata for cards that aren't in our cards table
+  // (Lorcast doesn't index Illumineer's Quest products as standalone). When
+  // present, the synthesis loop uses it instead of looking up a base card.
+  557538: {originSet:"Illumineer's Quest – Deep Trouble", variantLabel:"Deep Trouble", excludeFromBaseSet:true}, // Half Hexwell Crown
+  544485: {originSet:"Illumineer's Quest – Deep Trouble", variantLabel:"Deep Trouble", excludeFromBaseSet:true}, // Mickey Mouse - Playful Sorcerer (cn 225)
+  544492: {originSet:"Illumineer's Quest – Deep Trouble", variantLabel:"Deep Trouble", excludeFromBaseSet:true}, // Yen Sid - Powerful Sorcerer    (cn 223)
+  544494: {originSet:"Illumineer's Quest – Deep Trouble", variantLabel:"Deep Trouble", excludeFromBaseSet:true}, // Mulan - Elite Archer           (cn 224)
+  544487: {originSet:"Illumineer's Quest – Deep Trouble", variantLabel:"Deep Trouble", excludeFromBaseSet:true}, // Piglet - Pooh Pirate Captain (cn 223) — real cards row crd_custom_544487_piglet_pooh (see supabase/82_quest_card_piglet.sql); was a client-only standalone, which left its graded eBay sales orphaned onto the booster #16
+
+  // Illumineer's Quest: Palace Heist (Q2) — 4 quest-reward cards Lorcast
+  // doesn't index. Real cards rows are inserted by patch_pid_overrides.py
+  // so prices flow naturally; metadata mirrors what TCGCSV publishes.
+  634262: {
+    originSet:"Illumineer's Quest – Palace Heist", variantLabel:"Palace Heist", excludeFromBaseSet:true,
+    standalone: {
+      name: "Bolt", version: "Superdog",
+      rarity: "Super Rare", collector_number: "223",
+      ink: "Amber", inks:["Amber","Steel"], cost: 5, inkable: false, card_type: "Character",
+      classifications: ["Floodborn","Hero"],
+      image_small:  "https://tcgplayer-cdn.tcgplayer.com/product/634262_200w.jpg",
+      image_normal: "https://tcgplayer-cdn.tcgplayer.com/product/634262_400w.jpg",
+    },
+  },
+  634263: {
+    originSet:"Illumineer's Quest – Palace Heist", variantLabel:"Palace Heist", excludeFromBaseSet:true,
+    standalone: {
+      name: "Goofy", version: "Groundbreaking Chef",
+      rarity: "Legendary", collector_number: "223",
+      ink: "Amber", inks:["Amber"], cost: 4, inkable: false, card_type: "Character",
+      classifications: ["Storyborn","Hero"],
+      image_small:  "https://tcgplayer-cdn.tcgplayer.com/product/634263_200w.jpg",
+      image_normal: "https://tcgplayer-cdn.tcgplayer.com/product/634263_400w.jpg",
+    },
+  },
+  634264: {
+    originSet:"Illumineer's Quest – Palace Heist", variantLabel:"Palace Heist", excludeFromBaseSet:true,
+    standalone: {
+      name: "Pinocchio", version: "Strings Attached",
+      rarity: "Legendary", collector_number: "224",
+      ink: "Amethyst", inks:["Amethyst"], cost: 4, inkable: false, card_type: "Character",
+      classifications: ["Storyborn","Hero"],
+      image_small:  "https://tcgplayer-cdn.tcgplayer.com/product/634264_200w.jpg",
+      image_normal: "https://tcgplayer-cdn.tcgplayer.com/product/634264_400w.jpg",
+    },
+  },
+  634265: {
+    originSet:"Illumineer's Quest – Palace Heist", variantLabel:"Palace Heist", excludeFromBaseSet:true,
+    standalone: {
+      name: "Elsa", version: "Ice Maker",
+      rarity: "Super Rare", collector_number: "224",
+      ink: "Amethyst", inks:["Amethyst","Sapphire"], cost: 7, inkable: false, card_type: "Character",
+      classifications: ["Floodborn","Hero","Queen","Sorcerer"],
+      image_small:  "https://tcgplayer-cdn.tcgplayer.com/product/634265_200w.jpg",
+      image_normal: "https://tcgplayer-cdn.tcgplayer.com/product/634265_400w.jpg",
+    },
+  },
+};
+// ---- site ----
+const CONNECTING_FOILS = {
+  // Wilds Unknown
+  692014: 692015,  // Snow White - Merry as the Morning (cn 37)
+  692016: 692017,  // Dopey - Drawn to Music (cn 38)
+  692018: 692019,  // Bashful - Riding the Rails (cn 39)
+  692020: 692021,  // Doc - Taking Notes (cn 40)
+  692022: 692023,  // Grumpy - Soreheaded Miner (cn 41)
+  692024: 692025,  // Sneezy - Startlingly Loud (cn 42)
+  692026: 692027,  // Happy - Joyful Adventurer (cn 43)
+  692028: 692029,  // Sleepy - Deep Sleeper (cn 44)
+  692040: 692041,  // Peter Pan - Searching Far and Wide (cn 81)
+  692050: 692093,  // Pegasus - Searching High and Low (cn 106)
+  692179: 692180,  // Merryweather - Feisty Fairy (cn 139)
+  692060: 692061,  // Fauna - Good-Natured Fairy (cn 140)
+  692062: 692063,  // Flora - Strong-Willed Fairy (cn 141)
+  692081: 692082,  // Omnidroid - V.9 (cn 184)
+  690212: 692097,  // Mr. Incredible - Taking Out the Trash (cn 185)
+  // Winterspell
+  675499: 678861,  // Iduna - Alarmed Queen (cn 113)
+  675500: 678862,  // Agnarr - King of Arendelle (cn 114)
+  676217: 678863,  // Roo - Little Helper (cn 137)
+  676218: 678864,  // Kanga - Peaceful Gatherer (cn 138)
+  // Reign of Jafar — extended-art foils (collector numbers like 1f / 2f / 65f
+  // / 125f); the foil is a separate TCGPlayer SKU from the standard base print.
+  631349: 633427,  // Louie  - One Cool Duck       (cn 1   → 1f)
+  631350: 633428,  // Dewey  - Lovable Showoff     (cn 2   → 2f)
+  631351: 633429,  // Huey   - Reliable Leader     (cn 3   → 3f)
+  631394: 633430,  // Nero   - Fearsome Crocodile  (cn 65  → 65f)
+  631431: 633431,  // Brutus - Fearsome Crocodile  (cn 125 → 125f)
+  // Attack of the Vine! — Cold Foil is a separate TCGPlayer SKU. Prices sit in
+  // prices_daily under the foil pid; patch_pid_overrides builds the companion
+  // cards row so its price flows, and this maps base → foil for the render.
+  702684: 702683,  // Carl Fredricksen - Loving Husband     (cn 74)
+  702686: 702685,  // Ellie Fredricksen - Loving Wife        (cn 75)
+  704619: 704618,  // Yzma - Choosy Customer                 (cn 110)
+  704621: 704620,  // Kuzco - Picky Customer                 (cn 111)
+  704656: 704655,  // Maid Marian - Created by the Vine      (cn 158)
+  704658: 704657,  // Robin Hood - Created by the Vine       (cn 159)
+};
+// ---- site ----
+const TCG_PID_OVERRIDES = {
+  // Auto-generated by scripts/audit_missing_pids.py — re-run after each new
+  // promo drop. Promo Set 3 (cn 33-51) + earlier promos Lorcast hasn't linked.
+  "A Whole New World|10": 654595,
+  "Mad Hatter - Unruly Eccentric|16": 679565,
+  "Stitch - High Badness Level|35": 673336,
+  "Scrooge McDuck - S.H.U.S.H. Agent|36": 683650,
+  "Belle - Apprentice Inventor|37": 651391,
+  "Mulan - Disguised Soldier|38": 661852,
+  "Goofy - Set for Adventure|39": 678645,
+  "Beast - Gracious Prince|40": 651393,
+  "Belle - Accomplished Mystic|41": 647598,
+  "Stitch - Carefree Snowboarder|42": 683651,
+  "Ariel - Curious Traveler|43": 692413,
+  "Maleficent - Imperious Traveler|44": 692476,
+  "Cruella De Vil - Judgmental Traveler|45": 692477,
+  "Queen of Hearts - Impatient Traveler|46": 692478,
+  "Cinderella - Resourceful Traveler|47": 692479,
+  "Pocahontas - Steadfast Traveler|48": 692480,
+  "Lenny - Toy Binoculars|49": 692481,
+  "Zipper - Tiny Helper|50": 692482,
+  "Will o' the Wisp - Forest Spirit|51": 692483,
+  // Promo Set 3 #52-55 — Lorcast NOW indexes these (Wilds Unknown SC promos) but
+  // leaves tcgplayer_id null, so the weekly load_lorcast reverts the pid. These
+  // keep the price showing until patch_pid_overrides re-applies it server-side.
+  "Dash Parr - Lava Runner|52": 692484,
+  "Woody - Jungle Guide|53": 692485,                  // SC Participant (Normal)
+  "Woody - Jungle Guide|54": 692486,                  // SC Championship (Holofoil)
+  "Violet Parr - Learning New Powers|55": 692487,
+  // Promo Set 3 #57 — Lorcast indexes it now (pid null); the old crd_custom_
+  // reprint row was retired 2026-08-12 (same dance as #52-55 / supabase 107).
+  "Buzz Lightyear - Space Ranger|57": 692489,
+  // PD1 #2-#8 and Promo Set 4 #9-#16 — pid parity with patch_pid_overrides so
+  // the DB and client agree. Lorcast indexes both sets with null pids.
+  "Rapunzel - Ethereal Protector|2": 711443,
+  "Pocahontas - Guiding the Tribe|3": 705068,
+  "Vixey - Expert Fisher|4": 705072,
+  "Buzz Lightyear - Providing Cover|5": 705073,
+  "Boo - Energetic Child|6": 702706,
+  "Merlin - Envisioning the Future|7": 705074,
+  "Maximus - Relentless Stallion|8": 702707,
+  "Morph - Little Imitator|9": 705078,
+  "Meilin Lee - Lead Vocalist|10": 705080,
+  "Randall Boggs - Scary Smart|11": 705079,
+  "Tigger - Hunny Barbarian|12": 705083,
+  "Belle - Always Reading|13": 705082,
+  "If I Didn't Have You|14": 705081,
+  "Rapunzel - Escaping the Tower|15": 705084,       // Set Championship participant
+  "Rapunzel - Escaping the Tower|16": 705085,       // Set Championship (Top 8, foil)
+  "Mickey Mouse - Playful Sorcerer|7": 559564,
+  "Iago - Out of Reach|8": 630086,
+  "Mickey Mouse - True Friend|36": 653906,            // Promo Set 2 — Puzzle Promo
+  "Tinker Bell - Snowflake Collector|33": 673334,     // Promo Set 3 — SC Participant
+  "Tinker Bell - Snowflake Collector|34": 673333,     // Promo Set 3 — SC Championship (foil)
+  // Hiro Hamada Armor Designer — Lorcast bound #24 to 620276, but that's
+  // actually the Enchanted "Top 8" copy. The participation copy lives at
+  // 620277. Two overrides correct the swap.
+  "Hiro Hamada - Armor Designer|24":  620277,
+  "Hiro Hamada - Armor Designer|24B": 620276,
+  "Simba - Pride Protector|4": 695330,                // Lorcana Challenge Y3 (C2) — Holofoil promo, Lorcast left pid null
+  "Dragon Fire|9": 693401,                            // Lorcana Challenge Y3 (C2) — Lorcast left pid null
+  "Stitch - Carefree Snowboarder|207": 675380,        // Winterspell Epic — Lorcast left pid null
+};
+// ---- site ----
+const PULL = {
+  "Common":144,"Uncommon":72,"Rare":31.75,"Super Rare":12,"Legendary":4,
+  "Common Foil":13,"Uncommon Foil":6,"Rare Foil":3,"Super Rare Foil":1,
+  "Legendary Foil":0.5,"Enchanted":0.25,"Epic":1.5,"Iconic":0.0141
+};
+// ---- site ----
+const PULL_V2 = {
+  "Common":144,"Uncommon":72,"Rare":29.75,"Super Rare":12,"Legendary":6,
+  "Common Foil":12.259,"Uncommon Foil":5.658,"Rare Foil":3,"Super Rare Foil":1,
+  "Legendary Foil":0.5,"Enchanted":0.333,"Epic":2.5,"Iconic":0.0141
+};
+// ---- site ----
+const NEW_PULL_START = SET_ORDER.indexOf("Wilds Unknown");
+// ---- site ----
+const getPull = set => {const idx=SET_ORDER.indexOf(set); return (idx===-1||idx>=NEW_PULL_START)?PULL_V2:PULL;};
+// ---- site ----
+const INKS = ["Amber","Amethyst","Emerald","Ruby","Sapphire","Steel"];
+// ---- site ----
 const CAL_D = (s) => String(s || "").slice(0, 10);
 // ---- site ----
 const calYmdParts = (s) => {
@@ -257,7 +528,53 @@ const calendarUpcoming = (events, fromYmd, limit) => {
   return limit > 0 ? sorted.slice(0, limit) : sorted;
 };
 // ---- site ----
+const normalizeRarity = r => {
+  if(!r) return r;
+  const m={"super_rare":"Super Rare","Super_rare":"Super Rare","common":"Common","Common":"Common","uncommon":"Uncommon","Uncommon":"Uncommon","rare":"Rare","Rare":"Rare","legendary":"Legendary","Legendary":"Legendary","enchanted":"Enchanted","Enchanted":"Enchanted","epic":"Epic","Epic":"Epic","iconic":"Iconic","Iconic":"Iconic","promo":"Promo","Promo":"Promo"};
+  return m[r]||r;
+};
+// ---- site ----
+const pick = a => a?.length?a[Math.floor(Math.random()*a.length)]:null;
+// ---- site ----
+const wPick = opts => {
+  const av=opts.filter(o=>o.p?.length); if(!av.length) return null;
+  let r=Math.random()*av.reduce((s,o)=>s+o.w,0);
+  for(const o of av){r-=o.w; if(r<=0) return o.p;} return av[av.length-1].p;
+};
+// ---- site ----
+const simPack = (pools,pull) => {
+  const cards=[];
+  for(const ink of INKS){const c=pick(pools.byInk[ink]);if(c) cards.push(c);}
+  for(let i=0;i<3;i++){const c=pick(pools.unc);if(c) cards.push(c);}
+  for(let i=0;i<2;i++){const pool=wPick([{p:pools.rar,w:pull["Rare"]},{p:pools.sr,w:pull["Super Rare"]},{p:pools.leg,w:pull["Legendary"]}]);const c=pick(pool);if(c) cards.push(c);}
+  const fp=wPick([{p:pools.cF,w:pull["Common Foil"]},{p:pools.uF,w:pull["Uncommon Foil"]},{p:pools.rF,w:pull["Rare Foil"]},{p:pools.srF,w:pull["Super Rare Foil"]},{p:pools.lF,w:pull["Legendary Foil"]},{p:pools.enc,w:pull["Enchanted"]},{p:pools.epi,w:pull["Epic"]},{p:pools.ico,w:pull["Iconic"]}]);
+  const fc=pick(fp);if(fc) cards.push(fc);
+  return cards;
+};
+// ---- site ----
 const TCG_AFFILIATE_BASE = "https://partner.tcgplayer.com/c/7285926/1780961/21018";
+// ---- site ----
+const TCG_MASSENTRY_MAX = 6000;
+// ---- site ----
+const tcgMassEntryDest = (lines) =>
+  `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=${encodeURIComponent(lines.join("||"))}`;
+// ---- site ----
+const tcgMassEntryParts = (lines) => {
+  const parts = [];
+  let cur = [];
+  for(const line of lines || []){
+    if(cur.length && tcgMassEntryDest([...cur, line]).length > TCG_MASSENTRY_MAX){ parts.push(cur); cur = []; }
+    cur.push(line);
+  }
+  if(cur.length) parts.push(cur);
+  return parts.map(ls => ({
+    url: TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(tcgMassEntryDest(ls)),
+    copies: ls.reduce((n, l) => n + (parseInt(l, 10) || 0), 0),
+  }));
+};
+// ---- site ----
+const tcgMassName = (names, pid, fallback) =>
+  (pid != null && names && names.get(Number(pid))) || fallback;
 // ---- site ----
 const tcgUrl = (productId, printing) => {
   if(!productId) return null;
@@ -735,4 +1052,55 @@ const scLocalTime12 = (hhmm) => {
   h = h % 12 || 12;
   return `${h}:${m[2]} ${ap}`;
 };
-export { AMAZON_ASIN_BY_SET, AMAZON_DEPT_DEFAULT, AMAZON_PUZZLE_ASINS, AMAZON_SEALED_RULES, AMAZON_TAG, CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_REGIONS, CAL_D, CAL_EST_SUFFIX, CARD_DELTA_WINDOWS, GRADED_FOIL_PRINTINGS, GRADED_NONFOIL_PRINTINGS, PRICE_STANDING_HIGH, PRICE_STANDING_LOW, PRICE_STANDING_MIN_POINTS, PRICE_STANDING_MIN_SPAN_RATIO, PRICE_STANDING_MIN_SPREAD, PRICE_STANDING_NEAR_LOW, PRICE_STANDING_WINDOWS, PRODUCT_RELEASE_DATES, SC_GEO_COUNTRIES, SC_GEO_TIMEOUT_MS, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, SC_POSTAL_FORMATS, SEALED_DISPLAY_TYPE_FOR, SET_CADENCE_DAYS, SET_LGS_WEEKDAY, SET_RELEASE_DATES, SET_RELEASE_LABELS, SET_RELEASE_PHASES, SET_RETAIL_LAG_DAYS, TCG_AFFILIATE_BASE, UPCOMING_SET_NAMES, _CAL_REGION_BY_CC, _amznNorm, _calKindRank, _calPhaseRank, _calSetKey, _calSetPhase, amazonForSealed, amazonSearchUrl, amazonUrl, calAddDays, calEndOf, calEstimated, calEventFullLabel, calEventSubtitle, calEventTitle, calRegionOf, calStoreEventName, calTodayYmd, calUTCToYmd, calYmdParts, calYmdToUTC, calendarEstimatedSetEntries, calendarMergeEvents, calendarProductEntries, calendarSetEntries, calendarSetEstimates, calendarSort, calendarUpcoming, cleanSealedName, computeSeriesDeltas, deriveSealedDisplayType, gradedSlotBucket, haversineMi, priceStanding, rawSaleMatch, scLocalTime12, scNormalizePostal, scPlaceLabel, scPostalCandidates, scPostalShape, scRankPlaces, scZippo, searchNorm, seriesPricedOn, tcgSetSearchUrl, tcgUrl };
+// ---- site ----
+const REVEAL_WINDOW_HOURS = 96;
+// ---- site ----
+const REVEAL_MAX_CARDS = 36;
+// ---- site ----
+const REVEAL_EXCLUDED_SETS = new Set([EXTRAS_SET_NAME]);
+// ---- site ----
+const revealRotation = (rows, nowMs) => {
+  const cutoff = nowMs - REVEAL_WINDOW_HOURS * 36e5;
+  const oldNames = new Set();
+  for(const r of (rows || [])){
+    if(!r) continue;
+    const nm = r["Product Name"];
+    if(!nm) continue;
+    const t = r.added_at ? Date.parse(r.added_at) : NaN;
+    if(!Number.isFinite(t) || t < cutoff) oldNames.add(nm);
+  }
+  const best = new Map();
+  for(const r of (rows || [])){
+    if(!r || !r.card_id || !r.added_at) continue;
+    if(REVEAL_EXCLUDED_SETS.has(r.Set)) continue;
+    if(oldNames.has(r["Product Name"])) continue;
+    const t = Date.parse(r.added_at);
+    // ⚠ A stamp in the FUTURE is clock skew or a bad backfill, never a reveal.
+    // Trusting it would pin that card to the head of the reel permanently,
+    // because it can never fall out of a window whose end keeps moving toward
+    // it. Same rule coconutFreshCards applies to a typo'd `revealed` year.
+    if(!Number.isFinite(t) || t > nowMs || t < cutoff) continue;
+    const art = r.img_normal || r.img_large || r.img_small || null;
+    const prev = best.get(r.card_id);
+    // Keep the first printing that has art; only upgrade a no-art entry.
+    if(prev && (prev.art || !art)) continue;
+    const num = parseInt(r.Number, 10);
+    best.set(r.card_id, {card_id: r.card_id, t, art, row: r,
+      name: r["Product Name"] || "", set: r.Set || "",
+      num: Number.isFinite(num) ? num : Number.MAX_SAFE_INTEGER});
+  }
+  return [...best.values()]
+    .filter(c => c.art)
+    .sort((a, b) => (b.t - a.t) || (a.num - b.num)
+      || String(a.name).localeCompare(String(b.name)))
+    .slice(0, REVEAL_MAX_CARDS);
+};
+// ---- site ----
+const revealSetLabel = (cards) => {
+  const n = new Map();
+  for(const c of (cards || [])) if(c.set) n.set(c.set, (n.get(c.set) || 0) + 1);
+  let top = null, topN = 0;
+  for(const [s, k] of n){ if(k > topN){ top = s; topN = k; } }
+  return (top && topN * 2 > (cards || []).length) ? top : null;
+};
+export { AMAZON_ASIN_BY_SET, AMAZON_DEPT_DEFAULT, AMAZON_PUZZLE_ASINS, AMAZON_SEALED_RULES, AMAZON_TAG, CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_REGIONS, CAL_D, CAL_EST_SUFFIX, CARD_DELTA_WINDOWS, COLLECTOR_NUMBER_OVERRIDES, CONNECTING_FOILS, EXTRAS_MAP, EXTRAS_SET_NAME, GRADED_FOIL_PRINTINGS, GRADED_NONFOIL_PRINTINGS, INKS, MAINLINE_SETS, NEW_PULL_START, PRICE_STANDING_HIGH, PRICE_STANDING_LOW, PRICE_STANDING_MIN_POINTS, PRICE_STANDING_MIN_SPAN_RATIO, PRICE_STANDING_MIN_SPREAD, PRICE_STANDING_NEAR_LOW, PRICE_STANDING_WINDOWS, PRODUCT_RELEASE_DATES, PROMO_RARITY_SETS, PULL, PULL_V2, REVEAL_EXCLUDED_SETS, REVEAL_MAX_CARDS, REVEAL_WINDOW_HOURS, SC_GEO_COUNTRIES, SC_GEO_TIMEOUT_MS, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, SC_POSTAL_FORMATS, SEALED_DISPLAY_TYPE_FOR, SET_CADENCE_DAYS, SET_DISPLAY_NAMES, SET_LGS_WEEKDAY, SET_ORDER, SET_RELEASE_DATES, SET_RELEASE_LABELS, SET_RELEASE_PHASES, SET_RETAIL_LAG_DAYS, SUPPRESSED_CARD_IDS, TCG_AFFILIATE_BASE, TCG_MASSENTRY_MAX, TCG_PID_OVERRIDES, UPCOMING_SET_NAMES, _CAL_REGION_BY_CC, _amznNorm, _calKindRank, _calPhaseRank, _calSetKey, _calSetPhase, amazonForSealed, amazonSearchUrl, amazonUrl, calAddDays, calEndOf, calEstimated, calEventFullLabel, calEventSubtitle, calEventTitle, calRegionOf, calStoreEventName, calTodayYmd, calUTCToYmd, calYmdParts, calYmdToUTC, calendarEstimatedSetEntries, calendarMergeEvents, calendarProductEntries, calendarSetEntries, calendarSetEstimates, calendarSort, calendarUpcoming, cleanSealedName, computeSeriesDeltas, deriveSealedDisplayType, getPull, gradedSlotBucket, haversineMi, normalizeRarity, pick, priceStanding, rawSaleMatch, revealRotation, revealSetLabel, scLocalTime12, scNormalizePostal, scPlaceLabel, scPostalCandidates, scPostalShape, scRankPlaces, scZippo, searchNorm, seriesPricedOn, simPack, tcgMassEntryDest, tcgMassEntryParts, tcgMassName, tcgSetSearchUrl, tcgUrl, wPick };
