@@ -350,19 +350,17 @@ def main() -> None:
         # are numbered above their booster range (223-225); Q3 renumbers from 1.
         (704583, PD1_SET, "16", "crd_pd1_16_with_a_few_good_friends",  709896),
         # Printed 18/PD1 and 19/PD1 -- the two promos packed in the Costco-
-        # exclusive Best Buddies Bundle (Sep 2026, SEALED_EXCLUSIVES n:1).
+        # exclusive Best Buddies Bundle (Sep 2026, TCGplayer 719823).
         # Bases are the Attack of the Vine! printings: Sulley - Protective
         # Monster #128 (702691) and Violet Parr - Super Resilient #176
         # (704672). Cost / ink / stats / lore / classifications / ability text
         # on the real cards were read off the announcement photo and match
         # those two rows exactly, which is what makes cloning them safe.
-        # TCGplayer has not listed either promo yet, so no pid: fill it in and
-        # delete the art path when it does, and the row updates in place --
-        # same card_id, so nobody's collection mark moves.
-        (702691, PD1_SET, "18", "crd_pd1_18_sulley_protective_monster",   None,
-         "Logos/cards/sulley-protective-monster-pd1-18.jpg"),
-        (704672, PD1_SET, "19", "crd_pd1_19_violet_parr_super_resilient", None,
-         "Logos/cards/violet-parr-super-resilient-pd1-19.jpg"),
+        # TCGplayer listed both on 2026-09-24 (719967 / 719968, Disney Lorcana
+        # Promo Cards #18 / #19), which retired the repo-local photo crops they
+        # carried until then; same card_ids, so no collection mark moved.
+        (702691, PD1_SET, "18", "crd_pd1_18_sulley_protective_monster",   719967),
+        (704672, PD1_SET, "19", "crd_pd1_19_violet_parr_super_resilient", 719968),
         # Curator's Collection: Beauty and the Beast (CC2) — announced at D23
         # 2026, six premium foil reprints sold ~$99.99 at a handful of Disney
         # locations starting 2026-10-01. Not on TCGplayer yet (no secondary

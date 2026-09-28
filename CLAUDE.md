@@ -618,10 +618,12 @@ section; until 2026-09-11 they were tiles at the foot of the Sealed tab), from t
 cut out and served from our own storage.
 
 **A pin can come in a RETAIL BOX**, not just an event kit / convention / prize wall — n:45 ships
-inside the Costco Best Buddies Bundle (`SEALED_EXCLUSIVES`), which is also where 18/PD1 and
-19/PD1 come from. Its photo is a cut from the announcement shot rather than a studio one and is
-worth re-cutting from a better source, which is a re-upload rather than a code edit — it sits at
-`pins/45.png` like every other entry. `EXPECTED_PINS` in `upload_collectible_photos.py` tracks
+inside the Costco Best Buddies Bundle (TCGplayer 719823; it began as a `SEALED_EXCLUSIVES` row),
+which is also where 18/PD1 and 19/PD1 come from. Its photo is a cut from the announcement shot
+rather than a studio one and is worth re-cutting from a better source, which is a re-upload
+rather than a code edit — it sits at `pins/45.png` like every other entry. **TCGplayer's bundle
+photo is NOT that source** (checked 2026-09-27): the pin sits behind the blister at ~80px there,
+no sharper than the cut we have. `EXPECTED_PINS` in `upload_collectible_photos.py` tracks
 the highest valid `n`, so it moves with the list (45 today, counters 25).
 
 **⚠ Do NOT credit a photo source anywhere user-facing.** The Help credits paragraph and
@@ -2396,8 +2398,10 @@ Card detail modal's Graded tab:
 listing, no pid, no price and no `sealed_prices_latest` row. Same answer as `SEALED_PUZZLES`: a
 static client const shaped like a sealed_prices row, merged into the Sealed collection at the two
 sites that spread the puzzles. Ownership persists in `sealed_collection_items` — no FK on the
-product id, so a synthetic id is fine. First entry: the **Best Buddies Bundle** (Costco, Sep 2026)
-— portfolio, 6 Wilds Unknown packs, 18/PD1 + 19/PD1, and `LORCANA_PINS` n:45.
+product id, so a synthetic id is fine. The first entry was the **Best Buddies Bundle** (Costco,
+Sep 2026) — portfolio, 6 Wilds Unknown packs, 18/PD1 + 19/PD1, and `LORCANA_PINS` n:45 — and it
+**became a real TCGplayer row four days later** (below), so **the list is EMPTY today**. The
+const, `isUnpricedSealed` and the `is_exclusive` render branches stay, as infra for the next one.
 
 - **⚠ `set_id` is NULL, which files it under "Other / Promo"** with the portfolios and everything
   else TCGplayer gives no set (Zaven, 2026-09-20). It shipped with a synthetic `__exclusives__`
@@ -2410,11 +2414,26 @@ product id, so a synthetic id is fine. First entry: the **Best Buddies Bundle** 
   tab's unit and SKU counts, and these must NOT be, because a bundle is a box you own.
 - **⚠ `n` is a stable hand-assigned id.** Never renumber one — it is what somebody's owned mark
   is filed under. Same rule as the pins.
-- **⚠ This is the one static catalog whose rows can become REAL TCGplayer products.** A retailer
-  exclusive usually reaches the secondary market, and the daily loader would then bring in a
-  second row for the same box under its own set. When that happens **delete the entry here** —
-  two tiles for one product is worse than the owned marks it drops, and the real row is the one
-  with a price. `reconcile_catalog.py --watch` reports the new listing as `missing_sealed`.
+- **⚠ This is the one static catalog whose rows can become REAL TCGplayer products — and the
+  first one did, in four days.** TCGplayer listed the Best Buddies Bundle on 2026-09-24 as
+  **719823** (in its Wilds Unknown group; $69.90 Low / $72.77 Market on arrival), the daily
+  sealed loader took it that evening, and the site showed **two tiles for one box** — the static
+  one on a phone photo, the real one with TCGplayer's studio shot and a price — until Zaven noticed
+  the better photo on 2026-09-27. When that happens **delete the entry here**: the real row is
+  the one with a price. First check `sealed_collection_items` (and `watchlist_items`) for the
+  synthetic pid and move any owned mark onto the real pid rather than dropping it — nobody had
+  marked n:1, so nothing moved. **Retire the `n`**: reused, an old owned mark would attach itself
+  to a different box. `test_amazon_links.mjs` keeps the retired list and fails if one returns.
+- **⚠ NOTHING flags that moment.** This file used to say `reconcile_catalog.py --watch` reports
+  the listing as `missing_sealed` — it cannot: `load_sealed_products.py` runs inside the daily ETL
+  and absorbs a new SKU the day it appears, so by the watch's next run the product is in
+  `sealed_products` and nothing is missing. Whenever this list holds an entry, look for its name
+  in `sealed_products` from time to time.
+- **The real row files under TCGplayer's own group — Wilds Unknown — not "Other / Promo".** The
+  null-`set_id` rule below is about US not picking a set for a box that spans three; TCGplayer
+  has picked one (its name is "Disney Lorcana: Wilds Unknown Best Buddies Bundle"), and that is
+  left standing. Moving it back would take new loader code: `SEALED_SET_OVERRIDES` only FILLS a
+  set the group map left empty and cannot clear one.
 - **`isUnpricedSealed(p)`** is the one predicate for "static row, no TCGplayer SKU, no price" —
   puzzles, pins/counters and exclusives. Every surface that would otherwise build a TCGplayer buy
   link, fetch price history or multiply a price by a quantity asks it. **A missed call site is
@@ -2430,7 +2449,9 @@ product id, so a synthetic id is fine. First entry: the **Best Buddies Bundle** 
   is neither. Curate an ASIN for one and it WOULD join the shelf, which is the right outcome —
   by then there is a real listing to link to.
 - Guarded by the `SEALED_EXCLUSIVES` / `isUnpricedSealed` section of
-  `node scripts/test_amazon_links.mjs`.
+  `node scripts/test_amazon_links.mjs`. **⚠ It runs over a FIXTURE entry spliced into the real
+  `.map`**, followed by every live entry: with the list empty, each `.every` would otherwise pass
+  on nothing at all.
 
 ## Sealed enhancements (2026-06-05 — modal + Δ% + Screener)
 
@@ -2654,7 +2675,8 @@ so #7 there is five different cards.
   copies) links #9-16. #1-6 aren't indexed yet.
 - **PD1** — product/prerelease promos: #1-8 printed `/PD1` (checked 2026-09-18), #15 Pegasus
   (Lorebook), #16 With a Few Good Friends (Q3), #17 The Beanstalk, **#18 Sulley - Protective
-  Monster / #19 Violet Parr - Super Resilient** (Best Buddies Bundle, 2026-09-19).
+  Monster / #19 Violet Parr - Super Resilient** (Best Buddies Bundle, 2026-09-19; TCGplayer
+  719967 / 719968 since 2026-09-24).
 - **A promo TCGplayer has not listed yet is a `REPRINT_PROMOS` entry with a NULL pid** (2026-09-20).
   That tuple grew an optional 6th field: `(base_pid, set_id, cn, new_id, promo_pid[, art])`. A null
   `promo_pid` leaves the row unpriced — already the handled case, `NUMBERED_PROMO_SETS` emits one
@@ -2663,6 +2685,14 @@ so #7 there is five different cards.
   pid in later and deleting the art path updates the row **in place**: same `card_id`, so nobody's
   collection mark moves. That is the reason to use this script rather than a one-off migration —
   and it re-applies after every Lorcast load instead of being a single insert that can drift.
+  PD1 #18/#19 were the first to graduate (listed 2026-09-24, filled in 2026-09-27).
+  - **⚠ A filled-in pid reaches the `cards` rows only when the script runs FROM `main`.** The
+    21:00 UTC metadata job (etl.yml) re-runs it daily from `main`'s checkout, so a run from a
+    branch is reverted within the day — let the merge carry it, or run it by hand right after.
+  - **⚠ Delete a retired `art` file only AFTER the rows point at TCGplayer** — read
+    `cards.image_normal` for the ids first. Deleted in the same deploy, the image 404s from the
+    deploy until the next run. That is why `sulley-protective-monster-pd1-18.jpg` and
+    `violet-parr-super-resilient-pd1-19.jpg` were still in `Logos/cards/` after the switch.
 - **⚠ Check Lorcast before hand-writing any promo's stats.** #18/#19 turned out to be promo
   printings of Attack of the Vine! #128 and #176, so cloning those rows gave exact cost / ink /
   stats / lore / classifications / ability text instead of a blurry photo's best guess. A promo
