@@ -73,6 +73,47 @@ for (const [i, policy] of pagePolicies.entries()) {
   check(connect.includes("https://tile.openstreetmap.org"), `policy ${i + 1}: the calendar map's tile host is in connect-src`);
 }
 
+// ── sw.js handles images only on hosts it may fetch ───────────────────────
+// SW_IMAGE_HOSTS is the list the service worker re-fetches images from; any
+// other image host is left to the browser, because the SW's own fetch of it
+// would hit connect-src and break the image (a browser extension's
+// product-images.tcgplayer.com images filed exactly that CSP report on
+// 2026-09-28). Both directions matter: a listed host missing from connect-src
+// breaks every image on it, and an img-src host missing from the list is never
+// cached for offline use.
+{
+  const sw = readFileSync(new URL("../sw.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const m = sw.match(/const SW_IMAGE_HOSTS = \[([\s\S]*?)\];/);
+  check(!!m, "sw.js declares SW_IMAGE_HOSTS");
+  const list = m ? [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]) : [];
+  const SKIPPED = ["https://api.qrserver.com"]; // sw.js returns on this host before the image branch
+  for (const [i, policy] of pagePolicies.entries()) {
+    const connect = hosts(directive(policy, "connect-src"));
+    for (const h of list) {
+      check(connect.includes("https://" + h), `policy ${i + 1}: SW image host ${h} is in connect-src`,
+        `sw.js re-fetches images from it. Add https://${h} to connect-src in EVERY page policy.`);
+    }
+    for (const host of hosts(directive(policy, "img-src"))) {
+      if (SKIPPED.includes(host)) continue;
+      check(list.includes(host.replace(/^https:\/\//, "")), `policy ${i + 1}: img-src host ${host} is in SW_IMAGE_HOSTS`,
+        "add it to SW_IMAGE_HOSTS in sw.js, or its images are never cached for offline use.");
+    }
+  }
+  const fnSrc = sw.match(/const swImageHost = [^\n]*\n/);
+  check(!!fnSrc, "sw.js declares swImageHost");
+  if (fnSrc) {
+    const swImageHost = new Function("SW_IMAGE_HOSTS", fnSrc[0] + "return swImageHost;")(list);
+    for (const [host, want] of [["tcgplayer-cdn.tcgplayer.com", true], ["product-images.tcgplayer.com", false],
+      ["i.ebayimg.com", true], ["ebayimg.com", false], ["evilebayimg.com", false], ["cards.lorcast.io", true]]) {
+      check(swImageHost(host) === want, `swImageHost(${host}) is ${want}`);
+    }
+  }
+  const early = sw.indexOf("!swImageHost(url.hostname)) return;");
+  const branch = sw.indexOf("if (req.destination === 'image' || url.hostname.endsWith('lorcast.io'))");
+  check(early > 0 && branch > early, "sw.js leaves a foreign image host to the browser BEFORE its image branch",
+    "the early return must come first, or the catch-all at the end of the fetch handler re-fetches it.");
+}
+
 // ── the page policies must not drift ──────────────────────────────────────
 // _headers tells a reader to "add the origin to every copy"; they differ only
 // by frame-ancestors ('none' on /*, 'self' on /swiss and /ticker so the
