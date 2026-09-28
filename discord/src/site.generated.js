@@ -324,6 +324,28 @@ const simPack = (pools,pull) => {
 // ---- site ----
 const TCG_AFFILIATE_BASE = "https://partner.tcgplayer.com/c/7285926/1780961/21018";
 // ---- site ----
+const TCG_MASSENTRY_MAX = 6000;
+// ---- site ----
+const tcgMassEntryDest = (lines) =>
+  `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=${encodeURIComponent(lines.join("||"))}`;
+// ---- site ----
+const tcgMassEntryParts = (lines) => {
+  const parts = [];
+  let cur = [];
+  for(const line of lines || []){
+    if(cur.length && tcgMassEntryDest([...cur, line]).length > TCG_MASSENTRY_MAX){ parts.push(cur); cur = []; }
+    cur.push(line);
+  }
+  if(cur.length) parts.push(cur);
+  return parts.map(ls => ({
+    url: TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(tcgMassEntryDest(ls)),
+    copies: ls.reduce((n, l) => n + (parseInt(l, 10) || 0), 0),
+  }));
+};
+// ---- site ----
+const tcgMassName = (names, pid, fallback) =>
+  (pid != null && names && names.get(Number(pid))) || fallback;
+// ---- site ----
 const tcgUrl = (productId, printing) => {
   if(!productId) return null;
   let dest = `https://www.tcgplayer.com/product/${productId}/?Language=English`;
@@ -800,4 +822,4 @@ const scLocalTime12 = (hhmm) => {
   h = h % 12 || 12;
   return `${h}:${m[2]} ${ap}`;
 };
-export { AMAZON_ASIN_BY_SET, AMAZON_DEPT_DEFAULT, AMAZON_PUZZLE_ASINS, AMAZON_SEALED_RULES, AMAZON_TAG, CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_REGIONS, CAL_D, CAL_EST_SUFFIX, CARD_DELTA_WINDOWS, EXTRAS_SET_NAME, GRADED_FOIL_PRINTINGS, GRADED_NONFOIL_PRINTINGS, INKS, MAINLINE_SETS, NEW_PULL_START, PRICE_STANDING_HIGH, PRICE_STANDING_LOW, PRICE_STANDING_MIN_POINTS, PRICE_STANDING_MIN_SPAN_RATIO, PRICE_STANDING_MIN_SPREAD, PRICE_STANDING_NEAR_LOW, PRICE_STANDING_WINDOWS, PRODUCT_RELEASE_DATES, PULL, PULL_V2, SC_GEO_COUNTRIES, SC_GEO_TIMEOUT_MS, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, SC_POSTAL_FORMATS, SEALED_DISPLAY_TYPE_FOR, SET_CADENCE_DAYS, SET_LGS_WEEKDAY, SET_ORDER, SET_RELEASE_DATES, SET_RELEASE_LABELS, SET_RELEASE_PHASES, SET_RETAIL_LAG_DAYS, TCG_AFFILIATE_BASE, UPCOMING_SET_NAMES, _CAL_REGION_BY_CC, _amznNorm, _calKindRank, _calPhaseRank, _calSetKey, _calSetPhase, amazonForSealed, amazonSearchUrl, amazonUrl, calAddDays, calEndOf, calEstimated, calEventFullLabel, calEventSubtitle, calEventTitle, calRegionOf, calStoreEventName, calTodayYmd, calUTCToYmd, calYmdParts, calYmdToUTC, calendarEstimatedSetEntries, calendarMergeEvents, calendarProductEntries, calendarSetEntries, calendarSetEstimates, calendarSort, calendarUpcoming, cleanSealedName, computeSeriesDeltas, deriveSealedDisplayType, getPull, gradedSlotBucket, haversineMi, pick, priceStanding, rawSaleMatch, scLocalTime12, scNormalizePostal, scPlaceLabel, scPostalCandidates, scPostalShape, scRankPlaces, scZippo, searchNorm, seriesPricedOn, simPack, tcgSetSearchUrl, tcgUrl, wPick };
+export { AMAZON_ASIN_BY_SET, AMAZON_DEPT_DEFAULT, AMAZON_PUZZLE_ASINS, AMAZON_SEALED_RULES, AMAZON_TAG, CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_REGIONS, CAL_D, CAL_EST_SUFFIX, CARD_DELTA_WINDOWS, EXTRAS_SET_NAME, GRADED_FOIL_PRINTINGS, GRADED_NONFOIL_PRINTINGS, INKS, MAINLINE_SETS, NEW_PULL_START, PRICE_STANDING_HIGH, PRICE_STANDING_LOW, PRICE_STANDING_MIN_POINTS, PRICE_STANDING_MIN_SPAN_RATIO, PRICE_STANDING_MIN_SPREAD, PRICE_STANDING_NEAR_LOW, PRICE_STANDING_WINDOWS, PRODUCT_RELEASE_DATES, PULL, PULL_V2, SC_GEO_COUNTRIES, SC_GEO_TIMEOUT_MS, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, SC_POSTAL_FORMATS, SEALED_DISPLAY_TYPE_FOR, SET_CADENCE_DAYS, SET_LGS_WEEKDAY, SET_ORDER, SET_RELEASE_DATES, SET_RELEASE_LABELS, SET_RELEASE_PHASES, SET_RETAIL_LAG_DAYS, TCG_AFFILIATE_BASE, TCG_MASSENTRY_MAX, UPCOMING_SET_NAMES, _CAL_REGION_BY_CC, _amznNorm, _calKindRank, _calPhaseRank, _calSetKey, _calSetPhase, amazonForSealed, amazonSearchUrl, amazonUrl, calAddDays, calEndOf, calEstimated, calEventFullLabel, calEventSubtitle, calEventTitle, calRegionOf, calStoreEventName, calTodayYmd, calUTCToYmd, calYmdParts, calYmdToUTC, calendarEstimatedSetEntries, calendarMergeEvents, calendarProductEntries, calendarSetEntries, calendarSetEstimates, calendarSort, calendarUpcoming, cleanSealedName, computeSeriesDeltas, deriveSealedDisplayType, getPull, gradedSlotBucket, haversineMi, pick, priceStanding, rawSaleMatch, scLocalTime12, scNormalizePostal, scPlaceLabel, scPostalCandidates, scPostalShape, scRankPlaces, scZippo, searchNorm, seriesPricedOn, simPack, tcgMassEntryDest, tcgMassEntryParts, tcgMassName, tcgSetSearchUrl, tcgUrl, wPick };

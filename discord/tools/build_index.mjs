@@ -78,6 +78,9 @@ const [sets, prices, cards, sealed, tournaments, tdecks, gradedRoll, rawRoll] = 
   sbAll("graded_sales_rollup", { select: "card_id,sale_count", order: "card_id.asc,grader.asc,grade.asc,printing.asc" }),
   sbAll("raw_sales_rollup", { select: "card_id", order: "card_id.asc" }).catch(() => []),
 ]);
+// TCGplayer's own spelling of a product where it differs from ours (migration
+// 169): mass entry matches names exactly, so /deck's one-cart link needs them.
+const tcgNames = await sbAll("tcgplayer_names", { select: "product_id,name", order: "product_id.asc" }).catch(() => []);
 console.log(`  ${cards.length} cards, ${prices.length} prices, ${sets.length} sets, ${sealed.length} sealed, `
   + `${tournaments.length} tournaments / ${tdecks.length} top decks`);
 
@@ -196,6 +199,10 @@ for (const dc of deckCards) {
   plays.set(fam, (plays.get(fam) || 0) + (deckWeight.get(dc.deck_id) || 0));
 }
 console.log(`  plays: ${deckCards.length} deck rows across ${deckWeight.size} decks -> ${plays.size} played cards`);
+// The same weights summed over every deck that has cards: a card's `pl` over
+// this is the share of recent top-cut decks that play it ("in 38% of decks").
+const decksWithCards = new Set(deckCards.map((d) => d.deck_id));
+const playDecks = Math.round([...decksWithCards].reduce((s, id) => s + (deckWeight.get(id) || 0), 0) * 1000) / 1000;
 
 const gradedCount = new Map();
 for (const g of gradedRoll) gradedCount.set(g.card_id, (gradedCount.get(g.card_id) || 0) + (g.sale_count || 0));
@@ -378,6 +385,8 @@ const out = {
   v: 2,
   built: new Date().toISOString(),
   priceDate,
+  playDecks,
+  tcgNames: Object.fromEntries(tcgNames.map((r) => [String(r.product_id), r.name])),
   newestMain: site.MAINLINE_SETS[site.MAINLINE_SETS.length - 1],
   sets: setsOut,
   cards: identities,
@@ -403,8 +412,11 @@ if (process.argv.includes("--fixture")) {
     "Go Go Tomago", "Let It Go", "Be Prepared", "Tipo", "Peter Pan", "Genie", "Maleficent", "Hades", "Ariel",
     "Heart of Te Fiti", "A Whole New World", "Friends on the Other Side", "Moana", "Belle", "Gaston",
     "Cruella De Vil", "HeiHei", "Heihei", "Grandmother Willow", "Ursula", "Scar", "Flounder", "The Queen"]);
-  const fx = { ...out, cards: identities.filter((i) => WANT.has(i.c)),
-    sealed: sealedOut.filter((s) => s.sn === "Azurite Sea" || s.sn === out.newestMain) };
+  const fxCards = identities.filter((i) => WANT.has(i.c));
+  const fxPids = new Set(fxCards.flatMap((c) => c.p.flatMap((p) => p.f.map((f) => String(f[1])))));
+  const fx = { ...out, cards: fxCards,
+    sealed: sealedOut.filter((s) => s.sn === "Azurite Sea" || s.sn === out.newestMain),
+    tcgNames: Object.fromEntries(Object.entries(out.tcgNames).filter(([pid]) => fxPids.has(pid))) };
   mkdirSync(new URL("../test/", import.meta.url), { recursive: true });
   writeFileSync(FIXTURE, JSON.stringify(fx));
   console.log(`wrote fixture: ${fx.cards.length} cards, ${fx.sealed.length} sealed`);

@@ -74,11 +74,30 @@ export const COMMANDS = [
     ],
   },
   {
+    name: "meta", type: 1, ...EVERYWHERE,
+    description: "What's being played: the most-played cards and the latest tournament winners",
+    options: [privOpt],
+  },
+  {
     name: "calendar", type: 1, ...EVERYWHERE,
     description: "Set releases, Challenges and qualifiers coming up",
     options: [privOpt],
   },
   { name: "help", type: 1, ...EVERYWHERE, description: "What this bot can do" },
+  {
+    name: "set", type: 1, ...EVERYWHERE,
+    description: "A set at a glance: release dates, box price vs box EV, chase cards, sealed",
+    options: [{ type: 3, name: "set", autocomplete: true, max_length: 60, description: "Which set — hyperia city, azurite, set 5 (default: the newest)" }, privOpt],
+  },
+  {
+    name: "open", type: 1, ...EVERYWHERE,
+    description: "Open a booster pack (or a whole box) with real odds and real prices",
+    options: [
+      { type: 3, name: "set", autocomplete: true, max_length: 60, description: "Which set (default: the newest one out)" },
+      { type: 5, name: "box", description: "Open a whole box — 24 packs" },
+      privOpt,
+    ],
+  },
   {
     name: "reports", type: 1, integration_types: [0], contexts: [0],
     description: "A daily or weekly price movers report in a channel",

@@ -1,7 +1,7 @@
 // embeds.js — Discord message payloads. Pure: every function takes data that
 // has already been fetched and returns {embeds, components} JSON, which is what
 // lets the guard test check a reply without a network.
-import { tcgUrl, tcgSetSearchUrl, amazonForSealed, calEventTitle, calEventSubtitle, scLocalTime12 } from "./site.generated.js";
+import { tcgUrl, tcgSetSearchUrl, amazonForSealed, calEventTitle, calEventSubtitle, scLocalTime12, tcgMassEntryParts, tcgMassName } from "./site.generated.js";
 import { FIN_PRINTING, RANGES, DEFAULT_RANGE, MOVER_WINDOWS, MOVER_GROUPS, CAL_FILTERS } from "./data.js";
 
 export const SITE = "https://packs.ink";
@@ -111,6 +111,13 @@ export function cardMessage(ctx) {
   if (lead.length) lines.push("*" + lead.join(" ") + "*");
 
   lines.push([set.n, p.no ? "#" + p.no : null, p.r, p.var, fin && fin !== p.var ? fin : null].filter(Boolean).join(" · "));
+  // What a player needs to place the card (its ink, cost, type) and how much
+  // it is played — measured from recent tournament top cuts, the same number
+  // that decides which version "mowgli" means.
+  const ident = gameplayLine(c);
+  if (ident) lines.push(`*${ident}*`);
+  const play = playLine(R, res.index, ctx.playDecks);
+  if (play) lines.push(play);
   lines.push("");
 
   const mkt = price ? price.market : (f ? f[5] : null);
@@ -212,6 +219,42 @@ export function cardMessage(ctx) {
     { type: 2, style: 5, label: "packs.ink", url: cardPageUrl(p.id) },
   ] });
   return { embeds: [embed], components };
+}
+
+// ── a card's identity and play ───────────────────────────────────────────
+// The six inks as Discord's coloured squares: the nearest colour Discord can
+// draw inline, and they read at a glance in a list.
+export const INK_MARK = { Amber: "🟨", Amethyst: "🟪", Emerald: "🟩", Ruby: "🟥", Sapphire: "🟦", Steel: "⬜" };
+export const inkMarks = (inks) => (inks || []).map((k) => INK_MARK[k] || "").join("");
+
+export function gameplayLine(c) {
+  const bits = [];
+  if (c.i && c.i.length) bits.push(`${inkMarks(c.i)} ${c.i.join("/")}`);
+  if (c.cost != null) bits.push(`${c.cost} cost`);
+  if (c.t) bits.push(c.t + (c.k && c.k.length ? " — " + c.k.slice(0, 4).join(", ") : ""));
+  return bits.join(" · ");
+}
+
+// Rank among every card with a recent top-cut appearance, most played first.
+const PLAY_RANK = new WeakMap();
+export function playRankOf(R, i) {
+  let m = PLAY_RANK.get(R);
+  if (!m) {
+    m = new Map();
+    R.cards.map((c, k) => [k, c.pl || 0]).filter((x) => x[1] > 0).sort((a, b) => b[1] - a[1] || a[0] - b[0])
+      .forEach(([k], pos) => m.set(k, pos + 1));
+    PLAY_RANK.set(R, m);
+  }
+  return m.get(i) || null;
+}
+export function playLine(R, i, playDecks) {
+  const c = R.cards[i];
+  const rank = playRankOf(R, i);
+  if (!rank || !(c.pl > 0)) return null;
+  const share = playDecks > 0 ? c.pl / playDecks : null;
+  if (share != null && share < 0.02 && rank > 100) return null;
+  return `🏆 ${share != null && share >= 0.01 ? `In ${Math.round(share * 100)}% of recent tournament top-cut decks` : "Played in recent tournament top cuts"}` +
+    (rank <= 100 ? ` · #${rank} most played` : "");
 }
 
 function footerText(ctx, price) {
@@ -653,6 +696,7 @@ export function helpMessage(ids) {
         { name: "Market", value: `${c("movers")} — biggest gains and drops, cards or sealed; flip windows with the buttons` },
         { name: "Play", value: [
           `${c("events")} \`60614\` — Set Championships, prereleases and weekly play near you`,
+          `${c("meta")} — the most-played cards and the latest tournament winners`,
           `${c("calendar")} — set releases, Challenges and qualifiers coming up`,
         ].join("\n") },
         { name: "For fun", value: `${c("open")} — open a booster pack (or a box) at real prices` },
@@ -670,8 +714,62 @@ export function helpMessage(ids) {
   };
 }
 
+// ── the meta ─────────────────────────────────────────────────────────────
+// What is being played (the index's recency-weighted top-cut appearances —
+// the number that picks "the version people play") and who won lately.
+const PLACE_MARK = { 1: "🥇", 2: "🥈", 3: "🥉" };
+// Player and deck names are free text: escape what Discord would read as
+// markdown, or "[OSA] Moluk" and a name with an underscore render wrong.
+export const escMd = (s) => String(s || "").replace(/[\\*_~`|>[\]()]/g, "\\$&");
+export function deckPageUrl(r) {
+  const u = new URL(SITE + "/decks");
+  u.searchParams.set("deck", r.deck_id);
+  if (r.deck_visibility !== "public" && r.deck_share_token) u.searchParams.set("token", r.deck_share_token);
+  return u.toString();
+}
+export function metaMessage({ R, index, results }) {
+  const ranked = R.cards.map((c, i) => ({ c, i })).filter((x) => x.c.pl > 0)
+    .sort((a, b) => b.c.pl - a.c.pl || a.i - b.i).slice(0, 12);
+  const total = index.playDecks || 0;
+  const picks = [];
+  const lines = ranked.map((x, k) => {
+    const { printing, fi } = R.pickPrinting(x.i);
+    const f = printing.f[fi] || printing.f[0] || [];
+    const listed = !f[6];
+    const px = listed ? (f[5] ?? f[4]) : null;
+    const share = total > 0 ? ` · in ${Math.round((x.c.pl / total) * 100)}% of decks` : "";
+    picks.push({ label: clip(x.c.n, 100), value: R.cardKey(printing, fi), description: clip(`#${k + 1} most played${px != null ? " · " + money(px) : ""}`, 100) });
+    return `\`${String(k + 1).padStart(2)}\` ${inkMarks(x.c.i)} [${clip(x.c.n, 44)}](${buyUrl(x.c.n, listed ? f[1] : null, f[2] || FIN_PRINTING[f[0]])})${share}${px != null ? ` · ${money(px)}` : ""}`;
+  });
+  const played = {
+    title: "Most played in recent tournaments", color: BRAND_COLOR, url: `${SITE}/decks?s=tournaments`,
+    description: clip(lines.join("\n"), 4000) || "No tournament decks on record yet.",
+  };
+  const fields = [];
+  for (const t of results || []) {
+    if (!t.top || !t.top.length) continue;
+    const rows = t.top.map((r) => {
+      const inks = (r.deck_inks || []).filter(Boolean);
+      const deck = clip(r.deck_name || inks.join("/") || "Deck", 40);
+      const link = r.deck_id ? `[${escMd(deck)}](${deckPageUrl(r)})` : escMd(deck);
+      return `${PLACE_MARK[r.place_rank] || "▫️"} ${escMd(clip(r.player_name || "?", 28))} — ${inkMarks(inks)} ${link}${PLACE_MARK[r.place_rank] ? "" : ` *(${escMd(r.place || "top " + r.place_rank)})*`}`;
+    });
+    const meta = [shortDate(t.event_date), t.num_players ? `${t.num_players} players` : null].filter(Boolean).join(" · ");
+    fields.push({ name: clip(`${t.name}${meta ? " — " + meta : ""}`, 256), value: clip(rows.join("\n"), 1024) });
+  }
+  const results_ = {
+    title: "Latest results", color: BRAND_COLOR, url: `${SITE}/decks?s=tournaments`,
+    ...(fields.length ? { fields } : { description: "No recent results on record." }),
+    footer: { text: `Play share is recency-weighted across recent top-cut decks · TCGplayer NM Market as of ${shortDate(index.priceDate)} · ${AFFILIATE_NOTE}` },
+  };
+  const components = [];
+  if (picks.length) components.push({ type: 1, components: [{ type: 3, custom_id: openId("card"), placeholder: "Look at a card", options: picks.slice(0, 25) }] });
+  components.push({ type: 1, components: [{ type: 2, style: 5, label: "All tournament results", url: `${SITE}/decks?s=tournaments` }] });
+  return { embeds: [played, results_], components };
+}
+
 // ── a whole decklist ─────────────────────────────────────────────────────
-export function deckMessage({ result, priceDate }) {
+export function deckMessage({ result, priceDate, tcgNames }) {
   const r = result;
   const lines = [
     `**${money(r.totalMarket) || "$0.00"}** at NM Market · ${money(r.totalLow) || "$0.00"} at Low`,
@@ -699,10 +797,40 @@ export function deckMessage({ result, priceDate }) {
       (r.unmatched.length > 8 ? ` and ${r.unmatched.length - 8} more` : "") + " — not counted.");
   }
   if (r.unpricedMarket) lines.push(`${r.unpricedMarket} card${r.unpricedMarket === 1 ? " has" : "s have"} no NM Market price and count as $0.`);
-  return { embeds: [{
+  const embeds = [{
     title: "Deck price", color: BRAND_COLOR, description: clip(lines.join("\n"), 4000),
     footer: { text: `TCGplayer prices as of ${shortDate(priceDate)} · cheapest printing of each card · ${AFFILIATE_NOTE}` },
-  }], components: [] };
+  }];
+  // The whole list as ONE TCGplayer cart (mass entry), each card spelled the
+  // way TCGplayer spells it — the site's own builder. A 60-card list is always
+  // one cart. Its own embed: the cart URL runs to a couple of thousand
+  // characters, and the list above already uses most of its 4,096.
+  const cart = deckCartUrl(r, tcgNames);
+  if (cart) {
+    embeds.push({ color: BRAND_COLOR,
+      description: `🛒 [**Buy the whole deck on TCGplayer** — one cart, ${r.rows.reduce((s, x) => s + x.qty, 0)} cards](${cart})\n*Each card by name at its base printing; pick foils in the cart.*` });
+  }
+  return { embeds, components: [] };
+}
+
+const MASS_NAMES = new WeakMap();
+export function tcgNameMap(obj) {
+  if (!obj) return null;
+  let m = MASS_NAMES.get(obj);
+  if (!m) { m = new Map(Object.entries(obj).map(([k, v]) => [Number(k), v])); MASS_NAMES.set(obj, m); }
+  return m;
+}
+export function deckCartUrl(r, tcgNames) {
+  const byName = new Map();
+  for (const x of r.rows || []) {
+    const f = x.mktAt ? x.mktAt.f : null;
+    const name = tcgMassName(tcgNames, f && !f[6] ? f[1] : null, x.card.n);
+    if (name) byName.set(name, (byName.get(name) || 0) + x.qty);
+  }
+  if (!byName.size) return null;
+  const parts = tcgMassEntryParts([...byName].map(([name, qty]) => `${qty} ${name}`));
+  const url = parts[0] && parts[0].url;
+  return url && url.length <= 3800 ? url : null;
 }
 
 export const DECK_MODAL_ID = (priv) => `deck|${priv ? "p" : "-"}`;

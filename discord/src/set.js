@@ -85,7 +85,7 @@ export function setMessage(o, { origin } = {}) {
   // week" is only worth saying while reveals are still arriving.
   if (o.upcoming) {
     lines.push(`**${o.count} cards revealed so far**` + (o.added && o.added < o.count ? ` · ${o.added} in the last week` : ""));
-    lines.push("-# Not out yet: these are pre-sale prices, which usually run well above where a card settles.");
+    lines.push("*Not out yet: these are pre-sale prices, which usually run well above where a card settles.*");
   } else {
     lines.push(`${o.count} cards`);
   }

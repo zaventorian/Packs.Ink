@@ -32,6 +32,8 @@ export const WANT = [
   // /open: the site's pack slots and pull rates, so a simulated pack is the
   // same pack Analytics » Simulator opens
   "simPack", "getPull",
+  // /deck: one TCGplayer cart for the whole list, spelled TCGplayer's way
+  "tcgMassEntryParts", "tcgMassName",
 ];
 // Browser-derived constants the closure would otherwise drag in. SITE_ORIGIN
 // reads window.Capacitor for the native app; the bot is always the web.

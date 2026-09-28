@@ -199,6 +199,21 @@ export async function fetchMovers(db, { win = "1d", dir = "up", group = "all", b
   return { latest, rows: fresh.slice(0, limit), col, todayCol, priorCol, dropped: rows.length - fresh.length };
 }
 
+// ── tournaments ──────────────────────────────────────────────────────────
+// The newest events the site holds (3-star events imported from inkDecks and
+// the Chicagoland scene), each with its top four. Two small reads rather than
+// one big one: a Challenge can carry 60+ decks, and only the top matters here.
+export async function recentResults(db, { events = 3, places = 4 } = {}) {
+  const ts = await db.get("tournaments", { select: "id,name,event_date,format,num_players", order: "event_date.desc,id.asc", limit: events });
+  if (!ts || !ts.length) return [];
+  const rows = await db.get("tournament_results_v", {
+    select: "tournament_id,place,place_rank,player_name,deck_id,deck_name,deck_inks,deck_share_token,deck_visibility",
+    tournament_id: `in.(${ts.map((t) => t.id).join(",")})`, place_rank: "lte." + places,
+    order: "place_rank.asc,player_name.asc", limit: events * places * 3,
+  });
+  return ts.map((t) => ({ ...t, top: (rows || []).filter((r) => r.tournament_id === t.id).slice(0, places) }));
+}
+
 // ── events near a place ──────────────────────────────────────────────────
 // The site's own walk: postal code first (zippopotam, with the site's per-
 // country normalisation), then a town we actually hold events in.

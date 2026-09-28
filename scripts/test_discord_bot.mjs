@@ -584,6 +584,39 @@ const D = await mod("discord/src/data.js");
   eq(S.parsePackId("k|3|7"), null, "a pack id only opens 1 or 24");
 }
 
+// ── 10b. the meta, a card's play line, a deck's one cart ─────────────────
+{
+  const results = [{ id: "t1", name: "Big Event", event_date: "2026-09-12", num_players: 200, top: [
+    { place: "1st", place_rank: 1, player_name: "[OSA] Moluk_x", deck_id: "d1", deck_name: null, deck_inks: ["Amber", "Emerald"], deck_visibility: "public", deck_share_token: "tok" },
+    { place: "Top 4", place_rank: 4, player_name: "Some*one", deck_id: "d2", deck_name: "Rush", deck_inks: ["Ruby"], deck_visibility: "unlisted", deck_share_token: "abc" }] }];
+  const mm = E.metaMessage({ R, index, results });
+  checkMessage(mm, "meta");
+  const mt = JSON.stringify(mm);
+  ok(mt.includes("\\\\[OSA\\\\] Moluk\\\\_x") && mt.includes("Some\\\\*one"), "meta: player names are escaped, not read as markdown");
+  ok(mt.includes("decks?deck=d1)") && mt.includes("deck=d2&token=abc"), "meta: a public deck links without its token, an unlisted one with it");
+  checkMessage(E.metaMessage({ R, index, results: [] }), "meta, no results");
+  const played = index.cards.map((c, i) => ({ c, i })).filter((x) => x.c.pl > 0).sort((a, b) => b.c.pl - a.c.pl)[0];
+  if (played) {
+    eq(E.playRankOf(R, played.i), 1, "the most-played card ranks #1");
+    ok(/#1 most played/.test(E.playLine(R, played.i, index.playDecks || 0) || ""), "its play line says so");
+  }
+  const cold = index.cards.findIndex((c) => !c.pl);
+  if (cold >= 0) eq(E.playLine(R, cold, index.playDecks || 0), null, "a card with no recent top-cut play gets no play line");
+  const g = E.gameplayLine({ i: ["Amber", "Steel"], cost: 3, t: "Character", k: ["Storyborn", "Hero"] });
+  ok(g.includes("🟨⬜ Amber/Steel") && g.includes("3 cost") && g.includes("Character — Storyborn, Hero"), `gameplay line (${g})`);
+  // A deck's one-cart link: TCGplayer's own spelling where it differs.
+  const { parseDeckList, priceDeck } = await mod("discord/src/deck.js");
+  const dr = priceDeck(R, parseDeckList("4 Mowgli - Man Cub\n2 Be Prepared"));
+  const pid = dr.rows.find((x) => x.card.c === "Mowgli").mktAt.f[1];
+  const cart = E.deckCartUrl(dr, new Map([[Number(pid), "Mowgli - Man Cub (TCG spelling)"]]));
+  const dest = decodeURIComponent(cart.slice(TCG_AFFILIATE.length));
+  ok(cart.startsWith(TCG_AFFILIATE) && dest.startsWith("https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c="), "deck: the cart is a TCGplayer mass entry, through the affiliate program");
+  ok(decodeURIComponent(dest.split("&c=")[1]).includes("4 Mowgli - Man Cub (TCG spelling)||2 Be Prepared"), `deck: the cart spells cards TCGplayer's way (${dest.slice(0, 160)})`);
+  const dm = E.deckMessage({ result: dr, priceDate: "2026-09-27", tcgNames: null });
+  ok(dm.embeds.length === 2 && /Buy the whole deck/.test(dm.embeds[1].description), "deck: the reply carries the one-cart link");
+  checkMessage(dm, "deck with cart");
+}
+
 // ── 11. the resolver's shortcut is exact ─────────────────────────────────
 // expand() skips a candidate whose letters differ by more than two per edit
 // allowed — only sound if one edit can never change more than two. Checked on

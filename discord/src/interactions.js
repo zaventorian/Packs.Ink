@@ -57,6 +57,7 @@ function command(it, deps) {
     case "movers": return deferred(it, deps, priv, () => movers(o, deps));
     case "events": return deferred(it, deps, priv, () => events(o, deps));
     case "calendar": return deferred(it, deps, priv, () => calendar(deps));
+    case "meta": return deferred(it, deps, priv, () => meta(deps));
     case "help": return { type: R_.MESSAGE, data: { ...E.helpMessage(deps.commandIds), flags: EPHEMERAL, allowed_mentions: QUIET } };
     // A decklist has line breaks, which a slash-command option cannot hold —
     // so /deck opens a text box instead.
@@ -188,7 +189,7 @@ export async function cardPayload(res, { view, range, query }, deps) {
     raw: D.rawRowFor(rawRows || [], printingStr),
     rawTarget: { cardId: gt.cardId, bucket: rawSingle ? "" : gt.bucket },
     grade, gradedTarget: { cardId: gt.cardId, bucket: single ? "" : gt.bucket },
-    origin: deps.origin, inkColors: deps.index.inkColors,
+    origin: deps.origin, inkColors: deps.index.inkColors, playDecks: deps.index.playDecks,
   });
 }
 
@@ -220,7 +221,7 @@ async function priceCheck(it, deps) {
   }
   // A posted decklist is priced as a DECK, not as the first three names in it.
   if (looksLikeDeck(text)) {
-    return E.deckMessage({ result: priceDeck(deps.R, parseDeckList(text)), priceDate: deps.index.priceDate });
+    return E.deckMessage({ result: priceDeck(deps.R, parseDeckList(text)), priceDate: deps.index.priceDate, tcgNames: E.tcgNameMap(deps.index.tcgNames) });
   }
   const found = deps.R.findInText(text, 3).filter((r) => r.kind === "card" || r.kind === "sealed");
   if (!found.length) {
@@ -264,7 +265,7 @@ function modalSubmit(it, deps) {
     return { type: R_.MESSAGE, data: { flags: EPHEMERAL, allowed_mentions: QUIET,
       content: "That doesn't look like a decklist — one card per line with its count, like `4 Mowgli - Man Cub`." } };
   }
-  const msg = E.deckMessage({ result: priceDeck(deps.R, entries), priceDate: deps.index.priceDate });
+  const msg = E.deckMessage({ result: priceDeck(deps.R, entries), priceDate: deps.index.priceDate, tcgNames: E.tcgNameMap(deps.index.tcgNames) });
   return { type: R_.MESSAGE, data: { ...msg, allowed_mentions: QUIET, ...(m[1] === "p" ? { flags: EPHEMERAL } : {}) } };
 }
 
@@ -367,6 +368,12 @@ async function events(o, deps) {
 async function eventsBoard({ place, radius, kind, query }, deps) {
   const byKind = await D.nearbyByKind(deps.db, place, { radius, kind });
   return E.eventsMessage({ place, byKind, radius, kind, query });
+}
+
+// ── /meta ────────────────────────────────────────────────────────────────
+async function meta(deps) {
+  const results = await D.recentResults(deps.db, { events: 3, places: 4 }).catch((e) => { deps.log && deps.log("results failed", e && e.message); return []; });
+  return E.metaMessage({ R: deps.R, index: deps.index, results });
 }
 
 // ── /calendar ────────────────────────────────────────────────────────────

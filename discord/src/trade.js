@@ -292,7 +292,7 @@ export function tradeMessage(t, { mode = "you", priceDate, siteUrl } = {}) {
     const names = miss.slice(0, 6).map((u) => `“${clip(u.text, 40)}”`).join(", ");
     notes.push(`Couldn't find ${names}${miss.length > 6 ? ` and ${miss.length - 6} more` : ""} — not counted.`);
   }
-  const description = [head, `-# ${lowLine}`, ...(notes.length ? ["", ...notes] : [])];
+  const description = [head, `*${lowLine}*`, ...(notes.length ? ["", ...notes] : [])];
   if (siteUrl && siteUrl.length > 512 && siteUrl.length <= 1800) description.push("", `[Open this trade on packs.ink](${siteUrl})`);
   const color = t.even || mode === "post" ? BRAND_COLOR : t.diff > 0 ? GREEN : RED;
   const embed = {
