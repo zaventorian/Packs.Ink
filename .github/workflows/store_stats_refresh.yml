@@ -1,0 +1,65 @@
+name: Store stats refresh
+
+# Keeps the Elo » Stores tab close to live while stores chase the pro-rated
+# Legendary offer (Sept 1 – Oct 31 2026). Stores asked for real-time numbers;
+# the daily Discover run could not give them — its 09:00 UTC cron has been
+# landing around 15:00 UTC, so a Tuesday-night event reached the tab Wednesday
+# afternoon at best.
+#
+# This re-runs ONLY the two Stores steps from discover_scs.yml, every hour, with
+# short look-backs. Together they took ~70s in the daily run (the ~20-minute
+# upcoming scan is the long pole, and it isn't here):
+#   1. each tracked store's own past feed since 2 days ago -> lorcana_events_history
+#   2. a roster for every finished event that has none, plus a re-read of events
+#      from the last 2 days — so an event scanned mid-play, or before the store
+#      entered results, is re-read hourly until its final roster lands.
+# Both are idempotent upserts, the same scripts the daily job runs; that job
+# stays the backstop (30-day history top-up, 3-day re-reads).
+#
+# Temporary: once the offer's final numbers have settled (mid-November), drop the
+# schedule, or thin it to a few runs a day. The site's 15-minute cache during the
+# window (ELO_STORES_TTL_LIVE in Index.html) is paired with this cadence.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: store-stats-refresh
+  cancel-in-progress: false
+
+on:
+  schedule:
+    # :17 past, away from the top-of-hour rush that delays GitHub's scheduler.
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    name: Refresh store stats
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: pip install requests python-dotenv
+
+      - name: Top up tracked-store event history (last 2 days)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          python scripts/elo/scrape_store_history.py --since "$(date -u -d '2 days ago' +%F)"
+
+      # !cancelled(): a history hiccup must not quietly skip the rosters too.
+      - name: Scrape attendance for finished events
+        if: ${{ !cancelled() }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          python scripts/elo/test_attendance_targets.py
+          python scripts/elo/scrape_event_attendance.py --recheck-days 2

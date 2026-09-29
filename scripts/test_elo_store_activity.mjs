@@ -29,7 +29,8 @@
 //   7. Pro-rated Legendary is scored on Sept + Oct 2026 by each event's own
 //      date, in Chicago time — NOT on a set season, which is what it used to
 //      do. Only events that have run count; what's still on the calendar is
-//      reported beside the count, never in it.
+//      reported beside the count, never in it. The Jul–Aug proxy beside it is
+//      bucketed the same way, and an Aug 31 evening event belongs to IT.
 //
 // Reads the real functions out of Index.html rather than restating them, so it
 // cannot drift from what ships. Manual — there is no client-side CI.
@@ -65,14 +66,16 @@ const code = [
   grab("const RPH_PRORATED = {", "};"),
   grab("const RPH_PRORATED_WINDOW = {", "};"),
   grab("function rphProratedTotals(pro){", "\n}"),
+  grab("const RPH_PRORATED_PROXY = {", "};"),
+  grab("function eloUpdatedAgo(iso, now = Date.now()){", "\n}"),
   grab("const RPH_TIERS = [", "];"),
   grab("function rphShortfall(t){", "\n}"),
   grab("function rphTierFor(t){", "\n}"),
 ].join("\n\n");
 
-const [build, totals, tierFor, shortfall, proTotals, PRO_WIN] = new Function(
+const [build, totals, tierFor, shortfall, proTotals, PRO_WIN, PROXY_WIN, updatedAgo] = new Function(
   "MAINLINE_SETS",
-  code + "\nreturn [buildEloStoreActivity, eloStoreTotals, rphTierFor, rphShortfall, rphProratedTotals, RPH_PRORATED_WINDOW];",
+  code + "\nreturn [buildEloStoreActivity, eloStoreTotals, rphTierFor, rphShortfall, rphProratedTotals, RPH_PRORATED_WINDOW, RPH_PRORATED_PROXY, eloUpdatedAgo];",
 )(MAINLINE_SETS);
 
 let failures = 0;
@@ -282,7 +285,8 @@ eq("...and closes at midnight Nov 1, Chicago time",
    new Date(ms(PRO_WIN.end)).toISOString(), "2026-11-01T05:00:00.000Z");
 const PRO = (upcoming = [], now = "2026-09-29T12:00:00-05:00") => ({
   start: ms(PRO_WIN.start), end: ms(PRO_WIN.end), now: ms(now),
-  preSet: "Hyperia City", upcoming});
+  preSet: "Hyperia City", upcoming,
+  proxy: {start: ms(PROXY_WIN.start), end: ms(PROXY_WIN.end)}});
 const PID = {"Pro Shop": 50, "Late Starter": 51, "Nowhere Games": 52};
 const pev = (event_id, store_name, start_datetime, extra = {}) =>
   ({event_id, store_name, store_id: PID[store_name] ?? null, start_datetime,
@@ -342,6 +346,31 @@ const ranPre = build(
   proEvents.concat([pev(216, "Pro Shop", "2026-09-20T18:00:00+00:00", {kind: "prerelease", set_name: "Hyperia City"})]),
   proPlayed, proFallback, proScanned, seasons, PTRACK, PRO(upcoming)).stores.find((x) => x.store === "Pro Shop");
 eq("a Hyperia City prerelease that ran is held, and a booked one doesn't undo it", ranPre.pro.pre, "held");
+
+console.log("Jul–Aug proxy: the two months before, same bars");
+eq("the proxy opens at midnight Jul 1, Chicago time",
+   new Date(ms(PROXY_WIN.start)).toISOString(), "2026-07-01T05:00:00.000Z");
+eq("...and ends exactly where the offer begins", PROXY_WIN.end, PRO_WIN.start);
+eq("an Aug 31 evening event is in the proxy, and a mid-August one",
+   ps.proxy.events, 2);                // 200, 206
+eq("its tickets and fans come along", [ps.proxy.attendance, ps.proxy.players], [2, 2]);
+const june = build(proEvents.concat([pev(207, "Pro Shop", "2026-06-30T23:00:00+00:00")]),   // Jun 30, 6pm Chicago
+                   proPlayed, proFallback, new Set([...proScanned, 207]), seasons, PTRACK, PRO(upcoming))
+  .stores.find((x) => x.store === "Pro Shop");
+eq("a June 30 evening event is not July", june.proxy.events, 2);
+eq("a store with nothing in Jul–Aug has no proxy bucket", late.proxy, null);
+eq("no proxy window, no proxy bucket",
+   build(proEvents, proPlayed, proFallback, proScanned, seasons, PTRACK,
+         {...PRO(upcoming), proxy: undefined}).stores.every((x) => x.proxy === null), true);
+
+console.log("freshness line");
+const NOW = ms("2026-09-29T12:00:00Z");
+eq("under two minutes", updatedAgo("2026-09-29T11:59:00Z", NOW), "just now");
+eq("minutes", updatedAgo("2026-09-29T11:20:00Z", NOW), "40 min ago");
+eq("one hour", updatedAgo("2026-09-29T10:50:00Z", NOW), "1 hr ago");
+eq("hours", updatedAgo("2026-09-29T02:00:00Z", NOW), "10 hrs ago");
+eq("days", updatedAgo("2026-09-26T12:00:00Z", NOW), "3 days ago");
+eq("no timestamp, no line", updatedAgo(null, NOW), null);
 
 console.log("pro-rated verdict");
 eq("no activity reads as zeroes, never a crash",

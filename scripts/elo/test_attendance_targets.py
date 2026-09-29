@@ -139,6 +139,19 @@ check("this guard runs before the scrape",
       bool(att) and 0 <= att.find("test_attendance_targets.py")
       < att.find("scrape_event_attendance.py --recheck-days"), True)
 
+# The hourly refresh that keeps the pro-rated Sept–Oct counter near-live
+# (store_stats_refresh.yml). Same failure mode as above if it quietly stops:
+# green runs, frozen numbers, on the one stat stores are watching.
+print("\nwiring: the hourly store-stats refresh")
+hr = (HERE.parents[1] / ".github" / "workflows" / "store_stats_refresh.yml").read_text(encoding="utf-8")
+check("it runs on a schedule", re.search(r"\n  schedule:\n(    #.*\n)*    - cron: ", hr) is not None, True)
+check("it tops up history, then scrapes rosters",
+      0 <= hr.find("scrape_store_history.py --since") < hr.find("scrape_event_attendance.py --recheck-days"),
+      True)
+check("the scrape doesn't hang on a history failure", "if: ${{ !cancelled() }}" in hr, True)
+check("this guard runs before its scrape",
+      0 <= hr.find("test_attendance_targets.py") < hr.find("scrape_event_attendance.py --recheck-days"), True)
+
 print()
 if failures:
     print(f"{len(failures)} FAILED: " + ", ".join(failures))
