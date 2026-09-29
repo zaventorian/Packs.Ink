@@ -11,10 +11,23 @@ name: Discord bot
 # movers and events are read at request time either way; the index is names,
 # printings and popularity. A Workers deploy costs nothing.
 #
+# It also rebuilds whenever an ETL run finishes (cron-job.org dispatches the ETL
+# on time; GitHub has been starting this repo's evening schedules 2-3 hours
+# late), so the day's prices and any card Lorcast added reach the bot the same
+# evening. Re-deploying is cheap: an unchanged file is not uploaded again.
+#
+# /card shows the site's own card tile, drawn for every priced finish by
+# tools/bake_tiles.mjs. The card art it draws from is kept between runs in
+# actions/cache (a month at a time, so a re-rendered card is picked up within a
+# month); a cold cache only makes the run a few minutes longer.
+#
 # Green before it is switched on: until the DISCORD_* secrets exist, the job
 # builds and tests the bot, says what is missing, and stops without deploying.
 
 on:
+  workflow_run:
+    workflows: ["ETL"]
+    types: [completed]
   schedule:
     - cron: "45 21 * * *"   # after the 20:30 ETL: the index picks up today's catalog
   workflow_dispatch:
@@ -37,6 +50,8 @@ concurrency:
 
 jobs:
   bot:
+    # An ETL that failed changed nothing worth a deploy.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -54,8 +69,28 @@ jobs:
       # from THIS commit's Index.html, so what ships always matches the site.
       - name: Copy the site's helpers
         run: node tools/extract_site.mjs
+      - name: Month
+        id: month
+        run: echo "m=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+      - name: Restore the card art the tiles are drawn from
+        uses: actions/cache/restore@v4
+        with:
+          path: discord/.tile-art-cache
+          key: tile-art-v1-${{ steps.month.outputs.m }}-latest
+          restore-keys: tile-art-v1-${{ steps.month.outputs.m }}-
       - name: Build the card index (the site's own catalog code, live data)
         run: node tools/build_index.mjs
+      # Saved under the file count, so a run that downloaded nothing new finds
+      # its key taken and saves nothing (a warning, not a failure).
+      - name: Count the card art
+        id: artn
+        run: echo "n=$(ls .tile-art-cache 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
+      - name: Keep the card art for the next run
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: discord/.tile-art-cache
+          key: tile-art-v1-${{ steps.month.outputs.m }}-${{ steps.artn.outputs.n }}
       - name: Test
         run: |
           node ../scripts/test_discord_bot.mjs

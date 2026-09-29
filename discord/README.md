@@ -9,7 +9,7 @@ on workers.dev), so deploying it can never touch packs.ink.
 
 | | |
 |---|---|
-| `/card mowgli` | The card, big, with its NM Market / Low, recent changes, graded sales, its ink / cost / type, and how much it's played in recent tournament top cuts. |
+| `/card mowgli` | The site's card tile (the art, NM Market / Low and the 1D / 1W / 1M changes, drawn by the site's own code), with graded sales, its ink / cost / type, and how much it's played in recent tournament top cuts. |
 | `/price mowgli` | The same, as a price chart (1M / 3M / 1Y / All buttons), card art as a thumbnail. |
 | `/price elsa psa 10` | Graded: every grade's last sale and average of the last 5, and a chart of the PSA 10 sales. |
 | `/price azurite sea box` | Sealed product: price, changes, chart, TCGplayer + Amazon links. |
@@ -94,6 +94,9 @@ discord/
   tools/build_index.mjs builds the index by running the SITE's catalog transform
   tools/bake_art.mjs    card art Discord can show, for printings TCGplayer hasn't listed
   public/art/           that art, served as the Worker's static assets (not committed)
+  tools/bake_tiles.mjs  the site's card tile, drawn for every priced finish (+ tile_rules.mjs)
+  public/tile/          those tiles, served the same way (not committed)
+  src/tile.js           the tile file name + URL, shared by the build and the Worker
   tools/extract_site.mjs regenerates site.generated.js from Index.html
   tools/bake_font.py    regenerates font.generated.js
   tools/commands.js     the slash commands; register_commands.mjs publishes them
@@ -126,6 +129,17 @@ discord/
   `public/art/`, which wrangler serves at `/art/<id>.webp` without running the
   Worker. `check_index.mjs` refuses an index that points at a missing file or an
   image Discord can't show. `build_index.mjs --no-art` skips the download.
+- **`/card` shows the site's own card tile.** `bake_tiles.mjs` runs the site's
+  `drawCardTileCanvas` (pulled out of Index.html like the rest) on a Node canvas
+  (`@napi-rs/canvas`), for every priced finish, in the default dark theme read
+  out of styles.css, with prices and changes from the site's own
+  `computeSeriesDeltas` as of the index's price date. ~5,800 tiles, ~275 MB,
+  written to `public/tile/` and served without running the Worker; the URL
+  carries `?d=<price date>` so Discord fetches the new day's tile. A graded
+  reply, a raw-eBay promo and a finish with no tile keep the plain picture.
+  Nothing about the tiles can fail a build — a card with none just shows its
+  picture. The art they are drawn from is cached in `.tile-art-cache/`
+  (actions/cache in CI). `--no-tiles` skips them; `--no-art` does too.
 - **Every TCGplayer link is the affiliate link** (`tcgUrl` / `tcgSetSearchUrl`,
   copied from the site): the product page when TCGplayer lists the printing, a
   TCGplayer search for the name when it doesn't. Every message carrying one

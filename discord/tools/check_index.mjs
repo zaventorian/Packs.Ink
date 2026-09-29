@@ -9,6 +9,7 @@
 // (2,600 cards, 150 sealed) and far above anything a broken build produces.
 import { readFileSync, existsSync } from "node:fs";
 import { createResolver } from "../src/resolver.js";
+import { tileFile } from "../src/tile.js";
 
 const ix = JSON.parse(readFileSync(new URL("../src/card-index.json", import.meta.url), "utf8"));
 const problems = [];
@@ -41,6 +42,21 @@ for (const c of ix.cards) {
   }
 }
 if (blind) console.log(`::warning::${blind} printing(s) have no picture (no TCGplayer listing and no baked art)`);
+
+// Card tiles: every finish the index says has one must have its file in
+// public/tile/, or /card would point Discord at a 404 and show nothing. Too
+// few tiles is only a warning — a reply without one still has a picture.
+const tileDir = new URL("../public/tile/", import.meta.url);
+let tiles = 0;
+for (const c of ix.cards) {
+  for (const p of c.p) {
+    for (const code of p.tl || "") {
+      tiles++;
+      if (!existsSync(new URL(tileFile(p.id, code), tileDir))) problems.push(`${c.n} [${code}]: tile ${tileFile(p.id, code)} is not in public/tile/`);
+    }
+  }
+}
+if (tiles < 1000) console.log(`::warning::only ${tiles} card tiles — /card shows the plain card picture for the rest`);
 
 const R = createResolver(ix);
 for (const [q, kind] of [["elsa", "card"], ["mickey mouse", "card"], ["stitch", "card"], ["booster box", "sealed"]]) {

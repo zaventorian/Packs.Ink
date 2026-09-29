@@ -4926,6 +4926,35 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
   embeds.js is the one accessor, and `check_index.mjs` refuses an index that
   points at a missing file or an image Discord can't show. The `?v=` hash busts
   Discord's image cache when Lorcast re-renders a card.
+- **`/card` shows the SITE's card tile** (2026-09-28, Zaven: *"if someone calls a
+  card, id like it to basically spit out this image from our site"*), drawn once a
+  day at deploy time because the Worker has no canvas. `tools/bake_tiles.mjs`
+  runs the site's own `drawCardTileCanvas` (via sitecode.mjs, like the catalog
+  transform) on `@napi-rs/canvas`, for every priced finish (~5,800, ~275 MB of
+  WebP at 450px), in the velvet palette read out of styles.css, with Low / Market
+  and the 1D / 1W / 1M changes from the site's `computeSeriesDeltas` as of the
+  index's price date. Files go to `public/tile/` (gitignored, served as static
+  assets); the index marks each printing's drawn finishes in `tl`, and
+  `src/tile.js` is the one naming rule both sides use.
+  - **⚠ Not on a graded reply or a raw-eBay promo** (the tile carries TCGplayer's
+    raw price, which those replies call secondary), not for a named variant with
+    no SKU, and not in the chart view. Anything without a tile shows the plain
+    picture it always did, so **nothing about tiles can fail a build**: the whole
+    step is try/caught, and `check_index.mjs` only fails on a tile the index
+    names that is missing from disk.
+  - **The tile URL carries `?d=<price date>`** — Discord caches by URL, and the
+    footer date changes daily, so every tile is re-uploaded each day (wrangler
+    skips unchanged files, so a second deploy the same day uploads nothing).
+  - History is fetched per product for 45 days, then a year for the few whose
+    1M reference (or latest price) sits further back (`needsLonger`), so the
+    numbers match the site's card page. The art is cached between runs in
+    `.tile-art-cache/` (actions/cache, keyed by month so a re-rendered card is
+    picked up within a month); a cold cache costs ~8 minutes.
+  - `tools/tile_rules.mjs` holds the pure rules (which finishes, how much
+    history) so the offline guard can test them without the native canvas.
+  - **The bot also deploys when an ETL run finishes** (`workflow_run`), so new
+    cards and the day's prices reach it the same evening rather than after the
+    late-running 21:45 schedule.
 - **Every TCGplayer link is the affiliate link** (`buyUrl()`: `tcgUrl` for a
   listed printing, `tcgSetSearchUrl` — a TCGplayer search for the name — for one
   that isn't). Card titles, the Buy/Find button, /movers, /deck and Price check
