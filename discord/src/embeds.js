@@ -3,6 +3,7 @@
 // lets the guard test check a reply without a network.
 import { tcgUrl, tcgSetSearchUrl, amazonForSealed, calEventTitle, calEventSubtitle, scLocalTime12, tcgMassEntryParts, tcgMassName } from "./site.generated.js";
 import { FIN_PRINTING, RANGES, DEFAULT_RANGE, MOVER_WINDOWS, MOVER_GROUPS, CAL_FILTERS } from "./data.js";
+import { tileUrl } from "./tile.js";
 
 export const SITE = "https://packs.ink";
 export const BRAND_COLOR = 0xe3b341;
@@ -103,7 +104,8 @@ export function parseOpenId(id) {
 // ── one card ─────────────────────────────────────────────────────────────
 // ctx: { R (resolver), res (resolve() result), price (priceSummary or null),
 //        graded (rows for this printing), raw (raw eBay rollup row or null),
-//        view, range, origin, chartDate, query, grade {grader, grade} }
+//        view, range, origin, chartDate, query, grade {grader, grade},
+//        priceDate (the index's — dates the tile URL) }
 export function cardMessage(ctx) {
   const { R, res, price, view = "chart", range = DEFAULT_RANGE, origin } = ctx;
   const c = res.card, p = res.printing, f = p.f[res.fi] || p.f[0];
@@ -196,7 +198,12 @@ export function cardMessage(ctx) {
   const rt = rawLead && ctx.rawTarget ? ctx.rawTarget : null;
   const canChart = graded || (pid && !noListing) || !!rt;
   if (view === "card" || !canChart) {
-    if (img) embed.image = { url: img };
+    // The site's own card tile when one was drawn for this finish — the
+    // picture the card page shows. Never on a graded reply (the tile carries
+    // raw prices) or where eBay sales lead (the tile would lead with the
+    // TCGplayer price the reply has just called secondary).
+    const tile = !ctx.grade && !rawLead ? tileUrl(p, f && f[0], origin, ctx.priceDate) : null;
+    if (tile || img) embed.image = { url: tile || img };
   } else {
     if (img) embed.thumbnail = { url: img };
     const rawQ = rt ? `r=${encodeURIComponent(rt.cardId)}&rb=${encodeURIComponent(rt.bucket || "")}&` : "";

@@ -437,6 +437,71 @@ const D = await mod("discord/src/data.js");
   ok(index.cards.some((c) => c.p.some((p) => String(p.img || "").startsWith("/art/"))), "the fixture carries baked art, so the replies above exercised it");
 }
 
+// ── 8b. the card tile /card shows ────────────────────────────────────────
+// The site's own card tile, drawn per finish at deploy time (bake_tiles.mjs)
+// and served from the Worker's origin. The reply may only point at a tile the
+// build says it drew, never on a graded reply or where eBay sales lead.
+{
+  const { tileFile, tileUrl } = await mod("discord/src/tile.js");
+  const { tileJobs, needsLonger, tileMeta, tileDate } = await mod("discord/tools/tile_rules.mjs");
+  const O = "https://bot.example";
+  eq(tileFile("crd_ABC123", "C"), "crd_abc123-c.webp", "a tile file is the card id and the finish, lower case");
+  eq(tileFile("extras:647652", "N"), "extras-647652-n.webp", "a colon in a card id never reaches a path");
+  eq(tileFile("crd_x::variant::text-error", "H"), "crd_x-variant-text-error-h.webp", "a variant clone gets its own tile file");
+  eq(tileUrl({ id: "crd_x", tl: "NC" }, "C", O, "2026-09-28"), O + "/tile/crd_x-c.webp?d=2026-09-28", "a drawn tile is a URL on the Worker, dated so Discord re-fetches it");
+  eq(tileUrl({ id: "crd_x", tl: "N" }, "C", O, "2026-09-28"), null, "no tile for a finish the build didn't draw");
+  eq(tileUrl({ id: "crd_x" }, "N", O, "2026-09-28"), null, "no tile at all when the build drew none");
+  eq(tileUrl({ id: "crd_x", tl: "N" }, "N", null, "2026-09-28"), null, "a tile needs the Worker's origin to be a URL");
+  eq(tileMeta("Super Rare", null), "Super Rare", "tile meta: rarity alone when there's no finish to name");
+  eq(tileMeta("Promo", "Top Prize"), "Promo · Top Prize", "tile meta: the site's badge after the rarity");
+  eq(tileDate("2026-09-28"), "Sep 28, 2026", "tile date is the site's en-US date");
+
+  // Which finishes get a tile.
+  const ids = [{ n: "A", c: "A", p: [
+    { id: "p1", f: [["N", 1, "Normal", null, 1, 2, 0], ["C", 2, "Cold Foil", "Foil", null, null, 0]] },
+    { id: "p2", raw: 1, f: [["N", 3, "Normal", null, 5, 6, 0]] },
+    { id: "p3", f: [["H", 4, "Holofoil", null, 7, 8, 1]] },
+    { id: "p4", f: [["N", null, "Normal", null, 1, 1, 0]] },
+    { id: "p5", tl: "N", f: [["N", 5, "Normal", null, 1, null, 0]] },
+  ] }];
+  const jobs = tileJobs(ids);
+  eq(jobs.map((j) => `${j.p.id}${j.code}`).join(","), "p1N,p5N",
+    "tiles: priced listed finishes only — no unpriced foil, no raw-eBay promo, no named variant without a SKU, no pid-less row");
+  ok(!("tl" in ids[0].p[4]), "a rebuild clears the old tile marks before drawing");
+
+  // Enough history for the 1M change: a daily month is enough, a hole is not.
+  const days = (from, n) => Array.from({ length: n }, (_, i) => new Date(Date.parse(from + "T00:00:00Z") + i * 86400000).toISOString().slice(0, 10));
+  const daily = days("2026-08-14", 46).map((d) => ({ date: d, low_price: 1, market_price: 2 }));
+  eq(needsLonger(daily, "2026-09-28", [1, 2]), false, "a daily series over 45 days answers 1M without more history");
+  eq(needsLonger(daily.slice(20), "2026-09-28", [1, 2]), true, "a series starting inside the month needs a longer fetch");
+  const lowGap = daily.map((r, i) => (i < 40 ? { ...r, low_price: null } : r));
+  eq(needsLonger(lowGap, "2026-09-28", [1, 2]), true, "a Low that was blank for weeks needs its older reference");
+  eq(needsLonger(lowGap, "2026-09-28", [null, 2]), false, "a side with no catalog price asks for nothing");
+  eq(needsLonger([], "2026-09-28", [null, 2]), true, "no history at all for a priced card fetches more");
+
+  // The reply: card view shows the tile; graded, raw-led and chart views don't.
+  const withTile = index.cards.flatMap((c) => c.p.filter((p) => p.tl && !p.raw).map((p) => ({ c, p })));
+  ok(withTile.length > 20, `the fixture carries drawn tiles (${withTile.length} printings) — refresh it with: node discord/tools/build_index.mjs --fixture`);
+  const pick = withTile.find(({ p }) => p.f.some((f) => f[0] === p.tl[0] && f[1]));
+  if (pick) {
+    const fi = pick.p.f.findIndex((f) => f[0] === pick.p.tl[0]);
+    const res = { kind: "card", card: pick.c, index: index.cards.indexOf(pick.c), printing: pick.p, fi, dims: {}, notes: [], score: 1, exact: true, alts: [] };
+    const base = { R, res, price: null, graded: [], raw: null, range: "3m", origin: O, inkColors: index.inkColors,
+      gradedTarget: { cardId: pick.p.id, bucket: "" }, priceDate: "2026-09-28" };
+    const want = O + "/tile/" + tileFile(pick.p.id, pick.p.tl[0]) + "?d=2026-09-28";
+    const card = E.cardMessage({ ...base, view: "card" });
+    eq(card.embeds[0].image && card.embeds[0].image.url, want, `/card shows the site's tile (${pick.c.n})`);
+    checkMessage(card, "card with tile");
+    const g = E.cardMessage({ ...base, view: "card", grade: { grader: "PSA", grade: "10" } });
+    ok(!/\/tile\//.test(JSON.stringify(g.embeds[0])), "a graded reply never shows the raw-price tile");
+    const rawLed = E.cardMessage({ ...base, view: "card", raw: { last_sold_price: 100, last_sold_date: "2026-09-20", avg_last_5: 90, last_5_count: 5, sale_count: 9, printing: "" },
+      rawTarget: { cardId: pick.p.id, bucket: "" } });
+    ok(!/\/tile\//.test(JSON.stringify(rawLed.embeds[0])), "where eBay sales lead, the TCGplayer tile is not shown");
+    const chart = E.cardMessage({ ...base, view: "chart" });
+    ok(!/\/tile\//.test(JSON.stringify(chart.embeds[0])), "the chart view keeps the plain thumbnail");
+  }
+}
+
 // ── decklists ────────────────────────────────────────────────────────────
 {
   const { parseDeckList, looksLikeDeck, priceDeck } = await mod("discord/src/deck.js");

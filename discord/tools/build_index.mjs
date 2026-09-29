@@ -405,6 +405,44 @@ if (process.argv.includes("--no-art")) {
   for (const f of art.failed.slice(0, 10)) console.log(`::warning::card art not baked: ${f}`);
 }
 
+// ── The card tile /card shows ───────────────────────────────────────────
+// See bake_tiles.mjs: the site's own card tile, drawn for every priced finish.
+// A tile is a nicety on top of a reply that works without one, so nothing here
+// can fail the build — a card with no tile shows its plain picture, as before.
+// --no-art skips it too (it downloads card art); --no-tiles skips only this.
+const tileDir = fileURLToPath(new URL("../public/tile/", import.meta.url));
+if (process.argv.includes("--no-art") || process.argv.includes("--no-tiles")) {
+  mkdirSync(tileDir, { recursive: true });
+  for (const c of identities) for (const p of c.p) delete p.tl;
+} else {
+  try {
+    const { bakeTiles } = await import("./bake_tiles.mjs");
+    const fetchHistory = async (pids, since) => {
+      const chunks = chunk(pids, 40), out = [];
+      let next = 0;
+      const work = async () => {
+        while (next < chunks.length) {
+          const ids = chunks[next++];
+          out.push(...await sbAll("prices_daily", {
+            select: "tcgplayer_product_id,printing,date,low_price,market_price",
+            source: "eq.tcgcsv", grade: "eq.raw",
+            tcgplayer_product_id: `in.(${ids.join(",")})`, date: "gte." + since,
+            order: "tcgplayer_product_id.asc,printing.asc,date.asc",
+          }));
+        }
+      };
+      await Promise.all(Array.from({ length: 6 }, work));
+      return out;
+    };
+    const t = await bakeTiles(identities, { priceDate, fetchHistory, artDir });
+    for (const f of t.failed.slice(0, 10)) console.log(`::warning::card tile not drawn: ${f}`);
+  } catch (e) {
+    console.log(`::warning::card tiles skipped: ${String(e && e.stack || e).slice(0, 400)}`);
+    mkdirSync(tileDir, { recursive: true });
+    for (const c of identities) for (const p of c.p) delete p.tl;
+  }
+}
+
 const inkColors = Object.fromEntries(Object.entries(site.INK_COLORS).map(([k, v]) => [k, v.border]));
 const out = {
   v: 2,

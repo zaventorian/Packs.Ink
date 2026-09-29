@@ -191,6 +191,7 @@ export async function cardPayload(res, { view, range, query }, deps) {
     rawTarget: { cardId: gt.cardId, bucket: rawSingle ? "" : gt.bucket },
     grade, gradedTarget: { cardId: gt.cardId, bucket: single ? "" : gt.bucket },
     origin: deps.origin, inkColors: deps.index.inkColors, playDecks: deps.index.playDecks,
+    priceDate: deps.index.priceDate,
   });
 }
 
