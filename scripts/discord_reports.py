@@ -5,12 +5,35 @@ asked for it with the bot's /reports command.
     python scripts/discord_reports.py                 # dry run: what would post where
     python scripts/discord_reports.py --post          # actually post
     python scripts/discord_reports.py --post --force-weekly
+    python scripts/discord_reports.py --preview out/  # dry run + write each report to out/
 
-The report IS the daily digest (scripts/discord_digest.py): the same embed,
-built by the same functions, so a server's report and the digest can never
-disagree about a card. What this adds is the delivery: one post per
-subscribed channel, through the bot's own account (DISCORD_BOT_TOKEN), for
-every row in discord_report_subscriptions (migration 173).
+One post per subscribed channel, through the bot's own account
+(DISCORD_BOT_TOKEN), for every row in discord_report_subscriptions (migration
+173). The movers data, the standing maths ("cheapest in 6 months") and the
+freshness rules come from discord_digest.py, so a report can never disagree
+with the digest about a card; the LAYOUT is the report's own (2026-09-28):
+
+  * Sections by kind of card, because one list ranked by percent was mostly
+    $5 foils jumping 30% on one sale. CHASE (Enchanted / Epic / Iconic) and
+    PROMOS rank by DOLLARS: a $2,839 Iconic up $145 is +5.4% and was ranked
+    19th by percent. BASE CARDS (non-foil) and FOILS (base-rarity foils) rank
+    by percent. Each has a price floor AND a minimum dollar move, so a $4
+    card moving 50 cents never makes the list.
+  * The weekly adds the bigger trends: the whole market, chase cards, sealed,
+    the hottest and coolest set and the rarity that moved most (the
+    market_index matviews), a chart of those since the newest set came out,
+    a picture strip of the top chase and base movers, and a "Worth a look"
+    section of cards that fell AND now sit at a multi-month low.
+  * The pictures are drawn by discord_report_art.py and ATTACHED to the post.
+    If one cannot be drawn, or Discord refuses the attachments, the report
+    goes out without it rather than not at all.
+  * Every card name links to TCGplayer through the affiliate link, the site's
+    tcgUrl() exactly, and every report's footer says links may earn a
+    commission.
+  * No "-#" small text: Discord does not reliably draw it inside an embed.
+    Secondary lines are italics, as in the bot's own replies.
+
+Operationally:
 
   * DRY RUN BY DEFAULT, like the digest. `--post` is the deliberate act.
   * No bot token, or migration 173 not applied: a clean exit 0 that says so —
@@ -41,14 +64,17 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import os
 import sys
 import time
+from urllib.parse import quote
 
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import discord_digest as digest  # noqa: E402
+import discord_report_art as art  # noqa: E402
 from supabase_client import Supabase  # noqa: E402
 
 API = "https://discord.com/api/v10"
@@ -58,6 +84,49 @@ WINDOW = {"daily": "1d", "weekly": "7d"}
 # day's prices from about 20:30 UTC; runs after midnight (a late schedule, the
 # 01:00 ETL retry) still owe that day's report, and by noon it is stale.
 LATE_GRACE_HOURS = 12
+
+# ── links: the site's tcgUrl, exactly (test_discord_reports.py checks Index.html) ──
+TCG_AFFILIATE_BASE = "https://partner.tcgplayer.com/c/7285926/1780961/21018"
+AFFILIATE_NOTE = "Links may earn packs.ink a commission"
+# Index.html's SET_DISPLAY_NAMES — the names the site shows. Pinned by the test.
+SET_DISPLAY_NAMES = {
+    "Challenge Promo": "Lorcana Challenge Promo (C1)",
+    "Lorcana Challenge Year 3": "Lorcana Challenge Promo (C2)",
+    "EPCOT Festival of the Arts": "Magical Places Promos",
+}
+C1_SET = "Challenge Promo"
+
+# ── sections ────────────────────────────────────────────────────────────────
+CHASE_RARITIES = {"Enchanted", "Epic", "Iconic"}
+# rank: what the list is ordered by, and what the bold number leads with.
+# min_price / min_usd: the floor. Both have to clear, so a $4 card moving
+# 50 cents is out however big its percent is (Zaven, 2026-09-28: "raise the floor").
+SECTIONS = {
+    "chase": {"title": "✦ CHASE", "rank": "usd", "min_price": 10.0, "min_usd": 2.0,
+              "color": 0xE3B341, "lines": {"1d": 4, "7d": 5}},
+    "base": {"title": "◆ BASE CARDS", "rank": "pct", "min_price": 5.0, "min_usd": 1.0,
+             "color": 0x5B9CF5, "lines": {"1d": 4, "7d": 5}},
+    "promo": {"title": "★ PROMOS", "rank": "usd", "min_price": 10.0, "min_usd": 2.0,
+              "color": 0xC77DFF, "lines": {"1d": 3, "7d": 4}},
+    "foil": {"title": "✧ FOILS", "rank": "pct", "min_price": 5.0, "min_usd": 1.0,
+             "color": 0x9AA0AB, "lines": {"1d": 3, "7d": 4}},
+}
+SECTION_ORDER = ("chase", "base", "promo", "foil")
+HEADER_COLOR = 0xE3B341
+WORTH_COLOR = 0x5CC480
+WORTH_LINES = 4
+# Candidates per section before the stale-row check, as a multiple of the
+# lines shown. A stale row cut FIRST would cost a real mover its slot.
+OVERFETCH = 3
+# A mover's standing needs its history, which is the expensive read, so only
+# this many of each section's candidates get one (the shown rows are a subset).
+STANDING_PER_SECTION = 10
+# Discord refuses a message whose embeds hold more than 6000 characters. Every
+# card link is ~160 of them, so the weekly trims its last sections to fit.
+EMBED_TOTAL_LIMIT = 5900
+FOOTER = "packs.ink · NM Market via TCGCSV · not financial advice · " + AFFILIATE_NOTE
+RARITY_ORDER = ("Common", "Uncommon", "Rare", "Super Rare", "Legendary", "Enchanted", "Epic", "Iconic")
+MAINLINE_MIN_COMPONENTS = 100   # a set index this wide is a booster set, not a promo run
 
 
 def load_subscriptions(sb):
@@ -115,53 +184,524 @@ def drop_stale(sb, rows, price_date):
     return out
 
 
-def build_report(sb, price_date, window):
-    """The digest's embed for one window, with stale movers removed."""
-    risers = drop_stale(sb, digest.fetch_movers(sb, window, "up", digest.MOVERS_PER_SIDE * 2), price_date)
-    fallers = drop_stale(sb, digest.fetch_movers(sb, window, "down", digest.MOVERS_PER_SIDE * 2), price_date)
-    risers, fallers = risers[:digest.MOVERS_PER_SIDE], fallers[:digest.MOVERS_PER_SIDE]
-    if not risers and not fallers:
+# ── pure helpers ─────────────────────────────────────────────────────────────
+def tcg_url(pid, printing=None):
+    """Index.html's tcgUrl(productId, printing), character for character."""
+    if not pid:
         return None
-    since = (price_date - dt.timedelta(days=digest.HISTORY_DAYS)).isoformat()
-    pids = [r["tcgplayer_product_id"] for r in risers + fallers if r.get("tcgplayer_product_id")]
-    hist = digest.fetch_history(sb, pids, since)
-    standings = {k: s for k, s in ((k, digest.price_standing(p)) for k, p in hist.items()) if s}
-    embed = digest.build_embed(price_date, window, risers, fallers, standings)
-    if not embed.get("fields"):
+    dest = f"https://www.tcgplayer.com/product/{int(pid)}/?Language=English"
+    if printing and printing != "Normal":
+        dest += "&Printing=" + quote(printing, safe="")
+    return TCG_AFFILIATE_BASE + "?u=" + quote(dest, safe="")
+
+
+def bucket_of(row):
+    """chase | promo | base | foil. A chase or promo card is one printing, so it
+    is never called a foil (the site's printingBadge rule)."""
+    rarity = row.get("rarity")
+    if rarity in CHASE_RARITIES:
+        return "chase"
+    if rarity == "Promo":
+        return "promo"
+    if (row.get("printing") or "Normal") in ("Normal", "Non-Foil"):
+        return "base"
+    return "foil"
+
+
+def dollar_move(price, pct):
+    """What the move was in dollars, from today's price and its percent."""
+    base = 1 + float(pct) / 100
+    if base <= 0:
         return None
-    return dress_report(embed, price_date, window, risers, fallers, standings)
+    return float(price) - float(price) / base
 
 
-def dress_report(embed, price_date, window, risers, fallers, standings):
-    """The digest's embed, dressed for a server channel: the card the report
-    leads with as its picture, a title that says when a WEEKLY report covers
-    a week, and a footer naming the command that put it there — so a member
-    who has never seen it knows where it comes from. Only the wrapper changes;
-    the digest's own layout (shared with the site's webhook) is untouched."""
-    out = dict(embed)
-    if window != "1d":
-        out["title"] = f"Lorcana movers — week to {price_date:%b} {price_date.day}, {price_date:%Y}"
+def qualifies(row, key):
+    cfg = SECTIONS[key]
+    return row["price"] >= cfg["min_price"] and abs(row["usd"]) >= cfg["min_usd"]
 
-    def worth(r):
-        s = standings.get((r.get("tcgplayer_product_id"), r.get("printing") or "Normal"))
-        return bool(s) and s[0] in ("low", "near-low")
 
-    lead = next((r for r in fallers if worth(r)), None) or (risers[0] if risers else None) or (fallers[0] if fallers else None)
-    pid = lead and lead.get("tcgplayer_product_id")
-    if pid:
-        out["thumbnail"] = {"url": f"https://tcgplayer-cdn.tcgplayer.com/product/{int(pid)}_in_1000x1000.jpg"}
-    foot = (out.get("footer") or {}).get("text") or ""
-    out["footer"] = {"text": (foot + " · " if foot else "") + "posted by the packs.ink bot — /reports"}
+def rank(rows, key):
+    by = "usd" if SECTIONS[key]["rank"] == "usd" else "pct"
+    return sorted(rows, key=lambda r: -abs(r[by]))
+
+
+def sectioned(rows, window):
+    """price_movers rows -> {section: [ranked, floored rows]} with pct / usd / price."""
+    pct_col = digest.PCT_PREFIX + window
+    out = {k: [] for k in SECTION_ORDER}
+    for r in rows:
+        p, price = r.get(pct_col), r.get(digest.PRICE_COL)
+        if p is None or price is None or float(p) == 0:
+            continue
+        usd = dollar_move(price, p)
+        if usd is None:
+            continue
+        row = {**r, "pct": float(p), "usd": usd, "price": float(price)}
+        key = bucket_of(r)
+        if qualifies(row, key):
+            out[key].append(row)
+    return {k: rank(v, k) for k, v in out.items()}
+
+
+def card_title(row, set_name=""):
+    name = row.get("name") or "Unknown"
+    ver = row.get("version")
+    title = f"{name} — {ver}" if ver and ver != "None" else name
+    if set_name == C1_SET:   # one card_id, two markets
+        title += " (Prize Wall)" if (row.get("printing") or "Normal") == "Normal" else " (Top Prize)"
+    return title.replace("[", "(").replace("]", ")")
+
+
+def set_display(name):
+    return SET_DISPLAY_NAMES.get(name, name or "")
+
+
+def fmt_money(v, sign=False):
+    return art.fmt_money(float(v), sign=sign)
+
+
+def fmt_pct(p):
+    return art.fmt_pct(float(p))
+
+
+SHORT_STANDING = {
+    "cheapest in 12 months": "12-mo low", "cheapest in 6 months": "6-mo low",
+    "cheapest in 3 months": "3-mo low",
+}
+
+
+def short_standing(st):
+    if not st:
+        return ""
+    label = st[1]
+    if label in SHORT_STANDING:
+        return SHORT_STANDING[label]
+    return label.replace("near its ", "near ").replace("-month", "-mo")
+
+
+def is_worth(st):
+    return bool(st) and st[0] in ("low", "near-low")
+
+
+def lead_number(row, key):
+    return fmt_money(row["usd"], sign=True) if SECTIONS[key]["rank"] == "usd" else fmt_pct(row["pct"])
+
+
+def arrow(row):
+    return "▲" if row["pct"] > 0 else "▼"
+
+
+def daily_line(row, key, sets, standing):
+    title = card_title(row, sets.get(row.get("set_id"), ""))
+    url = tcg_url(row.get("tcgplayer_product_id"), row.get("printing"))
+    link = f"[{title}]({url})" if url else title
+    note = short_standing(standing)
+    tail = f" · *{note}*" if note else ""
+    return f"{arrow(row)} **{lead_number(row, key)}** {link} · {fmt_money(row['price'])}{tail}"
+
+
+def weekly_line(row, key, sets, standing):
+    set_raw = sets.get(row.get("set_id"), "")
+    title = card_title(row, set_raw)
+    url = tcg_url(row.get("tcgplayer_product_id"), row.get("printing"))
+    link = f"[{title}]({url})" if url else title
+    other = fmt_pct(row["pct"]) if SECTIONS[key]["rank"] == "usd" else fmt_money(row["usd"], sign=True)
+    detail = f"{fmt_money(row['price'])} ({other}) · {row.get('rarity') or ''}"
+    if set_raw:
+        detail += f" · {set_display(set_raw)}"
+    note = short_standing(standing)
+    tail = f" · **{note}**" if note else ""
+    return f"{arrow(row)} **{lead_number(row, key)}** {link}\n*{detail}*{tail}"
+
+
+def embed_chars(e):
+    n = len(e.get("title") or "") + len(e.get("description") or "")
+    n += len((e.get("author") or {}).get("name") or "") + len((e.get("footer") or {}).get("text") or "")
+    for f in e.get("fields") or []:
+        n += len(f.get("name") or "") + len(f.get("value") or "")
+    return n
+
+
+def fit_embeds(embeds, limit=None):
+    """Drop lines from the LAST section embeds until the whole message fits
+    Discord's 6000-character cap. An embed that loses every line is removed.
+    The header (index 0) and any embed marked `_keep` are never trimmed."""
+    limit = EMBED_TOTAL_LIMIT if limit is None else limit
+    embeds = [dict(e) for e in embeds]
+    while sum(embed_chars(e) for e in embeds) > limit:
+        for i in range(len(embeds) - 1, 0, -1):
+            e = embeds[i]
+            if e.get("_keep") or not e.get("description"):
+                continue
+            lines = e["_lines"]
+            if len(lines) > 1:
+                lines = lines[:-1]
+                e["_lines"] = lines
+                e["description"] = "\n".join(lines)
+            else:
+                foot = e.get("footer")
+                embeds.pop(i)
+                if foot:
+                    embeds[-1]["footer"] = foot
+            break
+        else:
+            break
+    return embeds
+
+
+def clean_embed(e):
+    return {k: v for k, v in e.items() if not k.startswith("_")}
+
+
+# ── the market pulse (market_index_daily) ────────────────────────────────────
+def index_change(series, day, back_days):
+    """% change of an index series between the value on `day` and the latest
+    value on or before `day - back_days`. None when either end is missing."""
+    now = series.get(day)
+    if now is None:
+        return None
+    cut = day - dt.timedelta(days=back_days)
+    prior = [v for d, v in series.items() if d <= cut]
+    if not prior:
+        return None
+    then = series[max(d for d in series if d <= cut)]
+    return (now / then - 1) * 100 if then else None
+
+
+def market_pulse(sb, price_date, window, sets):
+    """{all, chase, sealed, sets:[(name, week, month)], rarities:[(r, change)]} or None.
+
+    None whenever the index is not current for price_date — the ETL refreshes
+    it with the prices, but it is optional there, and a stale index would
+    report yesterday's market as today's."""
+    days = 1 if window == "1d" else 7
+    try:
+        rows = sb.select(
+            "market_index_daily", columns="scope,scope_key,date,value,n_components",
+            filters={"scope": "in.(all,chase,sealed,rarity,set)",
+                     "date": f"gte.{(price_date - dt.timedelta(days=32)).isoformat()}"},
+            order="scope.asc,scope_key.asc,date.asc")
+    except RuntimeError as e:
+        print(f"  (market index unavailable: {str(e)[:160]})")
+        return None
+    series, width = {}, {}
+    for r in rows:
+        key = (r["scope"], r.get("scope_key") or "")
+        d = dt.date.fromisoformat(str(r["date"])[:10])
+        series.setdefault(key, {})[d] = float(r["value"])
+        if d == price_date:
+            width[key] = r.get("n_components") or 0
+    if price_date not in series.get(("all", ""), {}):
+        return None
+
+    def ch(key, back):
+        s = series.get(key)
+        return index_change(s, price_date, back) if s else None
+
+    out = {"all": (ch(("all", ""), days), ch(("all", ""), 30)),
+           "chase": (ch(("chase", ""), days), ch(("chase", ""), 30)),
+           "sealed": (ch(("sealed", ""), days), ch(("sealed", ""), 30))}
+    set_moves = []
+    for (scope, key), s in series.items():
+        if scope != "set" or width.get((scope, key), 0) < MAINLINE_MIN_COMPONENTS:
+            continue
+        wk = index_change(s, price_date, days)
+        if wk is not None and key in sets:
+            set_moves.append((sets[key], wk, index_change(s, price_date, 30), key))
+    set_moves.sort(key=lambda t: -t[1])
+    out["sets"] = set_moves
+    rar = []
+    for r in RARITY_ORDER:
+        c = ch(("rarity", r), days)
+        if c is not None:
+            rar.append((r, c))
+    rar.sort(key=lambda t: -abs(t[1]))
+    out["rarities"] = rar
     return out
 
 
-def post(token, channel_id, embed, session=requests):
-    return session.post(
-        f"{API}/channels/{channel_id}/messages",
-        headers={"Authorization": f"Bot {token}", "Content-Type": "application/json"},
-        json={"embeds": [embed], "allowed_mentions": {"parse": []}},
-        timeout=30,
-    )
+def move_verb(p):
+    if abs(p) < 0.3:
+        return "held flat at"
+    if p > 0:
+        return "rose"
+    return "slipped" if p > -3 else "fell"
+
+
+def pulse_sentence(pulse, window):
+    if not pulse or pulse["all"][0] is None:
+        return ""
+    span = "today" if window == "1d" else "this week"
+    a, c = pulse["all"][0], pulse["chase"][0]
+    if abs(a) < 0.3 and (c is None or abs(c) < 0.3):
+        # Two "held flat at"s in one sentence read as a stutter.
+        s = f"A quiet {'day' if window == '1d' else 'week'}: the whole market moved **{fmt_pct(a)}**"
+        s += f" and chase cards **{fmt_pct(c)}**." if c is not None else "."
+    else:
+        s = f"The whole market {move_verb(a)} **{fmt_pct(a)}** {span}"
+        s += f" and chase cards {move_verb(c)} **{fmt_pct(c)}**." if c is not None else "."
+    if window != "1d" and len(pulse["sets"]) >= 2:
+        hot, cold = pulse["sets"][0], pulse["sets"][-1]
+        month = f", {fmt_pct(hot[2])} this month" if hot[2] is not None else ""
+        s += f" **{hot[0]}** led the sets (**{fmt_pct(hot[1])}**{month}); **{cold[0]}** trailed at **{fmt_pct(cold[1])}**."
+    return s
+
+
+def pulse_fields(pulse):
+    def two(label, pair):
+        wk, mo = pair
+        if wk is None:
+            return None
+        second = f"\n{fmt_pct(mo)} this month" if mo is not None else ""
+        return {"name": label, "value": f"**{fmt_pct(wk)}** this week{second}", "inline": True}
+
+    fields = [f for f in (two("Whole market", pulse["all"]), two("Chase cards", pulse["chase"]),
+                          two("Sealed", pulse["sealed"])) if f]
+    sets = pulse["sets"]
+    if len(sets) >= 2:
+        hot, cold = sets[0], sets[-1]
+        fields.append({"name": "🔥 Hottest set", "inline": True,
+                       "value": f"**{hot[0]}** {fmt_pct(hot[1])}" + (f"\n{sets[1][0]} {fmt_pct(sets[1][1])}" if len(sets) > 2 else "")})
+        fields.append({"name": "🧊 Coolest set", "inline": True,
+                       "value": f"**{cold[0]}** {fmt_pct(cold[1])}" + (f"\n{sets[-2][0]} {fmt_pct(sets[-2][1])}" if len(sets) > 2 else "")})
+    if pulse["rarities"]:
+        top = pulse["rarities"][0]
+        rest = " · ".join(f"{r} {fmt_pct(c)}" for r, c in pulse["rarities"][1:3])
+        fields.append({"name": "By rarity", "inline": True,
+                       "value": f"{top[0]} **{fmt_pct(top[1])}**" + (f"\n{rest}" if rest else "")})
+    return fields
+
+
+def market_chart_series(sb, price_date, pulse, sets_meta):
+    """(title, subtitle, series) for the weekly chart, or None."""
+    mainline = {key for _, _, _, key in pulse["sets"]}
+    released = sorted((m["released_at"], sid) for sid, m in sets_meta.items()
+                      if sid in mainline and m.get("released_at") and m["released_at"] <= price_date)
+    newest = released[-1] if released else None
+    if newest and 28 <= (price_date - newest[0]).days <= 150:
+        start, title = newest[0], f"Since {sets_meta[newest[1]]['name']} came out"
+    else:
+        start, title = price_date - dt.timedelta(days=90), "The last 3 months"
+    picks = [("Whole market", ("all", ""), art.TEXT), ("Chase cards", ("chase", ""), art.GOLD)]
+    hot = pulse["sets"][0] if pulse["sets"] else None
+    if hot:
+        picks.insert(0, (hot[0], ("set", hot[3]), art.TEAL))
+    if newest and (not hot or newest[1] != hot[3]):
+        picks.append((sets_meta[newest[1]]["name"], ("set", newest[1]), art.CORAL))
+    elif len(pulse["sets"]) >= 2:
+        cold = pulse["sets"][-1]
+        picks.append((cold[0], ("set", cold[3]), art.CORAL))
+    series = []
+    for label, (scope, key), color in picks:
+        try:
+            rows = sb.select("market_index_daily", columns="date,value",
+                             filters={"scope": f"eq.{scope}", "scope_key": f"eq.{key}",
+                                      "date": f"gte.{start.isoformat()}"},
+                             order="date.asc")
+        except RuntimeError:
+            continue
+        pts = [(dt.date.fromisoformat(str(r["date"])[:10]), float(r["value"])) for r in rows if r.get("value")]
+        pts = [p for p in pts if p[0] <= price_date]
+        if len(pts) >= 2:
+            series.append((label, pts, color))
+    if len(series) < 2:
+        return None
+    common = max(pts[0][0] for _, pts, _ in series)
+    rebased = []
+    for label, pts, color in series:
+        pts = [p for p in pts if p[0] >= common]
+        if len(pts) < 2:
+            continue
+        base = pts[0][1]
+        rebased.append((label, [(d, (v / base - 1) * 100) for d, v in pts], color))
+    if len(rebased) < 2:
+        return None
+    return title, f"% change since {common:%b} {common.day}", rebased
+
+
+# ── the report ───────────────────────────────────────────────────────────────
+def fetch_candidates(sb, window):
+    pct_col = digest.PCT_PREFIX + window
+    floor = min(s["min_price"] for s in SECTIONS.values())
+    cols = ("card_id,name,version,rarity,set_id,printing,tcgplayer_product_id,"
+            f"{digest.PRICE_COL},{pct_col}")
+    return sb.select("price_movers", columns=cols,
+                     filters={digest.PRICE_COL: f"gte.{floor}", pct_col: "neq.0"},
+                     order="card_id.asc,printing.asc")
+
+
+def load_sets(sb):
+    try:
+        rows = sb.select("sets", columns="id,name,released_at", order="id.asc")
+    except RuntimeError:
+        return {}
+    out = {}
+    for r in rows:
+        rel = r.get("released_at")
+        out[r["id"]] = {"name": r.get("name") or "",
+                        "released_at": dt.date.fromisoformat(str(rel)[:10]) if rel else None}
+    return out
+
+
+def key_of(row):
+    return (row.get("tcgplayer_product_id"), row.get("printing") or "Normal")
+
+
+def build_report(sb, price_date, window, session=requests):
+    """{"embeds", "files", "plain"} for one window, or None when nothing
+    cleared the floors. "plain" is the same report with no attachments — what
+    goes out if Discord refuses the pictures."""
+    weekly = window != "1d"
+    sets_meta = load_sets(sb)
+    sets = {sid: m["name"] for sid, m in sets_meta.items()}
+    ranked = sectioned(fetch_candidates(sb, window), window)
+    fresh = {}
+    for key in SECTION_ORDER:
+        want = SECTIONS[key]["lines"][window]
+        fresh[key] = drop_stale(sb, ranked[key][:want * OVERFETCH], price_date)
+    if not any(fresh.values()):
+        return None
+
+    look = {}
+    for key in SECTION_ORDER:
+        for r in fresh[key][:STANDING_PER_SECTION]:
+            look[key_of(r)] = r
+    since = (price_date - dt.timedelta(days=digest.HISTORY_DAYS)).isoformat()
+    pids = sorted({k[0] for k in look if k[0]})
+    hist = {}
+    for i in range(0, len(pids), 40):
+        hist.update(digest.fetch_history(sb, pids[i:i + 40], since))
+    standing = {k: digest.price_standing(hist.get(k, [])) for k in look}
+
+    worth = []
+    if weekly:
+        worth = [r for key in SECTION_ORDER for r in fresh[key][:STANDING_PER_SECTION]
+                 if r["pct"] < 0 and is_worth(standing.get(key_of(r)))]
+        worth.sort(key=lambda r: r["pct"])
+        worth = worth[:WORTH_LINES]
+    taken = {key_of(r) for r in worth}
+    shown = {key: [r for r in fresh[key] if key_of(r) not in taken][:SECTIONS[key]["lines"][window]]
+             for key in SECTION_ORDER}
+
+    pulse = market_pulse(sb, price_date, window, sets)
+    files = {}
+    line = weekly_line if weekly else daily_line
+
+    wk0 = price_date - dt.timedelta(days=6)
+    if weekly:
+        span = (f"{wk0:%b} {wk0.day}–{price_date.day}" if wk0.month == price_date.month
+                else f"{wk0:%b} {wk0.day} – {price_date:%b} {price_date.day}")
+        title = f"Lorcana week in review · {span}, {price_date:%Y}"
+    else:
+        title = f"Lorcana movers · {price_date:%a}, {price_date:%b} {price_date.day}, {price_date:%Y}"
+    desc = pulse_sentence(pulse, window) or (
+        "This week's biggest moves, by kind of card." if weekly else "Today's biggest moves, by kind of card.")
+    if not weekly:
+        desc += "\n*Italic notes say where a price sits against that card's own history.*"
+    header = {"title": title, "url": f"{digest.SITE}/screener", "color": HEADER_COLOR,
+              "description": desc, "_keep": True}
+    if weekly and pulse:
+        header["fields"] = pulse_fields(pulse)
+        chart = market_chart_series(sb, price_date, pulse, sets_meta)
+        if chart:
+            png = art.market_chart(chart[2], chart[0], chart[1])
+            if png:
+                files["market.png"] = png
+                header["image"] = {"url": "attachment://market.png"}
+    embeds = [header]
+
+    def section_embed(key, rows, label=None, color=None):
+        # Each row leads with ITS OWN section's number, so a base card in
+        # "Worth a look" still says -25.3%, not -$2.81.
+        lines = [line(r, bucket_of(r), sets, standing.get(key_of(r))) for r in rows]
+        cfg = SECTIONS[key]
+        if not label:
+            label = cfg["title"] + (" · biggest $ moves" if cfg["rank"] == "usd" else " · biggest % moves")
+            label += " this week" if weekly else ""
+        return {"author": {"name": label}, "color": color or cfg["color"],
+                "description": "\n".join(lines), "_lines": lines}
+
+    for key in SECTION_ORDER:
+        rows = shown[key]
+        if not rows:
+            continue
+        e = section_embed(key, rows)
+        lead_pid = rows[0].get("tcgplayer_product_id")
+        e["_thumb"] = {"url": art.art_url(lead_pid)} if lead_pid else None
+        if weekly and key in ("chase", "base"):
+            strip = art.card_strip([{
+                "pid": r.get("tcgplayer_product_id"), "name": r.get("name") or "",
+                "version": r.get("version") if r.get("version") not in (None, "None") else set_display(sets.get(r.get("set_id"), "")),
+                "price": r["price"], "pct": r["pct"], "usd": r["usd"],
+                "spark": hist.get(key_of(r), [])} for r in rows if r.get("tcgplayer_product_id")],
+                SECTIONS[key]["rank"], session=session)
+            if strip:
+                files[f"{key}.png"] = strip
+                e["image"] = {"url": f"attachment://{key}.png"}
+        if "image" not in e and e["_thumb"]:
+            e["thumbnail"] = e["_thumb"]
+        embeds.append(e)
+        if key == "base" and worth:
+            w = section_embed("chase", worth, label="💡 WORTH A LOOK · fell this week, now at a multi-month low",
+                              color=WORTH_COLOR)
+            pid = worth[0].get("tcgplayer_product_id")
+            if pid:
+                w["thumbnail"] = {"url": art.art_url(pid)}
+            embeds.append(w)
+    if len(embeds) == 1:
+        return None
+    embeds[-1]["footer"] = {"text": FOOTER + " · posted by the packs.ink bot — /reports"}
+
+    fitted = fit_embeds(embeds)
+    names = set(files)
+    plain = []
+    for e in fitted:
+        p = dict(e)
+        img = (p.get("image") or {}).get("url", "")
+        if img.startswith("attachment://"):
+            p.pop("image")
+            if p.get("_thumb"):
+                p["thumbnail"] = p["_thumb"]
+        plain.append(clean_embed(p))
+    used = {(e.get("image") or {}).get("url", "")[len("attachment://"):] for e in fitted}
+    return {"embeds": [clean_embed(e) for e in fitted],
+            "files": [(n, files[n]) for n in sorted(names) if n in used],
+            "plain": plain}
+
+
+def post(token, channel_id, report, session=requests):
+    """Post one report; a report whose attachments Discord refuses is re-sent
+    without them, so the words still arrive."""
+    url = f"{API}/channels/{channel_id}/messages"
+    auth = {"Authorization": f"Bot {token}"}
+
+    def as_json(embeds):
+        return session.post(url, headers={**auth, "Content-Type": "application/json"},
+                            json={"embeds": embeds, "allowed_mentions": {"parse": []}}, timeout=30)
+
+    files = report.get("files") or []
+    if not files:
+        return as_json(report["embeds"])
+    payload = {"embeds": report["embeds"], "allowed_mentions": {"parse": []},
+               "attachments": [{"id": i, "filename": n} for i, (n, _) in enumerate(files)]}
+    r = session.post(url, headers=auth, data={"payload_json": json.dumps(payload)},
+                     files={f"files[{i}]": (n, b, "image/png") for i, (n, b) in enumerate(files)},
+                     timeout=60)
+    if r.status_code == 400:
+        print("  (Discord refused the pictures; sending the report without them)")
+        return as_json(report["plain"])
+    return r
+
+
+def write_preview(folder, cadence, report):
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, f"{cadence}.json"), "w", encoding="utf-8") as f:
+        json.dump({"embeds": report["embeds"], "files": [n for n, _ in report["files"]]}, f,
+                  indent=1, ensure_ascii=False)
+    for name, data in report["files"]:
+        with open(os.path.join(folder, f"{cadence}-{name}"), "wb") as f:
+            f.write(data)
 
 
 def run(args, sb=None, session=requests, now=None):
@@ -174,7 +714,8 @@ def run(args, sb=None, session=requests, now=None):
     if subs is None:
         print(f"{TABLE} does not exist yet (migration 173 not applied). Exiting 0.")
         return 0
-    if not subs:
+    preview = getattr(args, "preview", None)
+    if not subs and not preview:
         print("No servers have asked for reports. Exiting 0.")
         return 0
     price_date = digest.latest_price_date(sb)
@@ -187,24 +728,34 @@ def run(args, sb=None, session=requests, now=None):
         return 0
 
     owed = [s for s in subs if due(s, price_date, args.force_weekly)]
+    if preview:
+        for cadence in ("daily", "weekly"):
+            rep = build_report(sb, price_date, WINDOW[cadence], session=session)
+            if rep:
+                write_preview(preview, cadence, rep)
+                print(f"  preview {cadence}: {len(rep['embeds'])} embeds, "
+                      f"{sum(embed_chars(e) for e in rep['embeds'])} chars, pictures {[n for n, _ in rep['files']]}")
+            else:
+                print(f"  preview {cadence}: nothing cleared the floors")
     if not owed:
         print(f"All {len(subs)} subscriptions already have today's report.")
         return 0
     reports = {}
     for cadence in sorted({s["cadence"] for s in owed}):
-        reports[cadence] = build_report(sb, price_date, WINDOW[cadence])
+        reports[cadence] = build_report(sb, price_date, WINDOW[cadence], session=session)
 
     posted = failed = 0
     for s in owed:
-        embed = reports.get(s["cadence"])
+        rep = reports.get(s["cadence"])
         where = f"{s['cadence']} → channel {s['channel_id']} (server {s['guild_id']})"
-        if not embed:
+        if not rep:
             print(f"  skip {where}: nothing cleared the filters today")
             continue
         if not args.post:
-            print(f"  DRY RUN {where}: {embed['title']} — {len(embed['fields'])} sections")
+            print(f"  DRY RUN {where}: {rep['embeds'][0]['title']} — {len(rep['embeds'])} embeds, "
+                  f"{len(rep['files'])} pictures")
             continue
-        r = post(token, s["channel_id"], embed, session=session)
+        r = post(token, s["channel_id"], rep, session=session)
         match = {"guild_id": s["guild_id"], "channel_id": s["channel_id"], "cadence": s["cadence"]}
         if r.status_code < 300:
             posted += 1
@@ -229,6 +780,7 @@ def main():
     ap.add_argument("--post", action="store_true", help="actually post (default is a dry run)")
     ap.add_argument("--allow-stale", action="store_true", help="post even when today's prices have not landed")
     ap.add_argument("--force-weekly", action="store_true", help="treat today as a weekly-report day")
+    ap.add_argument("--preview", metavar="DIR", help="also write both reports (JSON + pictures) to DIR")
     args = ap.parse_args()
     try:
         from dotenv import load_dotenv

@@ -4958,10 +4958,12 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
   budget. The name index is built at startup (`prepareDeckIndex`), not per request.
 - **`/reports`** stores (server, channel, cadence) in
   `discord_report_subscriptions` (**migration 173, APPLIED 2026-09-28**) through the service
-  key; `scripts/discord_reports.py` posts the **digest's own embed** (built by
-  `discord_digest.py`'s functions) through the bot token, daily and on Mondays
-  for weekly. It adds the same stale-row filter the Worker uses. A 403/404 is
-  written to `last_error`, which `/reports status` shows.
+  key; `scripts/discord_reports.py` posts the report through the bot token,
+  daily and on Mondays for weekly. The movers data, the standing maths and the
+  freshness rules come from `discord_digest.py`; the LAYOUT is the report's
+  own (see "The channel report's layout" below). It adds the same stale-row
+  filter the Worker uses. A 403/404 is written to `last_error`, which
+  `/reports status` shows.
   - **⚠ It runs when an ETL run FINISHES** (`workflow_run` on "ETL", which
     cron-job.org dispatches on time), with the 21:20 / 23:20 UTC schedule kept
     only as a fallback. GitHub has started this repo's evening schedules 2-3
@@ -5084,9 +5086,49 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
   then a last step turns the run red. `build_index.mjs` leaves `{}` for local runs.
 - **No `-#` subtext inside embeds** — it isn't reliably drawn there; secondary
   lines are italics. Plain message content (the fallback) keeps it.
-- **The channel report is dressed in `discord_reports.py` only** (the lead
-  card's picture, "week to …" on weekly, a footer naming /reports); the
-  digest's own layout, shared with the site's webhook, is untouched.
+- **The channel report has its own layout** (see the next section); the
+  digest's embed (`build_embed`, shared with the site's never-configured
+  webhook) is untouched.
+
+### The channel report's layout (2026-09-28)
+
+Zaven, on the first live report: *"foil prices aren't super important, base
+cards and chase cards are relevant, foil can be its own section."* One list
+ranked by percent was mostly $5 foils jumping 30% on one sale, and it called
+Epics and promos "(foil)". Mocked up, then built. Guarded by
+`python scripts/test_discord_reports.py`, which reads `TCG_AFFILIATE_BASE`,
+`tcgUrl` and `SET_DISPLAY_NAMES` back out of Index.html.
+
+- **Sections by kind of card** (`SECTIONS`): **Chase** (Enchanted / Epic /
+  Iconic) and **Promos** rank by DOLLARS — a $2,839 Iconic up $145 is +5.4%
+  and ranked 19th by percent; **Base cards** (non-foil) and **Foils**
+  (base-rarity foils only) rank by percent. `bucket_of` never files a chase or
+  promo card as a foil: it is one printing (the `printingBadge` rule).
+- **Every section has a price floor AND a minimum dollar move** ($10/$2 for
+  chase and promos, $5/$1 for base and foils): "raise the floor" (Zaven). A
+  quiet day's base section can be one line, which is the honest answer.
+- **The weekly adds the bigger trends**: the header's pulse (whole market,
+  chase cards, sealed — week and month; hottest and coolest set; the rarity
+  that moved most) from `market_index_daily`, a chart since the newest set came
+  out, a picture strip of the top 4 chase and base movers, and **Worth a look**
+  (fell this week AND at a multi-month low, pulled out of the other sections).
+  **⚠ No pulse when the index is not current for the price date** — the ETL
+  refreshes it with the prices, but optionally, and a stale index would report
+  yesterday's market as today's. A set index narrower than 100 cards is a promo
+  run, not a set, and stays out of hottest/coolest.
+- **The pictures are drawn by `scripts/discord_report_art.py` (Pillow) and
+  ATTACHED** (multipart, `attachment://<name>.png`). Fonts are committed under
+  `scripts/fonts/` (SIL OFL), so CI never downloads them. Every drawing
+  function returns None instead of raising, and a multipart post Discord
+  refuses (400) is re-sent as text: a picture must never cost the post.
+- **⚠ Every card link is ~160 characters** (the affiliate URL), and a message's
+  embeds may hold 6,000 in total, so `fit_embeds` trims lines from the LAST
+  sections (foils first) until it fits. The header is never trimmed and the
+  disclosure footer moves to whatever embed ends up last.
+- **Links go to TCGplayer through the affiliate link** (`tcg_url`, the site's
+  `tcgUrl` exactly), never to packs.ink card pages (Zaven, 2026-09-28).
+- `python scripts/discord_reports.py --preview <dir>` builds both reports from
+  live data (read-only) and writes the JSON and pictures to `<dir>`.
 
 ## The guards RUN now — `.github/workflows/guards.yml` (2026-09-21)
 
