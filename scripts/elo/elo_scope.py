@@ -34,6 +34,17 @@ EXCLUDED_STORE_IDS — the STORE is out of scope entirely, past and future.
     Indianapolis was excluded here and still sat on the Scout tab months later,
     because nothing in the pipeline could ever take a row back out (reported
     2026-09-12). sync_elo_tracked_stores.prune_excluded() is that delete.
+
+STATUS_ONLY_STORE_IDS — out of Elo, but still on the Store Status tab.
+    Being cut from the rating is a statement about where the scene plays, not
+    about the shop, and the Store Status tab is how a shop follows its own RPH
+    tier progress. So a store cut from Elo keeps its Store Status row. This list is
+    read ONLY by what feeds that tab — the history top-up and the roster scrape
+    (scrape_store_history, scrape_event_attendance), report_store_tiers, and the
+    client's ELO_STATUS_ONLY_STORE_IDS in Index.html. It is deliberately NOT
+    written into elo_tracked_stores: that table also gates the Upcoming SCs tab,
+    the Scout tab, scouting sheets and the SC roster scrape, and a cut store
+    belongs on none of those.
 """
 
 ONE_OFF_EVENT_IDS = {
@@ -88,3 +99,14 @@ EXCLUDED_STORE_IDS = {
 # organiser's label stuck to six unrelated venues for a year. Only 5392 and 5393
 # are actually WorldClassCards. Identify a store by its store_id, never by the
 # name in `events.store`.
+
+# Every store cut from Elo stays on the Store Status tab (Zaven, 2026-09-29: "add
+# back wcc and any other previous elo store we cut, so they can track progress" —
+# WCC is WorldClassCards, 5392 / 5393). Derived rather than copied, so a future exclusion
+# keeps its Store Status row by default — to take a store off that tab as well,
+# subtract it here with a reason.
+#
+# ⚠ Index.html carries ELO_STATUS_ONLY_STORE_IDS, a copy for the browser (it has
+# no way to read this file). scripts/elo/test_excluded_stores.py fails the moment
+# the two disagree, so adding an exclusion means adding the id there too.
+STATUS_ONLY_STORE_IDS = frozenset(EXCLUDED_STORE_IDS)

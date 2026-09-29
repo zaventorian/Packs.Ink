@@ -22,7 +22,10 @@ The registrations endpoint has both, per event, for past events (confirmed by
 probe_rph_history.py). Each row carries the user, their final standing and their
 match record — enough to tell a registrant from someone who actually sat down.
 
-Scope: events in lorcana_events_history belonging to elo_tracked_stores. The
+Scope: events in lorcana_events_history belonging to elo_tracked_stores, plus the
+stores cut from Elo that stay on the Store Status tab (elo_scope's
+STATUS_ONLY_STORE_IDS — they are not in that table, which also gates Upcoming SCs
+and the Scout tab, so reading it alone left their rosters unscraped). The
 first full run was ~4,200 events at one request each; writes are batched
 FLUSH_EVERY events, and the scans table makes every later run incremental, so an
 interrupted run resumes where it stopped rather than starting over.
@@ -45,6 +48,7 @@ from urllib.parse import urlencode, quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from discover_wu_scs import SUPABASE_URL, SERVICE_KEY, HDR  # noqa: E402
+from elo_scope import STATUS_ONLY_STORE_IDS  # noqa: E402
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -133,7 +137,8 @@ def _started(iso: str | None) -> datetime.datetime | None:
 
 def target_events(refresh: bool, limit: int | None, recheck_days: int = 0,
                   now: datetime.datetime | None = None) -> list[dict]:
-    """Past events at tracked stores, oldest first so an interrupted run makes
+    """Past events at the Store Status tab's stores (tracked, plus the ones cut
+    from Elo that keep their row), oldest first so an interrupted run makes
     monotonic progress rather than re-treading the newest slice.
 
     An already-scanned event is queued again, flagged `_recheck`, when it started
@@ -144,7 +149,7 @@ def target_events(refresh: bool, limit: int | None, recheck_days: int = 0,
     now = now or datetime.datetime.now(datetime.timezone.utc)
     recheck_from = now - datetime.timedelta(days=recheck_days) if recheck_days > 0 else None
     tracked = sorted({r["store_id"] for r in _get("elo_tracked_stores?select=store_id")
-                      if r.get("store_id") is not None})
+                      if r.get("store_id") is not None} | set(STATUS_ONLY_STORE_IDS))
     done: set[int] = set()
     if not refresh:
         off = 0

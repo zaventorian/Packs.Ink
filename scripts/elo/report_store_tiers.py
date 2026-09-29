@@ -41,6 +41,7 @@ from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from discover_wu_scs import SUPABASE_URL, SERVICE_KEY, FALLBACK_SETS  # noqa: E402
+from elo_scope import STATUS_ONLY_STORE_IDS  # noqa: E402
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -95,12 +96,15 @@ def window_start(n_sets: int, skip_current: bool = True) -> tuple[str, str | Non
 
 
 def tracked_store_ids() -> set[int]:
-    """The stores we actually track. lorcana_events_history also holds every
-    store worldwide (the archive step keeps whatever the global upcoming feed
+    """The stores the Store Status tab reports on: the ones we track, plus the ones
+    cut from Elo that keep their row (elo_scope.STATUS_ONLY_STORE_IDS), so this
+    report and the tab answer for the same shops. lorcana_events_history also holds
+    every store worldwide (the archive step keeps whatever the global upcoming feed
     listed), so without this the report answers for ~3,000 shops instead of the
     ~100 in this scene."""
     rows = _get("elo_tracked_stores?select=store_id")
-    return {r["store_id"] for r in rows if r.get("store_id") is not None}
+    return ({r["store_id"] for r in rows if r.get("store_id") is not None}
+            | set(STATUS_ONLY_STORE_IDS))
 
 
 def fetch_events(since: str, until: str | None = None) -> list[dict]:
@@ -208,7 +212,7 @@ def main() -> None:
     with_play = {a["event_id"] for a in played}
     tracked = None if args.all_stores else tracked_store_ids()
     if tracked is not None:
-        print(f"Scoped to {len(tracked)} tracked stores (--all-stores for everything)\n")
+        print(f"Scoped to the {len(tracked)} Store Status stores (--all-stores for everything)\n")
     stores: dict[int, dict] = {}
     at_store: dict[int, dict] = {}      # event_id → its store bucket
     for e in evs:
