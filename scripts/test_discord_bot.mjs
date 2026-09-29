@@ -24,6 +24,10 @@
 //   8. Every picture is one Discord shows (no AVIF, no data: URI, no relative
 //      path — the last two get the whole reply rejected), and every TCGplayer
 //      link is the affiliate link, with the disclosure beside it.
+//   9. A picture that is one of the Worker's own files (the tile, baked art)
+//      is UPLOADED with the reply — Discord dropped it from the first edit of
+//      a deferred reply when it was only linked — and a refused upload falls
+//      back to the link.
 import { readFileSync } from "node:fs";
 import { inflateSync } from "node:zlib";
 import { webcrypto } from "node:crypto";
@@ -1145,6 +1149,121 @@ const D = await mod("discord/src/data.js");
     data: { type: 1, name: "reports", options: [{ type: 1, name: "daily", options: [] }] } }, deps);
   await Promise.all(pending.splice(0));
   ok(patches[0] && /manage this server/.test(patches[0].body.content), "/reports refuses a member without Manage Server");
+}
+
+// ── 9. our own pictures go WITH the reply, uploaded — not linked ─────────
+// Discord dropped the site tile from the FIRST edit of a deferred /card reply
+// (2026-09-29, Broken Pod) and showed it on every later edit. A picture that is
+// one of the Worker's own files is therefore read from the asset store and
+// uploaded with the edit. Silent both ways: a link that should have been an
+// upload is a card with no picture, and an upload that is refused must still
+// leave the person a reply.
+{
+  const I = await mod("discord/src/interactions.js");
+  const E = await mod("discord/src/embeds.js");
+  const { tileFile } = await mod("discord/src/tile.js");
+  const O = "https://bot.example";
+
+  eq(I.ownFilePath(O + "/tile/crd_abc-n.webp?d=2026-09-29", O), "/tile/crd_abc-n.webp", "a tile URL is one of our files");
+  eq(I.ownFilePath(O + "/art/crd_abc.webp?v=1a2b3c4d", O), "/art/crd_abc.webp", "baked art is one of our files");
+  eq(I.ownFilePath(O + "/chart/p/1/N/3m.png?d=2026-09-29", O), null, "a chart stays a link (drawn on request)");
+  eq(I.ownFilePath("https://tcgplayer-cdn.tcgplayer.com/product/1_in_1000x1000.jpg", O), null, "TCGplayer's photo stays a link");
+  eq(I.ownFilePath("https://evil.example/tile/x.webp", O), null, "another host's /tile/ is not ours");
+  eq(I.ownFilePath(O + "/tile/../x.webp", O), null, "a dot-segment is refused");
+  eq(I.ownFilePath(O + "/tile/a/b.webp", O), null, "a nested path is refused");
+
+  const withTile = index.cards.flatMap((c) => c.p.filter((p) => p.tl && !p.raw).map((p) => ({ c, p })));
+  const pick = withTile.find(({ p }) => p.f.some((f) => f[0] === p.tl[0] && f[1] && !f[6]));
+  ok(!!pick, "the fixture has a priced printing with a drawn tile");
+  if (pick) {
+    const fi = pick.p.f.findIndex((f) => f[0] === pick.p.tl[0]);
+    const key = R.cardKey(pick.p, fi);
+    const tilePath = "/tile/" + tileFile(pick.p.id, pick.p.tl[0]);
+    const nullDb = { hasService: false, async get() { return []; }, async all() { return []; }, async rpc() { return []; } };
+    const decode = async (init) => {
+      if (init.body instanceof FormData) {
+        const files = [];
+        for (const [k, v] of init.body.entries()) if (k.startsWith("files[")) files.push({ field: k, name: v.name, type: v.type, size: v.size });
+        return { multipart: true, body: JSON.parse(init.body.get("payload_json")), files, ctype: init.headers && init.headers["Content-Type"] };
+      }
+      return { multipart: false, body: JSON.parse(init.body), files: [] };
+    };
+    const run = async (it, { status = () => 200, assets } = {}) => {
+      const sent = [], pending = [], asked = [];
+      const deps = {
+        R, index, db: nullDb, origin: O, appId: "123",
+        assets: assets === undefined ? { fetch: async (req) => { asked.push(new URL(req.url).pathname); return new Response(new Uint8Array([82, 73, 70, 70]), { headers: { "content-type": "image/webp" } }); } } : assets,
+        fetch: async (url, init) => { const d = await decode(init); sent.push({ url, method: init.method, ...d }); return new Response("{}", { status: status(sent.length, d) }); },
+        waitUntil: (p) => pending.push(p), log: () => {},
+      };
+      const r = await I.handleInteraction(it, deps);
+      await Promise.all(pending.splice(0));
+      return { r, sent, asked };
+    };
+    const cardCmd = { type: 2, token: "tk", application_id: "123", data: { type: 1, name: "card", options: [{ type: 3, name: "name", value: key }] } };
+
+    // The first reply to /card: the tile goes up with the edit.
+    const a = await run(cardCmd);
+    eq(a.r.type, 5, "/card defers");
+    const s0 = a.sent[0] || {};
+    ok(a.sent.length === 1 && s0.multipart && s0.method === "PATCH" && /\/messages\/@original$/.test(s0.url), "/card's first reply is ONE multipart edit of the deferred message");
+    ok(!s0.ctype, "a multipart edit leaves Content-Type to the runtime (it carries the boundary)");
+    eq(a.asked[0], tilePath, "the Worker reads the tile from its own asset store");
+    const e0 = s0.body && s0.body.embeds && s0.body.embeds[0];
+    eq(e0 && e0.image && e0.image.url, "attachment://packs-ink-0.webp", "the embed points at the uploaded file, not a URL Discord would have to fetch");
+    ok(s0.files && s0.files.length === 1 && s0.files[0].name === "packs-ink-0.webp" && s0.files[0].type === "image/webp" && s0.files[0].size === 4 && s0.files[0].field === "files[0]",
+      "the file rides along as files[0], named as the embed references it");
+    eq(JSON.stringify(s0.body && s0.body.attachments), JSON.stringify([{ id: 0, filename: "packs-ink-0.webp" }]), "attachments declares exactly the uploaded file");
+    ok(s0.body && s0.body.allowed_mentions && !s0.body.allowed_mentions.parse.length, "an upload still never pings anyone");
+    ok(s0.body && Array.isArray(s0.body.components) && s0.body.components.length > 0, "an upload keeps the reply's buttons");
+
+    // Switching to the chart is a plain edit that DROPS the old upload.
+    const b = await run({ type: 3, token: "tk2", application_id: "123", data: { custom_id: E.rangeId("3m", "chart", key), component_type: 2 } });
+    const s1 = b.sent[0] || {};
+    ok(b.sent.length === 1 && !s1.multipart, "the chart view is a plain JSON edit");
+    eq(JSON.stringify(s1.body && s1.body.attachments), "[]", "the chart edit clears the uploaded tile (or it would hang loose under the embed)");
+    ok(/\/chart\//.test((s1.body && s1.body.embeds[0].image && s1.body.embeds[0].image.url) || ""), "the chart stays a link");
+
+    // Back to the card image: uploaded again.
+    const c = await run({ type: 3, token: "tk3", application_id: "123", data: { custom_id: E.rangeId("3m", "card", key), component_type: 2 } });
+    ok(c.sent[0] && c.sent[0].multipart && c.sent[0].body.embeds[0].image.url === "attachment://packs-ink-0.webp", "the Card image button uploads the tile again");
+
+    // Discord refuses the upload: the reply goes again as it used to, with the link.
+    const d = await run(cardCmd, { status: (n, dd) => (dd.multipart ? 400 : 200) });
+    ok(d.sent.length === 2 && d.sent[0].multipart && !d.sent[1].multipart, "a refused upload is retried once without it");
+    ok(d.sent[1] && d.sent[1].body.embeds[0].image.url.startsWith(O + tilePath + "?"), "the retry carries the tile as a link, as before uploads existed");
+    ok(d.sent[1] && d.sent[1].body.embeds.length === 1 && !d.sent[1].body.content, "the retry is the full card, not the plain-text fallback");
+
+    // Even a non-400 refusal of the upload gets the linked retry.
+    const d5 = await run(cardCmd, { status: (n, dd) => (dd.multipart ? 413 : 200) });
+    ok(d5.sent.length === 2 && !d5.sent[1].multipart, "an upload refused as too large is retried as a link");
+
+    // Upload refused AND the linked reply refused: the plain-text fallback still comes.
+    const f = await run(cardCmd, { status: (n) => (n < 3 ? 400 : 200) });
+    ok(f.sent.length === 3 && f.sent[2].body.content && !f.sent[2].body.embeds.length, "when both are refused, the plain-text fallback still answers");
+
+    // The asset store can't produce the file: nothing to upload, the link stands.
+    const g = await run(cardCmd, { assets: { fetch: async () => new Response("nope", { status: 404 }) } });
+    ok(g.sent.length === 1 && !g.sent[0].multipart && g.sent[0].body.embeds[0].image.url.startsWith(O + tilePath), "a tile missing from the asset store falls back to the link");
+    const g2 = await run(cardCmd, { assets: { fetch: async () => { throw new Error("boom"); } } });
+    ok(g2.sent.length === 1 && !g2.sent[0].multipart, "an asset store that throws falls back to the link");
+
+    // No binding at all (an older deploy config): exactly the old behaviour.
+    const h = await run(cardCmd, { assets: null });
+    ok(h.sent.length === 1 && !h.sent[0].multipart && h.sent[0].body.embeds[0].image.url.startsWith(O + tilePath), "without an asset binding the tile is linked, as before");
+  }
+
+  // withUploads directly: thumbnails too, several embeds, a cap of ten files.
+  const assets = { fetch: async () => new Response(new Uint8Array([1]), { headers: { "content-type": "image/webp" } }) };
+  const many = { embeds: Array.from({ length: 12 }, (_, i) => ({ title: "x" + i, image: { url: `${O}/art/c${i}.webp?v=1` } })) };
+  const up = await I.withUploads(many, { assets, origin: O });
+  eq(up && up.files.length, 10, "at most ten files ride along (Discord's limit)");
+  ok(up && up.body.embeds[10].image.url.startsWith(O + "/art/"), "a picture past the tenth stays a link");
+  const mixed = await I.withUploads({ embeds: [{ thumbnail: { url: O + "/art/a.webp?v=1" }, image: { url: O + "/chart/p/1/N/3m.png?d=x" } }] }, { assets, origin: O });
+  ok(mixed && mixed.body.embeds[0].thumbnail.url === "attachment://packs-ink-0.webp" && /\/chart\//.test(mixed.body.embeds[0].image.url), "a baked-art thumbnail is uploaded; the chart beside it stays a link");
+  eq(await I.withUploads({ embeds: [{ image: { url: "https://tcgplayer-cdn.tcgplayer.com/product/1_in_1000x1000.jpg" } }] }, { assets, origin: O }), null, "nothing of ours in the reply → no upload");
+  eq(await I.withUploads({ content: "hi" }, { assets, origin: O }), null, "a reply with no embeds uploads nothing");
+  ok(many.embeds[0].image.url.startsWith(O), "withUploads never mutates the payload it was handed");
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

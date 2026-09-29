@@ -111,13 +111,30 @@ function deferredUpdate(it, deps, build) {
 const webhookUrl = (it, deps) => `${deps.discordApi || DISCORD_API}/webhooks/${deps.appId || it.application_id}/${it.token}`;
 
 async function patchOriginal(it, deps, payload, { update = false } = {}) {
-  const send = (method, url, body) => deps.fetch(url, {
-    method, headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ allowed_mentions: QUIET, ...body }),
-  });
-  const r = await send("PATCH", webhookUrl(it, deps) + "/messages/@original", payload);
+  const send = (method, url, body, files) => {
+    const json = JSON.stringify({ allowed_mentions: QUIET, ...body });
+    if (!files || !files.length) return deps.fetch(url, { method, headers: { "Content-Type": "application/json" }, body: json });
+    const form = new FormData();
+    form.append("payload_json", json);
+    files.forEach((f, i) => form.append(`files[${i}]`, new Blob([f.data], { type: f.type }), f.name));
+    return deps.fetch(url, { method, body: form });
+  };
+  const orig = webhookUrl(it, deps) + "/messages/@original";
+  // `attachments: []` on every plain edit: a card reply that switches from
+  // its uploaded picture to the chart would otherwise keep the old file,
+  // shown loose under the embed. A payload's own list wins.
+  const plainBody = { attachments: [], ...payload };
+  const up = await withUploads(payload, deps).catch((e) => { deps.log && deps.log("upload prep failed", e && e.message); return null; });
+  let r = await send("PATCH", orig, up ? up.body : plainBody, up && up.files);
   if (r.ok) return;
   if (deps.log) deps.log("patch failed", r.status, (await r.text().catch(() => "")).slice(0, 800));
+  // The upload is the new risk, so if it was refused for any reason the reply
+  // goes again exactly as it was before uploads existed: the picture as a link.
+  if (up) {
+    r = await send("PATCH", orig, plainBody);
+    if (r.ok) return;
+    if (deps.log) deps.log("patch without upload failed", r.status);
+  }
   // ⚠ A 400 is Discord refusing the SHAPE of the reply (a limit, a field it
   // won't take). Left there, the person who asked sees "thinking…" forever —
   // the worst answer the bot can give. So the same content goes again as
@@ -128,8 +145,57 @@ async function patchOriginal(it, deps, payload, { update = false } = {}) {
   const plain = plainFallback(payload);
   const r2 = update
     ? await send("POST", webhookUrl(it, deps), { ...plain, flags: EPHEMERAL })
-    : await send("PATCH", webhookUrl(it, deps) + "/messages/@original", plain);
+    : await send("PATCH", orig, { attachments: [], ...plain });
   if (!r2.ok && deps.log) deps.log("fallback failed", r2.status);
+}
+
+// ── pictures this Worker hosts go WITH the reply ─────────────────────────
+// ⚠ Discord dropped the site tile from the FIRST edit of a "thinking…" reply
+// and kept it on every later edit of the same message: the Broken Pod /card of
+// 2026-09-29 was stored with no image at all, while pressing any button (an
+// ordinary edit carrying the same URL) brought it back. Pictures from
+// TCGplayer's and Supabase's CDNs in the same spot were fine (Rivera Family
+// Photo, 9/28). So a picture that is one of our OWN files — the tile, or baked
+// art — is read from the asset store and uploaded with the edit, and the embed
+// points at the attachment. Discord then has the bytes before the message
+// exists and never has to fetch anything. Charts stay links: they are drawn on
+// request, and they were never the problem.
+export const OWN_FILE = /^\/(?:tile|art)\/[a-z0-9_.-]+\.(webp|png|jpe?g|gif)$/i;
+const MIME = { webp: "image/webp", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif" };
+export function ownFilePath(url, origin) {
+  if (!url || !origin || !String(url).startsWith(origin + "/")) return null;
+  const path = String(url).slice(origin.length).split(/[?#]/)[0];
+  return OWN_FILE.test(path) && !path.includes("..") ? path : null;
+}
+
+// {body, files} for a multipart edit, or null when there is nothing to upload
+// (or the asset store couldn't give us a file — then the link stands).
+export async function withUploads(payload, deps) {
+  if (!deps.assets || !deps.origin || !payload || !Array.isArray(payload.embeds)) return null;
+  const refs = [];
+  payload.embeds.forEach((e, ei) => {
+    for (const slot of ["image", "thumbnail"]) {
+      const path = ownFilePath(e && e[slot] && e[slot].url, deps.origin);
+      if (path && refs.length < 10) refs.push({ ei, slot, path });
+    }
+  });
+  if (!refs.length) return null;
+  const got = await Promise.all(refs.map(async (ref) => {
+    const r = await deps.assets.fetch(new Request(deps.origin + ref.path)).catch(() => null);
+    if (!r || !r.ok) return null;
+    const ext = ref.path.split(".").pop().toLowerCase();
+    return { ...ref, data: await r.arrayBuffer(), type: MIME[ext] || "application/octet-stream", ext };
+  }));
+  const files = [];
+  const embeds = payload.embeds.map((e) => ({ ...e }));
+  for (const g of got) {
+    if (!g) continue;
+    const name = `packs-ink-${files.length}.${g.ext}`;
+    files.push({ name, type: g.type, data: g.data });
+    embeds[g.ei][g.slot] = { url: "attachment://" + name };
+  }
+  if (!files.length) return null;
+  return { body: { ...payload, embeds, attachments: files.map((f, i) => ({ id: i, filename: f.name })) }, files };
 }
 
 // A reply reduced to text: every embed's title, lines and fields, no
