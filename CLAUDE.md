@@ -4957,6 +4957,22 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
   - **The tile URL carries `?d=<price date>`** — Discord caches by URL, and the
     footer date changes daily, so every tile is re-uploaded each day (wrangler
     skips unchanged files, so a second deploy the same day uploads nothing).
+  - **⚠ The tile is UPLOADED with the reply, not linked** (2026-09-29). Linked,
+    Discord dropped it from the FIRST edit of a deferred `/card` reply — the
+    stored message had no image at all, even after a reload — and showed it on
+    every later edit of the same message (a button, a foil switch), which is
+    how it read as "no picture until you mess with it". TCGplayer and Supabase
+    pictures in the same first edit were fine, so it is our workers.dev assets
+    in particular; the cause on Discord's side was not pinned down, and the
+    upload sidesteps it. `withUploads` (interactions.js) reads any embed
+    picture under `<origin>/tile/` or `/art/` through the **`ASSETS` binding**
+    (wrangler.toml) and sends it as `files[n]` with `attachment://` in the embed.
+    Every plain edit carries `attachments: []`, or switching to the chart would
+    leave the tile hanging loose under the embed. A refused upload (any
+    status) is re-sent once with the link, then the plain-text fallback as
+    before; a file the asset store can't produce stays a link. Charts stay
+    links (drawn on request, never the problem), and so do the instant
+    `/set` / `/open` replies, which are not deferred edits.
   - History is fetched per product for 45 days, then a year for the few whose
     1M reference (or latest price) sits further back (`needsLonger`), so the
     numbers match the site's card page. The art is cached between runs in

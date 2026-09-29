@@ -51,6 +51,7 @@ export default {
         const interaction = JSON.parse(body);
         const out = await handleInteraction(interaction, {
           R, index: INDEX, db: makeDb(env), origin: url.origin, commandIds: COMMAND_IDS,
+          assets: env.ASSETS,
           appId: env.DISCORD_APPLICATION_ID, discordApi: env.DISCORD_API_BASE,
           fetch: (...a) => fetch(...a),
           waitUntil: (p) => ctx.waitUntil(p),

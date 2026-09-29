@@ -140,6 +140,12 @@ discord/
   Nothing about the tiles can fail a build — a card with none just shows its
   picture. The art they are drawn from is cached in `.tile-art-cache/`
   (actions/cache in CI). `--no-tiles` skips them; `--no-art` does too.
+- **A tile or baked picture is UPLOADED with the reply, not linked.** Linked,
+  Discord dropped it from the first edit of a deferred `/card` reply and only
+  showed it after a later edit (a button press). `withUploads` in
+  `interactions.js` reads the file through the `ASSETS` binding and sends it as
+  an attachment; a refused upload is re-sent with the plain link. Charts stay
+  links. `node tools/simulate.mjs` prints `uploaded:` for each file it catches.
 - **Every TCGplayer link is the affiliate link** (`tcgUrl` / `tcgSetSearchUrl`,
   copied from the site): the product page when TCGplayer lists the printing, a
   TCGplayer search for the name when it doesn't. Every message carrying one

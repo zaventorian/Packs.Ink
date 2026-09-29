@@ -26,13 +26,23 @@ const pubHex = Buffer.from(await crypto.subtle.exportKey("raw", kp.publicKey)).t
 // ── capture server: stands in for discord.com/api ────────────────────────
 const captured = [];
 const waiters = [];
+// A reply that uploads a picture (the tile, baked art) arrives as multipart:
+// the JSON is the payload_json part, and each file is noted by name and size.
 const cap = http.createServer((req, res) => {
-  let body = "";
-  req.on("data", (c) => (body += c));
-  req.on("end", () => {
-    let parsed = null;
-    try { parsed = JSON.parse(body); } catch {}
-    captured.push({ method: req.method, url: req.url, body: parsed });
+  const chunks = [];
+  req.on("data", (c) => chunks.push(c));
+  req.on("end", async () => {
+    const buf = Buffer.concat(chunks);
+    const ctype = req.headers["content-type"] || "";
+    let parsed = null, files = [];
+    try {
+      if (/^multipart\/form-data/i.test(ctype)) {
+        const form = await new Response(buf, { headers: { "content-type": ctype } }).formData();
+        parsed = JSON.parse(form.get("payload_json"));
+        for (const [k, v] of form.entries()) if (k.startsWith("files[")) files.push({ field: k, name: v.name, type: v.type, size: v.size });
+      } else parsed = JSON.parse(buf.toString("utf8"));
+    } catch {}
+    captured.push({ method: req.method, url: req.url, body: parsed, files });
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end("{}");
     while (waiters.length) waiters.shift()();
@@ -137,9 +147,11 @@ for (const line of script) {
   const r = await send(parseLine(line));
   // An immediate reply (type 4) carries its message in .data, like a follow-up's body.
   let out = r.json && r.json.type === 4 ? r.json.data : r.json;
+  let uploaded = [];
   if (r.json && (r.json.type === 5 || r.json.type === 6)) {
     const fu = await waitFollowUp(before + 1);
     out = fu ? fu.body : { error: "no follow-up within 20s" };
+    uploaded = (fu && fu.files) || [];
   }
   const file = new URL(`${String(seq).padStart(2, "0")}-${line.replace(/[^a-z0-9]+/gi, "_").slice(0, 40)}.json`, OUT);
   writeFileSync(file, JSON.stringify(out, null, 2));
@@ -152,6 +164,7 @@ for (const line of script) {
     for (const f of e.fields || []) console.log(`  [${f.name}] ${f.value.replace(/\n/g, " | ")}`);
     if (e.image) console.log("  image:", e.image.url);
     if (e.thumbnail) console.log("  thumb:", e.thumbnail.url);
+    for (const f of uploaded) console.log(`  uploaded: ${f.field} ${f.name} (${f.type}, ${f.size} bytes)`);
   }
   if (out && out.components) console.log("  components:", out.components.map((row) => row.components.map((c) => c.label || c.placeholder).join(" / ")).join("  ||  "));
 }
