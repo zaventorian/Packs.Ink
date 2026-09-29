@@ -24,8 +24,8 @@
 //   8. Every picture is one Discord shows (no AVIF, no data: URI, no relative
 //      path — the last two get the whole reply rejected), and every TCGplayer
 //      link is the affiliate link, with the disclosure beside it.
-//   9. A picture that is one of the Worker's own files (the tile, baked art)
-//      is UPLOADED with the reply — Discord dropped it from the first edit of
+//   9. A picture the Worker makes itself (the tile, baked art, a chart) is
+//      UPLOADED with the reply — Discord dropped it from the first edit of
 //      a deferred reply when it was only linked — and a refused upload falls
 //      back to the link.
 import { readFileSync } from "node:fs";
@@ -181,11 +181,16 @@ function checkMessage(m, label) {
       total += f.name.length + f.value.length;
     }
     total += (e.title || "").length + (e.description || "").length + ((e.footer && e.footer.text) || "").length;
-    for (const u of [e.url, e.image && e.image.url, e.thumbnail && e.thumbnail.url]) if (u) ok(/^https?:\/\//.test(u), `${label}: absolute URL ${u}`);
+    // An uploaded picture is "attachment://<name>", and the name must be one
+    // the message declares, or Discord shows nothing (section 9).
+    const declared = new Set((m.attachments || []).map((a) => a.filename));
+    const isAtt = (u) => /^attachment:\/\//.test(String(u));
+    for (const u of [e.url, e.image && e.image.url, e.thumbnail && e.thumbnail.url]) if (u && !isAtt(u)) ok(/^https?:\/\//.test(u), `${label}: absolute URL ${u}`);
     // Discord shows no AVIF, and a data: URI or a relative path gets the whole
     // reply rejected — so a picture is an https JPEG / PNG / WebP / GIF or nothing.
     for (const u of [e.image && e.image.url, e.thumbnail && e.thumbnail.url]) {
-      if (u) ok(DISCORD_IMG.test(u), `${label}: picture is in a format Discord shows (${String(u).slice(0, 90)})`);
+      if (u && isAtt(u)) ok(/^attachment:\/\/[A-Za-z0-9_.-]+\.(?:png|webp|jpe?g|gif)$/.test(u) && declared.has(u.slice(13)), `${label}: uploaded picture ${u} is declared in attachments`);
+      else if (u) ok(DISCORD_IMG.test(u), `${label}: picture is in a format Discord shows (${String(u).slice(0, 90)})`);
     }
   }
   ok(total <= 6000, `${label}: embeds total ≤6000 chars (${total})`);
@@ -1005,6 +1010,9 @@ const D = await mod("discord/src/data.js");
   const { handleInteraction } = await mod("discord/src/interactions.js");
   const patches = [];
   const pending = [];
+  const dbCalls = [];
+  // A reply that uploads a picture is multipart; its JSON is payload_json.
+  const bodyOf = (init) => (init.body instanceof FormData ? JSON.parse(init.body.get("payload_json")) : JSON.parse(init.body));
   const fakeDb = {
     hasService: false,
     async get(table, params) {
@@ -1018,6 +1026,7 @@ const D = await mod("discord/src/data.js");
       return [];
     },
     async all(table, params) {
+      dbCalls.push({ table, params });
       if (table === "prices_daily" && params.date === "eq.2026-09-27") return [
         { tcgplayer_product_id: 1, printing: "Normal", low_price: 18, market_price: 20 },
         { tcgplayer_product_id: 2, printing: "Normal", low_price: 12, market_price: 14 },   // "today" in the matview is not today
@@ -1029,7 +1038,7 @@ const D = await mod("discord/src/data.js");
   };
   const deps = {
     R, index, db: fakeDb, origin: "https://bot.example", appId: "123",
-    fetch: async (url, init) => { patches.push({ url, body: JSON.parse(init.body) }); return new Response("{}"); },
+    fetch: async (url, init) => { patches.push({ url, body: bodyOf(init), multipart: init.body instanceof FormData }); return new Response("{}"); },
     waitUntil: (p) => pending.push(p), log: () => {},
   };
   eq((await handleInteraction({ type: 1 }, deps)).type, 1, "PING -> PONG");
@@ -1053,11 +1062,17 @@ const D = await mod("discord/src/data.js");
 
   // a range button edits the same message with the new range
   patches.length = 0;
+  dbCalls.length = 0;
   const key = R.cardKey(R.resolve("mowgli").printing, 0);
   const b = await handleInteraction({ type: 3, token: "t3", application_id: "123", data: { custom_id: E.rangeId("1y", "chart", key), component_type: 2 } }, deps);
   eq(b.type, 6, "a button defers an UPDATE, not a new message");
   await Promise.all(pending.splice(0));
-  ok(patches[0] && /\/1y\.png/.test(patches[0].body.embeds[0].image.url), "the 1Y button redraws the chart at 1Y");
+  // The chart is drawn here and uploaded, so the range shows up as the window
+  // of the history read that drew it, not in a URL.
+  const yearAgo = Date.now() - 365 * 86400000;
+  ok(patches[0] && patches[0].multipart && /^attachment:\/\/.+\.png$/.test(patches[0].body.embeds[0].image.url), "the 1Y button uploads the redrawn chart");
+  ok(dbCalls.some((c) => c.table === "prices_daily" && /^gte\./.test(String(c.params.date)) && Math.abs(Date.parse(c.params.date.slice(4) + "T00:00:00Z") - yearAgo) < 2 * 86400000),
+    "the 1Y button redraws the chart over one year of history");
 
   // /deck opens a text box; submitting it prices the list at once
   const md = await handleInteraction({ type: 2, token: "t5", application_id: "123", data: { type: 1, name: "deck", options: [] } }, deps);
@@ -1137,10 +1152,13 @@ const D = await mod("discord/src/data.js");
   // Discord refusing a reply's shape (400) gets the same thing as plain text
   {
     const sent = [];
-    const d400 = { ...deps, fetch: async (url, init) => { sent.push(JSON.parse(init.body)); return new Response("{}", { status: sent.length === 1 ? 400 : 200 }); } };
+    // Discord refuses every shape that carries embeds (the upload, then the
+    // same reply with the chart as a link); the plain text still arrives.
+    const d400 = { ...deps, fetch: async (url, init) => { const bd = bodyOf(init); sent.push(bd); return new Response("{}", { status: bd.embeds && bd.embeds.length ? 400 : 200 }); } };
     await handleInteraction({ type: 2, token: "t19", application_id: "123", data: { type: 1, name: "price", options: [{ type: 3, name: "name", value: "mowgli" }] } }, d400);
     await Promise.all(pending.splice(0));
-    ok(sent.length === 2 && sent[1].content && !sent[1].embeds.length && /Mowgli/.test(sent[1].content), "a reply Discord refuses is re-sent as plain text");
+    const last = sent[sent.length - 1];
+    ok(sent.length === 3 && last.content && !last.embeds.length && /Mowgli/.test(last.content), "a reply Discord refuses is re-sent as plain text");
   }
 
   // reports refuses someone who can't manage the server
@@ -1171,6 +1189,9 @@ const D = await mod("discord/src/data.js");
   eq(I.ownFilePath("https://evil.example/tile/x.webp", O), null, "another host's /tile/ is not ours");
   eq(I.ownFilePath(O + "/tile/../x.webp", O), null, "a dot-segment is refused");
   eq(I.ownFilePath(O + "/tile/a/b.webp", O), null, "a nested path is refused");
+  eq(String(I.ownChartUrl(O + "/chart/p/1/N/3m.png?d=2026-09-29&r=x", O)), O + "/chart/p/1/N/3m.png?d=2026-09-29&r=x", "a chart URL is ours to draw, query and all");
+  eq(I.ownChartUrl(O + "/tile/crd_abc-n.webp", O), null, "a tile is not a chart");
+  eq(I.ownChartUrl("https://evil.example/chart/p/1/N/3m.png", O), null, "another host's /chart/ is not ours");
 
   const withTile = index.cards.flatMap((c) => c.p.filter((p) => p.tl && !p.raw).map((p) => ({ c, p })));
   const pick = withTile.find(({ p }) => p.f.some((f) => f[0] === p.tl[0] && f[1] && !f[6]));
@@ -1217,12 +1238,28 @@ const D = await mod("discord/src/data.js");
     ok(s0.body && s0.body.allowed_mentions && !s0.body.allowed_mentions.parse.length, "an upload still never pings anyone");
     ok(s0.body && Array.isArray(s0.body.components) && s0.body.components.length > 0, "an upload keeps the reply's buttons");
 
-    // Switching to the chart is a plain edit that DROPS the old upload.
+    // Switching to the chart uploads the CHART, drawn here by the chart route,
+    // and its attachments list names only it, so the tile is dropped.
     const b = await run({ type: 3, token: "tk2", application_id: "123", data: { custom_id: E.rangeId("3m", "chart", key), component_type: 2 } });
     const s1 = b.sent[0] || {};
-    ok(b.sent.length === 1 && !s1.multipart, "the chart view is a plain JSON edit");
-    eq(JSON.stringify(s1.body && s1.body.attachments), "[]", "the chart edit clears the uploaded tile (or it would hang loose under the embed)");
-    ok(/\/chart\//.test((s1.body && s1.body.embeds[0].image && s1.body.embeds[0].image.url) || ""), "the chart stays a link");
+    ok(b.sent.length === 1 && s1.multipart, "the chart view is one multipart edit");
+    eq(s1.body && s1.body.embeds[0].image && s1.body.embeds[0].image.url, "attachment://packs-ink-0.png", "the chart is uploaded, not linked");
+    ok(s1.files && s1.files.length === 1 && s1.files[0].type === "image/png" && s1.files[0].size > 1000, "the uploaded chart is a real PNG");
+    eq(JSON.stringify(s1.body && s1.body.attachments), JSON.stringify([{ id: 0, filename: "packs-ink-0.png" }]), "the chart edit's attachments name only the chart, which drops the tile");
+    ok(!b.asked.length, "the chart is drawn, not read from the asset store");
+
+    // The chart's database read fails: the chart keeps its link, the reply still goes.
+    const failDb = { hasService: false, async get() { return []; }, async all() { throw new Error("57014 statement timeout"); }, async rpc() { return []; } };
+    const cf = await (async () => {
+      const sent = [], pending = [];
+      const deps = { R, index, db: failDb, origin: O, appId: "123", assets: null,
+        fetch: async (url, init) => { sent.push(await decode(init)); return new Response("{}"); },
+        waitUntil: (p) => pending.push(p), log: () => {} };
+      await I.handleInteraction({ type: 3, token: "tk4", application_id: "123", data: { custom_id: E.rangeId("3m", "chart", key), component_type: 2 } }, deps);
+      await Promise.all(pending.splice(0));
+      return sent;
+    })();
+    ok(cf.length === 1 && !cf[0].multipart && /\/chart\/p\//.test(cf[0].body.embeds[0].image.url), "a chart that can't be drawn here keeps its link, and the reply still goes");
 
     // Back to the card image: uploaded again.
     const c = await run({ type: 3, token: "tk3", application_id: "123", data: { custom_id: E.rangeId("3m", "card", key), component_type: 2 } });
@@ -1260,7 +1297,10 @@ const D = await mod("discord/src/data.js");
   eq(up && up.files.length, 10, "at most ten files ride along (Discord's limit)");
   ok(up && up.body.embeds[10].image.url.startsWith(O + "/art/"), "a picture past the tenth stays a link");
   const mixed = await I.withUploads({ embeds: [{ thumbnail: { url: O + "/art/a.webp?v=1" }, image: { url: O + "/chart/p/1/N/3m.png?d=x" } }] }, { assets, origin: O });
-  ok(mixed && mixed.body.embeds[0].thumbnail.url === "attachment://packs-ink-0.webp" && /\/chart\//.test(mixed.body.embeds[0].image.url), "a baked-art thumbnail is uploaded; the chart beside it stays a link");
+  ok(mixed && mixed.body.embeds[0].thumbnail.url === "attachment://packs-ink-0.webp" && /\/chart\//.test(mixed.body.embeds[0].image.url), "without a database, a chart beside an uploaded thumbnail stays a link");
+  const rowsDb = { async all() { return Array.from({ length: 30 }, (_, i) => ({ date: new Date(Date.UTC(2026, 7, 1) + i * 864e5).toISOString().slice(0, 10), low_price: 1, market_price: 2 + i / 50 })); }, async get() { return []; } };
+  const both = await I.withUploads({ embeds: [{ thumbnail: { url: O + "/art/a.webp?v=1" }, image: { url: O + "/chart/p/1/N/3m.png?d=x" } }] }, { assets, db: rowsDb, origin: O });
+  ok(both && both.files.length === 2 && both.body.embeds[0].image.url === "attachment://packs-ink-0.png" && both.files[0].type === "image/png" && both.body.embeds[0].thumbnail.url === "attachment://packs-ink-1.webp", "with a database, the chart is drawn and uploaded beside the thumbnail");
   eq(await I.withUploads({ embeds: [{ image: { url: "https://tcgplayer-cdn.tcgplayer.com/product/1_in_1000x1000.jpg" } }] }, { assets, origin: O }), null, "nothing of ours in the reply → no upload");
   eq(await I.withUploads({ content: "hi" }, { assets, origin: O }), null, "a reply with no embeds uploads nothing");
   ok(many.embeds[0].image.url.startsWith(O), "withUploads never mutates the payload it was handed");

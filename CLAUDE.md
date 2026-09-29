@@ -4970,9 +4970,16 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
     Every plain edit carries `attachments: []`, or switching to the chart would
     leave the tile hanging loose under the embed. A refused upload (any
     status) is re-sent once with the link, then the plain-text fallback as
-    before; a file the asset store can't produce stays a link. Charts stay
-    links (drawn on request, never the problem), and so do the instant
-    `/set` / `/open` replies, which are not deferred edits.
+    before; a file the asset store can't produce stays a link.
+  - **⚠ Charts are uploaded too** (same day, Zaven: *"now when I click over to
+    price graph, that wont load unless I click through all the options"*).
+    `withUploads` draws them in-process with `chartResponse` — the very route
+    Discord would have fetched, so the picture is identical — and a chart whose
+    database read fails keeps its link. A live tail showed Discord downloads a
+    linked chart THREE times (~2 s after the edit, three different IPs, GET
+    with a Discordbot UA, never HEAD), each a fresh Supabase read and redraw
+    at 27–35 ms of CPU, not the ~5 ms the render alone costs. TCGplayer
+    thumbnails and the instant `/set` / `/open` replies stay links.
   - History is fetched per product for 45 days, then a year for the few whose
     1M reference (or latest price) sits further back (`needsLonger`), so the
     numbers match the site's card page. The art is cached between runs in

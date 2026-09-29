@@ -10,6 +10,7 @@ import { parseDeckList, looksLikeDeck, priceDeck } from "./deck.js";
 import { parseTradePost, priceTrade, tradeMessage, tradeModal, tradeSiteUrl } from "./trade.js";
 import { setOverview, setMessage, openPacks, packMessage, parsePackId, newCards, newCardsMessage, freshRevealRows } from "./set.js";
 import { CALENDAR_REGIONS } from "./site.generated.js";
+import { chartResponse } from "./charts.js";
 
 export const T = { PING: 1, COMMAND: 2, COMPONENT: 3, AUTOCOMPLETE: 4, MODAL_SUBMIT: 5 };
 export const R_ = { PONG: 1, MESSAGE: 4, DEFERRED: 5, DEFERRED_UPDATE: 6, AUTOCOMPLETE: 8, MODAL: 9 };
@@ -158,29 +159,52 @@ async function patchOriginal(it, deps, payload, { update = false } = {}) {
 // Photo, 9/28). So a picture that is one of our OWN files — the tile, or baked
 // art — is read from the asset store and uploaded with the edit, and the embed
 // points at the attachment. Discord then has the bytes before the message
-// exists and never has to fetch anything. Charts stay links: they are drawn on
-// request, and they were never the problem.
+// exists and never has to fetch anything.
+//
+// ⚠ CHARTS TOO (2026-09-29): linked, the price chart went missing the same way
+// after the Price chart button, until a few more clicks brought it back. The
+// chart is drawn here, by the very route Discord would have fetched
+// (chartResponse, ~5 ms), and uploaded. It also stops Discord downloading
+// every chart three times, each one a fresh database read and redraw.
 export const OWN_FILE = /^\/(?:tile|art)\/[a-z0-9_.-]+\.(webp|png|jpe?g|gif)$/i;
+const CHART_PATH = /^\/chart\/[pgr]\/[^?#]+\.png$/;
 const MIME = { webp: "image/webp", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif" };
+const ourPath = (url, origin) => (url && origin && String(url).startsWith(origin + "/") ? String(url).slice(origin.length) : null);
 export function ownFilePath(url, origin) {
-  if (!url || !origin || !String(url).startsWith(origin + "/")) return null;
-  const path = String(url).slice(origin.length).split(/[?#]/)[0];
+  const p = ourPath(url, origin);
+  if (!p) return null;
+  const path = p.split(/[?#]/)[0];
   return OWN_FILE.test(path) && !path.includes("..") ? path : null;
 }
+// The chart's full URL (its query carries the date and any eBay overlay), or null.
+export function ownChartUrl(url, origin) {
+  const p = ourPath(url, origin);
+  return p && CHART_PATH.test(p.split(/[?#]/)[0]) ? new URL(String(url)) : null;
+}
 
-// {body, files} for a multipart edit, or null when there is nothing to upload
-// (or the asset store couldn't give us a file — then the link stands).
+// {body, files} for a multipart edit, or null when there is nothing to upload.
+// Anything that can't be produced here (a file the asset store lacks, a chart
+// whose database read fails) keeps its link, which is how it worked before.
 export async function withUploads(payload, deps) {
-  if (!deps.assets || !deps.origin || !payload || !Array.isArray(payload.embeds)) return null;
+  if (!deps.origin || !payload || !Array.isArray(payload.embeds)) return null;
   const refs = [];
   payload.embeds.forEach((e, ei) => {
     for (const slot of ["image", "thumbnail"]) {
-      const path = ownFilePath(e && e[slot] && e[slot].url, deps.origin);
-      if (path && refs.length < 10) refs.push({ ei, slot, path });
+      const url = e && e[slot] && e[slot].url;
+      if (refs.length >= 10) break;
+      const path = deps.assets ? ownFilePath(url, deps.origin) : null;
+      if (path) { refs.push({ ei, slot, path }); continue; }
+      const chart = deps.db ? ownChartUrl(url, deps.origin) : null;
+      if (chart) refs.push({ ei, slot, chart });
     }
   });
   if (!refs.length) return null;
   const got = await Promise.all(refs.map(async (ref) => {
+    if (ref.chart) {
+      const r = await chartResponse(ref.chart, deps.db).catch((e) => { deps.log && deps.log("chart upload failed", e && e.message); return null; });
+      if (!r || !r.ok) return null;
+      return { ...ref, data: await r.arrayBuffer(), type: "image/png", ext: "png" };
+    }
     const r = await deps.assets.fetch(new Request(deps.origin + ref.path)).catch(() => null);
     if (!r || !r.ok) return null;
     const ext = ref.path.split(".").pop().toLowerCase();
