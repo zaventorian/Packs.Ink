@@ -5395,8 +5395,10 @@ a dispatch input on the existing workflow rather than a script you run on its ow
 ### Taking a store OUT of scope (2026-09-12)
 
 `EXCLUDED_STORE_IDS` is the other half of `elo_scope.py`: this shop is not Chicagoland,
-past and future, whatever the rules infer. Today it holds the two central-Indiana stores
-(Good Games - Indianapolis, Storming Good Games — both ~165 mi out).
+past and future, whatever the rules infer. It started with the two central-Indiana stores
+(Good Games - Indianapolis, Storming Good Games — both ~165 mi out) and since 2026-09-13
+holds 15: all of Michigan, plus anything over a 3 h 30 m DRIVE (the Fox Valley / Green Bay
+corridor and Springfield). The per-store drive times are in `elo_scope.py`.
 
 **⚠ Both of these were true at once, and a store excluded months earlier was still on the
 Scout tab** (reported 2026-09-12, and either one alone is enough to reproduce it):
@@ -5434,6 +5436,41 @@ Scout tab** (reported 2026-09-12, and either one alone is enough to reproduce it
   importers (identity, not equality — a local copy holding the same ids today is how they
   drifted and it compares equal), that neither pass tracks an excluded store, that an
   existing row is deleted, and that an unmatched one is not.
+
+### …but a store cut from Elo STAYS on Store Status (2026-09-29)
+
+Zaven, after WorldClassCards (5392 / 5393) asked why they had vanished: *"add back wcc and
+any other previous elo store we cut, so they can track progress."* Cutting a store from the
+rating is a statement about where the scene plays, not about the shop, and the Store Status
+tab is how a shop follows its own RPH tier progress. **The cut took them off that tab only
+because the tab, the history top-up and the roster scrape all read `elo_tracked_stores`** —
+the same table `prune_excluded()` deletes them from.
+
+- **`elo_scope.STATUS_ONLY_STORE_IDS`** is the list, and it is `frozenset(EXCLUDED_STORE_IDS)`:
+  derived, so a future exclusion keeps its Store Status row by default. To take a store off
+  that tab too, subtract it there with a reason. Checked 2026-09-29: the 15 exclusions are the
+  only stores ever cut. Battle City, Grognard and Zeek's each have an `is_ignored` event, but
+  that was a data-quality call on one event, and all three are still tracked.
+- **⚠ It is deliberately NOT written into `elo_tracked_stores`.** That table also gates Upcoming
+  SCs, the Scout tab, scouting sheets and the SC roster scrape, and a cut store belongs on none
+  of them. Instead the Store Status consumers union it in: `scrape_store_history.store_status_ids()`
+  (the daily 30-day and hourly 2-day top-ups), `scrape_event_attendance.target_events()`,
+  `report_store_tiers`, and the client.
+- **⚠ The client carries a COPY, `ELO_STATUS_ONLY_STORE_IDS`**, because the browser cannot read
+  a Python file. `test_excluded_stores.py` fails when the two disagree: an id only in the copy
+  is a row whose numbers froze the day it was cut; an id only in `elo_scope` is scraped and
+  never shown. Adding an exclusion therefore means adding the id to Index.html too.
+- **The client unions only once `elo_tracked_stores` answered.** An empty tracked list means "no
+  filter" (the pivot's fixture rule), and 15 ids would turn that into a tab of just the cut
+  stores.
+- **Their rows say "Not in Elo"** and have no store-report link: that report is built from the
+  Elo events these stores no longer have (their `elo_events` rows are `is_ignored`).
+- **Several were cut before their full history was ever pulled** — Chimera, Draw 7, Fanfare,
+  Gnome Games and Titan Games had history back to August 2026 only, and every roster since
+  the cut was unscraped. Actions → Discover Lorcana events → `backfill_stores: status` +
+  `skip_discover: true` runs `scrape_store_history.py --status-only` (full history for just
+  those 15); the next hourly store-stats refresh then scrapes every roster they are missing.
+- Guarded by section 5 of `python scripts/elo/test_excluded_stores.py`.
 
 ## Intentional draws — flat, not skipped (2026-09-08)
 
@@ -5604,7 +5641,7 @@ Both tab strips — `.elo-innertabs` and Analytics' `.market-subtabs` — are **
 - **The "Exclude org" toggle is GONE** (2026-09-12, Zaven) — it hid I&L⟡Zaven / I&L⟡jacobayy from every avg-Elo stat, and appeared on four different surfaces. The `p_exclude_org` parameter survives on `get_store_report` / `get_event_roster` / `get_roster_scout` / `get_tracked_store_strength` with its `false` default; nothing passes it any more. Don't re-add the toggle without a reason — it was four controls answering a question nobody was asking.
 - Store names link to the gated store report only when `can_view_store_report()` passes; everyone else sees plain text. The tab itself is public — it aggregates data the Tournaments tab already lists per-event.
 - **RPH tier verdicts (`RPH_TIERS` / `rphTierFor`)** are the doc's published bars over "the four most recent set seasons" — Standard 25/25/250, Legendary 50/50/500 (events / unique fans / tickets). All three are scored now that Fans is a real head count. The window still matters — three sets can't clear a four-set bar and ten sets clears it trivially — so the legend warns when the selection isn't four sets rather than blanking the column. The **Prerelease requirement is NOT scored**: `Pre` counts sets the store ran a prerelease for, but not which sets RPH considered available to it, hence the asterisk.
-- **Pro-rated Legendary is scored on Sept + Oct 2026 by EVENT DATE — its own highlighted column group, not a set season.** The memo's 8/8/80 (+ a Hyperia City prerelease) is 1/6 of Legendary earned in September and October. Until 2026-09-29 it was a lens that scored the most recent completed *set* as a stand-in; a store owner pointed out that answers the wrong question, and the lens (`eloProSeasonKey`, the `proBars` pref) is gone. `buildEloStoreActivity(..., pro)` now gives every store a `pro` bucket: events/tickets/fans for events that have already RUN inside `RPH_PRORATED_WINDOW` (bounds are Chicago-time instants, `-05:00`, since CDT holds the whole window; slicing the UTC date would move a Monday-night Aug 31 event into September), plus `scheduled` (future-dated history rows + `lorcana_events` rows not in the history, not cancelled) and `pre` (`held`/`scheduled`). Scheduled events are shown as `+N` beside the count, never added to it. The columns ignore the set chips, and a store active in Sept–Oct stays in the table even when the chosen sets hide it ("Last 4 complete" leaves out the running set, i.e. all of September). A plain **Jul–Aug proxy** group sits beside it (`RPH_PRORATED_PROXY`, bucketed as `proxy`: the same bars over the two months before the offer — Vine's first month + August — Zaven's ask so stores have a yardstick). **Near-live:** `store_stats_refresh.yml` re-runs just the history top-up (2 days) + roster scrape (`--recheck-days 2`) HOURLY (~70s; the daily Discover cron was landing ~15:00 UTC), the tab's cache drops to 15 min while the counter is up (`ELO_STORES_TTL_LIVE`), and the callout shows "updated N ago" from max(`last_seen_at`, `scraped_at`). The history fetch is scoped server-side to `elo_tracked_stores` now (was the whole 32.8k-row worldwide table for 4.4k useful rows). Temporary: `RPH_PRORATED_SHOW_UNTIL` (2026-12-01) takes the callout and columns down on its own — delete the block after that, and drop or thin the hourly cron in mid-November. Guarded by `test_elo_store_activity.mjs` + `scripts/elo/test_attendance_targets.py` (hourly wiring).
+- **Pro-rated Legendary is scored on Sept + Oct 2026 by EVENT DATE — its own highlighted column group, not a set season.** The memo's 8/8/80 (+ a Hyperia City prerelease) is 1/6 of Legendary earned in September and October. Until 2026-09-29 it was a lens that scored the most recent completed *set* as a stand-in; a store owner pointed out that answers the wrong question, and the lens (`eloProSeasonKey`, the `proBars` pref) is gone. `buildEloStoreActivity(..., pro)` now gives every store a `pro` bucket: events/tickets/fans for events that have already RUN inside `RPH_PRORATED_WINDOW` (bounds are Chicago-time instants, `-05:00`, since CDT holds the whole window; slicing the UTC date would move a Monday-night Aug 31 event into September), plus `scheduled` (future-dated history rows + `lorcana_events` rows not in the history, not cancelled) and `pre` (`held`/`scheduled`). Scheduled events are shown as `+N` beside the count, never added to it. The columns ignore the set chips, and a store active in Sept–Oct stays in the table even when the chosen sets hide it ("Last 4 complete" leaves out the running set, i.e. all of September). A plain **Jul–Aug proxy** group sits beside it (`RPH_PRORATED_PROXY`, bucketed as `proxy`: the same bars over the two months before the offer — Vine's first month + August — Zaven's ask so stores have a yardstick). **Near-live:** `store_stats_refresh.yml` re-runs just the history top-up (2 days) + roster scrape (`--recheck-days 2`) HOURLY (~70s; the daily Discover cron was landing ~15:00 UTC), the tab's cache drops to 15 min while the counter is up (`ELO_STORES_TTL_LIVE`), and the callout shows "updated N ago" from max(`last_seen_at`, `scraped_at`). The history fetch is scoped server-side to `elo_tracked_stores` now, plus `ELO_STATUS_ONLY_STORE_IDS` (see "…but a store cut from Elo STAYS on Store Status") — it was the whole 32.8k-row worldwide table for 4.4k useful rows. Temporary: `RPH_PRORATED_SHOW_UNTIL` (2026-12-01) takes the callout and columns down on its own — delete the block after that, and drop or thin the hourly cron in mid-November. Guarded by `test_elo_store_activity.mjs` + `scripts/elo/test_attendance_targets.py` (hourly wiring).
 - **Guarded by `node scripts/test_elo_store_activity.mjs`**, which extracts `buildEloStoreActivity` + `eloStoreTotals` out of Index.html so they can't drift. Run it after touching the pivot or the rollup.
 
 ## Scouting is a TEAM tool now (migration 143, 2026-09-12)

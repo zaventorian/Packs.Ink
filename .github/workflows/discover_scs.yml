@@ -51,7 +51,7 @@ on:
         default: ""
         type: string
       backfill_stores:
-        description: "Also backfill every PAST event for tracked stores (slow; needs migration 121)"
+        description: "Backfill every PAST event: true = every Store Status store (slow), status = only the stores cut from Elo that stay on Store Status"
         required: false
         default: "false"
         type: string
@@ -135,16 +135,27 @@ jobs:
       # list + tracked stores refresh (rosters read elo_upcoming_scs, so the fresh
       # rows must land first — hence chained steps in the same job, not parallel).
       # Fails soft per-event; idempotent (REPLACE members + upsert header).
-      # Backfill: every PAST event our tracked stores have run. Only reachable
-      # by hand (backfill_stores=true) — it walks ~30 stores' full history, which
-      # the nightly job has no reason to redo. Once it has run, the archive step
-      # in discover_events.py keeps history current from there.
+      # Backfill: every PAST event our Store Status stores have run. Only
+      # reachable by hand — it walks each store's full history, which the nightly
+      # job has no reason to redo. Once it has run, the archive step in
+      # discover_events.py and the 30-day top-up below keep history current.
+      # backfill_stores=status does just the stores cut from Elo that stay on the
+      # Store Status tab (elo_scope.STATUS_ONLY_STORE_IDS): several were cut before
+      # their full history was ever pulled, so their four-set numbers start in
+      # August 2026 until this runs. Their rosters follow on the next hourly
+      # store-stats refresh, which scrapes any event that has none.
       - name: Backfill store event history
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.backfill_stores == 'true' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.backfill_stores == 'true' || inputs.backfill_stores == 'status') }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: python scripts/elo/scrape_store_history.py
+          BACKFILL_STORES: ${{ inputs.backfill_stores }}
+        run: |
+          if [ "$BACKFILL_STORES" = "status" ]; then
+            python scripts/elo/scrape_store_history.py --status-only
+          else
+            python scripts/elo/scrape_store_history.py
+          fi
 
       # Read-only: prints the tier metrics per store to the run log.
       # Who actually PLAYED, per past event — the real source for RPH's Event

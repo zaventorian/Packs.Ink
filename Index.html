@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=497">
+<link rel="stylesheet" href="styles.css?v=498">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -33795,11 +33795,30 @@ function EloUpcomingSCs({canViewStore, canScout, onStoreClick, onPlayerClick, on
 // exactly like a quiet week. Cached 12h — except while the pro-rated counter
 // is up, when stores check it daily and the data refreshes hourly
 // (store_stats_refresh.yml), so a 12h copy would sit up to half a day behind.
-const ELO_STORES_CACHE = "packsink:elo:stores:v9";   // v9: Sept–Oct pro-rated + Jul–Aug proxy buckets, updatedAt
+const ELO_STORES_CACHE = "packsink:elo:stores:v10";  // v10: the stores cut from Elo are back on the tab
 const ELO_STORES_TTL = 12 * 3600 * 1000;
 const ELO_STORES_TTL_LIVE = 15 * 60 * 1000;
 const ELO_STORES_PREFS = "packsink:elo:stores:prefs";
 const ELO_RECENT_SETS = 4;
+
+// Stores cut from Elo that stay on this tab (Zaven, 2026-09-29: "add back wcc
+// and any other previous elo store we cut, so they can track progress"). Being
+// out of the rating region says where the scene plays, not anything about the
+// shop, and this tab is how a shop follows its own RPH tier progress. They are
+// NOT in elo_tracked_stores, which also gates Upcoming SCs, the Scout tab and the
+// roster scrape, so the tab adds them here. The row says so, and has no store
+// report link — that report is built from the Elo events these stores no longer
+// have.
+//
+// ⚠ A copy of elo_scope.STATUS_ONLY_STORE_IDS (every EXCLUDED_STORE_IDS entry),
+// which the history and roster scrapes read. scripts/elo/test_excluded_stores.py
+// fails when the two disagree: an id only here shows a store whose numbers stop
+// updating; an id only there is scraped and never shown.
+const ELO_STATUS_ONLY_STORE_IDS = new Set([
+  2237, 28480,                                // central Indiana
+  1550, 3663, 1646, 4495, 2519, 1325, 4809,   // Michigan
+  5392, 814, 2178, 5011, 5364, 5393,          // over a 3 h 30 m drive (5392/5393 = WorldClassCards)
+]);
 
 // "Wilds Unknown Summer 2026" → "Wilds Unknown". Season labels are
 // "<set> <tag> <year>" (see SEASON_REVIEWS); the set half is the column header.
@@ -33868,6 +33887,9 @@ async function fetchEloStoreActivity(){
   // pivot's own no-filter rule) rather than an empty tab.
   const tracked = await sbFetchAll("elo_tracked_stores", {select: "store_id", order: "store_id.asc"}, null);
   const trackedIds = new Set((tracked || []).map(t => t.store_id).filter(x => x != null));
+  // Only once the table answered: an empty tracked list falls back to "no
+  // filter", and 15 ids would turn that into a tab of just the cut stores.
+  if(trackedIds.size) for(const id of ELO_STATUS_ONLY_STORE_IDS) trackedIds.add(id);
   const histParams = {
     // display_status is how a cancelled event is told apart — see buildEloStoreActivity.
     // last_seen_at is stamped by every history pull, so its max says how fresh the tab is.
@@ -34565,7 +34587,9 @@ function EloStores({canViewStore, onStoreClick}){
       marked <span class="elo-stores-gap">~</span> — because a shop that runs events without recording pairings is not a
       shop nobody attended. <strong>Pre</strong> is how many sets the store ran a prerelease for. The tier verdict scores
       events, fans and tickets; prereleases carry the asterisk. A cancelled event isn't counted unless the store
-      recorded results for it.</p>
+      recorded results for it. Stores marked <span class="elo-stores-outside elo-stores-outside--inline">Not in Elo</span>${" "}
+      are outside the Chicagoland rating region: they're listed so they can follow their own tier progress, and their
+      events don't count toward anyone's rating.</p>
     <p class="elo-stores-fresh">${proShown
       ? html`<${React.Fragment}>Store events and rosters refresh from Ravensburger Play every hour while the pro-rated offer
         runs, so an event shows up an hour or so after the store enters its results.</>`
@@ -34641,12 +34665,14 @@ function EloStores({canViewStore, onStoreClick}){
           </tr>`}
         </thead>
         <tbody>
-          ${rows.map(r => html`<tr key=${r.key || r.store}>
-            <td class="elo-stores-name">${canViewStore
+          ${rows.map(r => { const outside = ELO_STATUS_ONLY_STORE_IDS.has(r.store_id); return html`<tr key=${r.key || r.store}>
+            <td class="elo-stores-name">${canViewStore && !outside
               ? html`<${EloLink} to=${{tab:"store", store:r.store}} className="elo-name-btn elo-stores-nametxt"
                   title=${r.store} onClick=${() => onStoreClick && onStoreClick(r.store)}>${r.store}</${EloLink}>`
               : html`<span class="elo-stores-nametxt" title=${r.store}>${r.store}</span>`}
-              ${(r.city || r.state) ? html`<span class="elo-stores-loc">${[r.city, r.state].filter(Boolean).join(", ")}</span>` : ""}</td>
+              ${(r.city || r.state) ? html`<span class="elo-stores-loc">${[r.city, r.state].filter(Boolean).join(", ")}</span>` : ""}
+              ${outside ? html`<span class="elo-stores-outside"
+                title="Outside the Chicagoland Elo region. The store is listed here so it can follow its RPH tier progress; its events don't count toward Elo ratings.">Not in Elo</span>` : ""}</td>
             ${r.p ? html`<${React.Fragment}>
               <td class="num elo-stores-pro-col elo-stores-pro-first">${prog(r.p.events, RPH_PRORATED.events)}${r.p.scheduled
                 ? html`<span class="elo-stores-sched" title=${r.p.scheduled + " more on the store's calendar before Oct 31 — not counted until they run."}>+${r.p.scheduled}</span>` : ""}${r.p.unscanned
@@ -34682,7 +34708,7 @@ function EloStores({canViewStore, onStoreClick}){
                 <td class="num">${c ? num(c.attendance) : html`<span class="muted">—</span>`}</td>
               </${React.Fragment}>`;
             })}
-          </tr>`)}
+          </tr>`; })}
         </tbody>
         <tfoot>
           <tr>
