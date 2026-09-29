@@ -99,7 +99,7 @@ def parse_card(html, cn, setnum):
     return dict(
         name=q(r'name:"([^"]*)"', a), version=q(r'subtitle:"([^"]*)"'),
         rarity=RARITY.get((rar or "").lower(), rar), ink=(inks[0] if inks else None), inks=inks,
-        cost=num("ink_cost"), inkable=("ink_convertible:!0" in w), card_type=ctype, classifications=subt,
+        cost=num("ink_cost"), inkable=(q(r"ink_convertible:!(\d)") == "0"), card_type=ctype, classifications=subt,
         strength=num("strength"), willpower=num("willpower"), lore=num("quest_value"), move_cost=num("move_cost"),
         text=clean_text(rules.group(1) if rules else None), flavor_text=clean_text(flav.group(1) if flav else None),
         illustrators=ills, img=(img.group(1) + "card") if img else None,
