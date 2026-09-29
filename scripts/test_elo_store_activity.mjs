@@ -26,6 +26,10 @@
 //      cancelled events on a store's feed; the history held 1,063 of them at
 //      tracked stores, all counted, and the ones that took pre-registrations
 //      leaked 96 tickets through the registrations fallback.
+//   7. Pro-rated Legendary is scored on Sept + Oct 2026 by each event's own
+//      date, in Chicago time — NOT on a set season, which is what it used to
+//      do. Only events that have run count; what's still on the calendar is
+//      reported beside the count, never in it.
 //
 // Reads the real functions out of Index.html rather than restating them, so it
 // cannot drift from what ships. Manual — there is no client-side CI.
@@ -54,20 +58,21 @@ const code = [
   grab("const rphPersonKey = (a) =>", '.toLowerCase();'),
   grab("const rphCompleteReg = (a) => {", "\n};"),
   grab("function eloSeasonForDate(iso, seasons){", "\n}"),
-  grab("function buildEloStoreActivity(events, played, fallback, scanned, seasons, trackedIds){",
+  grab("function buildEloStoreActivity(events, played, fallback, scanned, seasons, trackedIds, pro){",
        "\n  return {seasons: seasonList, stores};\n}"),
   grab("function eloStoreTotals(store, seasonKeys){", "\n}"),
   grab("const RPH_ENTRY = {", "};"),
   grab("const RPH_PRORATED = {", "};"),
-  grab("const eloProSeasonKey = (seasons) =>", "seasons[0].key);"),
+  grab("const RPH_PRORATED_WINDOW = {", "};"),
+  grab("function rphProratedTotals(pro){", "\n}"),
   grab("const RPH_TIERS = [", "];"),
   grab("function rphShortfall(t){", "\n}"),
   grab("function rphTierFor(t){", "\n}"),
 ].join("\n\n");
 
-const [build, totals, tierFor, shortfall, proKey] = new Function(
+const [build, totals, tierFor, shortfall, proTotals, PRO_WIN] = new Function(
   "MAINLINE_SETS",
-  code + "\nreturn [buildEloStoreActivity, eloStoreTotals, rphTierFor, rphShortfall, eloProSeasonKey];",
+  code + "\nreturn [buildEloStoreActivity, eloStoreTotals, rphTierFor, rphShortfall, rphProratedTotals, RPH_PRORATED_WINDOW];",
 )(MAINLINE_SETS);
 
 let failures = 0;
@@ -266,15 +271,89 @@ eq("busy but thin attendance -> no tier", tierFor(T(60, 60, 100)), null);
 eq("many tickets from very few people -> no tier", tierFor(T(80, 2, 900)), null);
 eq("nothing at all -> no tier", tierFor(T(0, 0, 0)), null);
 
-console.log("pro-rated lens picks ONE season");
-// Two months is one set season's activity, not four — scoring 8/8/80 over a
-// four-set window would clear it for everybody.
-// Wilds Unknown is index 0 here, i.e. the set still running — so the lens has
-// to reach past it to Winterspell.
-eq("the newest COMPLETE season, not the one still running",
-   proKey(out.seasons), WINTER);
-eq("with only one season on file, that one", proKey([{key: WINTER}]), WINTER);
-eq("no seasons at all", proKey([]), null);
+console.log("pro-rated window: Sept + Oct by date, not a set season");
+// The offer counts what a store runs in September and October 2026. It used to
+// be scored on the most recent completed SET instead, which a store owner
+// rightly called unhelpful: Sept–Oct is the only window that counts.
+const ms = (iso) => Date.parse(iso);
+eq("the window opens at midnight Sept 1, Chicago time",
+   new Date(ms(PRO_WIN.start)).toISOString(), "2026-09-01T05:00:00.000Z");
+eq("...and closes at midnight Nov 1, Chicago time",
+   new Date(ms(PRO_WIN.end)).toISOString(), "2026-11-01T05:00:00.000Z");
+const PRO = (upcoming = [], now = "2026-09-29T12:00:00-05:00") => ({
+  start: ms(PRO_WIN.start), end: ms(PRO_WIN.end), now: ms(now),
+  preSet: "Hyperia City", upcoming});
+const PID = {"Pro Shop": 50, "Late Starter": 51, "Nowhere Games": 52};
+const pev = (event_id, store_name, start_datetime, extra = {}) =>
+  ({event_id, store_name, store_id: PID[store_name] ?? null, start_datetime,
+    kind: "other", set_name: null, ...extra});
+const proEvents = [
+  pev(200, "Pro Shop", "2026-09-01T00:30:00+00:00"),   // Mon Aug 31, 7:30pm in Chicago — NOT September
+  pev(201, "Pro Shop", "2026-09-02T00:00:00+00:00"),   // Tue Sep 1, 7pm in Chicago — in
+  pev(202, "Pro Shop", "2026-09-12T18:00:00+00:00"),   // in; no results, so its registrations count
+  pev(203, "Pro Shop", "2026-09-19T18:00:00+00:00", {display_status: "canceled"}),   // cancelled, no results
+  pev(204, "Pro Shop", "2026-09-26T18:00:00+00:00"),   // in; roster not pulled yet
+  pev(205, "Pro Shop", "2026-10-03T17:00:00+00:00"),   // a history row dated in the FUTURE
+  pev(206, "Pro Shop", "2026-08-15T18:00:00+00:00"),   // August — seasons only
+];
+const proPlayed = [at(200, 90), at(201, 1), at(201, 2), at(201, null, "Walk In"), at(206, 3)];
+const proFallback = [reg(202, 1), reg(202, 4), reg(203, 5)];
+const proScanned = new Set([200, 201, 202, 203, 206]);
+const upcoming = [
+  pev(205, "Pro Shop", "2026-10-03T17:00:00+00:00"),   // the feed repeats a history row: not twice
+  pev(210, "Pro Shop", "2026-10-10T17:00:00+00:00"),   // on the calendar
+  pev(210, "Pro Shop", "2026-10-10T17:00:00+00:00"),   // ...listed twice
+  pev(211, "Pro Shop", "2026-11-01T00:30:00+00:00"),   // Sat Oct 31, 7:30pm in Chicago — still October
+  pev(212, "Pro Shop", "2026-11-01T06:00:00+00:00"),   // Nov 1, 1am in Chicago — past the window
+  pev(213, "Pro Shop", "2026-10-17T17:00:00+00:00", {display_status: "Cancelled"}),
+  pev(214, "Pro Shop", "2026-09-28T23:00:00+00:00"),   // ran last night, not in the history yet
+  pev(215, "Pro Shop", "2026-10-15T23:00:00+00:00", {kind: "prerelease", set_name: "Hyperia City"}),
+  pev(220, "Late Starter", "2026-10-05T23:00:00+00:00"),   // only on the feed so far
+  pev(230, "Nowhere Games", "2026-10-05T23:00:00+00:00"),  // untracked
+];
+const PTRACK = new Set([50, 51]);
+const po = build(proEvents, proPlayed, proFallback, proScanned, seasons, PTRACK, PRO(upcoming));
+const ps = po.stores.find((x) => x.store === "Pro Shop");
+eq("counts events that ran Sept 1 – Oct 31 in Chicago, not by UTC date",
+   ps.pro.events, 3);                  // 201, 202, 204
+eq("tickets: played rows plus a result-less event's registrations",
+   [ps.pro.attendance, ps.pro.unrecorded], [5, 2]);
+eq("fans are distinct people in the window (a guest by name)", ps.pro.players, 4);
+eq("an event with no roster yet is flagged, not read as empty", ps.pro.unscanned, 1);
+eq("on the calendar: a future-dated history row + the feed, deduped, in the window, not cancelled",
+   ps.pro.scheduled, 4);               // 205, 210, 211, 215
+eq("a Hyperia City prerelease on the calendar reads as booked", ps.pro.pre, "scheduled");
+eq("the seasons are untouched by the pro bucket",
+   JSON.stringify(ps.per),
+   JSON.stringify(build(proEvents, proPlayed, proFallback, proScanned, seasons, PTRACK).stores
+     .find((x) => x.store === "Pro Shop").per));
+const late = po.stores.find((x) => x.store === "Late Starter");
+eq("a store that is only on the feed still gets a row", [late.pro.events, late.pro.scheduled], [0, 1]);
+eq("...with no season activity", Object.keys(late.per).length, 0);
+eq("an untracked store on the feed is ignored",
+   po.stores.some((x) => x.store === "Nowhere Games"), false);
+eq("without a window, no store carries a pro bucket",
+   build(proEvents, proPlayed, proFallback, proScanned, seasons, PTRACK).stores.every((x) => x.pro === null), true);
+const later = build(proEvents, proPlayed, proFallback, proScanned, seasons, PTRACK,
+                    PRO(upcoming, "2026-10-04T12:00:00-05:00")).stores.find((x) => x.store === "Pro Shop");
+eq("once its date passes, a scheduled event moves into the count",
+   [later.pro.events, later.pro.scheduled, later.pro.unscanned], [4, 3, 2]);
+const ranPre = build(
+  proEvents.concat([pev(216, "Pro Shop", "2026-09-20T18:00:00+00:00", {kind: "prerelease", set_name: "Hyperia City"})]),
+  proPlayed, proFallback, proScanned, seasons, PTRACK, PRO(upcoming)).stores.find((x) => x.store === "Pro Shop");
+eq("a Hyperia City prerelease that ran is held, and a booked one doesn't undo it", ranPre.pro.pre, "held");
+
+console.log("pro-rated verdict");
+eq("no activity reads as zeroes, never a crash",
+   [proTotals(null).events, proTotals(null).clears, proTotals(null).gaps.length], [0, false, 3]);
+eq("clears exactly at 8 / 8 / 80",
+   proTotals({events: 8, players: 8, attendance: 80}).clears, true);
+eq("names only what is missing, singular when one",
+   proTotals({events: 7, players: 9, attendance: 80}).gaps, ["1 more event"]);
+eq("scheduled events never count toward the bar",
+   proTotals({events: 5, players: 20, attendance: 200, scheduled: 9}).clears, false);
+eq("prerelease ranks held > booked > none",
+   [proTotals({pre: "held"}).preRank, proTotals({pre: "scheduled"}).preRank, proTotals({}).preRank], [2, 1, 0]);
 
 console.log("shortfall wording");
 eq("names every missing metric", shortfall(T(20, 20, 200)),

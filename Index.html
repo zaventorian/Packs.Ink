@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=495">
+<link rel="stylesheet" href="styles.css?v=496">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -33358,7 +33358,7 @@ function EloUpcomingSCs({canViewStore, canScout, onStoreClick, onPlayerClick, on
 // An event nobody has scraped yet is NOT silently counted as zero — the row
 // carries how many of its events are uncovered, because a quiet zero reads
 // exactly like a quiet week. Cached 12h.
-const ELO_STORES_CACHE = "packsink:elo:stores:v7";   // v7: a cancelled event without results no longer counts
+const ELO_STORES_CACHE = "packsink:elo:stores:v8";   // v8: each store carries its Sept–Oct pro-rated bucket
 const ELO_STORES_TTL = 12 * 3600 * 1000;
 const ELO_STORES_PREFS = "packsink:elo:stores:prefs";
 const ELO_RECENT_SETS = 4;
@@ -33452,8 +33452,34 @@ async function fetchEloStoreActivity(){
   // so this is a small tail fetch, not a second full one.
   const withPlay = new Set((played || []).map(a => a.event_id));
   const noResult = Array.from(scanned).filter(id => !withPlay.has(id));
-  const fallback = await fetchEloAttendanceFor(noResult);
-  return buildEloStoreActivity(events, played, fallback, scanned, seasons, trackedIds);
+  const proOn = rphProratedShown();
+  const [fallback, upcoming] = await Promise.all([
+    fetchEloAttendanceFor(noResult),
+    proOn ? fetchEloProUpcoming(Array.from(trackedIds)) : [],
+  ]);
+  const pro = proOn ? {start: Date.parse(RPH_PRORATED_WINDOW.start), end: Date.parse(RPH_PRORATED_WINDOW.end),
+                       now: Date.now(), preSet: RPH_PRORATED.prereleaseSet, upcoming} : null;
+  return buildEloStoreActivity(events, played, fallback, scanned, seasons, trackedIds, pro);
+}
+
+// What the tracked stores still have on the live feed between now and the end
+// of the pro-rated window — a few hundred rows, scoped server-side so the
+// ~20k-row worldwide feed never ships. Best-effort: if it fails, the columns
+// still show everything that has run, just without the "+N on the calendar".
+async function fetchEloProUpcoming(storeIds){
+  const now = Date.now(), end = Date.parse(RPH_PRORATED_WINDOW.end);
+  if(!storeIds.length || now >= end) return [];
+  try {
+    return await sbFetchAll("lorcana_events", {
+      select: "event_id,store_id,store_name,city,state,kind,set_name,start_datetime,display_status",
+      store_id: "in.(" + storeIds.join(",") + ")",
+      and: "(start_datetime.gt." + new Date(now).toISOString() + ",start_datetime.lt." + new Date(end).toISOString() + ")",
+      order: "event_id.asc",
+    }, null);
+  } catch(e){
+    console.warn("[elo] upcoming store events fetch failed", e);
+    return [];
+  }
 }
 
 // Every stored registration for the given events, in URL-sized chunks. A bare
@@ -33498,10 +33524,30 @@ function eloSeasonForDate(iso, seasons){
 // have NO played rows at all — stores that never recorded results — and is used
 // only for those (see rphCompleteReg). `scanned` is the set of event ids
 // attendance has been pulled for; pass null to skip coverage tracking.
-function buildEloStoreActivity(events, played, fallback, scanned, seasons, trackedIds){
+//
+// `pro`, when given, also buckets the pro-rated window (see RPH_PRORATED) on
+// each store as `pro`: {start, end, now} are epoch ms, `preSet` is the
+// prerelease the offer asks for, and `upcoming` is lorcana_events rows — the
+// live feed — for what a store still has on the calendar before it closes.
+// Unlike the seasons, it is one fixed window, so its fans are counted here
+// rather than carried as person keys.
+function buildEloStoreActivity(events, played, fallback, scanned, seasons, trackedIds, pro){
   const byStore = new Map();
-  const evAt = new Map();                 // event_id → {store, season}, for the match pass
+  const evAt = new Map();                 // event_id → {store, season, pro}, for the match pass
   const used = new Map();                 // season → earliest date seen, for column order
+  const newStore = (skey, e) => {
+    const st = {key: skey, store: e.store_name, store_id: e.store_id,
+                city: e.city || null, state: e.state || null,
+                per: new Map(), pro: null, first_date: null, last_date: null};
+    byStore.set(skey, st);
+    return st;
+  };
+  const proCell = (st) => st.pro || (st.pro = {events: 0, attendance: 0, players: new Set(),
+                                               unscanned: 0, unrecorded: 0, scheduled: 0, pre: null});
+  // Key on store_id, NOT the name. Two branches of a chain can share a name
+  // (and several do), and merging them would report one location's numbers as
+  // both. RPH tiers are per physical store, so the id is the identity.
+  const storeKey = (e) => e.store_id != null ? "id:" + e.store_id : "name:" + e.store_name;
 
   // Results prove an event ran, whatever RPH now labels it. A CANCELLED event
   // without any is not an event at all: until 2026-09-10 every one counted toward
@@ -33516,23 +33562,36 @@ function buildEloStoreActivity(events, played, fallback, scanned, seasons, track
     // "no filter" so the pivot stays usable against fixtures.
     if(trackedIds && trackedIds.size && !trackedIds.has(e.store_id)) continue;
     if(/^cancel{1,2}ed$/i.test(e.display_status || "") && !withPlay.has(e.event_id)) continue;
-    // Key on store_id, NOT the name. Two branches of a chain can share a name
-    // (and several do), and merging them would report one location's numbers as
-    // both. RPH tiers are per physical store, so the id is the identity.
-    const skey = e.store_id != null ? "id:" + e.store_id : "name:" + store;
+    const skey = storeKey(e);
     const key = eloSeasonForDate(e.start_datetime, seasons);
-    evAt.set(e.event_id, {skey, season: key});
-    let st = byStore.get(skey);
-    if(!st){ st = {key: skey, store: store, store_id: e.store_id,
-                   city: e.city || null, state: e.state || null,
-                   per: new Map(), first_date: null, last_date: null};
-             byStore.set(skey, st); }
+    const st = byStore.get(skey) || newStore(skey, e);
     let cell = st.per.get(key);
     if(!cell){ cell = {events: 0, attendance: 0, players: new Set(), pre: new Set(),
                        unscanned: 0, unrecorded: 0}; st.per.set(key, cell); }
     cell.events++;
     if(scanned && !scanned.has(e.event_id)) cell.unscanned++;
     if(e.kind === "prerelease") cell.pre.add(e.set_name || key || "?");
+    // Pro-rated window. Only an event that has already run counts toward the
+    // bars — a dated history row can still be in the future — and one that
+    // hasn't is on the calendar, not in the count.
+    let proHeld = false;
+    if(pro){
+      const ms = e.start_datetime ? Date.parse(e.start_datetime) : NaN;
+      if(ms >= pro.start && ms < pro.end){
+        const pc = proCell(st);
+        if(ms <= pro.now){
+          proHeld = true;
+          pc.events++;
+          if(scanned && !scanned.has(e.event_id)) pc.unscanned++;
+        } else pc.scheduled++;
+      }
+      if(e.kind === "prerelease" && e.set_name === pro.preSet){
+        const pc = proCell(st);
+        if(ms <= pro.now) pc.pre = "held";
+        else if(pc.pre !== "held") pc.pre = "scheduled";
+      }
+    }
+    evAt.set(e.event_id, {skey, season: key, pro: proHeld});
     const d = e.start_datetime ? String(e.start_datetime).slice(0, 10) : null;
     if(d){
       if(!st.first_date || d < st.first_date) st.first_date = d;
@@ -33553,6 +33612,7 @@ function buildEloStoreActivity(events, played, fallback, scanned, seasons, track
     if(!cell) continue;
     cell.attendance++;
     cell.players.add(rphPersonKey(a));
+    if(at.pro){ st.pro.attendance++; st.pro.players.add(rphPersonKey(a)); }
   }
 
   // Events nobody has a result in fall back to their registrations. Guarded on
@@ -33570,6 +33630,34 @@ function buildEloStoreActivity(events, played, fallback, scanned, seasons, track
     cell.attendance++;
     cell.players.add(rphPersonKey(a));
     cell.unrecorded++;
+    if(at.pro){ st.pro.attendance++; st.pro.players.add(rphPersonKey(a)); st.pro.unrecorded++; }
+  }
+
+  // What each store still has on the calendar before the pro-rated window
+  // closes, off the live feed. The feed overlaps the history for anything run
+  // in the last few days, so an event the history holds at all is skipped — it
+  // was already counted above, as run or as scheduled. An event on the feed
+  // whose date has passed isn't counted as scheduled either: it ran, and it
+  // joins the count on the next daily pull, same as every other number here.
+  if(pro && pro.upcoming && pro.upcoming.length){
+    const inHistory = new Set(events.map(e => e.event_id));
+    const seen = new Set();
+    for(const e of pro.upcoming){
+      if(inHistory.has(e.event_id) || seen.has(e.event_id)) continue;
+      seen.add(e.event_id);
+      if(!e.store_name) continue;
+      if(trackedIds && trackedIds.size && !trackedIds.has(e.store_id)) continue;
+      if(/^cancel{1,2}ed$/i.test(e.display_status || "")) continue;
+      const ms = e.start_datetime ? Date.parse(e.start_datetime) : NaN;
+      if(!(ms > pro.now)) continue;
+      const inWin = ms >= pro.start && ms < pro.end;
+      const isPre = e.kind === "prerelease" && e.set_name === pro.preSet;
+      if(!inWin && !isPre) continue;
+      const skey = storeKey(e);
+      const pc = proCell(byStore.get(skey) || newStore(skey, e));
+      if(inWin) pc.scheduled++;
+      if(isPre && pc.pre !== "held") pc.pre = "scheduled";
+    }
   }
 
   // Newest set first, ordered by the season's own release date where we have it.
@@ -33586,8 +33674,12 @@ function buildEloStoreActivity(events, played, fallback, scanned, seasons, track
     for(const [k, c] of st.per) per[k] = {events: c.events, attendance: c.attendance,
                                          players: Array.from(c.players), pre: Array.from(c.pre),
                                          unscanned: c.unscanned, unrecorded: c.unrecorded};
+    const p = st.pro;
     return {key: st.key, store: st.store, store_id: st.store_id,
             city: st.city, state: st.state, per,
+            pro: p ? {events: p.events, attendance: p.attendance, players: p.players.size,
+                      unscanned: p.unscanned, unrecorded: p.unrecorded,
+                      scheduled: p.scheduled, pre: p.pre} : null,
             first_date: st.first_date, last_date: st.last_date};
   });
   return {seasons: seasonList, stores};
@@ -33615,26 +33707,50 @@ const RPH_TIERS = [
 // but not sufficient.
 const RPH_ENTRY = {key: "entry", label: "Standard (entry)", events: 4, players: 0, tickets: 0};
 
-// The memo's pro-rating offer: during Sept 1 – Nov 1 2026 ONLY, 1/6 of the
-// Legendary bars plus the Hyperia City prerelease earns provisional Legendary.
-// Explicitly not repeated ("No additional pro-rating will occur"), and it has to
-// be held afterwards, so it's a softer bar over a much shorter window, not a
-// softer tier.
+// The memo's pro-rating offer: 1/6 of the Legendary bars, earned in September
+// and October 2026, plus the Hyperia City prerelease, earns provisional
+// Legendary. Explicitly not repeated ("No additional pro-rating will occur"),
+// and it has to be held afterwards, so it's a softer bar over a much shorter
+// window, not a softer tier.
 //
-// Two months is ONE set season's worth of activity, not four — so scoring 8/8/80
-// against a four-set window would clear it for everyone and mean nothing. The
-// lens therefore scores a SINGLE season: the most recent completed set. That is
-// the closest honest proxy for "where would this store stand under the
-// pro-rated bars", which is the question being asked, since the real window is
-// in the future and reads as zeroes today.
+// The window is Sept + Oct and nothing else — scored off each event's own date,
+// NOT a set season. Until 2026-09-29 this was a lens that scored the most recent
+// completed set as a stand-in, which a store owner pointed out answers the
+// wrong question: what counts is what a shop runs in these two months.
+//
+// Bounds are instants in Chicago time. Every tracked store is on Central time,
+// and CDT (UTC−5) holds for the whole window — DST ends 2am Nov 1 — so a fixed
+// offset is exact. Comparing UTC dates instead would move a Monday-night Aug 31
+// event into September and an Oct 31 evening event out of October.
 const RPH_PRORATED = {key: "prorated", label: "Legendary (pro-rated)",
                       events: 8, players: 8, tickets: 80, prereleaseSet: "Hyperia City"};
-const RPH_PRORATED_WINDOW = {start: "2026-09-01", end: "2026-11-01"};
+const RPH_PRORATED_WINDOW = {start: "2026-09-01T00:00:00-05:00", end: "2026-11-01T00:00:00-05:00",
+                             label: "Sept–Oct"};
+// The highlighted Sept–Oct columns are temporary. They stay up for a month after
+// the window closes so stores can read their final numbers, then drop out on
+// their own; delete the block once that has happened.
+const RPH_PRORATED_SHOW_UNTIL = "2026-12-01T00:00:00-06:00";
+const rphProratedShown = (now = Date.now()) => now < Date.parse(RPH_PRORATED_SHOW_UNTIL);
 
-// The newest FINISHED season — seasons are newest-first and index 0 is the set
-// currently running, whose numbers are still filling up.
-const eloProSeasonKey = (seasons) => !seasons || !seasons.length ? null
-  : (seasons.length > 1 ? seasons[1].key : seasons[0].key);
+// A store's standing against the pro-rated bars. `pro` is the store's Sept–Oct
+// bucket from buildEloStoreActivity; a store with none reads as all zeroes.
+// Only events that have already RUN count toward the bars; `scheduled` is what
+// the store still has on the calendar before Oct 31, shown beside the count
+// so a shop can see whether it is on course, never added to it.
+function rphProratedTotals(pro){
+  const p = pro || {};
+  const events = p.events || 0, attendance = p.attendance || 0, players = p.players || 0;
+  const pre = p.pre === "held" ? "held" : p.pre === "scheduled" ? "scheduled" : null;
+  const b = RPH_PRORATED;
+  const gaps = [];
+  if(events < b.events)       gaps.push(`${b.events - events} more event${b.events - events === 1 ? "" : "s"}`);
+  if(players < b.players)     gaps.push(`${b.players - players} more fan${b.players - players === 1 ? "" : "s"}`);
+  if(attendance < b.tickets)  gaps.push(`${b.tickets - attendance} more ticket${b.tickets - attendance === 1 ? "" : "s"}`);
+  return {events, attendance, players, scheduled: p.scheduled || 0,
+          unscanned: p.unscanned || 0, unrecorded: p.unrecorded || 0,
+          pre, preRank: pre === "held" ? 2 : pre === "scheduled" ? 1 : 0,
+          clears: gaps.length === 0, gaps};
+}
 
 // What a Welcome-tier store still needs for Standard, so the badge explains
 // itself instead of just reading as a failure.
@@ -33690,22 +33806,20 @@ function EloStores({canViewStore, onStoreClick}){
     ["all", "custom", "recent"].includes(prefs0.mode) ? prefs0.mode : "complete");
   const [customKeys, setCustomKeys] = useState(Array.isArray(prefs0.keys) ? prefs0.keys : []);
   const [breakdown, setBreakdown] = useState(!!prefs0.breakdown);
-  // Pro-rating is a fixed Sept 1 – Nov 1 2026 window with its own (1/6) bars, so
-  // it replaces the set-season window rather than filtering within it.
-  // Pro-rated is a LENS, not a window: it re-scores the sets you've selected
-  // against the memo's 1/6 bars so a store can see where it'd stand under the
-  // easier requirement. The real offer is date-scoped (Sept 1 – Nov 1 2026), but
-  // showing a future window just reads as zeroes, so this answers the useful
-  // question instead.
-  const [proBars, setProBars] = useState(!!prefs0.proBars);
   const [showBars, setShowBars] = useState(prefs0.showBars !== false);
-  const [sortCol, setSortCol] = useState("attendance");
+  // Pro-rating is scored on its own fixed window (Sept–Oct 2026), so it is a
+  // highlighted column group of its own rather than a mode of the set chips:
+  // every store sees its four-set tier and its Sept–Oct standing side by side.
+  // While it's up it leads the sort as well — who is clearing it is the question
+  // stores are asking these few weeks.
+  const proShown = useMemo(() => rphProratedShown(), []);
+  const [sortCol, setSortCol] = useState(proShown ? "pro_status" : "attendance");
   const [sortDir, setSortDir] = useState("desc");
   const setSort = (col, dir) => { setSortCol(col); setSortDir(dir); };
 
   useEffect(() => {
-    try { localStorage.setItem(ELO_STORES_PREFS, JSON.stringify({mode: scopeMode, keys: customKeys, breakdown, showBars, proBars})); } catch {}
-  }, [scopeMode, customKeys, breakdown, showBars, proBars]);
+    try { localStorage.setItem(ELO_STORES_PREFS, JSON.stringify({mode: scopeMode, keys: customKeys, breakdown, showBars})); } catch {}
+  }, [scopeMode, customKeys, breakdown, showBars]);
 
   useEffect(() => {
     let cancelled = false;
@@ -33745,11 +33859,7 @@ function EloStores({canViewStore, onStoreClick}){
     }
     return seasons.slice(0, ELO_RECENT_SETS).map(s => s.key);
   }, [seasons, scopeMode, customKeys]);
-  // The pro-rated bars are one season's worth of activity, so the lens scores
-  // one season — the set chips are overridden while it's on rather than left
-  // showing numbers the verdict doesn't come from.
-  const proKey = useMemo(() => eloProSeasonKey(seasons), [seasons]);
-  const selectedKeys = useMemo(() => (proBars && proKey) ? [proKey] : baseKeys, [proBars, proKey, baseKeys]);
+  const selectedKeys = baseKeys;
   const selected = useMemo(() => new Set(selectedKeys), [selectedKeys]);
 
   const toggleSeason = (key) => {
@@ -33769,20 +33879,28 @@ function EloStores({canViewStore, onStoreClick}){
     const out = data.stores
       .map(s => {
         const t = eloStoreTotals(s, selectedKeys);
-        const tier = proBars
-          ? ((t.events >= RPH_PRORATED.events && t.players >= RPH_PRORATED.players
-              && t.attendance >= RPH_PRORATED.tickets) ? RPH_PRORATED : null)
-          : rphTierFor(t);
-        return {...s, t, tier, tierRank: tier ? (tier.key === "legendary" ? 2 : 1) : 0};
+        const tier = rphTierFor(t);
+        const p = proShown ? rphProratedTotals(s.pro) : null;
+        return {...s, t, p, tier, tierRank: tier ? (tier.key === "legendary" ? 2 : 1) : 0};
       })
-      // A store that ran nothing in the chosen window isn't in the window —
-      // except in pro mode before Sept 1, where EVERY store is legitimately at
-      // zero and hiding them all would look like the tab was broken.
-      .filter(s => s.t.events > 0)
+      // A store that ran nothing in the chosen sets isn't in the window — unless
+      // it is active in Sept–Oct, which the pro-rated columns score whatever the
+      // chips say. The default "Last 4 complete" leaves out the set running now,
+      // i.e. all of September, so without this a shop that only got going this
+      // month would be missing from the one number it most wants to see.
+      .filter(s => s.t.events > 0 || (s.p && (s.p.events > 0 || s.p.scheduled > 0)))
       .filter(s => !q || s.store.toLowerCase().includes(q));
-    // Per-set columns sort under a "<metric>:<season>" key; everything else is
-    // either the store name or a field on the rolled-up totals.
+    // Per-set columns sort under a "<metric>:<season>" key and the pro-rated ones
+    // under "pro_<field>"; everything else is either the store name or a field on
+    // the rolled-up totals.
     const valOf = (r) => {
+      if(sortCol.startsWith("pro_")){
+        if(!r.p) return 0;
+        // Status ranks by how many of the three bars are cleared, then by the
+        // prerelease, then by tickets — so "nearly there" sorts above "idle".
+        if(sortCol === "pro_status") return (3 - r.p.gaps.length) * 1e7 + r.p.preRank * 1e6 + r.p.attendance;
+        return r.p[sortCol.slice(4)];
+      }
       const i = sortCol.indexOf(":");
       if(i < 0){
         if(sortCol === "store") return r.store;
@@ -33798,13 +33916,36 @@ function EloStores({canViewStore, onStoreClick}){
       if(typeof av === "string" || typeof bv === "string") return String(av || "").localeCompare(String(bv || "")) * dir;
       return ((av || 0) - (bv || 0)) * dir;
     });
-  }, [data, search, sortCol, sortDir, selectedKeys, proBars]);
+  }, [data, search, sortCol, sortDir, selectedKeys, proShown]);
+
+  // The headline for the callout, over EVERY tracked store — not the searched
+  // subset — so typing a name into the box doesn't change "how many clear it".
+  const proSummary = useMemo(() => {
+    if(!data || !proShown) return null;
+    const s = {active: 0, clears: 0, reach: 0, pre: 0};
+    for(const st of data.stores){
+      const p = rphProratedTotals(st.pro);
+      if(!p.events && !p.scheduled && !p.pre) continue;
+      s.active++;
+      if(p.clears) s.clears++;
+      else if(p.events < RPH_PRORATED.events && p.events + p.scheduled >= RPH_PRORATED.events) s.reach++;
+      if(p.pre) s.pre++;
+    }
+    return s;
+  }, [data, proShown]);
 
   const totals = useMemo(() => {
     if(!rows) return null;
-    const t = {events: 0, attendance: 0, per: {}};
+    const t = {events: 0, attendance: 0, per: {},
+               pro: {events: 0, attendance: 0, scheduled: 0, pre: 0, clears: 0}};
     for(const r of rows){
       t.events += r.t.events; t.attendance += r.t.attendance;
+      if(r.p){
+        t.pro.events += r.p.events; t.pro.attendance += r.p.attendance;
+        t.pro.scheduled += r.p.scheduled;
+        if(r.p.pre) t.pro.pre++;
+        if(r.p.clears) t.pro.clears++;
+      }
       for(const k of selectedKeys){
         const c = r.per[k];
         if(!c) continue;
@@ -33828,13 +33969,11 @@ function EloStores({canViewStore, onStoreClick}){
   const scopeLabel = selectedKeys.length === seasons.length ? "all sets"
     : selectedKeys.length === 1 ? (seasons.find(s => s.key === selectedKeys[0]) || {}).label
     : selectedKeys.length + " sets";
-  const proSeasonLabel = (seasons.find(s => s.key === proKey) || {}).label || "";
   // Only a genuinely huge table needs the height cap — see the CSS note.
   const wide = cols.length > ELO_RECENT_SETS;
-  // Which bar the progress cells count toward. Outside pro mode the target is
-  // the NEXT rung: a store already clearing Standard is shown its Legendary gap.
+  // Which bar the progress cells count toward: the NEXT rung, so a store
+  // already clearing Standard is shown its Legendary gap.
   const barFor = (r) => {
-    if(proBars) return RPH_PRORATED;
     if(!showBars) return null;
     return (r.t.events >= RPH_TIERS[1].events && r.t.players >= RPH_TIERS[1].players
             && r.t.attendance >= RPH_TIERS[1].tickets) ? RPH_TIERS[0] : RPH_TIERS[1];
@@ -33853,7 +33992,59 @@ function EloStores({canViewStore, onStoreClick}){
   // left and the last Tickets column had no label at all.
   const TOTALS_COLS = 6;
 
+  // ── Pro-rated (Sept–Oct) ──
+  const proEnd = Date.parse(RPH_PRORATED_WINDOW.end);
+  const proOpen = Date.now() < proEnd;
+  const proDaysLeft = Math.max(0, Math.ceil((proEnd - Date.now()) / 86400000));
+  const proHead = html`<${React.Fragment}>
+    <${EloSortTh} label="Events"  col="pro_events"     sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-pro-col elo-stores-pro-first" numeric=${true}/>
+    <${EloSortTh} label="Tickets" col="pro_attendance" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-pro-col" numeric=${true}/>
+    <${EloSortTh} label="Fans"    col="pro_players"    sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-pro-col" numeric=${true}/>
+    <${EloSortTh} label="Hyperia pre" col="pro_preRank" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="elo-stores-pro-col" numeric=${true}/>
+    <${EloSortTh} label="Status"  col="pro_status"     sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="elo-stores-pro-col" numeric=${true}/>
+  </${React.Fragment}>`;
+  const PRO_COLS = 5;
+  const proStatus = (p) => {
+    if(p.clears && p.pre === "held") return html`<span class="elo-tier elo-tier--legendary"
+      title="Events, fans and tickets all clear the pro-rated bars in Sept–Oct, and the store ran the ${RPH_PRORATED.prereleaseSet} prerelease.">Qualifies</span>`;
+    if(p.clears) return html`<span class="elo-tier elo-tier--standard"
+      title=${"Events, fans and tickets all clear the pro-rated bars. " + (p.pre === "scheduled"
+        ? `The ${RPH_PRORATED.prereleaseSet} prerelease is on the calendar — it qualifies once that runs.`
+        : `Still needs a ${RPH_PRORATED.prereleaseSet} prerelease, and none is on the calendar.`)}>Bars met</span>`;
+    return html`<span class="elo-tier elo-tier--welcome" title=${"Needs " + p.gaps.join(", ")
+      + (p.scheduled ? ` — ${p.scheduled} more event${p.scheduled === 1 ? "" : "s"} on the calendar before Oct 31` : "")
+      + (p.pre ? "" : `; no ${RPH_PRORATED.prereleaseSet} prerelease on the calendar`) + "."}>${proOpen ? "Not yet" : "Missed"}</span>`;
+  };
+  const proPre = (p) => p.pre === "held"
+    ? html`<span class="elo-prog met" title="Ran the ${RPH_PRORATED.prereleaseSet} prerelease.">Held</span>`
+    : p.pre === "scheduled"
+      ? html`<span title="A ${RPH_PRORATED.prereleaseSet} prerelease is on the store's calendar.">Booked</span>`
+      : html`<span class="muted" title="No ${RPH_PRORATED.prereleaseSet} prerelease on the store's calendar.">—</span>`;
+  const twoRowHead = proShown || (breakdown && cols.length > 0);
+
   return html`<div class="elo-stores">
+    ${proShown && proSummary ? html`<section class="elo-stores-pro" aria-label="Pro-rated Legendary, Sept–Oct">
+      <div class="elo-stores-pro-top">
+        <span class="elo-stores-pro-kicker">Pro-rated Legendary · Sept 1 – Oct 31</span>
+        <span class="elo-stores-pro-when">${proOpen
+          ? (proDaysLeft <= 1 ? "Last day" : proDaysLeft + " days left")
+          : "Closed Oct 31 — final numbers"}</span>
+      </div>
+      <div class="elo-stores-pro-stats">
+        <div class="elo-stores-pro-stat"><b>${proSummary.clears}</b><span>of ${proSummary.active} active stores clear
+          all three bars</span></div>
+        ${proOpen ? html`<div class="elo-stores-pro-stat"><b>${proSummary.reach}</b><span>more reach ${RPH_PRORATED.events} events
+          with what's on their calendar</span></div>` : ""}
+        <div class="elo-stores-pro-stat"><b>${proSummary.pre}</b><span>${proOpen ? "have" : "ran"} a ${RPH_PRORATED.prereleaseSet}
+          ${" "}prerelease${proOpen ? " held or booked" : ""}</span></div>
+      </div>
+      <p class="elo-stores-pro-note">Ravensburger's one-off offer: <b>${RPH_PRORATED.events}</b> events,
+        ${" "}<b>${RPH_PRORATED.players}</b> unique fans and <b>${RPH_PRORATED.tickets}</b> tickets run between
+        ${" "}<b>Sept 1 and Oct 31</b>, plus a <b>${RPH_PRORATED.prereleaseSet}</b> prerelease, earns provisional
+        Legendary — no further pro-rating follows, and the status has to be held afterwards. The highlighted columns
+        count only events that have already run, by their date, whatever sets are picked below; <b>+N</b> is what a
+        store still has on the calendar before Oct 31.</p>
+    </section>` : ""}
     <p class="elo-stores-intro">Every event a store has run on Ravensburger Play — Set Championships, prereleases, locals,
       league nights — grouped by the shop and bucketed into set seasons by date. <strong>Tickets</strong> counts everyone who
       actually played, one per person per event, so a regular who shows up weekly is a ticket each week.${" "}
@@ -33868,29 +34059,22 @@ function EloStores({canViewStore, onStoreClick}){
       pick <strong>Incl. current</strong> to see this season.</p>
 
     <div class="elo-stores-req">
-      ${proBars ? html`<${React.Fragment}><strong>Pro-rated bars</strong> — the memo's one-off 1/6 offer:${" "}
-        <b>${RPH_PRORATED.events}</b> events · <b>${RPH_PRORATED.players}</b> unique fans · <b>${RPH_PRORATED.tickets}</b> tickets ·${" "}
-        <b>Hyperia City</b> prerelease. The real offer is a two-month window (<b>Sept 1 – Nov 1 2026</b>), which is one set
-        season's worth of activity, not four — so this lens scores a single season, the most recent completed set
-        (<b>${proSeasonLabel || "—"}</b>), and ignores the set chips. It's a proxy for where a store would stand under the
-        easier bars; the memo is explicit that no further pro-rating follows and the status must be held afterwards.</>`
-      : html`<${React.Fragment}><strong>Maintaining a tier</strong> over four set seasons —${" "}
+      <strong>Maintaining a tier</strong> over four set seasons —${" "}
         <b>Standard</b>: ${RPH_TIERS[1].events} events · ${RPH_TIERS[1].players} unique fans · ${RPH_TIERS[1].tickets} tickets ·
         a prerelease for every available set. <b>Legendary</b>: ${RPH_TIERS[0].events} · ${RPH_TIERS[0].players} · ${RPH_TIERS[0].tickets} · same prereleases.${" "}
-        <b>Entry</b> to Standard is ${RPH_ENTRY.events} events with 4 players in each.</>`}
-      ${(!proBars && selectedKeys.length !== ELO_RECENT_SETS) ? html`<span class="elo-stores-req-warn">You've picked ${selectedKeys.length} set${selectedKeys.length===1?"":"s"}, not ${ELO_RECENT_SETS} — the bars are written for a four-season window, so read the verdict accordingly.</span>` : ""}
+        <b>Entry</b> to Standard is ${RPH_ENTRY.events} events with 4 players in each.
+      ${selectedKeys.length !== ELO_RECENT_SETS ? html`<span class="elo-stores-req-warn">You've picked ${selectedKeys.length} set${selectedKeys.length===1?"":"s"}, not ${ELO_RECENT_SETS} — the bars are written for a four-season window, so read the verdict accordingly.</span>` : ""}
     </div>
-    <div class="elo-stores-setbar ${proBars?"elo-stores-setbar--locked":""}"
-      title=${proBars ? "The pro-rated lens scores one season — turn it off to pick your own sets." : ""}>
+    <div class="elo-stores-setbar">
       <span class="elo-stores-setlbl">Sets</span>
-      <button class="elo-chip ${scopeMode==="complete"?"active":""}" disabled=${proBars} onClick=${()=>setScopeMode("complete")}
+      <button class="elo-chip ${scopeMode==="complete"?"active":""}" onClick=${()=>setScopeMode("complete")}
         title="The ${ELO_RECENT_SETS} most recent FINISHED sets — skips the set currently running, whose season is still filling up. Rolls forward on its own as sets release.">Last ${ELO_RECENT_SETS} complete</button>
-      <button class="elo-chip ${scopeMode==="recent"?"active":""}" disabled=${proBars} onClick=${()=>setScopeMode("recent")}
+      <button class="elo-chip ${scopeMode==="recent"?"active":""}" onClick=${()=>setScopeMode("recent")}
         title="The ${ELO_RECENT_SETS} most recent sets, including the one currently running.">Incl. current</button>
-      <button class="elo-chip ${scopeMode==="all"?"active":""}" disabled=${proBars} onClick=${()=>setScopeMode("all")}>All</button>
+      <button class="elo-chip ${scopeMode==="all"?"active":""}" onClick=${()=>setScopeMode("all")}>All</button>
       <span class="elo-stores-setdiv"></span>
       ${seasons.map(s => html`<button key=${s.key} class="elo-chip elo-chip--set ${selected.has(s.key)?"active":""}"
-        title=${s.key || "Events with no set recorded"} disabled=${proBars}
+        title=${s.key || "Events with no set recorded"}
         onClick=${()=>toggleSeason(s.key)}>${s.label}</button>`)}
     </div>
 
@@ -33900,12 +34084,8 @@ function EloStores({canViewStore, onStoreClick}){
                onChange=${e => setBreakdown(e.target.checked)}/>
         Per-set breakdown
       </label>
-      <label class="elo-stores-toggle" title="Score the most recent completed set on its own against the memo's pro-rated bars (8 / 8 / 80) — two months is one season's activity, not four.">
-        <input type="checkbox" checked=${proBars} onChange=${e => setProBars(e.target.checked)}/>
-        Pro-rated bars
-      </label>
       <label class="elo-stores-toggle">
-        <input type="checkbox" checked=${showBars} disabled=${proBars}
+        <input type="checkbox" checked=${showBars}
                onChange=${e => setShowBars(e.target.checked)}/>
         Show progress to next tier
       </label>
@@ -33919,14 +34099,17 @@ function EloStores({canViewStore, onStoreClick}){
     <div class="elo-table-wrap elo-stores-wrap ${wide?"elo-stores-wrap--wide":""}">
       <table class="elo-table elo-stores-table">
         <thead>
-          ${breakdown && cols.length > 0 ? html`<${React.Fragment}>
+          ${twoRowHead ? html`<${React.Fragment}>
             <tr>
               <${EloSortTh} label="Store" col="store" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort}
                 className="elo-stores-name" numeric=${false} rowspan=${2}/>
+              ${proShown ? html`<th colspan=${PRO_COLS} class="elo-stores-grp elo-stores-grp--pro"
+                title="Pro-rated Legendary: events that ran Sept 1 – Oct 31, against ${RPH_PRORATED.events} / ${RPH_PRORATED.players} / ${RPH_PRORATED.tickets}. Independent of the set chips.">Pro-rated · ${RPH_PRORATED_WINDOW.label}</th>` : ""}
               <th colspan=${TOTALS_COLS} class="elo-stores-grp elo-stores-grp--tot">${scopeLabel}</th>
               ${cols.map(s => html`<th key=${s.key} colspan=${2} class="elo-stores-grp">${s.label}</th>`)}
             </tr>
             <tr>
+              ${proShown ? proHead : ""}
               ${totalsHead}
               ${cols.map(s => html`<${React.Fragment} key=${s.key}>
                 <${EloSortTh} label="Events"  col=${"ev:" + s.key} sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num" numeric=${true}/>
@@ -33946,12 +34129,22 @@ function EloStores({canViewStore, onStoreClick}){
                   title=${r.store} onClick=${() => onStoreClick && onStoreClick(r.store)}>${r.store}</${EloLink}>`
               : html`<span class="elo-stores-nametxt" title=${r.store}>${r.store}</span>`}
               ${(r.city || r.state) ? html`<span class="elo-stores-loc">${[r.city, r.state].filter(Boolean).join(", ")}</span>` : ""}</td>
+            ${r.p ? html`<${React.Fragment}>
+              <td class="num elo-stores-pro-col elo-stores-pro-first">${prog(r.p.events, RPH_PRORATED.events)}${r.p.scheduled
+                ? html`<span class="elo-stores-sched" title=${r.p.scheduled + " more on the store's calendar before Oct 31 — not counted until they run."}>+${r.p.scheduled}</span>` : ""}${r.p.unscanned
+                ? html`<span class="elo-stores-gap" title=${r.p.unscanned + " of these events have no roster pulled yet, so nobody from them is counted in Tickets or Fans."}>†</span>` : ""}</td>
+              <td class="num elo-stores-pro-col"><strong>${prog(r.p.attendance, RPH_PRORATED.tickets)}</strong>${r.p.unrecorded
+                ? html`<span class="elo-stores-gap" title=${r.p.unrecorded + " of these came from events where the store took registrations but never entered results, so they are counted as registered rather than confirmed played."}>~</span>` : ""}</td>
+              <td class="num elo-stores-pro-col" title="Distinct people who played at this store Sept 1 – Oct 31.">${prog(r.p.players, RPH_PRORATED.players)}</td>
+              <td class="elo-stores-pro-col">${proPre(r.p)}</td>
+              <td class="elo-stores-pro-col">${proStatus(r.p)}</td>
+            </>` : ""}
             <td class="num elo-stores-tot">${prog(r.t.events, barFor(r) && barFor(r).events)}${r.t.unscanned
               ? html`<span class="elo-stores-gap" title=${r.t.unscanned + " of these events have no roster pulled yet, so nobody from them is counted in Tickets or Fans."}>†</span>` : ""}</td>
             <td class="num elo-stores-tot"><strong>${prog(r.t.attendance, barFor(r) && barFor(r).tickets)}</strong>${r.t.unrecorded
               ? html`<span class="elo-stores-gap" title=${r.t.unrecorded + " of these came from events where the store took registrations but never entered results, so they are counted as registered rather than confirmed played."}>~</span>` : ""}</td>
             <td class="num elo-stores-tot" title="Distinct people who played at this store across the selected sets — a union, so a regular counts once no matter how many events they played.">${prog(r.t.players, barFor(r) && barFor(r).players)}</td>
-            <td class="num elo-stores-tot" title="Distinct sets this store ran a prerelease for. RPH wants one per available set; pro-rated Legendary wants Hyperia City specifically.">${r.t.pre || 0}</td>
+            <td class="num elo-stores-tot" title="Distinct sets this store ran a prerelease for. RPH wants one per available set.">${r.t.pre || 0}</td>
             <td class="num elo-stores-tot">${r.t.avg}</td>
             <td class="elo-stores-tiercell">${r.tier
                 ? html`<span class=${"elo-tier elo-tier--" + r.tier.key}
@@ -33969,6 +34162,14 @@ function EloStores({canViewStore, onStoreClick}){
         <tfoot>
           <tr>
             <td class="elo-stores-name"><span class="elo-stores-nametxt">${rows.length === data.stores.length ? "All stores" : "Shown stores"}</span></td>
+            ${proShown ? html`<${React.Fragment}>
+              <td class="num elo-stores-pro-col elo-stores-pro-first">${num(totals.pro.events)}${totals.pro.scheduled
+                ? html`<span class="elo-stores-sched">+${num(totals.pro.scheduled)}</span>` : ""}</td>
+              <td class="num elo-stores-pro-col">${num(totals.pro.attendance)}</td>
+              <td class="num elo-stores-pro-col"><span class="muted" title="Distinct players can't be summed across stores — the same person plays at several.">—</span></td>
+              <td class="elo-stores-pro-col" title="Stores with a ${RPH_PRORATED.prereleaseSet} prerelease held or booked.">${num(totals.pro.pre)}</td>
+              <td class="elo-stores-pro-col" title="Stores clearing all three pro-rated bars.">${num(totals.pro.clears)} clear</td>
+            </>` : ""}
             <td class="num elo-stores-tot">${num(totals.events)}</td>
             <td class="num elo-stores-tot">${num(totals.attendance)}</td>
             <td class="num elo-stores-tot"><span class="muted" title="Distinct players can't be summed across stores — the same person plays at several.">—</span></td>
