@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=495">
+<link rel="stylesheet" href="styles.css?v=496">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -12521,10 +12521,403 @@ const drawProxyWatermark = (ctx, w, h, mode) => {
   ctx.restore();
 };
 
+// ── Text-only face ─────────────────────────────────────────────────────────
+// Everything a playtester reads off a card — cost, inkable, ink, name, type
+// line, stats, rules text — around an EMPTY art box, black on white. Asked for
+// by a user whose printer didn't enjoy sixty full-bleed cards ("like
+// Jorcana"). It is just another way to paint the canvas, so the JPEG → PDF
+// path, the sheet geometry and the baked-in watermark are all shared.
+
+// Card glyphs as vector paths, read out of the same SVGs LorcanaGlyph masks.
+// Path2D rather than drawImage: an SVG drawn as an image can taint the canvas
+// in some engines and has no natural size in others, and a path is crisp at
+// any size. Each element keeps its own Path2D because SVG fills every shape
+// independently — one combined nonzero fill would let a counter-wound hole in
+// one shape punch through its neighbour.
+let _proxyGlyphs = null;
+const loadProxyGlyphs = () => _proxyGlyphs || (_proxyGlyphs = (async () => {
+  const out = {};
+  await Promise.all(["lore", "strength", "willpower", "moveCost", "exert"].map(async (k) => {
+    try {
+      const res = await fetch(LORCANA_CARD_GLYPHS[k]);
+      if(!res.ok) return;
+      const doc = new DOMParser().parseFromString(await res.text(), "image/svg+xml");
+      const svg = doc.querySelector("svg");
+      const vb = String((svg && svg.getAttribute("viewBox")) || "").split(/[\s,]+/).map(Number);
+      if(vb.length !== 4 || !(vb[2] > 0 && vb[3] > 0)) return;
+      const shapes = [];
+      for(const el of doc.querySelectorAll("path, polygon, circle")){
+        const tag = el.tagName.toLowerCase();
+        if(tag === "path") shapes.push(new Path2D(el.getAttribute("d") || ""));
+        else if(tag === "polygon") shapes.push(new Path2D("M" + (el.getAttribute("points") || "").trim() + "Z"));
+        else {
+          const p = new Path2D();
+          p.arc(+el.getAttribute("cx"), +el.getAttribute("cy"), +el.getAttribute("r"), 0, Math.PI * 2);
+          shapes.push(p);
+        }
+      }
+      if(shapes.length) out[k] = {vb, shapes};
+    } catch {}
+  }));
+  // Don't pin an offline miss for the whole session — the next build retries.
+  if(!Object.keys(out).length) _proxyGlyphs = null;
+  return out;
+})());
+
+// The glyphs sit inside generous 400x400 viewBoxes (the lore pip fills about
+// half of its box), so `size` is the BOX, not the ink.
+const drawProxyGlyph = (ctx, g, x, y, size) => {
+  const s = size / Math.max(g.vb[2], g.vb[3]);
+  ctx.save();
+  ctx.translate(x + (size - g.vb[2] * s) / 2 - g.vb[0] * s, y + (size - g.vb[3] * s) / 2 - g.vb[1] * s);
+  ctx.scale(s, s);
+  for(const p of g.shapes) ctx.fill(p);
+  ctx.restore();
+};
+
+// Pointy-top, like the printed cost hex. There's no SVG for the inline {I}
+// ink symbol, and the inkable/uninkable glyphs are solid silhouettes — a
+// solid hexagon behind every cost number is exactly the toner this face
+// exists to save — so both are drawn.
+const proxyHexPath = (ctx, cx, cy, r) => {
+  ctx.beginPath();
+  for(let i = 0; i < 6; i++){
+    const a = -Math.PI / 2 + i * Math.PI / 3;
+    const px = cx + r * Math.cos(a), py = cy + r * Math.sin(a);
+    if(i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+  }
+  ctx.closePath();
+};
+
+// Rules text → paragraphs of styled pieces. A Lorcana text box speaks in
+// three voices: a keyword or ABILITY NAME in bold, reminder text (anything in
+// parentheses) in italic, the rest plain; {I} {L} {S} {W} {E} are symbols.
+//   bold  = a keyword that opens the line, with its value ("Shift 6",
+//           "Singer 5", "Boost 2 {I}"), a Shift's alternate cost up to its
+//           reminder ("Shift: Discard a song card"), or a whole keyword list
+//           ("Evasive, Ward") — then the run of all-caps words that follows,
+//           which is how an ability NAME prints ("PHENOMENAL COSMIC POWER!").
+// A run needs 3+ capital letters, so a sentence opening "A character…" or
+// "(A character…" stays plain. A token with no letters ("10,000", "-") rides
+// along inside a run but never ends one — "10,000 MEDICAL PROCEDURES" is a
+// real ability name, while "2 damage" never reaches three capitals.
+// Bolding "up to the first paren" is NOT the rule: the catalog carries
+// "Shift 4 I'LL COUNT YOU IN Whenever this character quests…" on one line
+// with no reminder, and that rule set the whole ability in bold.
+const PROXY_KEYWORD_LINE_RE = /^(?:Universal Shift|Puppy Shift|Sing Together|Shift|Singer|Challenger|Resist|Boost|Bodyguard|Evasive|Reckless|Rush|Support|Ward|Voiceless|Vanish|Alert|Lurk|Probe)\b(?:\s+[+-]?\d+(?:\s*\{I\})?)?/;
+const parseProxyRules = (text) => {
+  return String(text || "").split(/\n+/).map(s => s.trim()).filter(Boolean).map(line => {
+    let boldEnd = 0;
+    const kw = PROXY_KEYWORD_LINE_RE.exec(line);
+    if(kw){
+      boldEnd = kw[0].length;
+      const rest = line.slice(boldEnd);
+      if(/^:/.test(rest)){ const p = line.indexOf("(", boldEnd); boldEnd = p < 0 ? line.length : p; }
+      else if(/^\s*[,&]/.test(rest) && rest.indexOf("(") < 0) boldEnd = line.length;
+    }
+    const re = /\S+/g;
+    re.lastIndex = boldEnd;
+    let m, end = 0, letters = 0;
+    while((m = re.exec(line))){
+      const tok = m[0];
+      if(tok.includes("{")) break;
+      const L = tok.replace(/[^A-Za-z]/g, "");
+      if(!L) continue;
+      if(L !== L.toUpperCase()) break;
+      letters += L.length; end = m.index + tok.length;
+    }
+    if(letters >= 3) boldEnd = end;
+    const pieces = [];
+    let depth = 0, buf = "", cb = false, ci = false;
+    const flush = () => {
+      if(!buf) return;
+      for(const s of buf.split(/(\{[ILSWE]\})/)){
+        if(!s) continue;
+        const g = /^\{([ILSWE])\}$/.exec(s);
+        pieces.push(g ? {g: g[1]} : {t: s, b: cb, i: ci});
+      }
+      buf = "";
+    };
+    for(let k = 0; k < line.length; k++){
+      const ch = line[k];
+      if(ch === "(") depth++;
+      const b = k < boldEnd && depth === 0, it = depth > 0;
+      if(b !== cb || it !== ci){ flush(); cb = b; ci = it; }
+      buf += ch;
+      if(ch === ")" && depth > 0) depth--;
+    }
+    flush();
+    return pieces;
+  });
+};
+
+const PROXY_FONT = "Helvetica, Arial, sans-serif";
+const PROXY_GLYPH_KEY  = {L: "lore", S: "strength", W: "willpower", E: "exert"};
+const PROXY_GLYPH_WORD = {I: "ink", L: "lore", S: "strength", W: "willpower", E: "exert"};
+const proxyRunFont = (fs, p) => (p.i ? "italic " : "") + (p.b ? "700 " : "400 ") + fs + "px " + PROXY_FONT;
+
+// Greedy word wrap over styled pieces. A "word" is everything between two
+// spaces, so "{E}," or "{I}." stays glued to its punctuation.
+const layoutProxyRules = (ctx, paras, fs, maxW, glyphs) => {
+  const glyphW = fs * 1.05;
+  ctx.font = proxyRunFont(fs, {});
+  const spaceW = ctx.measureText(" ").width;
+  const lines = [];
+  paras.forEach((para, pi) => {
+    const words = [];
+    let cur = [];
+    const push = (p) => {
+      if(p.g){ cur.push({p, w: glyphW}); return; }
+      for(const s of p.t.split(/(\s+)/)){
+        if(!s) continue;
+        if(/^\s+$/.test(s)){ if(cur.length){ words.push(cur); cur = []; } continue; }
+        ctx.font = proxyRunFont(fs, p);
+        cur.push({p: {t: s, b: p.b, i: p.i}, w: ctx.measureText(s).width});
+      }
+    };
+    for(const p of para){
+      // A symbol whose SVG didn't load (offline, first visit) prints as its
+      // word — "pay 6 ink", "can exert to sing" both read naturally.
+      if(p.g && p.g !== "I" && !glyphs[PROXY_GLYPH_KEY[p.g]]) push({t: PROXY_GLYPH_WORD[p.g], b: false, i: false});
+      else push(p);
+    }
+    if(cur.length) words.push(cur);
+    let line = [], x = 0;
+    for(const word of words){
+      const ww = word.reduce((s, it) => s + it.w, 0);
+      if(line.length && x + spaceW + ww > maxW){ lines.push({items: line, para: pi}); line = []; x = 0; }
+      if(line.length) x += spaceW;
+      for(const it of word){ line.push({...it, x}); x += it.w; }
+    }
+    if(line.length) lines.push({items: line, para: pi});
+  });
+  const lh = fs * 1.2, gap = fs * 0.45;
+  const paraBreaks = lines.filter((l, i) => i && l.para !== lines[i - 1].para).length;
+  return {lines, lh, gap, glyphW, fs, height: lines.length ? lines.length * lh + paraBreaks * gap : 0};
+};
+
+// Shrink a single line's font until it fits, then ellipsize as a last resort.
+const fitProxyLine = (ctx, text, weight, max, min, maxW) => {
+  let fs = max;
+  for(; fs > min; fs--){
+    ctx.font = weight + " " + fs + "px " + PROXY_FONT;
+    if(ctx.measureText(text).width <= maxW) return {text, fs};
+  }
+  ctx.font = weight + " " + min + "px " + PROXY_FONT;
+  let t = text;
+  while(t.length > 1 && ctx.measureText(t + "…").width > maxW) t = t.slice(0, -1);
+  return {text: t === text ? t : t.replace(/\s+$/, "") + "…", fs: min};
+};
+
+const drawProxyTextFace = (ctx, w, h, card, {bw, glyphs}) => {
+  const pad = Math.round(w * 0.054);                      // ~3.4mm
+  const INK = "#111", DIM = "#555", FAINT = "#8a8a8a";
+  const inks = (card.inks || []).filter(i => INK_COLORS[i]);
+  const ink0 = !bw && inks[0] ? INK_COLORS[inks[0]] : null;
+
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
+
+  // Frame, inset so a cut that wanders a millimetre still leaves it whole.
+  ctx.strokeStyle = "#333";
+  ctx.lineWidth = 3;
+  roundRectPath(ctx, 12, 12, w - 24, h - 24, 30);
+  ctx.stroke();
+
+  // ── Cost hex (top-left). Inkable = the hex inside a ring, like the print.
+  const R = Math.round(w * 0.066), cx = pad + R + 12, cy = pad + R + 12;
+  if(card.inkable){
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = ink0 ? ink0.border : INK;
+    ctx.beginPath(); ctx.arc(cx, cy, R + 11, 0, Math.PI * 2); ctx.stroke();
+  }
+  if(!bw && inks.length){
+    // Dual-ink cards split the hex down the middle, one ink per half.
+    inks.slice(0, 2).forEach((ink, i, arr) => {
+      ctx.save();
+      if(arr.length > 1){ ctx.beginPath(); ctx.rect(i ? cx : cx - R - 2, cy - R - 2, R + 2, R * 2 + 4); ctx.clip(); }
+      proxyHexPath(ctx, cx, cy, R);
+      ctx.fillStyle = INK_COLORS[ink].bg; ctx.fill();
+      ctx.restore();
+    });
+  }
+  proxyHexPath(ctx, cx, cy, R);
+  ctx.lineWidth = 4; ctx.strokeStyle = ink0 ? ink0.border : INK; ctx.stroke();
+  ctx.fillStyle = INK;
+  ctx.textAlign = "center";
+  ctx.font = "700 " + Math.round(R * 1.15) + "px " + PROXY_FONT;
+  ctx.fillText(card.costVal != null ? String(card.costVal) : "–", cx, cy + R * 0.4);
+  if(card.inkable != null){
+    ctx.font = "700 " + Math.round(w * 0.02) + "px " + PROXY_FONT;
+    ctx.fillStyle = DIM;
+    ctx.fillText(card.inkable ? "INKABLE" : "UNINKABLE", cx, cy + R + 11 + Math.round(w * 0.034));
+  }
+  ctx.textAlign = "left";
+
+  // ── Ink · name · version, right of the hex.
+  const nx = cx + R + 30, nw = w - pad - nx;
+  const inkLabel = (card.inks || []).join(" · ").toUpperCase();
+  const top = pad + 14;
+  const hasVersion = !!card.version;
+  let y = top + (hasVersion ? 0 : 18);
+  if(inkLabel){
+    const f = fitProxyLine(ctx, inkLabel, "700", Math.round(w * 0.025), 14, nw);
+    ctx.font = "700 " + f.fs + "px " + PROXY_FONT;
+    ctx.fillStyle = ink0 ? ink0.text : DIM;
+    ctx.fillText(f.text, nx, y + f.fs);
+    y += f.fs + 12;
+  }
+  {
+    const f = fitProxyLine(ctx, card.base || card.name || "Unknown card", "700", Math.round(w * 0.062), 28, nw);
+    ctx.font = "700 " + f.fs + "px " + PROXY_FONT;
+    ctx.fillStyle = INK;
+    ctx.fillText(f.text, nx, y + f.fs * 0.9);
+    y += f.fs * 0.9 + 12;
+  }
+  if(hasVersion){
+    const f = fitProxyLine(ctx, card.version, "italic 400", Math.round(w * 0.04), 20, nw);
+    ctx.font = "italic 400 " + f.fs + "px " + PROXY_FONT;
+    ctx.fillStyle = "#333";
+    ctx.fillText(f.text, nx, y + f.fs * 0.9);
+  }
+  const headerBottom = cy + R + 11 + Math.round(w * 0.05);
+
+  // ── Vertical budget. The art box is the flex: short text gets a big blank
+  // box, long text takes the space back before the font starts shrinking —
+  // legible rules beat a big empty rectangle every time.
+  const tag = Math.round(h * 0.036);                       // drawProxyWatermark's tag
+  const footerTop = h - tag * 2.1 - 16;
+
+  // Stats and type line share one row. Measured before anything is drawn:
+  // a five-classification character next to three stats can't fit its type
+  // line at a readable size, and it drops to a row of its own instead —
+  // classifications are rules ("your Sorcerer characters…"), not decoration,
+  // so shrinking or clipping them is the wrong answer.
+  const stats = [];
+  if(card.moveCost != null) stats.push({g: "moveCost", word: "MOVE", v: card.moveCost});
+  if(card.strength != null) stats.push({g: "strength", word: "STR", v: card.strength});
+  if(card.willpower != null) stats.push({g: "willpower", word: "WP", v: card.willpower});
+  if(card.lore != null)      stats.push({g: "lore", word: "LORE", v: card.lore});
+  const gSize = 50, statFs = 38, wordFs = 16;
+  let statsW = 0;
+  for(const s of stats){
+    ctx.font = "700 " + statFs + "px " + PROXY_FONT;
+    statsW += ctx.measureText(String(s.v)).width + 4 + 22;
+    if(glyphs[s.g]) statsW += gSize;
+    else { ctx.font = "700 " + wordFs + "px " + PROXY_FONT; statsW += ctx.measureText(s.word).width + 4; }
+  }
+  const ftype = card.faceType != null ? card.faceType : card.type;
+  const typeLine = ftype === "Character"
+    ? ((card.classes && card.classes.length) ? card.classes.join(" · ") : "Character")
+    : String(ftype || "").replace(/\s+-\s+/g, " · ");
+  const typeMax = Math.round(w * 0.034), typeOk = Math.round(w * 0.029);
+  const besideW = w - pad * 2 - 4 - statsW;
+  let typeFit = typeLine ? fitProxyLine(ctx, typeLine, "400", typeMax, typeOk, besideW) : null;
+  const typeOwnRow = !!(typeFit && stats.length && typeFit.text !== typeLine);
+  if(typeOwnRow) typeFit = fitProxyLine(ctx, typeLine, "400", typeMax, 17, w - pad * 2 - 8);
+  const barH = typeOwnRow ? 64 + typeMax + 16 : 64;        // type line + stats + rule
+  const artTop = headerBottom + 10;
+  const budget = footerTop - artTop - 14 - barH - 16;      // art + rules text
+  const ART_MAX = Math.round(h * 0.36), ART_MIN = Math.round(h * 0.15), ART_FLOOR = Math.round(h * 0.06);
+  const textW = w - pad * 2 - 8;
+  const paras = parseProxyRules(card.text);
+  let lay = null;
+  for(let fs = Math.round(w * 0.041); fs >= 17; fs--){
+    lay = layoutProxyRules(ctx, paras, fs, textW, glyphs);
+    if(lay.height <= budget - ART_MIN) break;
+  }
+  const artH = Math.max(ART_FLOOR, Math.min(ART_MAX, budget - lay.height));
+
+  // The blank box, in a grey light enough that a pencil sketch sits over it.
+  ctx.strokeStyle = "#c8c8c8";
+  ctx.lineWidth = 2;
+  roundRectPath(ctx, pad, artTop, w - pad * 2, artH, 14);
+  ctx.stroke();
+
+  // ── Type line (left) + stats (right).
+  const barTop = artTop + artH + 14;
+  const statBase = barTop + 38;
+  let sx = w - pad;
+  ctx.fillStyle = INK;
+  for(let i = stats.length - 1; i >= 0; i--){
+    const s = stats[i];
+    ctx.font = "700 " + statFs + "px " + PROXY_FONT;
+    const vw = ctx.measureText(String(s.v)).width;
+    sx -= vw;
+    ctx.fillText(String(s.v), sx, statBase);
+    sx -= 4;
+    if(glyphs[s.g]){
+      sx -= gSize;
+      drawProxyGlyph(ctx, glyphs[s.g], sx, statBase - statFs * 0.36 - gSize / 2, gSize);
+    } else {
+      ctx.font = "700 " + wordFs + "px " + PROXY_FONT;
+      const ww = ctx.measureText(s.word).width;
+      sx -= ww + 4;
+      ctx.fillStyle = DIM; ctx.fillText(s.word, sx, statBase); ctx.fillStyle = INK;
+    }
+    sx -= 22;
+  }
+  if(typeFit){
+    ctx.font = "400 " + typeFit.fs + "px " + PROXY_FONT;
+    ctx.fillStyle = "#333";
+    ctx.fillText(typeFit.text, pad + 4, typeOwnRow ? statBase + 12 + typeMax : statBase - 6);
+  }
+  const ruleY = barTop + barH - 12;
+  ctx.strokeStyle = "#999";
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(pad, ruleY); ctx.lineTo(w - pad, ruleY); ctx.stroke();
+
+  // ── Rules text. Clipped to its box: at the minimum size with the art at its
+  // floor, a wall-of-text card loses its tail rather than printing over the
+  // footer.
+  const tTop = ruleY + 16;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(pad, tTop - 4, w - pad * 2, footerTop - tTop + 8); ctx.clip();
+  let by = tTop + lay.fs * 0.92;
+  lay.lines.forEach((ln, i) => {
+    if(i && ln.para !== lay.lines[i - 1].para) by += lay.gap;
+    for(const it of ln.items){
+      const x = pad + 4 + it.x;
+      if(it.p.g === "I"){
+        ctx.fillStyle = INK;
+        proxyHexPath(ctx, x + lay.glyphW / 2, by - lay.fs * 0.34, lay.fs * 0.44);
+        ctx.fill();
+      } else if(it.p.g){
+        ctx.fillStyle = INK;
+        drawProxyGlyph(ctx, glyphs[PROXY_GLYPH_KEY[it.p.g]], x - lay.glyphW * 0.1, by - lay.fs * 0.34 - lay.glyphW * 0.6, lay.glyphW * 1.2);
+      } else {
+        ctx.font = proxyRunFont(lay.fs, it.p);
+        ctx.fillStyle = it.p.i ? DIM : INK;
+        ctx.fillText(it.p.t, x, by);
+      }
+    }
+    by += lay.lh;
+  });
+  ctx.restore();
+
+  // ── Footer: which printing (left) and rarity (right), clear of the PROXY
+  // tag that drawProxyWatermark centres along the bottom.
+  const fy = h - tag * 2.1 + tag * 0.72;
+  const side = (w - pad * 2) / 2 - 90;
+  ctx.fillStyle = FAINT;
+  const where = [card.set, card.number ? "#" + card.number : null].filter(Boolean).join(" ");
+  if(where){
+    const f = fitProxyLine(ctx, where, "400", 18, 13, side);
+    ctx.font = "400 " + f.fs + "px " + PROXY_FONT;
+    ctx.textAlign = "left"; ctx.fillText(f.text, pad + 4, fy);
+  }
+  if(card.rarity){
+    const f = fitProxyLine(ctx, card.rarity, "400", 18, 13, side);
+    ctx.font = "400 " + f.fs + "px " + PROXY_FONT;
+    ctx.textAlign = "right"; ctx.fillText(f.text, w - pad - 4, fy);
+  }
+  ctx.textAlign = "left";
+};
+
 // One card → JPEG bytes. White ground first: Lorcast art is transparent
 // outside the rounded corners and JPEG has no alpha, so an unpainted canvas
 // would print four black corners on every card.
-const renderProxyCardJpeg = async (card, {bw, lighten, watermark}) => {
+const renderProxyCardJpeg = async (card, {bw, lighten, watermark, face, glyphs}) => {
   const w = PROXY_RENDER_PX;
   const h = Math.round(w * PROXY_CARD_MM.h / PROXY_CARD_MM.w);
   const cv = document.createElement("canvas");
@@ -12533,8 +12926,13 @@ const renderProxyCardJpeg = async (card, {bw, lighten, watermark}) => {
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, w, h);
 
-  const img = card.img ? await loadPosterImage(card.img) : null;
-  if(img){
+  // The text face picks its own palette per ink mode, so it skips the art
+  // path AND the greyscale pass below (nothing to convert, and no reason to
+  // walk 770k pixels per card to find that out).
+  const img = face === "text" ? null : card.img ? await loadPosterImage(card.img) : null;
+  if(face === "text"){
+    drawProxyTextFace(ctx, w, h, card, {bw, glyphs: glyphs || {}});
+  } else if(img){
     drawImageCover(ctx, img, 0, 0, w, h);
   } else {
     // No art (offline, or a catalog row with no image): print a cuttable
@@ -12552,7 +12950,7 @@ const renderProxyCardJpeg = async (card, {bw, lighten, watermark}) => {
     lines.forEach((ln, i) => ctx.fillText(ln, w / 2, h / 2 - ((lines.length - 1) * lh) / 2 + i * lh));
   }
 
-  if(bw){
+  if(bw && face !== "text"){
     const d = ctx.getImageData(0, 0, w, h);
     const p = d.data;
     for(let i = 0; i < p.length; i += 4){
@@ -12573,8 +12971,8 @@ const renderProxyCardJpeg = async (card, {bw, lighten, watermark}) => {
   cv.width = cv.height = 1;
   // noArt: the card HAD an image URL and it didn't load (offline, a slow CDN,
   // the load timeout) — the caller says so rather than letting a placeholder
-  // go to the printer unannounced.
-  return {data: new Uint8Array(buf), w, h, noArt: !!card.img && !img};
+  // go to the printer unannounced. The text face never asks for art.
+  return {data: new Uint8Array(buf), w, h, noArt: face !== "text" && !!card.img && !img};
 };
 
 // Slot geometry for one sheet: a centred COLS x ROWS block of true-size cards
@@ -12611,11 +13009,33 @@ const PROXY_MAX_PER_CARD = 99;
 const readProxyPrefs = () => {
   try { return JSON.parse(localStorage.getItem(PROXY_PREFS_KEY)) || {}; } catch { return {}; }
 };
+// What the text-only face prints, off a catalog row. Product Name is
+// "Name - Version"; songs, actions and most items have no version.
+const proxyFaceOf = (meta) => {
+  const name = meta["Product Name"] || "";
+  const dash = name.indexOf(" - ");
+  return {
+    base: dash > 0 ? name.slice(0, dash) : name,
+    version: dash > 0 ? name.slice(dash + 3) : "",
+    inks: meta.inks || (meta.ink ? [meta.ink] : []),
+    inkable: meta.inkable == null ? null : !!meta.inkable,
+    costVal: meta.cost,
+    strength: meta.strength, willpower: meta.willpower, lore: meta.lore, moveCost: meta.move_cost,
+    classes: meta.classifications || [],
+    // Its own field: the list's `type` is a SORT key, and Robin Hood's bow
+    // sorts as "Leader" while printing as the Item it is.
+    faceType: meta.card_type || "",
+    text: meta.text || "",
+    set: meta.Set || "", number: meta.Number || "", rarity: meta.Rarity || "",
+  };
+};
 
 const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
   useEscToClose(onClose);
   const deckTitle = deckDisplayTitle(deck, tournamentContext);
   const saved = useMemo(readProxyPrefs, []);
+  // "art" = the card image; "text" = rules text around a blank art box.
+  const [face, setFace]           = useState(saved.face === "text" ? "text" : "art");
   const [ink, setInk]             = useState(saved.ink === "bw" ? "bw" : "color");
   const [lighten, setLighten]     = useState(saved.lighten !== false);
   // "none" was removed 2026-08-24 — an unmarked proxy is a counterfeit in a
@@ -12639,9 +13059,9 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
 
   useEffect(() => {
     try {
-      localStorage.setItem(PROXY_PREFS_KEY, JSON.stringify({ink, lighten, watermark, paper, guides, listOpen}));
+      localStorage.setItem(PROXY_PREFS_KEY, JSON.stringify({face, ink, lighten, watermark, paper, guides, listOpen}));
     } catch {}
-  }, [ink, lighten, watermark, paper, guides, listOpen]);
+  }, [face, ink, lighten, watermark, paper, guides, listOpen]);
 
   // Revoke the blob URL on unmount only — regeneration revokes its own
   // predecessor, so tying this to `result` would pull the URL out from under
@@ -12664,6 +13084,7 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
       let img = raw ? proxyImg(raw).replace("/normal/", "/large/").replace("/small/", "/large/") : null;
       if(img && PROXY_ORIGIN && img.startsWith("/")) img = PROXY_ORIGIN + img;
       seen.set(c.card_id, {
+        ...proxyFaceOf(meta),
         card_id: c.card_id,
         quantity: c.quantity,
         name: meta["Product Name"] || "",
@@ -12683,6 +13104,10 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
     const leader = getCoconutCard(deck.coconut_card);
     if(leader){
       seen.set(coconutRowId(leader.slug), {
+        // A leader has no cost, stats or inkwell — just its ability.
+        base: leader.name, version: leader.version, inks: leader.ink ? [leader.ink] : [],
+        inkable: null, costVal: null, classes: [], faceType: "Leader",
+        text: leader.ability || "", set: "Coconut", number: leader.cn ? String(leader.cn) : "", rarity: "",
         card_id: coconutRowId(leader.slug), quantity: 1,
         name: coconutDisplayName(leader), sub: "Coconut leader · outside your 60",
         cost: -1, type: "Leader", img: coconutArtUrl(leader.cn),
@@ -12696,6 +13121,7 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
         let img = raw ? proxyImg(raw).replace("/normal/", "/large/").replace("/small/", "/large/") : null;
         if(img && PROXY_ORIGIN && img.startsWith("/")) img = PROXY_ORIGIN + img;
         seen.set(bonus.card_id, {
+          ...proxyFaceOf(bonus),
           card_id: bonus.card_id, quantity: 1,
           name: bonus["Product Name"] || leader.bonus, sub: "Bonus card · free, outside your 60",
           cost: -1, type: "Leader", img,
@@ -12744,7 +13170,8 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
   const printCards = cards.filter(c => qtyOf(c.card_id) > 0);
   const totalCards = printCards.reduce((s, c) => s + qtyOf(c.card_id), 0);
   const pageCount = Math.ceil(totalCards / PROXY_PER_PAGE) || 0;
-  const missingArt = printCards.filter(c => !c.img).length;
+  // The text face never draws art, so a card without any isn't worth a warning.
+  const missingArt = face === "text" ? 0 : printCards.filter(c => !c.img).length;
 
   const generate = async () => {
     if(busy || !printCards.length) return;
@@ -12752,7 +13179,8 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
     setBusy(true); setError(null);
     setProgress({done: 0, total: printCards.length});
     try {
-      const opts = {bw: ink === "bw", lighten: ink === "bw" && lighten, watermark};
+      const glyphs = face === "text" ? await loadProxyGlyphs() : null;
+      const opts = {bw: ink === "bw", lighten: ink === "bw" && lighten, watermark, face, glyphs};
       const imgs = [];
       const indexOf = new Map();
       for(let i = 0; i < printCards.length; i++){
@@ -12827,13 +13255,20 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
 
         <div class="proxy-opts">
         <div class="proxy-opt">
+          <div class="proxy-opt-lbl">Card face</div>
+          <div class="proxy-opt-row">
+            ${seg("art", face, setFace, "Card art", "The full card image")}
+            ${seg("text", face, setFace, "Text only", "Cost, name, stats and rules text around a blank art box — a fraction of the ink")}
+          </div>
+        </div>
+        <div class="proxy-opt">
           <div class="proxy-opt-lbl">Ink</div>
           <div class="proxy-opt-row">
-            ${seg("color", ink, setInk, "Colour")}
+            ${seg("color", ink, setInk, "Colour", face === "text" ? "Tints each cost hex by its ink" : null)}
             ${seg("bw", ink, setInk, "Black & white")}
           </div>
         </div>
-        ${ink === "bw" && html`<label class="proxy-check">
+        ${ink === "bw" && face === "art" && html`<label class="proxy-check">
           <input type="checkbox" checked=${lighten}
             onChange=${e => { setLighten(e.target.checked); setResult(null); }}/>
           <span>Lighten for laser/inkjet <span class="muted">— keeps rules text readable and uses far less toner on dark cards</span></span>
@@ -12882,7 +13317,7 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
               <span class="proxy-cardname" title=${c.name + (c.sub ? " — " + c.sub : "")}>
                 ${c.name}${c.sub && html`<span class="proxy-cardsub"> ${c.sub}</span>`}
               </span>
-              ${!c.img && html`<span class="proxy-cardwarn" title="No art available — prints as a name card">no art</span>`}
+              ${!c.img && face === "art" && html`<span class="proxy-cardwarn" title="No art available — prints as a name card">no art</span>`}
               <div class="proxy-cardqty" onClick=${e => e.stopPropagation()}>
                 <button type="button" onClick=${() => bumpQty(c.card_id, -1)} disabled=${n <= 0}
                   aria-label=${"One fewer "+c.name}>−</button>

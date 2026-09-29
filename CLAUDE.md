@@ -3458,7 +3458,7 @@ spelling in each direction.
 
 ## Print proxies (deck → print-and-cut PDF)
 
-`ProxyPrintModal` (Index.html, just after `DeckPosterModal`). DeckEditor toolbar → **🖨 Print Proxies**. Renders each card to a canvas, encodes JPEG, and writes a PDF: 9 cards per page at true card size (63×88mm), colour or B&W, PROXY watermark, crop marks, Save / Open-and-print.
+`ProxyPrintModal` (Index.html, just after `DeckPosterModal`). DeckEditor toolbar → **🖨 Print Proxies**. Renders each card to a canvas, encodes JPEG, and writes a PDF: 9 cards per page at true card size (63×88mm), card art or text-only (see below), colour or B&W, PROXY watermark, crop marks, Save / Open-and-print.
 
 **The PDF writer is hand-rolled — deliberately.** `buildProxyPdfBlob` emits raw PDF syntax and embeds each JPEG as a `/DCTDecode` image XObject, which means the JPEG bytes pass through verbatim and the whole writer is ~100 lines. The alternative was vendoring jsPDF (~350KB) into `/vendor/` and lazy-loading it, which buys nothing here: the only PDF feature used is "place image at rect". Same reasoning as the canvas card posters — it ships inside Index.html (network-first) so a stale service worker can't break it.
 
@@ -3474,6 +3474,18 @@ spelling in each direction.
 **Guarded by `node scripts/test_proxy_pdf.mjs`**, which extracts the real writer out of Index.html. The two ways this breaks are silent and total — a wrong xref byte offset or a wrong stream `/Length` makes the file unopenable in every reader with no clue why — and both are arithmetic that shifts the moment anyone edits what the writer emits. It caught an off-by-one in `objCount` that emitted a phantom xref row. Verified end-to-end in Chromium's PDFium viewer, and the embedded streams check out as baseline (SOF0) 3-component JPEGs at the declared dimensions.
 
 **htm fragments are `` html`<${React.Fragment}>…</>` ``, never `` html`<>…</>` ``.** htm compiles a bare `<>` to `h("", …)` and `React.createElement("")` throws. Cost a debugging cycle here; the rest of the file already uses the `React.Fragment` form.
+
+### Text-only face (2026-09-29)
+
+**Card face → Text only** prints cost hex, inkable, ink, name/version, type line, strength / willpower / lore / move and rules text around an EMPTY art box, black on white — a user request ("like Jorcana… easier on my printer"). `drawProxyTextFace` is just another way to paint the same 744px canvas, so the JPEG → PDF writer, sheet geometry and baked-in watermark are shared, untouched. A 60-card deck: **1.1 MB vs 2.2 MB** with art, and a fraction of the toner.
+
+- **Rules text is parsed, not just wrapped** (`parseProxyRules`): keyword + value bold (`Shift 6`, `Boost 2 {I}`), a Shift's alternate cost bold up to its reminder, a bare keyword list all bold, then the following run of ALL-CAPS words bold (ability names); parenthesised reminder text italic; `{I} {L} {S} {W} {E}` inline symbols. A caps run needs 3+ capitals (so "A character…" stays plain) and may open on a number ("10,000 MEDICAL PROCEDURES" is a real one). ⚠ **Never "bold up to the first paren"** — the catalog carries `Shift 4 I'LL COUNT YOU IN Whenever…` on one line with no reminder, and that rule set the whole ability bold. Checked against all 2,825 unique catalog lines: no whole-line bold, no bold run over 40 chars.
+- **The art box is the flex.** Short text gets a tall blank box (≤36% of the card); long text takes the space back (≥15%) before the font shrinks (30px → 17px floor). The longest card in the catalog (Fairy Godmother, 414 chars) still lands at a readable size.
+- **A type line that can't fit beside the stats at ≥21px gets its own row** instead of shrinking — classifications are rules text ("your Sorcerer characters"), not decoration.
+- **Glyphs are `Path2D`s parsed from the SVGs in `Logos/lorcana/card/`** (`loadProxyGlyphs`), not `drawImage`: an SVG image can taint the canvas in some engines and has no natural size in others. One Path2D per element, each filled separately — that's SVG semantics. A glyph that fails to load prints as its word ("pay 6 ink", "can exert to sing"). The cost hex and inline `{I}` are drawn, because the inkable/uninkable SVGs are solid silhouettes — exactly the toner this face exists to save. Inkable = the hex inside a ring, plus an INKABLE / UNINKABLE label.
+- **Colour** tints the cost hex by ink (dual-ink cards split it down the middle); **B&W** is pure black. The Lighten checkbox and every "no art" warning are art-only — `noArt` must stay `false` for the text face, or the post-build banner claims every card's art failed.
+- The list's `type` is a SORT key (Robin Hood's bow sorts as "Leader"), so the face reads **`faceType`** from `proxyFaceOf(meta)`. Coconut leaders print their ability with a "–" cost and no inkable label.
+- Parser cases live in `scripts/test_proxy_pdf.mjs` under "text-only rules parsing".
 
 ## Artist Alley poster
 
