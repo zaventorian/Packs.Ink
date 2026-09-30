@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=495">
+<link rel="stylesheet" href="styles.css?v=504">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -575,7 +575,7 @@ const deckVersionsUnavailable = (err) => {
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v60";  // v60: Coconut rebalance — Snow White (Beta 1.1) + The Madrigal Family (Beta 2.1) ability text and re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording for 24h. (v59: Coconut leader Pete - Bad Guy (cn 26) is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v58: rows carry `added_at` (cards.inserted_at) for the new-card reveal reel — a replayed v57 record has no such field, so every card reads as "not new" and the reel stays dark for 24h on exactly the sessions a reveal wave is meant to reach. (v57: promo-set rework — SUPPRESSED_CARD_IDS, one placeholder row per unpriced P4/PD1 card, the P3 #63 "Japanese Exclusive" label, and the cards-count freshness probe (a v56 record has no cardCount). (v56: Coconut Beta 2 — The Vine - Towering Stalk is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v55: Elsa - Exploring the Unknown 59/P3 (JA) moved to JAPAN_ONLY_NONFOIL, so its img_* now point at the JP scan — the English frame is baked into cached rows and a replay would keep showing it for 24h. v54: Coconut Beta 1.1 — Stitch/Mufasa/Donald Duck/Robin Hood ability text + their re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording searchable for 24h. v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. v52: Coconut leader merge/suppress.)
+const CACHE_KEY = "packsink:catalog:v61";  // v61: two ink drop counter rows (Extras & Oddities, Hyperia City) are NEW synthetic rows baked in by transformSupabaseData, and Minnie Mouse 17/P4 gains its "Japanese Exclusive" label and moves to the Normal printing there, so a cache replay would show neither for 24h. (v60: Coconut rebalance — Snow White (Beta 1.1) + The Madrigal Family (Beta 2.1) ability text and re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording for 24h. (v59: Coconut leader Pete - Bad Guy (cn 26) is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v58: rows carry `added_at` (cards.inserted_at) for the new-card reveal reel — a replayed v57 record has no such field, so every card reads as "not new" and the reel stays dark for 24h on exactly the sessions a reveal wave is meant to reach. (v57: promo-set rework — SUPPRESSED_CARD_IDS, one placeholder row per unpriced P4/PD1 card, the P3 #63 "Japanese Exclusive" label, and the cards-count freshness probe (a v56 record has no cardCount). (v56: Coconut Beta 2 — The Vine - Towering Stalk is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v55: Elsa - Exploring the Unknown 59/P3 (JA) moved to JAPAN_ONLY_NONFOIL, so its img_* now point at the JP scan — the English frame is baked into cached rows and a replay would keep showing it for 24h. v54: Coconut Beta 1.1 — Stitch/Mufasa/Donald Duck/Robin Hood ability text + their re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording searchable for 24h. v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. v52: Coconut leader merge/suppress.))
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -820,6 +820,66 @@ const rawPopPick = (rows, printing, cardId) => {
   }
   return list.length === 1 ? list[0] : list.slice().sort(byTotal)[0];
 };
+// The Screener's RAW-mode graded PRICE columns (asked for from the Screener,
+// 2026-09-28: "add columns for PSA 10 last sold price and last 5 avg price … and
+// for other graders/grades too … don't add like 5000 columns but maybe a custom
+// ability w/ drop down"). So it is ONE pair of columns, and the gear's grade
+// picker decides which grader + grade they show — PSA 10 by default. The key is
+// the row field too, so the sort comparator needs no mapping. Both start hidden.
+const RAW_GRADED_COL_KEYS = ["gr_last", "gr_avg5"];
+const RAW_GRADED_TIER_DEFAULT = "PSA|10";
+// "PSA|10" -> {grader:"PSA", grade:"10", label:"PSA 10"}. The rollup stores the
+// grader uppercase and the grade as text ("9.5"), which is what this keeps.
+const parseGradedTier = (s) => {
+  const [g, gr] = String(s || "").split("|");
+  const grader = (g || "").trim().toUpperCase(), grade = (gr || "").trim();
+  return grader && grade ? {grader, grade, label: grader + " " + grade}
+    : {grader: "PSA", grade: "10", label: "PSA 10"};
+};
+// The stored / linked form, canonical so a hand-typed "cgc|10" and the picker's
+// "CGC|10" are one value rather than two options.
+const normGradedTier = (s) => { const t = parseGradedTier(s); return t.grader + "|" + t.grade; };
+// The picker's options, from the rollup that is loaded: every grader, its
+// grades high to low, keeping a tier only if enough cards carry it for a column
+// of it to be more than a wall of dashes. PSA leads — it is the market. The
+// current pick is always offered, so a saved choice can't silently vanish.
+const GRADED_TIER_MIN_CARDS = 20;
+// Before the rollup has loaded (no graded column switched on yet) the picker
+// still has to offer something to pick, so it starts from the common tiers.
+const GRADED_TIER_SEED = ["PSA|10", "PSA|9", "PSA|8", "CGC|10", "CGC|9.5", "CGC|9",
+  "BGS|10", "BGS|9.5", "BGS|9", "SGC|10", "SGC|9.5", "TAG|10", "TAG|9"];
+const gradedTierOptions = (rollup, current) => {
+  const ORDER = ["PSA", "CGC", "BGS", "SGC", "TAG"];
+  const cards = new Map();                  // "PSA|10" -> Set(card_id)
+  for(const r of (rollup || [])){
+    if(!r.grader || r.grade == null) continue;
+    const k = r.grader.toUpperCase() + "|" + r.grade;
+    let s = cards.get(k); if(!s){ s = new Set(); cards.set(k, s); }
+    s.add(r.card_id);
+  }
+  const keep = new Set([RAW_GRADED_TIER_DEFAULT, normGradedTier(current),
+    ...(rollup ? [] : GRADED_TIER_SEED)]);
+  for(const [k, s] of cards) if(s.size >= GRADED_TIER_MIN_CARDS) keep.add(k);
+  const byGrader = new Map();
+  for(const k of keep){
+    const t = parseGradedTier(k);
+    if(!byGrader.has(t.grader)) byGrader.set(t.grader, []);
+    byGrader.get(t.grader).push(t);
+  }
+  const rank = (g) => { const i = ORDER.indexOf(g); return i < 0 ? ORDER.length : i; };
+  return [...byGrader.entries()]
+    .sort((a, b) => rank(a[0]) - rank(b[0]) || a[0].localeCompare(b[0]))
+    .map(([grader, tiers]) => ({grader,
+      tiers: tiers.sort((a, b) => (parseFloat(b.grade) || 0) - (parseFloat(a.grade) || 0))
+        .map(t => ({value: t.grader + "|" + t.grade, label: t.label}))}));
+};
+// The Screener's one read of the per-sale rollup, shared by Graded mode and
+// Raw mode's graded price columns (both fill the same state, so whichever asks
+// first loads it for the other).
+const fetchScreenerGradedRollup = () => sbFetchAll("graded_sales_rollup", {
+  select: "card_id,grader,grade,printing,sale_count,last_sold_date,last_sold_price,avg_last_5,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,pct_1095d,pct_rel",
+  order: "card_id.asc,grader.asc,grade.asc,printing.asc",
+});
 // Is this column switched on in a mode's saved prefs? Mirrors the Screener's
 // colHidden rule (below): a column the prefs have never KNOWN takes its default,
 // which for every raw pop column is hidden. Used to decide whether Raw mode
@@ -2408,6 +2468,10 @@ const REGIONAL_EXCLUSIVE_LABEL = {
   // until a JP scan lands in JAPAN_ONLY_NONFOIL.
   "Maleficent - Monstrous Dragon|61":    "Japanese Exclusive",
   "Maleficent - Monstrous Dragon|62":    "Japanese Exclusive",
+  // 17/P4 · JA · 14: the promo packed in Japan's Hyperia City booster box
+  // (Takara Tomy's box bonus). The English buy-a-box printing is 4/RPH. The
+  // row's own image is already the JP card, so it needs only the label.
+  "Minnie Mouse - Urban Visionary|17":   "Japanese Exclusive",
   "Elsa - Snow Queen|38":                "Chinese Exclusive",
   "Snow White - Unexpected Houseguest|42": "Chinese Exclusive",
   "Stitch - Little Rocket|43":           "Chinese Exclusive",
@@ -4050,9 +4114,45 @@ const CUSTOM_VARIANTS = [
 // Image strategy: provide EITHER `image` (full URL or `Logos/cards/...`)
 // OR `tcgplayer_product_id` (auto-derives the TCGPlayer CDN URL).
 // `printing` defaults to "Normal".
+//
+// `id` (optional) pins a short, stable card_id. Give one to anything a person
+// can mark as owned: the derived id is long and changes with the entry's name.
+// `originSet` files an Extras & Oddities entry under its set's heading, the
+// same field EXTRAS_MAP rows carry.
 const CUSTOM_CARDS = [
   // Golden Mickey (pid 554628) is now a real cards row, injected via
   // scripts/patch_pid_overrides.py. No client-side stub needed.
+
+  // The two ink drop counter cards packed one per box in Japan's Hyperia City
+  // booster box (Takara Tomy's box bonus, beside Minnie Mouse 17/P4). Printed
+  // `JA · 14` with no collector number, and they are counters, not cards, so
+  // they live here rather than in the set. The box-bonus graphic says the backs
+  // show Baymax and Merlin; only the fronts are pictured so far.
+  // ⚠ "Japanese Box Bonus" is as far as the evidence goes (2026-09-30). English
+  // packs carry the same two designs in the marketing slot, and Ravensburger
+  // said there are no foil ink drops yet. Takara Tomy's renders show a sparkle
+  // texture the English ones lack, and Zaven heard these are Japan-only foils,
+  // but no official page says foil. Don't write "foil" on the tile until one does.
+  {
+    id: "extras:ink-drop-ja-baymax",
+    Set: EXTRAS_SET_NAME, originSet: "Hyperia City",
+    name: "Ink Drop Counter - Baymax Back",
+    Rarity: "Japanese Box Bonus",
+    card_type: "Counter",
+    illustrators: ["Matthew Eng"],
+    text: "You may remove this counter to pay 1 {I}. (This counter doesn't count as a card.)",
+    image: `${SUPABASE_URL}/storage/v1/object/public/card-art/extras/ink-drop-ja-baymax.jpg`,
+  },
+  {
+    id: "extras:ink-drop-ja-merlin",
+    Set: EXTRAS_SET_NAME, originSet: "Hyperia City",
+    name: "Ink Drop Counter - Merlin Back",
+    Rarity: "Japanese Box Bonus",
+    card_type: "Counter",
+    illustrators: ["Matthew Eng"],
+    text: "You may remove this counter to pay 1 {I}. (This counter doesn't count as a card.)",
+    image: `${SUPABASE_URL}/storage/v1/object/public/card-art/extras/ink-drop-ja-merlin.jpg`,
+  },
 ];
 
 const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
@@ -4519,7 +4619,7 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
     const nameSlug = String(cc.name   || "card").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0,50);
     const printSlug = printing.toLowerCase().replace(/\s+/g, "-");
     const variantSlug = cc.variantLabel ? "-" + cc.variantLabel.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") : "";
-    const card_id = `custom::${(cc.Set||"unknown").toLowerCase().replace(/\s+/g,"-")}::${numSlug}::${nameSlug}::${printSlug}${variantSlug}`;
+    const card_id = cc.id || `custom::${(cc.Set||"unknown").toLowerCase().replace(/\s+/g,"-")}::${numSlug}::${nameSlug}::${printSlug}${variantSlug}`;
     const img = cc.image
       || (cc.tcgplayer_product_id != null
             ? `https://tcgplayer-cdn.tcgplayer.com/product/${cc.tcgplayer_product_id}_400w.jpg`
@@ -4552,7 +4652,9 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
       "classifications":  cc.classifications || null,
       "keywords":         cc.keywords || null,
       "illustrators":     cc.illustrators || null,
+      "text":             cc.text || null,
       "variant_label":    cc.variantLabel || null,
+      "originSet":        cc.originSet || null,
       "isCustomCard":     true,
     });
   }
@@ -5649,6 +5751,67 @@ const gradedPriceNote = (hit) =>
   hit && hit.row && hit.split && !hit.exact
     ? `Blended across printings — ${hit.row.sale_count || 0} sale${hit.row.sale_count === 1 ? "" : "s"} for this card were never labelled with a printing, so this is both markets together.`
     : null;
+
+// The rollup, indexed the way makeGradedPrintingLookup reads it:
+// `${id}|${printing}|${grader}|${grade}` → a row shaped like the old feed's, so
+// every consumer reads Avg-of-5 without knowing where it came from. `ebay_avg_*`
+// are internal field names here, NOT legacy columns — see gradedRowValue.
+// keyOf(rollupRow, catalogRow) names the id: the Graded collection keys on the
+// card's TCGplayer pid (owned slots are stored against it), the Screener's raw
+// columns on card_id (a raw row IS a card_id + printing). Returning null skips
+// the row. The rollup's grader is UPPERCASE; the keys are lowercased to match
+// graded_collection_items.
+//   Pass 1 writes the non-specific rows ("" = one market, "Unknown" = split but
+//   unclassified) under EVERY printing key; pass 2 lets a labelled row override
+//   the keys that printing means. rollup_printing is the row's PROVENANCE, not
+//   a lookup key: makeGradedPrintingLookup reads it to tell a printing's own
+//   tier from the blended Unknown one.
+function buildGradedPriceIndex(rollup, cardById, keyOf){
+  const m = new Map();
+  const PRINTINGS = ["Normal", "Holofoil", "Cold Foil", "Foil", "Non-Foil"];
+  const SYN = {"Foil": ["Foil", "Holofoil", "Cold Foil"], "Non-Foil": ["Non-Foil", "Normal"], "Cold Foil": ["Cold Foil"]};
+  const val = (r) => r.avg_last_5 != null ? Number(r.avg_last_5)
+                   : r.last_sold_price != null ? Number(r.last_sold_price) : null;
+  const rowOf = (r, meta, v) => ({ebay_avg_1d: v, ebay_avg_30d: v, ebay_avg_7d: v,
+    last_sold_price: r.last_sold_price, avg_last_5: r.avg_last_5,
+    last_sold_date: r.last_sold_date, sale_count: r.sale_count, rollup_printing: r.printing || "",
+    grader: (r.grader||"").toLowerCase(), grade: r.grade,
+    tcgplayer_product_id: meta ? meta.tcgplayer_product_id : null});
+  for(const pass of [1, 2]){
+    for(const r of (rollup||[])){
+      const specific = !!r.printing && r.printing !== "Unknown";
+      if(specific !== (pass === 2)) continue;
+      const meta = cardById ? cardById.get(r.card_id) : null;
+      const id = keyOf(r, meta); const v = val(r);
+      if(id == null || v == null) continue;
+      const grader = (r.grader||"").toLowerCase();
+      for(const pr of (pass === 1 ? PRINTINGS : (SYN[r.printing] || [r.printing])))
+        m.set(id + "|" + pr + "|" + grader + "|" + r.grade, rowOf(r, meta, v));
+    }
+  }
+  return m;
+}
+
+// What one RAW Screener row shows for a graded tier. `hit` is
+// makeGradedPrintingLookup's answer for (card, printing, grader, grade);
+// `catalogBuckets` is the card's set of catalog printing buckets. Null when
+// nothing may price this printing — on a split card the other side's sales
+// never stand in, so a Cold Foil row with no foil PSA 10 sale reads "—".
+// `note` says why a number isn't this printing's own: a split card's
+// unclassified tier (gradedPriceNote), or a card the catalog sells in both
+// finishes whose graded sales were never split by finish at all. The cell
+// marks it ≈ rather than passing a blend off as this printing's price.
+const rawGradedFields = (hit, catalogBuckets) => {
+  const row = hit && hit.row;
+  if(!row) return null;
+  const num = (v) => (v == null || v === "" || !isFinite(Number(v))) ? null : Number(v);
+  const note = gradedPriceNote(hit)
+    || (!hit.split && catalogBuckets && catalogBuckets.size >= 2
+      ? "Both finishes blended — this card's graded sales aren't split by foil and non-foil, so this is the two markets together."
+      : null);
+  return {last: num(row.last_sold_price), avg5: num(row.avg_last_5),
+    n: row.sale_count ?? null, date: row.last_sold_date || null, note};
+};
 
 // Fold slabs the per-sale window MISSED back into a {date,value} portfolio
 // series, as a flat line at their range-independent price.
@@ -8048,6 +8211,38 @@ const isLandscapeCard = (row) =>
 // breaks the row or shrinks every card to fit the odd one out, and on a
 // browse wall you are picking a card out, not reading it.
 const landscapeArt = (img) => html`<span class="lscape-wrap">${img}</span>`;
+
+// A deck laid out as a grid of cards (the deck poster, the deck editor's image
+// grid and stacked pile) draws a Location at the SAME size as the cards around
+// it: a rotated card does not shrink, so its long edge is 1.4 columns wide,
+// and one column would draw it at 71%. Adjacent landscape cards form a RUN
+// that shares one grid cell, placed by span with no explicit start, so it sits
+// in the current row when there is room and wraps when there is not. See the
+// deck poster's render for the history (a 2-column span per card left ~100px
+// between two Locations; a forced full-width row could never share a row).
+const groupLandscapeRuns = (items) => {
+  const out = [];
+  for(const c of items){
+    const landscape = isLandscapeCard(c.meta);
+    const prev = out[out.length-1];
+    if(landscape && prev && prev.landscape) prev.items.push(c);
+    else out.push({landscape, items:[c]});
+  }
+  return out;
+};
+// Enough columns for n cards at 1.4 columns each plus their gaps (ceil(1.4n)
+// always exceeds n, so the gaps fit too), never more than the grid has.
+const landscapeRunSpan = (n, cols) => Math.min(cols, Math.max(2, Math.ceil(n * 1.4)));
+// A cell spanning S tracks is S*W + (S-1)*gap wide, so this is exactly 1.4W,
+// a portrait card's long edge, whatever S is. Capped at the cell so a
+// one-column grid shrinks the card rather than overflowing it.
+const landscapeRunCardWidth = (span, gapPx) =>
+  `min(100%, calc((100% - ${(span-1)*gapPx}px) / ${span} * 1.4))`;
+// The deck poster's quantity badge is 25px tall and sits 6px down, like the
+// badges on the portrait cards beside it; a Location's goes ABOVE the card, so
+// this is its 6 + 25 + a 4px gap. A portrait row is 1.4W tall and a Location
+// W, so the room comes out of space the row already has at 5-8 columns.
+const POSTER_LSCAPE_BADGE_ROOM = 35;
 
 // Copy the current page's link. Uses the clipboard synchronously inside the
 // click (Safari drops a write that happens after an await), and falls back to
@@ -11201,17 +11396,9 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   // forced full-width row fixed that but could never share a row with
   // anything, even a row with plenty of room left). Grouping is by adjacency
   // rather than by "is a Location", so a landscape card that somehow isn't
-  // last still renders correctly — it just gets its own span.
-  const posterGroups = useMemo(() => {
-    const out = [];
-    for(const c of cards){
-      const landscape = isLandscapeCard(c.meta);
-      const prev = out[out.length-1];
-      if(landscape && prev && prev.landscape) prev.items.push(c);
-      else out.push({landscape, items:[c]});
-    }
-    return out;
-  }, [cards]);
+  // last still renders correctly — it just gets its own span. The deck
+  // editor's image grid and stacked pile use the same runs.
+  const posterGroups = useMemo(() => groupLandscapeRuns(cards), [cards]);
 
   // A card the catalog has not loaded yet is dropped by the `if(!meta) continue`
   // above, silently. On a cold visit the decks arrive BEFORE the catalog does
@@ -12106,16 +12293,20 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
                 : {width:"100%",aspectRatio:"5/7",objectFit:"cover",borderRadius:8,
                    boxShadow:"0 3px 8px rgba(0,0,0,0.3)",background:"rgba(255,255,255,0.05)"}}/>`;
             /* Coconut is near-singleton, so a "1x" on 55 of 56 tiles is noise —
-               only the multiples are worth calling out. The badge lives INSIDE
-               the card's own box on a landscape card, or it would pin to the
-               far corner of the row rather than to the card it counts. On a
-               landscape card the quarter turn puts the COST in the top-right
-               corner, so the badge steps left of it rather than covering it. */
-            const qty = (!posterCoconut || c.quantity > 1) && html`<span style=${{position:"absolute",top:6,right:landscape ? "calc(14% + 6px)" : 6,background:"rgba(0,0,0,0.82)",color:"#fff",
+               only the multiples are worth calling out. A landscape card's
+               quarter turn puts its COST in the top-right corner, so its badge
+               sits ABOVE the card, right-aligned over the cost hexagon, in the
+               room POSTER_LSCAPE_BADGE_ROOM reserves (Zaven, 2026-09-30: "line
+               up above the ink cost"). It used to sit inside the box, stepped
+               left of the cost — but the box was being stretched to the row's
+               height, so it landed above the card AND left of the cost. */
+            const qty = (!posterCoconut || c.quantity > 1) && html`<span style=${{position:"absolute",top:6,right:landscape ? 0 : 6,background:"rgba(0,0,0,0.82)",color:"#fff",
               fontSize:14,fontWeight:800,padding:"3px 8px",borderRadius:6,
               fontVariantNumeric:"tabular-nums",letterSpacing:"-0.3px",
               boxShadow:"0 2px 5px rgba(0,0,0,0.35)"}}>${c.quantity}x</span>`;
-            return html`<${React.Fragment}>${art}${qty}</>`;
+            return landscape
+              ? html`<${React.Fragment}><div style=${{position:"relative",aspectRatio:"7/5"}}>${art}</div>${qty}</>`
+              : html`<${React.Fragment}>${art}${qty}</>`;
           };
           if(!g.landscape){
             const c = g.items[0];
@@ -12124,12 +12315,17 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
           // Enough columns to hold n cards at 1.4W plus their internal gaps,
           // provably (see the comment above `posterGroups.map`). No explicit
           // start — plain auto-placement shares the current row when the span
-          // fits, wraps to a new one when it doesn't.
-          const spanCols = Math.min(cols, Math.max(2, Math.ceil(g.items.length * 1.4)));
+          // fits, wraps to a new one when it doesn't. `alignItems:"flex-start"`
+          // is load-bearing: stretched to the row's height, each card's box
+          // grew past its 7/5 and anything pinned to its top floated above
+          // the card. The badge's room is reserved in EVERY row, including a
+          // row of nothing but Locations, where there is no taller card to
+          // lend it space and it would otherwise ride up over the row above.
+          const spanCols = landscapeRunSpan(g.items.length, cols);
           return html`<div key=${"lrow:" + g.items[0].card_id}
-            style=${{gridColumn:`span ${spanCols}`,display:"flex",flexWrap:"wrap",gap:10}}>
+            style=${{gridColumn:`span ${spanCols}`,display:"flex",flexWrap:"wrap",alignItems:"flex-start",gap:10}}>
             ${g.items.map(c => html`<div key=${c.card_id} style=${{position:"relative",
-              width:`calc((100% - ${(spanCols-1)*10}px) / ${spanCols} * 1.4)`,aspectRatio:"7/5"}}>
+              width:landscapeRunCardWidth(spanCols, 10),paddingTop:POSTER_LSCAPE_BADGE_ROOM}}>
               ${cell(c, true)}
             </div>`)}
           </div>`;
@@ -12484,7 +12680,7 @@ const buildProxyPdfBlob = ({imgs, pages, pageW, pageH, title}) => {
 
 // The watermark is painted into the card's pixels, not laid over the page, so
 // it survives whatever the user does with the PDF afterwards.
-const drawProxyWatermark = (ctx, w, h, mode) => {
+const drawProxyWatermark = (ctx, w, h, mode, {tag = true, landscape = false} = {}) => {
   if(mode === "none") return;
   if(mode === "bold"){
     ctx.save();
@@ -12501,30 +12697,637 @@ const drawProxyWatermark = (ctx, w, h, mode) => {
     for(let y = -h; y <= h; y += step){ ctx.strokeText("PROXY", 0, y); ctx.fillText("PROXY", 0, y); }
     ctx.restore();
   }
-  // Corner tag — the always-legible mark, on both subtle and bold.
+  // Corner tag — the always-legible mark, on both subtle and bold. Bottom
+  // RIGHT, inside the border: centred, it sat on the card's rarity symbol.
+  // The printer-friendly face draws the tag in its own footer instead (tag: false).
+  if(tag){
+    const tagH = Math.round(h * 0.036), inset = Math.round(w * 0.05);
+    // 1.85 tag-heights up puts it in the card's black footer strip, below the
+    // text box and level with the artist line. A Location is printed sideways,
+    // so ITS bottom-right is the portrait image's top-right: the mark turns
+    // with the card rather than landing on the first line of its rules text.
+    ctx.save();
+    if(landscape){ ctx.translate(0, h); ctx.rotate(-Math.PI / 2); }
+    drawProxyTag(ctx, (landscape ? h : w) - inset, (landscape ? w : h) - tagH * 1.85, tagH);
+    ctx.restore();
+  }
+};
+
+// ── Blank-art face ────────────────────────────────────────────────────────────
+// The REAL card with its art window painted white: frame, cost, name bar,
+// stats and rules text exactly as printed, and no art to pay toner for.
+// (It replaced a hand-drawn text layout: "less custom … the actual card but
+// the art box is just blank".)
+//
+// Which pixels are art is MEASURED, not drawn. scripts/bake_proxy_blank_mask.py
+// stacks ~90 real renders per layout; the frame is the pixels they agree on and
+// the art is the pixels they don't. proxy-blank.png holds one 674x940 tile per
+// layout, left to right in PROXY_BLANK_TILES order: white over the art window,
+// frame colour over a band of border around it (which paints out art that
+// breaks the frame), transparent everywhere else.
+// ⚠ Bump ?v= when the sprite is re-baked: the service worker's image cache
+// outlives deploys, so an unchanged URL keeps serving the old template.
+const PROXY_BLANK_SRC = "/Logos/proxy-blank.png?v=1";
+const PROXY_BLANK_TILES = ["char_ink", "char_unk", "other_ink", "other_unk", "loc_ink", "loc_unk"];
+const PROXY_BLANK_TW = 674, PROXY_BLANK_TH = 940;
+// Share of a card's border band that has to be frame-black before its art
+// window is blanked. Every base-rarity card measured >= 0.91; a full-art
+// printing (Enchanted, Iconic, Epic, most promos) mostly lands far below, and
+// blanking a "window" on one of those would print half a painting.
+const PROXY_FRAME_MIN = 0.85;
+let _proxyBlankSprite = null;
+const loadProxyBlankSprite = () => _proxyBlankSprite || (_proxyBlankSprite =
+  loadPosterImage(PROXY_BLANK_SRC).then(img => { if(!img) _proxyBlankSprite = null; return img; }));
+const proxyBlankTileOf = (card) => {
+  const t = card.cardType || "";
+  const lay = /Location/.test(t) ? "loc" : /Character/.test(t) ? "char" : "other";
+  return PROXY_BLANK_TILES.indexOf(lay + (card.inkable === false ? "_unk" : "_ink"));
+};
+// The tile has to land on the same pixels drawImageCover put the card on, so
+// the cover crop is taken as fractions of the image and applied to the tile.
+const drawProxyBlankTile = (ctx, img, sprite, tile, w, h) => {
+  const ir = img.naturalWidth / img.naturalHeight, dr = w / h;
+  let fx = 0, fy = 0, fw = 1, fh = 1;
+  if(ir > dr){ fw = dr / ir; fx = (1 - fw) / 2; } else { fh = ir / dr; fy = (1 - fh) / 2; }
+  ctx.drawImage(sprite, (tile + fx) * PROXY_BLANK_TW, fy * PROXY_BLANK_TH,
+    fw * PROXY_BLANK_TW, fh * PROXY_BLANK_TH, 0, 0, w, h);
+};
+// Is this card on the standard frame? The share of the tile's frame band that
+// is dark on this card — the same test the bake script prints its scores with.
+const proxyFrameScore = (img, sprite, tile) => {
+  const w = 168, h = 235;
+  const cv = document.createElement("canvas");
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext("2d", {willReadFrequently: true});
+  drawImageCover(ctx, img, 0, 0, w, h);
+  const card = ctx.getImageData(0, 0, w, h).data;
+  ctx.clearRect(0, 0, w, h);
+  drawProxyBlankTile(ctx, img, sprite, tile, w, h);
+  const m = ctx.getImageData(0, 0, w, h).data;
+  let n = 0, dark = 0;
+  for(let i = 0; i < m.length; i += 4){
+    if(m[i + 3] < 250 || m[i] + m[i + 1] + m[i + 2] >= 180) continue;
+    n++;
+    if(card[i] + card[i + 1] + card[i + 2] < 210) dark++;
+  }
+  return n ? dark / n : 0;
+};
+
+// ── Printer-friendly face ──────────────────────────────────────────────────────────
+// The card REDRAWN in outline, in the printed card's own layout: cost, name
+// where the art would be, ink band with the stat badges, type line, rules
+// text, lore pips. No art and almost no ink, which is what "printer friendly"
+// actually meant (the reference was jorcana.ink's test cards, now retired).
+// It is just another way to paint the canvas, so the JPEG → PDF path, the
+// sheet geometry and the baked-in PROXY mark are all shared.
+
+// Type is vendored and loaded on demand: a canvas silently falls back to the
+// generic family when a face isn't loaded, and a print has to look the same
+// on every machine. Barlow is OFL (vendor/fonts/OFL.txt).
+const PROXY_FONT_FILES = [
+  ["Barlow Condensed",      "/vendor/fonts/barlow-condensed-800.woff2",             "800", "normal"],
+  ["Barlow Semi Condensed", "/vendor/fonts/barlow-semi-condensed-400.woff2",        "400", "normal"],
+  ["Barlow Semi Condensed", "/vendor/fonts/barlow-semi-condensed-400-italic.woff2", "400", "italic"],
+  ["Barlow Semi Condensed", "/vendor/fonts/barlow-semi-condensed-600.woff2",        "600", "normal"],
+  ["Barlow Semi Condensed", "/vendor/fonts/barlow-semi-condensed-600-italic.woff2", "600", "italic"],
+];
+const PROXY_NAME_FONT = '"Barlow Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
+const PROXY_TEXT_FONT = '"Barlow Semi Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
+let _proxyFonts = null;
+const loadProxyFonts = () => _proxyFonts || (_proxyFonts = (async () => {
+  if(typeof FontFace === "undefined" || !document.fonts) return false;
+  const ok = await Promise.all(PROXY_FONT_FILES.map(async ([family, url, weight, style]) => {
+    try {
+      const face = new FontFace(family, 'url("' + url + '") format("woff2")', {weight, style});
+      await face.load();
+      document.fonts.add(face);
+      return true;
+    } catch { return false; }
+  }));
+  // Offline miss: print in the fallback stack, and try again on the next build.
+  if(!ok.every(Boolean)) _proxyFonts = null;
+  return ok.every(Boolean);
+})());
+
+// Card glyphs as vector paths, read out of the same SVGs LorcanaGlyph masks.
+// Path2D rather than drawImage: an SVG drawn as an image can taint the canvas
+// in some engines and has no natural size in others. Each shape keeps its CSS
+// class, because the files are layered: on the stat badges cls-1 is the
+// linework and cls-2 the fill behind it; on the cost glyphs the ring and hex
+// outline sit above a solid backing. Painted as one silhouette they are a
+// black blob — exactly the toner this face exists to save.
+let _proxyGlyphs = null;
+const loadProxyGlyphs = () => _proxyGlyphs || (_proxyGlyphs = (async () => {
+  const out = {};
+  await Promise.all(["lore", "strength", "willpower", "moveCost", "exert", "inkable", "uninkable"].map(async (k) => {
+    try {
+      const res = await fetch(LORCANA_CARD_GLYPHS[k]);
+      if(!res.ok) return;
+      const doc = new DOMParser().parseFromString(await res.text(), "image/svg+xml");
+      const svg = doc.querySelector("svg");
+      const vb = String((svg && svg.getAttribute("viewBox")) || "").split(/[\s,]+/).map(Number);
+      if(vb.length !== 4 || !(vb[2] > 0 && vb[3] > 0)) return;
+      const shapes = [];
+      for(const el of doc.querySelectorAll("path, polygon, circle")){
+        const tag = el.tagName.toLowerCase();
+        let path;
+        if(tag === "path") path = new Path2D(el.getAttribute("d") || "");
+        else if(tag === "polygon") path = new Path2D("M" + (el.getAttribute("points") || "").trim() + "Z");
+        else { path = new Path2D(); path.arc(+el.getAttribute("cx"), +el.getAttribute("cy"), +el.getAttribute("r"), 0, Math.PI * 2); }
+        shapes.push({path, cls: el.getAttribute("class") || ""});
+      }
+      if(shapes.length) out[k] = {vb, shapes};
+    } catch {}
+  }));
+  // Don't pin an offline miss for the whole session — the next build retries.
+  if(!Object.keys(out).length) _proxyGlyphs = null;
+  return out;
+})());
+
+// `size` is the glyph's BOX (the stat glyphs sit inside generous 400x400
+// viewBoxes), and `paint` maps a shape's class to a fill, or null to skip it.
+const drawProxyGlyph = (ctx, g, x, y, size, paint) => {
+  const s = size / Math.max(g.vb[2], g.vb[3]);
   ctx.save();
-  const tagH = Math.round(h * 0.036);
+  ctx.translate(x + (size - g.vb[2] * s) / 2 - g.vb[0] * s, y + (size - g.vb[3] * s) / 2 - g.vb[1] * s);
+  ctx.scale(s, s);
+  for(const sh of g.shapes){
+    const fill = paint ? paint(sh.cls) : ctx.fillStyle;
+    if(!fill) continue;
+    ctx.fillStyle = fill;
+    ctx.fill(sh.path);
+  }
+  ctx.restore();
+};
+// A stat badge: white inside, the glyph's own linework on top.
+const PROXY_BADGE_PAINT = (cls) => cls === "cls-1" ? "#141414" : "#ffffff";
+// The cost glyph: just the ring / hex outline, never the solid backing.
+const PROXY_COST_PAINT = {
+  inkable:   (cls) => cls === "cls-3" ? "#a9a9a9" : null,
+  uninkable: (cls) => cls === "cls-2" ? "#4a4a4a" : null,
+};
+
+// Pointy-top, like the printed cost hex — for the inline {I} ink symbol and
+// for the cost when the glyph file didn't load.
+const proxyHexPath = (ctx, cx, cy, r) => {
+  ctx.beginPath();
+  for(let i = 0; i < 6; i++){
+    const a = -Math.PI / 2 + i * Math.PI / 3;
+    const px = cx + r * Math.cos(a), py = cy + r * Math.sin(a);
+    if(i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+  }
+  ctx.closePath();
+};
+
+// Rules text → paragraphs of styled pieces. A Lorcana text box speaks in
+// four voices: a keyword in bold, an ABILITY NAME in its own tag, reminder
+// text (anything in parentheses) in italic, the rest plain; {I} {L} {S} {W}
+// {E} are symbols.
+//   bold (b) = a keyword that opens the line, with its value ("Shift 6",
+//           "Singer 5", "Boost 2 {I}"), a Shift's alternate cost up to its
+//           reminder ("Shift: Discard a song card"), or a whole keyword list
+//           ("Evasive, Ward").
+//   name (n) = the run of all-caps words that follows, which is how an
+//           ability NAME prints ("PHENOMENAL COSMIC POWER!").
+// A run needs 3+ capital letters, so a sentence opening "A character…" or
+// "(A character…" stays plain. A token with no letters ("10,000", "-") rides
+// along inside a run but never ends one — "10,000 MEDICAL PROCEDURES" is a
+// real ability name, while "2 damage" never reaches three capitals.
+// "Up to the first paren" is NOT the rule: the catalog carries
+// "Shift 4 I'LL COUNT YOU IN Whenever this character quests…" on one line
+// with no reminder, and that rule swallowed the whole ability.
+const PROXY_KEYWORD_LINE_RE = /^(?:Universal Shift|Puppy Shift|Sing Together|Shift|Singer|Challenger|Resist|Boost|Bodyguard|Evasive|Reckless|Rush|Support|Ward|Voiceless|Vanish|Alert|Lurk|Probe)\b(?:\s+[+-]?\d+(?:\s*\{I\})?)?/;
+const parseProxyRules = (text) => {
+  return String(text || "").split(/\n+/).map(s => s.trim()).filter(Boolean).map(line => {
+    let boldEnd = 0;
+    const kw = PROXY_KEYWORD_LINE_RE.exec(line);
+    if(kw){
+      boldEnd = kw[0].length;
+      const rest = line.slice(boldEnd);
+      if(/^:/.test(rest)){ const p = line.indexOf("(", boldEnd); boldEnd = p < 0 ? line.length : p; }
+      else if(/^\s*[,&]/.test(rest) && rest.indexOf("(") < 0) boldEnd = line.length;
+    }
+    const re = /\S+/g;
+    re.lastIndex = boldEnd;
+    let m, start = -1, end = 0, letters = 0;
+    while((m = re.exec(line))){
+      const tok = m[0];
+      if(tok.includes("{")) break;
+      const L = tok.replace(/[^A-Za-z]/g, "");
+      if(!L){ if(start < 0) start = m.index; continue; }
+      if(L !== L.toUpperCase()) break;
+      if(start < 0) start = m.index;
+      letters += L.length; end = m.index + tok.length;
+    }
+    const nameStart = letters >= 3 ? start : -1, nameEnd = letters >= 3 ? end : -1;
+    const pieces = [];
+    let depth = 0, buf = "", cb = false, ci = false, cn = false;
+    const flush = () => {
+      if(!buf) return;
+      for(const s of buf.split(/(\{[ILSWE]\})/)){
+        if(!s) continue;
+        const g = /^\{([ILSWE])\}$/.exec(s);
+        pieces.push(g ? {g: g[1]} : cn ? {t: s, n: true} : {t: s, b: cb, i: ci});
+      }
+      buf = "";
+    };
+    for(let k = 0; k < line.length; k++){
+      const ch = line[k];
+      if(ch === "(") depth++;
+      const nm = k >= nameStart && k < nameEnd;
+      const b = !nm && k < boldEnd && depth === 0, it = !nm && depth > 0;
+      if(b !== cb || it !== ci || nm !== cn){ flush(); cb = b; ci = it; cn = nm; }
+      buf += ch;
+      if(ch === ")" && depth > 0) depth--;
+    }
+    flush();
+    return pieces;
+  });
+};
+
+const PROXY_GLYPH_KEY  = {L: "lore", S: "strength", W: "willpower", E: "exert"};
+const PROXY_GLYPH_WORD = {I: "ink", L: "lore", S: "strength", W: "willpower", E: "exert"};
+const proxyRunFont = (fs, p) => p.n ? "600 " + Math.round(fs * 0.92) + "px " + PROXY_TEXT_FONT
+  : (p.i ? "italic " : "") + (p.b ? "600 " : "400 ") + fs + "px " + PROXY_TEXT_FONT;
+// Room an ability-name tag takes on each side of its text.
+const PROXY_TAG_PAD = 6;
+
+// Greedy word wrap over styled pieces. A "word" is everything between two
+// spaces, so "{E}," or "{I}." stays glued to its punctuation.
+const layoutProxyRules = (ctx, paras, fs, maxW, glyphs) => {
+  const glyphW = fs * 0.98;
+  ctx.font = proxyRunFont(fs, {});
+  const spaceW = ctx.measureText(" ").width;
+  const lines = [];
+  paras.forEach((para, pi) => {
+    const words = [];
+    let cur = [];
+    const push = (p) => {
+      if(p.g){ cur.push({p, w: glyphW}); return; }
+      for(const s of p.t.split(/(\s+)/)){
+        if(!s) continue;
+        if(/^\s+$/.test(s)){ if(cur.length){ words.push(cur); cur = []; } continue; }
+        ctx.font = proxyRunFont(fs, p);
+        cur.push({p: {...p, t: s}, w: ctx.measureText(s).width});
+      }
+    };
+    for(const p of para){
+      // A symbol whose SVG didn't load (offline, first visit) prints as its
+      // word — "pay 6 ink", "can exert to sing" both read naturally.
+      if(p.g && p.g !== "I" && !glyphs[PROXY_GLYPH_KEY[p.g]]) push({t: PROXY_GLYPH_WORD[p.g], b: false, i: false});
+      else push(p);
+    }
+    if(cur.length) words.push(cur);
+    let line = [], x = 0, prevName = false;
+    for(const word of words){
+      const isName = !!word[0].p.n;
+      const ww = word.reduce((s, it) => s + it.w, 0) + (isName ? PROXY_TAG_PAD : 0);
+      // A tag needs its padding on the way in and on the way out.
+      const lead = (line.length ? spaceW : 0) + (isName && !prevName ? PROXY_TAG_PAD : 0) + (!isName && prevName ? PROXY_TAG_PAD : 0);
+      if(line.length && x + lead + ww > maxW){ lines.push({items: line, para: pi}); line = []; x = isName ? PROXY_TAG_PAD : 0; }
+      else x += lead;
+      for(const it of word){ line.push({...it, x}); x += it.w; }
+      prevName = isName;
+    }
+    if(line.length) lines.push({items: line, para: pi});
+  });
+  const lh = fs * 1.2, gap = fs * 0.42;
+  const paraBreaks = lines.filter((l, i) => i && l.para !== lines[i - 1].para).length;
+  return {lines, lh, gap, glyphW, fs, height: lines.length ? lines.length * lh + paraBreaks * gap : 0};
+};
+
+// Shrink a single line's font until it fits, then ellipsize as a last resort.
+const fitProxyLine = (ctx, text, style, family, max, min, maxW) => {
+  let fs = max;
+  for(; fs > min; fs--){
+    ctx.font = style + " " + fs + "px " + family;
+    if(ctx.measureText(text).width <= maxW) return {text, fs};
+  }
+  ctx.font = style + " " + min + "px " + family;
+  let t = text;
+  while(t.length > 1 && ctx.measureText(t + "…").width > maxW) t = t.slice(0, -1);
+  return {text: t === text ? t : t.replace(/\s+$/, "") + "…", fs: min};
+};
+
+// A card name at the biggest size its box allows: one line if that stays
+// large, otherwise the most even two-line split ("BE OUR / GUEST").
+const fitProxyName = (ctx, name, maxW, maxFs, minFs) => {
+  const T = String(name || "").toUpperCase().trim() || "UNKNOWN CARD";
+  const width = (s, fs) => { ctx.font = "800 " + fs + "px " + PROXY_NAME_FONT; return ctx.measureText(s).width; };
+  const biggest = (lines) => { for(let fs = maxFs; fs >= minFs; fs -= 2) if(lines.every(l => width(l, fs) <= maxW)) return fs; return 0; };
+  let best = {lines: [T], fs: biggest([T])};
+  const words = T.split(/\s+/);
+  if(words.length > 1 && best.fs < maxFs){
+    let split = null;
+    for(let i = 1; i < words.length; i++){
+      const a = words.slice(0, i).join(" "), b = words.slice(i).join(" ");
+      const m = Math.max(width(a, 100), width(b, 100));
+      if(!split || m < split.m) split = {a, b, m};
+    }
+    const fs2 = biggest([split.a, split.b]);
+    // Two lines only when they buy real size; a slightly smaller single line reads better.
+    if(fs2 > best.fs * 1.2) best = {lines: [split.a, split.b], fs: fs2};
+  }
+  if(!best.fs){
+    const f = fitProxyLine(ctx, T, "800", PROXY_NAME_FONT, minFs, Math.round(minFs * 0.6), maxW);
+    best = {lines: [f.text], fs: f.fs};
+  }
+  return best;
+};
+
+// Band tints: pale enough to cost little ink, distinct enough to sort a cut
+// stack by colour at a glance. Black & white prints them as one light grey.
+const PROXY_BAND_TINT = {
+  Amber: "#fdd488", Amethyst: "#d9b3df", Emerald: "#a6dbb5",
+  Ruby: "#f5b5b8", Sapphire: "#aed9f0", Steel: "#cfd5dc",
+};
+const PROXY_BAND_GREY = "#e9e9e9";
+
+// The PROXY pill, right-aligned at `right`. Shared by the image faces' corner
+// mark and the printer-friendly face's footer.
+const drawProxyTag = (ctx, right, top, tagH) => {
+  ctx.save();
   const fs = Math.round(tagH * 0.62);
   ctx.font = '700 ' + fs + 'px Helvetica, Arial, sans-serif';
   const label = "PROXY";
   const tagW = Math.round(ctx.measureText(label).width + tagH * 1.2);
-  const x = Math.round((w - tagW) / 2), y = Math.round(h - tagH * 2.1);
+  const x = Math.round(right - tagW), y = Math.round(top);
   ctx.globalAlpha = 0.8;
   ctx.fillStyle = "#000";
   roundRectPath(ctx, x, y, tagW, tagH, tagH / 2);
   ctx.fill();
+  // A pale edge, so the pill still reads as a pill on a card's black border.
+  ctx.globalAlpha = 0.75;
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = Math.max(1, tagH * 0.05);
+  ctx.stroke();
   ctx.globalAlpha = 1;
   ctx.fillStyle = "#fff";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(label, x + tagW / 2, y + tagH / 2 + fs * 0.06);
   ctx.restore();
+  return tagW;
+};
+
+const drawProxyLiteFace = (ctx, w, h, card, {bw, glyphs}) => {
+  const INK = "#141414", LINE = "#2a2a2a", DIM = "#555";
+  // Everything below is measured on a 744px-wide card.
+  const u = w / 744, PW = 744, PH = h / u;
+  // A Location is printed sideways: the same layout, turned a quarter turn,
+  // with only the cost left upright in the portrait corner — as on the card.
+  const landscape = /Location/.test(card.cardType || "");
+  const W = landscape ? PH : PW, H = landscape ? PW : PH;
+  const M = 26, top = 30, fBot = H - (landscape ? 64 : 74);
+  const inks = (card.inks || []).filter(i => PROXY_BAND_TINT[i]);
+
+  ctx.save();
+  ctx.scale(u, u);
+  ctx.save();
+  if(landscape){ ctx.translate(0, PH); ctx.rotate(-Math.PI / 2); }
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
+
+  // ── Stats and lore.
+  const badges = [];                         // in the band, right to left
+  if(card.willpower != null) badges.push({g: "willpower", v: card.willpower, dy: -0.02});
+  if(card.strength != null)  badges.push({g: "strength", v: card.strength, dy: 0});
+  const lore = Math.max(0, Math.min(6, card.lore | 0));
+  const bandH = landscape ? 94 : 104, typeH = 38;
+
+  // ── Name block, measured first: the art box is the flex, and the name is
+  // what it has to keep room for.
+  const nameW = W - M * 2 - (landscape ? 250 : 70);
+  const nm = fitProxyName(ctx, card.base || card.name, nameW, landscape ? 96 : 104, 44);
+  const nameLH = nm.fs * 0.98;
+  const ver = card.version ? fitProxyLine(ctx, card.version, "400", PROXY_TEXT_FONT, Math.round(Math.min(46, nm.fs * 0.62)), 22, nameW) : null;
+  const nameH = nm.lines.length * nameLH + (ver ? ver.fs * 1.3 : 0);
+
+  // ── Vertical budget. Short text gets the printed card's proportions; long
+  // text takes the art box back before its own type starts shrinking.
+  const artDefault = Math.round((fBot - top) * (landscape ? 0.47 : 0.555));
+  const artMin = Math.round(nameH + (landscape ? 56 : 120));
+  const padT = 14, padB = 12;
+  const textRoom = (artH) => fBot - (top + artH + bandH + typeH) - padT - padB;
+  const textW = W - M * 2 - 28 - (lore ? 52 : 0);
+  const paras = parseProxyRules(card.text);
+  let lay = null;
+  for(let fs = 29; fs >= 17; fs--){
+    lay = layoutProxyRules(ctx, paras, fs, textW, glyphs);
+    if(lay.height <= textRoom(artMin)) break;
+  }
+  const artH = Math.max(artMin, Math.min(artDefault, fBot - top - bandH - typeH - padT - padB - lay.height));
+  const bandTop = top + artH, typeTop = bandTop + bandH, boxTop = typeTop + typeH;
+
+  // ── Band.
+  ctx.save();
+  ctx.beginPath(); ctx.rect(M, bandTop, W - M * 2, bandH); ctx.clip();
+  ctx.fillStyle = bw || !inks.length ? PROXY_BAND_GREY : PROXY_BAND_TINT[inks[0]];
+  ctx.fillRect(M, bandTop, W - M * 2, bandH);
+  if(!bw && inks.length > 1){
+    // Dual ink: the second tint takes the right half, on a slant.
+    ctx.fillStyle = PROXY_BAND_TINT[inks[1]];
+    ctx.beginPath();
+    ctx.moveTo(W / 2 + bandH * 0.3, bandTop); ctx.lineTo(W - M, bandTop);
+    ctx.lineTo(W - M, bandTop + bandH); ctx.lineTo(W / 2 - bandH * 0.3, bandTop + bandH);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+
+  // ── Frame and rules.
+  ctx.strokeStyle = LINE;
+  ctx.lineWidth = 2.5;
+  roundRectPath(ctx, M, top, W - M * 2, fBot - top, 9);
+  ctx.stroke();
+  ctx.lineWidth = 2;
+  for(const y of [bandTop, typeTop, boxTop]){ ctx.beginPath(); ctx.moveTo(M, y); ctx.lineTo(W - M, y); ctx.stroke(); }
+
+  // ── Name, centred where the art would be.
+  ctx.textAlign = "center";
+  ctx.fillStyle = INK;
+  const nameMid = W / 2;
+  let ny = top + (artH - nameH) / 2 + (landscape ? 0 : 14);
+  ctx.font = "800 " + nm.fs + "px " + PROXY_NAME_FONT;
+  for(const ln of nm.lines){ ctx.fillText(ln, nameMid, ny + nameLH * 0.84); ny += nameLH; }
+  if(ver){
+    ctx.font = "400 " + ver.fs + "px " + PROXY_TEXT_FONT;
+    ctx.fillText(ver.text, nameMid, ny + ver.fs * 1.02);
+  }
+
+  // ── Stat badges over the band's end(s). Without the glyph files they fall
+  // back to a plain ring, so the number never goes missing.
+  // The glyphs fill about 0.6 of their 400-unit boxes, so the box is sized
+  // to make the INK as tall as the band.
+  const vis = bandH + 4, bSize = vis / 0.6;
+  const drawBadge = (b, cx) => {
+    const cy = bandTop + bandH / 2;
+    const g = glyphs[b.g];
+    if(g) drawProxyGlyph(ctx, g, cx - bSize / 2, cy - bSize / 2, bSize, PROXY_BADGE_PAINT);
+    else {
+      ctx.beginPath(); ctx.arc(cx, cy, vis * 0.42, 0, Math.PI * 2);
+      ctx.fillStyle = "#fff"; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.stroke();
+    }
+    ctx.fillStyle = INK;
+    ctx.textAlign = "center";
+    ctx.font = "600 " + Math.round(vis * 0.5) + "px " + PROXY_TEXT_FONT;
+    ctx.fillText(String(b.v), cx, cy + vis * (0.17 + (b.dy || 0)));
+  };
+  let bx = W - M - vis * 0.5 - 5;
+  for(const b of badges){ drawBadge(b, bx); bx -= vis * 0.84; }
+  if(card.moveCost != null) drawBadge({g: "moveCost", v: card.moveCost, dy: 0}, M + vis * 0.5 + 5);
+  // Without colour the band can't say which ink it is, so it says it in words
+  // — that's what a cut stack gets sorted by.
+  if(bw && inks.length){
+    const left = M + 16 + (card.moveCost != null ? vis : 0);
+    const room = W - M - left - 16 - badges.length * vis * 0.84 - (badges.length ? vis * 0.2 : 0);
+    const f = fitProxyLine(ctx, inks.join(" / ").toUpperCase(), "800", PROXY_NAME_FONT, 40, 18, room);
+    ctx.font = "800 " + f.fs + "px " + PROXY_NAME_FONT;
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#8a8a8a";
+    ctx.fillText(f.text, left, bandTop + bandH / 2 + f.fs * 0.36);
+  }
+
+  // ── Type row: ink on the left, the type line centred.
+  const ftype = card.cardType || "";
+  const typeLine = /Character/.test(ftype)
+    ? ((card.classes && card.classes.length) ? card.classes.join(" · ") : "Character")
+    : ftype.replace(/\s+-\s+/g, " · ");
+  const typeBase = typeTop + 26;
+  ctx.textAlign = "left";
+  ctx.fillStyle = INK;
+  const inkLabel = (card.inks || []).join(" / ");
+  let inkW = 0;
+  if(inkLabel){
+    ctx.font = "italic 600 20px " + PROXY_TEXT_FONT;
+    ctx.fillText(inkLabel, M + 12, typeBase);
+    inkW = ctx.measureText(inkLabel).width + 12;
+  }
+  if(typeLine){
+    // Centred on the card when it clears the ink label; otherwise it takes
+    // the room to the right of it — classifications are rules text ("your
+    // Sorcerer characters"), so they shrink last and never clip silently.
+    const centred = W - 2 * (M + inkW + 18);
+    ctx.font = "italic 600 20px " + PROXY_TEXT_FONT;
+    if(ctx.measureText(typeLine).width <= centred){
+      ctx.textAlign = "center";
+      ctx.fillText(typeLine, W / 2, typeBase);
+    } else {
+      const f = fitProxyLine(ctx, typeLine, "italic 600", PROXY_TEXT_FONT, 20, 14, W - M * 2 - inkW - 36);
+      ctx.font = "italic 600 " + f.fs + "px " + PROXY_TEXT_FONT;
+      ctx.textAlign = "right";
+      ctx.fillText(f.text, W - M - 12, typeBase);
+    }
+  }
+  ctx.textAlign = "left";
+
+  // ── Rules text, centred in its box and clipped to it: at the minimum size
+  // a wall-of-text card loses its tail rather than printing over the footer.
+  const boxH = fBot - boxTop;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(M, boxTop + 2, W - M * 2, boxH - 4); ctx.clip();
+  const tx = M + 14;
+  let by = boxTop + Math.max(padT, (boxH - lay.height) / 2) + lay.fs * 0.9;
+  lay.lines.forEach((ln, i) => {
+    if(i && ln.para !== lay.lines[i - 1].para) by += lay.gap;
+    // An ability name sits in an outlined tag, as it does on the card.
+    let run = null;
+    const closeRun = () => {
+      if(!run) return;
+      ctx.strokeStyle = LINE; ctx.lineWidth = 1.6;
+      roundRectPath(ctx, tx + run.x0 - PROXY_TAG_PAD, by - lay.fs * 0.86, run.x1 - run.x0 + PROXY_TAG_PAD * 2, lay.fs * 1.1, 5);
+      ctx.stroke();
+      run = null;
+    };
+    for(const it of ln.items){
+      const x = tx + it.x;
+      if(it.p.n){ if(!run) run = {x0: it.x, x1: it.x + it.w}; else run.x1 = it.x + it.w; }
+      else closeRun();
+      if(it.p.g === "I"){
+        ctx.strokeStyle = INK; ctx.lineWidth = Math.max(1.6, lay.fs * 0.085);
+        proxyHexPath(ctx, x + lay.glyphW / 2, by - lay.fs * 0.33, lay.fs * 0.38);
+        ctx.stroke();
+      } else if(it.p.g){
+        ctx.fillStyle = INK;
+        drawProxyGlyph(ctx, glyphs[PROXY_GLYPH_KEY[it.p.g]], x - lay.glyphW * 0.12, by - lay.fs * 0.33 - lay.glyphW * 0.62, lay.glyphW * 1.24, () => INK);
+      } else {
+        ctx.font = proxyRunFont(lay.fs, it.p);
+        ctx.fillStyle = it.p.i ? "#333" : INK;
+        ctx.fillText(it.p.t, x, by);
+      }
+    }
+    closeRun();
+    by += lay.lh;
+  });
+  ctx.restore();
+
+  // ── Lore pips, down the right of the text box.
+  if(lore){
+    const pip = 70, step = Math.min(54, (boxH - 12) / lore);
+    let py = boxTop + (boxH - step * lore) / 2 + (step - pip) / 2;
+    for(let i = 0; i < lore; i++, py += step){
+      const cx = W - M - 32;
+      if(glyphs.lore){ ctx.fillStyle = INK; drawProxyGlyph(ctx, glyphs.lore, cx - pip / 2, py, pip, () => INK); }
+      else {
+        ctx.strokeStyle = INK; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(cx, py + 8); ctx.lineTo(cx + 12, py + pip / 2); ctx.lineTo(cx, py + pip - 8); ctx.lineTo(cx - 12, py + pip / 2); ctx.closePath(); ctx.stroke();
+      }
+    }
+  }
+
+  // ── Footer: artist and printing on the left, the PROXY mark on the right.
+  const tagH = 30;
+  const tagW = drawProxyTag(ctx, W - M, fBot + (H - fBot - tagH) / 2 - 2, tagH);
+  const f1 = fBot + (landscape ? 25 : 28), f2 = f1 + 20;
+  ctx.fillStyle = DIM;
+  ctx.textAlign = "right";
+  ctx.font = "400 15px " + PROXY_TEXT_FONT;
+  ctx.fillText("Playtest card", W - M - tagW - 10, f1);
+  ctx.fillText("packs.ink", W - M - tagW - 10, f2);
+  ctx.textAlign = "left";
+  const leftW = W - M * 2 - tagW - 110;
+  const printing = [card.number ? "#" + card.number : null, card.set, card.rarity].filter(Boolean).join(" · ");
+  if(card.artist){
+    const f = fitProxyLine(ctx, card.artist, "400", PROXY_TEXT_FONT, 16, 12, leftW);
+    ctx.font = "400 " + f.fs + "px " + PROXY_TEXT_FONT;
+    ctx.fillText(f.text, M + 2, f1);
+  }
+  if(printing){
+    const f = fitProxyLine(ctx, printing, "400", PROXY_TEXT_FONT, 16, 12, leftW);
+    ctx.font = "400 " + f.fs + "px " + PROXY_TEXT_FONT;
+    ctx.fillText(f.text, M + 2, card.artist ? f2 : f1);
+  }
+  ctx.restore();
+
+  // ── Cost, upright in the portrait corner on every layout. A leader has none.
+  if(card.costVal != null){
+    const box = 132, gx = M - 25, gy = top - 28;
+    const key = card.inkable === false ? "uninkable" : "inkable";
+    const g = glyphs[key];
+    // The glyph's hex sits a touch left of and above its box's centre.
+    const cx = gx + box * 0.487, cy = gy + box * 0.955 * 0.487;
+    ctx.fillStyle = "#fff";
+    proxyHexPath(ctx, cx, cy, box * 0.295); ctx.fill();
+    if(g) drawProxyGlyph(ctx, g, gx, gy, box, PROXY_COST_PAINT[key]);
+    else if(key === "inkable"){ ctx.strokeStyle = "#a9a9a9"; ctx.lineWidth = 6; ctx.beginPath(); ctx.arc(cx, cy, box * 0.4, 0, Math.PI * 2); ctx.stroke(); }
+    // The inkwell ring is grey; the hex inside it gets a dark edge of its own
+    // so the cost still reads as a hex. (The uninkable glyph IS that edge.)
+    if(!g || key === "inkable"){
+      ctx.fillStyle = "#fff"; ctx.strokeStyle = LINE; ctx.lineWidth = 3.4;
+      proxyHexPath(ctx, cx, cy, box * 0.262); ctx.fill(); ctx.stroke();
+    }
+    ctx.fillStyle = INK;
+    ctx.textAlign = "center";
+    ctx.font = "600 46px " + PROXY_TEXT_FONT;
+    ctx.fillText(String(card.costVal), cx, cy + 16);
+    ctx.textAlign = "left";
+  }
+  ctx.restore();
 };
 
 // One card → JPEG bytes. White ground first: Lorcast art is transparent
 // outside the rounded corners and JPEG has no alpha, so an unpainted canvas
 // would print four black corners on every card.
-const renderProxyCardJpeg = async (card, {bw, lighten, watermark}) => {
+const renderProxyCardJpeg = async (card, {bw, lighten, watermark, face, blank, glyphs}) => {
   const w = PROXY_RENDER_PX;
   const h = Math.round(w * PROXY_CARD_MM.h / PROXY_CARD_MM.w);
   const cv = document.createElement("canvas");
@@ -12533,9 +13336,27 @@ const renderProxyCardJpeg = async (card, {bw, lighten, watermark}) => {
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, w, h);
 
-  const img = card.img ? await loadPosterImage(card.img) : null;
-  if(img){
+  // The blank-art face prefers a base-rarity printing of the card (blankImg):
+  // an Enchanted or Iconic is art edge to edge, with no window to blank.
+  // The printer-friendly face is drawn, not loaded: no image, and no greyscale pass
+  // (it picks its own palette per ink mode).
+  const lite = face === "lite";
+  const src = lite ? null : face === "blank" ? (card.blankImg || card.img) : card.img;
+  const img = src ? await loadPosterImage(src) : null;
+  let blanked = false;
+  if(lite){
+    drawProxyLiteFace(ctx, w, h, card, {bw, glyphs: glyphs || {}});
+  } else if(img){
     drawImageCover(ctx, img, 0, 0, w, h);
+    if(face === "blank" && blank){
+      const tile = proxyBlankTileOf(card);
+      let score = 0;
+      try { score = proxyFrameScore(img, blank, tile); } catch {}
+      if(score >= PROXY_FRAME_MIN){
+        drawProxyBlankTile(ctx, img, blank, tile, w, h);
+        blanked = true;
+      }
+    }
   } else {
     // No art (offline, or a catalog row with no image): print a cuttable
     // name card rather than dropping the slot and shifting the whole sheet.
@@ -12552,7 +13373,7 @@ const renderProxyCardJpeg = async (card, {bw, lighten, watermark}) => {
     lines.forEach((ln, i) => ctx.fillText(ln, w / 2, h / 2 - ((lines.length - 1) * lh) / 2 + i * lh));
   }
 
-  if(bw){
+  if(bw && !lite){
     const d = ctx.getImageData(0, 0, w, h);
     const p = d.data;
     for(let i = 0; i < p.length; i += 4){
@@ -12564,7 +13385,7 @@ const renderProxyCardJpeg = async (card, {bw, lighten, watermark}) => {
     }
     ctx.putImageData(d, 0, 0);
   }
-  drawProxyWatermark(ctx, w, h, watermark);
+  drawProxyWatermark(ctx, w, h, watermark, {tag: !lite, landscape: /Location/.test(card.cardType || "")});
 
   const blob = await new Promise((res) => cv.toBlob(res, "image/jpeg", 0.85));
   if(!blob) throw new Error("card render failed");
@@ -12573,8 +13394,10 @@ const renderProxyCardJpeg = async (card, {bw, lighten, watermark}) => {
   cv.width = cv.height = 1;
   // noArt: the card HAD an image URL and it didn't load (offline, a slow CDN,
   // the load timeout) — the caller says so rather than letting a placeholder
-  // go to the printer unannounced.
-  return {data: new Uint8Array(buf), w, h, noArt: !!card.img && !img};
+  // go to the printer unannounced. keptArt: the blank-art face was asked for but
+  // the card isn't on the standard frame, so it printed with its art.
+  return {data: new Uint8Array(buf), w, h, noArt: !!src && !img,
+    keptArt: face === "blank" && !!img && !blanked};
 };
 
 // Slot geometry for one sheet: a centred COLS x ROWS block of true-size cards
@@ -12611,11 +13434,48 @@ const PROXY_MAX_PER_CARD = 99;
 const readProxyPrefs = () => {
   try { return JSON.parse(localStorage.getItem(PROXY_PREFS_KEY)) || {}; } catch { return {}; }
 };
+// The image a proxy renders from: the large Lorcast art through the
+// same-origin proxy, so the canvas stays readable.
+const proxyArtSrc = (meta) => {
+  const raw = meta && (meta.img_large || meta.img_normal || meta.img_small);
+  let img = raw ? proxyImg(raw).replace("/normal/", "/large/").replace("/small/", "/large/") : null;
+  if(img && PROXY_ORIGIN && img.startsWith("/")) img = PROXY_ORIGIN + img;
+  return img;
+};
+// Rarities printed on the standard frame, with the art in a window.
+const PROXY_FRAMED_RARITIES = new Set(["Common", "Uncommon", "Rare", "Super Rare", "Legendary"]);
+// Per-card fields the render needs beyond the list's own. `type` is a SORT
+// key (Robin Hood's bow sorts as "Leader"), so the layout reads cardType.
+// Product Name is "Name - Version"; songs, actions and most items have none.
+const proxyCardOf = (meta) => {
+  const name = meta["Product Name"] || "";
+  const dash = name.indexOf(" - ");
+  return {
+    cardType: meta.card_type || "",
+    inkable: meta.inkable == null ? null : !!meta.inkable,
+    img: proxyArtSrc(meta),
+    // What the printer-friendly face prints.
+    base: dash > 0 ? name.slice(0, dash) : name,
+    version: dash > 0 ? name.slice(dash + 3) : "",
+    inks: meta.inks || (meta.ink ? [meta.ink] : []),
+    costVal: meta.cost,
+    strength: meta.strength, willpower: meta.willpower, lore: meta.lore, moveCost: meta.move_cost,
+    classes: meta.classifications || [],
+    text: meta.text || "",
+    set: meta.Set || "", number: meta.Number || "", rarity: meta.Rarity || "",
+    artist: (meta.illustrators || []).join(" / "),
+  };
+};
 
 const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
   useEscToClose(onClose);
   const deckTitle = deckDisplayTitle(deck, tournamentContext);
   const saved = useMemo(readProxyPrefs, []);
+  // "art" = the card image; "blank" = the same image with its art box left
+  // empty; "lite" = the card redrawn in outline (the printer-friendly face). A stored
+  // "text" is the first hand-drawn face, which "lite" is the grown-up form of.
+  const [face, setFace]           = useState(saved.face === "lite" || saved.face === "text" ? "lite"
+                                             : saved.face === "blank" ? "blank" : "art");
   const [ink, setInk]             = useState(saved.ink === "bw" ? "bw" : "color");
   const [lighten, setLighten]     = useState(saved.lighten !== false);
   // "none" was removed 2026-08-24 — an unmarked proxy is a counterfeit in a
@@ -12639,9 +13499,9 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
 
   useEffect(() => {
     try {
-      localStorage.setItem(PROXY_PREFS_KEY, JSON.stringify({ink, lighten, watermark, paper, guides, listOpen}));
+      localStorage.setItem(PROXY_PREFS_KEY, JSON.stringify({face, ink, lighten, watermark, paper, guides, listOpen}));
     } catch {}
-  }, [ink, lighten, watermark, paper, guides, listOpen]);
+  }, [face, ink, lighten, watermark, paper, guides, listOpen]);
 
   // Revoke the blob URL on unmount only — regeneration revokes its own
   // predecessor, so tying this to `result` would pull the URL out from under
@@ -12650,6 +13510,22 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
     cancelled.current = true;
     if(resultRef.current) URL.revokeObjectURL(resultRef.current.url);
   }, []);
+
+  // For the blank-art face, a card is drawn from a booster printing on the
+  // standard frame when it has one: the Enchanted in your deck is art from
+  // edge to edge, and its Common is the same card with a window to blank.
+  const catalog = useContext(CatalogContext);
+  const framedSrcOf = useMemo(() => {
+    const byName = new Map();
+    for(const r of catalog || []){
+      const name = r["Product Name"];
+      if(!name || byName.has(name) || !PROXY_FRAMED_RARITIES.has(r.Rarity) || !MAINLINE_SETS.includes(r.Set)) continue;
+      const src = proxyArtSrc(r);
+      if(src) byName.set(name, src);
+    }
+    return (meta) => PROXY_FRAMED_RARITIES.has(meta.Rarity) ? proxyArtSrc(meta)
+      : (byName.get(meta["Product Name"]) || proxyArtSrc(meta));
+  }, [catalog]);
 
   // One entry per card_id, in the same section/cost order the deck poster and
   // the printed decklist use — so a cut stack comes out already sorted.
@@ -12660,10 +13536,9 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
       if(seen.has(c.card_id)){ seen.get(c.card_id).quantity += c.quantity; continue; }
       const meta = (cardById[c.card_id] || [])[0];
       if(!meta) continue;
-      const raw = meta.img_large || meta.img_normal || meta.img_small;
-      let img = raw ? proxyImg(raw).replace("/normal/", "/large/").replace("/small/", "/large/") : null;
-      if(img && PROXY_ORIGIN && img.startsWith("/")) img = PROXY_ORIGIN + img;
       seen.set(c.card_id, {
+        ...proxyCardOf(meta),
+        blankImg: framedSrcOf(meta),
         card_id: c.card_id,
         quantity: c.quantity,
         name: meta["Product Name"] || "",
@@ -12673,7 +13548,6 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
         sub: [meta.Set, meta.Number ? "#" + meta.Number : null, meta.Rarity].filter(Boolean).join(" · "),
         cost: meta.cost ?? 99,
         type: meta.card_type || "",
-        img,
       });
     }
     // A Coconut deck's leader — and Robin Hood's bow, played from outside the
@@ -12683,6 +13557,12 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
     const leader = getCoconutCard(deck.coconut_card);
     if(leader){
       seen.set(coconutRowId(leader.slug), {
+        // A leader's beta render is not on the standard frame, so the blank-art
+        // face prints it as it is. It has no cost, stats or inkwell.
+        cardType: "Leader", inkable: null,
+        base: leader.name, version: leader.version || "", inks: leader.ink ? [leader.ink] : [],
+        costVal: null, classes: [], text: leader.ability || "",
+        set: "Format Coconut", number: leader.cn ? String(leader.cn) : "", rarity: "", artist: "",
         card_id: coconutRowId(leader.slug), quantity: 1,
         name: coconutDisplayName(leader), sub: "Coconut leader · outside your 60",
         cost: -1, type: "Leader", img: coconutArtUrl(leader.cn),
@@ -12692,13 +13572,12 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
       // more physical card on top of those.
       if(bonus && bonus.card_id && seen.has(bonus.card_id)) seen.get(bonus.card_id).quantity += 1;
       else if(bonus && bonus.card_id){
-        const raw = bonus.img_large || bonus.img_normal || bonus.img_small;
-        let img = raw ? proxyImg(raw).replace("/normal/", "/large/").replace("/small/", "/large/") : null;
-        if(img && PROXY_ORIGIN && img.startsWith("/")) img = PROXY_ORIGIN + img;
         seen.set(bonus.card_id, {
+          ...proxyCardOf(bonus),
+          blankImg: framedSrcOf(bonus),
           card_id: bonus.card_id, quantity: 1,
           name: bonus["Product Name"] || leader.bonus, sub: "Bonus card · free, outside your 60",
-          cost: -1, type: "Leader", img,
+          cost: -1, type: "Leader",
         });
       }
     }
@@ -12706,7 +13585,7 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
     const rank = (t) => { const i = ORDER.indexOf(t === "Action - Song" ? "Song" : t); return i < 0 ? 99 : i; };
     return Array.from(seen.values()).sort((a, b) =>
       rank(a.type) - rank(b.type) || a.cost - b.cost || a.name.localeCompare(b.name));
-  }, [deck.cards, deck.coconut_card, cardById]);
+  }, [deck.cards, deck.coconut_card, cardById, framedSrcOf]);
 
   // Re-seed whenever the card set itself changes (a different deck, or the
   // deck edited underneath us) — but NOT on every render, or the steppers
@@ -12744,7 +13623,9 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
   const printCards = cards.filter(c => qtyOf(c.card_id) > 0);
   const totalCards = printCards.reduce((s, c) => s + qtyOf(c.card_id), 0);
   const pageCount = Math.ceil(totalCards / PROXY_PER_PAGE) || 0;
-  const missingArt = printCards.filter(c => !c.img).length;
+  // The printer-friendly face never loads an image, so a card without one isn't worth a warning.
+  const missingArt = face === "lite" ? 0
+    : printCards.filter(c => !(face === "blank" ? (c.blankImg || c.img) : c.img)).length;
 
   const generate = async () => {
     if(busy || !printCards.length) return;
@@ -12752,7 +13633,15 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
     setBusy(true); setError(null);
     setProgress({done: 0, total: printCards.length});
     try {
-      const opts = {bw: ink === "bw", lighten: ink === "bw" && lighten, watermark};
+      const blank = face === "blank" ? await loadProxyBlankSprite() : null;
+      if(face === "blank" && !blank){
+        setError("Couldn't load the blank-art template. Check your connection, or print with card art.");
+        return;
+      }
+      // Fonts and glyphs both degrade (fallback type, words for symbols)
+      // rather than fail, so an offline build still prints.
+      const [glyphs] = face === "lite" ? await Promise.all([loadProxyGlyphs(), loadProxyFonts()]) : [null];
+      const opts = {bw: ink === "bw", lighten: ink === "bw" && lighten, watermark, face, blank, glyphs};
       const imgs = [];
       const indexOf = new Map();
       for(let i = 0; i < printCards.length; i++){
@@ -12792,9 +13681,10 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
       if(cancelled.current) return;
       if(resultRef.current) URL.revokeObjectURL(resultRef.current.url);
       const artFailed = printCards.filter(c => imgs[indexOf.get(c.card_id)]?.noArt).map(c => c.name);
+      const keptArt = printCards.filter(c => imgs[indexOf.get(c.card_id)]?.keptArt).map(c => c.name);
       const next = {
         url: URL.createObjectURL(blob), blob,
-        pages: pages.length, cards: seq.length, bytes: blob.size, artFailed,
+        pages: pages.length, cards: seq.length, bytes: blob.size, artFailed, keptArt,
         name: deckTitle.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-").slice(0, 48) || "deck",
       };
       resultRef.current = next;
@@ -12827,13 +13717,21 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
 
         <div class="proxy-opts">
         <div class="proxy-opt">
+          <div class="proxy-opt-lbl">Card face</div>
+          <div class="proxy-opt-row">
+            ${seg("art", face, setFace, "Card art", "The full card image")}
+            ${seg("blank", face, setFace, "Blank art box", "The real card with its art box left blank")}
+            ${seg("lite", face, setFace, "Printer-friendly", "The card redrawn in outline — cost, name, stats and rules text, no art and almost no ink")}
+          </div>
+        </div>
+        <div class="proxy-opt">
           <div class="proxy-opt-lbl">Ink</div>
           <div class="proxy-opt-row">
-            ${seg("color", ink, setInk, "Colour")}
+            ${seg("color", ink, setInk, "Colour", face === "lite" ? "Tints each card's band by its ink" : null)}
             ${seg("bw", ink, setInk, "Black & white")}
           </div>
         </div>
-        ${ink === "bw" && html`<label class="proxy-check">
+        ${ink === "bw" && face !== "lite" && html`<label class="proxy-check">
           <input type="checkbox" checked=${lighten}
             onChange=${e => { setLighten(e.target.checked); setResult(null); }}/>
           <span>Lighten for laser/inkjet <span class="muted">— keeps rules text readable and uses far less toner on dark cards</span></span>
@@ -12882,7 +13780,7 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
               <span class="proxy-cardname" title=${c.name + (c.sub ? " — " + c.sub : "")}>
                 ${c.name}${c.sub && html`<span class="proxy-cardsub"> ${c.sub}</span>`}
               </span>
-              ${!c.img && html`<span class="proxy-cardwarn" title="No art available — prints as a name card">no art</span>`}
+              ${!c.img && face !== "lite" && html`<span class="proxy-cardwarn" title="No card image available — prints as a name card">no image</span>`}
               <div class="proxy-cardqty" onClick=${e => e.stopPropagation()}>
                 <button type="button" onClick=${() => bumpQty(c.card_id, -1)} disabled=${n <= 0}
                   aria-label=${"One fewer "+c.name}>−</button>
@@ -12909,7 +13807,7 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
             : totalCards === 0
               ? html`<span class="muted">No cards selected — tick some above, or hit “One of each”.</span>`
               : html`<strong>${totalCards}</strong> card${totalCards === 1 ? "" : "s"} · <strong>${pageCount}</strong> page${pageCount === 1 ? "" : "s"} · ${printCards.length} unique`}
-          ${missingArt > 0 && html`<div class="proxy-warn">${missingArt} card${missingArt === 1 ? " has" : "s have"} no art available — they print as a name card.</div>`}
+          ${missingArt > 0 && html`<div class="proxy-warn">${missingArt} card${missingArt === 1 ? " has" : "s have"} no card image available — ${missingArt === 1 ? "it prints" : "they print"} as a name card.</div>`}
         </div>
 
         <div class="proxy-print-note proxy-print-note--foot">
@@ -12951,6 +13849,11 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
           + " as a name card: " + result.artFailed.slice(0, 4).join(", ")
           + (result.artFailed.length > 4 ? " and " + (result.artFailed.length - 4) + " more" : "")
           + ". Rebuild to try again."}</div>`}
+        ${result && result.keptArt && result.keptArt.length > 0 && html`<div class="proxy-warn" role="status">${
+          (result.keptArt.length === 1 ? "1 card isn't" : result.keptArt.length + " cards aren't")
+          + " on the standard card frame, so " + (result.keptArt.length === 1 ? "it prints with its" : "they print with their") + " art: "
+          + result.keptArt.slice(0, 4).join(", ")
+          + (result.keptArt.length > 4 ? " and " + (result.keptArt.length - 4) + " more" : "") + "."}</div>`}
         </div>
       </div>
     </div>
@@ -13081,7 +13984,7 @@ const COACH_TOURS = {
     {sel:".price-db-modebar", title:"Raw · Graded · Sealed", body:"One database, three markets — flip between raw singles, graded slabs and sealed product."},
     {sel:".price-db-presets", title:"Presets", body:"Movers, Gainers, Buyouts, Crashing, Discount and more — each chip is a ready-made screen."},
     {sel:"input.price-db-search", title:"Search & filters", body:"The full Cards smart-search works here too — plus BUY / CRSH / DISC / PREM signal chips, and owned/missing filters when signed in."},
-    {sel:".price-db-tablewrap", title:"Sort like a terminal", body:"Click any column header to sort. Click a row for full card detail — or tick checkboxes to graph several together."},
+    {sel:".price-db-tablebox", title:"Sort like a terminal", body:"Click any column header to sort. Click a row for full card detail — or tick checkboxes to graph several together."},
   ]},
   history: { title: "Price Graphing", steps: [
     {sel:".history-toolbar .seg-toggle", title:"Four chart modes", body:"Chart a card, a sealed product, a graded slab, or a whole set's value over time."},
@@ -28479,51 +29382,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   // Index latest prices by (pid, printing, grader, grade). Printing was
   // added in migration 49 so split-printing rows no longer collapse.
   // Legacy callers that don't know printing can look up under "Normal".
-  const priceByKey = useMemo(() => {
-    const m = new Map();
-    {
-      // Synthesize rows shaped like the old feed's from the per-sale rollup so
-      // every existing consumer (header totals, slot pills, add modal, poster)
-      // reads Avg-of-5 without touching each call site. `ebay_avg_*` here is an
-      // internal field name, NOT a legacy column — see gradedRowValue. The
-      // rollup's grader is UPPERCASE, so lowercase it to match the convention in
-      // graded_collection_items, and emit the value under every plausible
-      // printing key for the card's pid.
-      const PRINTINGS = ["Normal", "Holofoil", "Cold Foil", "Foil", "Non-Foil"];
-      // Which owned-item printing keys a split-card rollup row should price. The
-      // rollup's printing is "" (non-split → price every printing the same),
-      // "Unknown" (split but unclassified → fallback for any), or a real variant.
-      const SYN = {"Foil": ["Foil", "Holofoil", "Cold Foil"], "Non-Foil": ["Non-Foil", "Normal"], "Cold Foil": ["Cold Foil"]};
-      // rollup_printing is the row's PROVENANCE, not a lookup key: a row written
-      // under "Cold Foil" may have come from the card's Unknown (unclassified)
-      // tier, and on a split card that is a blend of two markets rather than
-      // this printing's price. gradedPrintingLookup reads it to tell the two
-      // apart; every other consumer ignores it.
-      const rowOf = (r, meta, v) => ({ebay_avg_1d: v, ebay_avg_30d: v, ebay_avg_7d: v,
-        last_sold_price: r.last_sold_price, avg_last_5: r.avg_last_5,
-        last_sold_date: r.last_sold_date, sale_count: r.sale_count, rollup_printing: r.printing || "",
-        grader: (r.grader||"").toLowerCase(), grade: r.grade, tcgplayer_product_id: meta.tcgplayer_product_id});
-      const val = (r) => r.avg_last_5 != null ? Number(r.avg_last_5)
-                       : r.last_sold_price != null ? Number(r.last_sold_price) : null;
-      // Pass 1: non-specific rows (non-split "" or split-but-Unknown) under ALL keys.
-      for(const r of (rollup||[])){
-        if(r.printing && r.printing !== "Unknown") continue;
-        const meta = cardById.get(r.card_id); const v = val(r);
-        if(!meta || !meta.tcgplayer_product_id || v == null) continue;
-        const grader = (r.grader||"").toLowerCase();
-        for(const pr of PRINTINGS) m.set(meta.tcgplayer_product_id + "|" + pr + "|" + grader + "|" + r.grade, rowOf(r, meta, v));
-      }
-      // Pass 2: specific-printing rows OVERRIDE their matching owned-item keys.
-      for(const r of (rollup||[])){
-        if(!r.printing || r.printing === "Unknown") continue;
-        const meta = cardById.get(r.card_id); const v = val(r);
-        if(!meta || !meta.tcgplayer_product_id || v == null) continue;
-        const grader = (r.grader||"").toLowerCase();
-        for(const pr of (SYN[r.printing] || [r.printing])) m.set(meta.tcgplayer_product_id + "|" + pr + "|" + grader + "|" + r.grade, rowOf(r, meta, v));
-      }
-      return m;
-    }
-  }, [rollup, cardById]);
+  const priceByKey = useMemo(
+    () => buildGradedPriceIndex(rollup, cardById, (r, meta) => meta && meta.tcgplayer_product_id ? meta.tcgplayer_product_id : null),
+    [rollup, cardById]);
   // THE ladder for every displayed graded price in this view — set-goal tiles,
   // owned-slot pills, the header total. Never crosses a split.
   const gradedHit = useMemo(() => makeGradedPrintingLookup(priceByKey, gradedSplitTiersSet),
@@ -28550,6 +29411,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     const seenPerBucket = new Map();
     for(const r of (raw||[])){
       if(r.Set !== EXTRAS_SET_NAME) continue;
+      // A CUSTOM_CARDS entry here is a counter or similar, not a card anyone
+      // grades, so it must not mint a graded tracking bucket of its own.
+      if(r.isCustomCard) continue;
       const bucket = r.Rarity || r.variant_label || null;
       if(!bucket || !r.card_id) continue;
       const seen = seenPerBucket.get(bucket) || new Set();
@@ -33357,11 +34221,33 @@ function EloUpcomingSCs({canViewStore, canScout, onStoreClick, onPlayerClick, on
 //
 // An event nobody has scraped yet is NOT silently counted as zero — the row
 // carries how many of its events are uncovered, because a quiet zero reads
-// exactly like a quiet week. Cached 12h.
-const ELO_STORES_CACHE = "packsink:elo:stores:v7";   // v7: a cancelled event without results no longer counts
+// exactly like a quiet week. Cached 12h — except while the pro-rated counter
+// is up, when stores check it daily and the data refreshes hourly
+// (store_stats_refresh.yml), so a 12h copy would sit up to half a day behind.
+const ELO_STORES_CACHE = "packsink:elo:stores:v10";  // v10: the stores cut from Elo are back on the tab
 const ELO_STORES_TTL = 12 * 3600 * 1000;
+const ELO_STORES_TTL_LIVE = 15 * 60 * 1000;
 const ELO_STORES_PREFS = "packsink:elo:stores:prefs";
 const ELO_RECENT_SETS = 4;
+
+// Stores cut from Elo that stay on this tab (Zaven, 2026-09-29: "add back wcc
+// and any other previous elo store we cut, so they can track progress"). Being
+// out of the rating region says where the scene plays, not anything about the
+// shop, and this tab is how a shop follows its own RPH tier progress. They are
+// NOT in elo_tracked_stores, which also gates Upcoming SCs, the Scout tab and the
+// roster scrape, so the tab adds them here. The row says so, and has no store
+// report link — that report is built from the Elo events these stores no longer
+// have.
+//
+// ⚠ A copy of elo_scope.STATUS_ONLY_STORE_IDS (every EXCLUDED_STORE_IDS entry),
+// which the history and roster scrapes read. scripts/elo/test_excluded_stores.py
+// fails when the two disagree: an id only here shows a store whose numbers stop
+// updating; an id only there is scraped and never shown.
+const ELO_STATUS_ONLY_STORE_IDS = new Set([
+  2237, 28480,                                // central Indiana
+  1550, 3663, 1646, 4495, 2519, 1325, 4809,   // Michigan
+  5392, 814, 2178, 5011, 5364, 5393,          // over a 3 h 30 m drive (5392/5393 = WorldClassCards)
+]);
 
 // "Wilds Unknown Summer 2026" → "Wilds Unknown". Season labels are
 // "<set> <tag> <year>" (see SEASON_REVIEWS); the set half is the column header.
@@ -33420,12 +34306,28 @@ async function fetchEloStoreActivity(){
   // locals, league nights — not the SC-shaped Elo ingest. Set release dates come
   // along because seasons have to be assigned by DATE (see eloSeasonForDate).
   // rph_event_attendance joins on the RPH event id, the same id both carry.
-  const [events, played, scans, sets, tracked] = await Promise.all([
-    sbFetchAll("lorcana_events_history", {
-      // display_status is how a cancelled event is told apart — see buildEloStoreActivity.
-      select: "event_id,store_id,store_name,city,state,kind,set_name,start_datetime,display_status",
-      order: "event_id.asc",
-    }, null),
+  //
+  // lorcana_events_history holds every store the global upcoming feed ever
+  // listed — ~3,000 shops worldwide — and until 2026-09-29 the whole table
+  // shipped to the phone and was filtered here: 32.8k rows to use 4.4k. The
+  // tracked ids come first now so the history is scoped server-side, which is
+  // what makes the short refresh interval during the pro-rated window
+  // affordable. An empty tracked list falls back to the whole table (and the
+  // pivot's own no-filter rule) rather than an empty tab.
+  const tracked = await sbFetchAll("elo_tracked_stores", {select: "store_id", order: "store_id.asc"}, null);
+  const trackedIds = new Set((tracked || []).map(t => t.store_id).filter(x => x != null));
+  // Only once the table answered: an empty tracked list falls back to "no
+  // filter", and 15 ids would turn that into a tab of just the cut stores.
+  if(trackedIds.size) for(const id of ELO_STATUS_ONLY_STORE_IDS) trackedIds.add(id);
+  const histParams = {
+    // display_status is how a cancelled event is told apart — see buildEloStoreActivity.
+    // last_seen_at is stamped by every history pull, so its max says how fresh the tab is.
+    select: "event_id,store_id,store_name,city,state,kind,set_name,start_datetime,display_status,last_seen_at",
+    order: "event_id.asc",
+  };
+  if(trackedIds.size) histParams.store_id = "in.(" + Array.from(trackedIds).join(",") + ")";
+  const [events, played, scans, sets] = await Promise.all([
+    sbFetchAll("lorcana_events_history", histParams, null),
     sbFetchAll("rph_event_attendance", {
       select: "event_id,rph_user_id,best_identifier",
       or: RPH_PLAYED_FILTER,
@@ -33433,17 +34335,19 @@ async function fetchEloStoreActivity(){
     }, null),
     // Which events have been looked at, so "no attendance" and "not scraped
     // yet" stay distinguishable instead of both reading as a quiet week.
-    sbFetchAll("rph_event_attendance_scans", {select: "event_id", order: "event_id.asc"}, null),
+    // scraped_at moves on every read, re-reads included — the other half of
+    // "how fresh is this".
+    sbFetchAll("rph_event_attendance_scans", {select: "event_id,scraped_at", order: "event_id.asc"}, null),
     sbFetchAll("sets", {select: "name,released_at", order: "released_at.desc"}, null),
-    // lorcana_events_history holds every store the global upcoming feed ever
-    // listed — ~3,000 shops worldwide. Without this the tab lists all of them.
-    sbFetchAll("elo_tracked_stores", {select: "store_id", order: "store_id.asc"}, null),
   ]);
   const seasons = (sets || [])
     .filter(x => x.released_at && MAINLINE_SETS.includes(x.name))
     .sort((a, b) => a.released_at < b.released_at ? 1 : a.released_at > b.released_at ? -1 : 0);
-  const trackedIds = new Set((tracked || []).map(t => t.store_id).filter(x => x != null));
   const scanned = new Set((scans || []).map(x => x.event_id));
+  // Newest pull of either kind: an event list or a roster.
+  let updatedAt = null;
+  for(const e of events || []) if(e.last_seen_at && (!updatedAt || e.last_seen_at > updatedAt)) updatedAt = e.last_seen_at;
+  for(const s of scans || []) if(s.scraped_at && (!updatedAt || s.scraped_at > updatedAt)) updatedAt = s.scraped_at;
   // Second pass for the events nobody has a result in — see rphCompleteReg.
   // Derived from the played rows we just fetched rather than from the scans
   // table's own player_count, so the client's rule stays the only rule: an
@@ -33452,8 +34356,35 @@ async function fetchEloStoreActivity(){
   // so this is a small tail fetch, not a second full one.
   const withPlay = new Set((played || []).map(a => a.event_id));
   const noResult = Array.from(scanned).filter(id => !withPlay.has(id));
-  const fallback = await fetchEloAttendanceFor(noResult);
-  return buildEloStoreActivity(events, played, fallback, scanned, seasons, trackedIds);
+  const proOn = rphProratedShown();
+  const [fallback, upcoming] = await Promise.all([
+    fetchEloAttendanceFor(noResult),
+    proOn ? fetchEloProUpcoming(Array.from(trackedIds)) : [],
+  ]);
+  const pro = proOn ? {start: Date.parse(RPH_PRORATED_WINDOW.start), end: Date.parse(RPH_PRORATED_WINDOW.end),
+                       now: Date.now(), preSet: RPH_PRORATED.prereleaseSet, upcoming,
+                       proxy: {start: Date.parse(RPH_PRORATED_PROXY.start), end: Date.parse(RPH_PRORATED_PROXY.end)}} : null;
+  return {...buildEloStoreActivity(events, played, fallback, scanned, seasons, trackedIds, pro), updatedAt};
+}
+
+// What the tracked stores still have on the live feed between now and the end
+// of the pro-rated window — a few hundred rows, scoped server-side so the
+// ~20k-row worldwide feed never ships. Best-effort: if it fails, the columns
+// still show everything that has run, just without the "+N on the calendar".
+async function fetchEloProUpcoming(storeIds){
+  const now = Date.now(), end = Date.parse(RPH_PRORATED_WINDOW.end);
+  if(!storeIds.length || now >= end) return [];
+  try {
+    return await sbFetchAll("lorcana_events", {
+      select: "event_id,store_id,store_name,city,state,kind,set_name,start_datetime,display_status",
+      store_id: "in.(" + storeIds.join(",") + ")",
+      and: "(start_datetime.gt." + new Date(now).toISOString() + ",start_datetime.lt." + new Date(end).toISOString() + ")",
+      order: "event_id.asc",
+    }, null);
+  } catch(e){
+    console.warn("[elo] upcoming store events fetch failed", e);
+    return [];
+  }
 }
 
 // Every stored registration for the given events, in URL-sized chunks. A bare
@@ -33498,10 +34429,33 @@ function eloSeasonForDate(iso, seasons){
 // have NO played rows at all — stores that never recorded results — and is used
 // only for those (see rphCompleteReg). `scanned` is the set of event ids
 // attendance has been pulled for; pass null to skip coverage tracking.
-function buildEloStoreActivity(events, played, fallback, scanned, seasons, trackedIds){
+//
+// `pro`, when given, also buckets the pro-rated window (see RPH_PRORATED) on
+// each store as `pro`: {start, end, now} are epoch ms, `preSet` is the
+// prerelease the offer asks for, and `upcoming` is lorcana_events rows — the
+// live feed — for what a store still has on the calendar before it closes.
+// Unlike the seasons, it is one fixed window, so its fans are counted here
+// rather than carried as person keys. `pro.proxy` ({start, end}, epoch ms) is
+// the comparison window (RPH_PRORATED_PROXY), bucketed the same way as `proxy`.
+function buildEloStoreActivity(events, played, fallback, scanned, seasons, trackedIds, pro){
   const byStore = new Map();
-  const evAt = new Map();                 // event_id → {store, season}, for the match pass
+  const evAt = new Map();                 // event_id → {store, season, pro, proxy}, for the match pass
   const used = new Map();                 // season → earliest date seen, for column order
+  const newStore = (skey, e) => {
+    const st = {key: skey, store: e.store_name, store_id: e.store_id,
+                city: e.city || null, state: e.state || null,
+                per: new Map(), pro: null, proxy: null, first_date: null, last_date: null};
+    byStore.set(skey, st);
+    return st;
+  };
+  const proCell = (st) => st.pro || (st.pro = {events: 0, attendance: 0, players: new Set(),
+                                               unscanned: 0, unrecorded: 0, scheduled: 0, pre: null});
+  const proxyCell = (st) => st.proxy || (st.proxy = {events: 0, attendance: 0, players: new Set(),
+                                                     unscanned: 0, unrecorded: 0});
+  // Key on store_id, NOT the name. Two branches of a chain can share a name
+  // (and several do), and merging them would report one location's numbers as
+  // both. RPH tiers are per physical store, so the id is the identity.
+  const storeKey = (e) => e.store_id != null ? "id:" + e.store_id : "name:" + e.store_name;
 
   // Results prove an event ran, whatever RPH now labels it. A CANCELLED event
   // without any is not an event at all: until 2026-09-10 every one counted toward
@@ -33516,23 +34470,44 @@ function buildEloStoreActivity(events, played, fallback, scanned, seasons, track
     // "no filter" so the pivot stays usable against fixtures.
     if(trackedIds && trackedIds.size && !trackedIds.has(e.store_id)) continue;
     if(/^cancel{1,2}ed$/i.test(e.display_status || "") && !withPlay.has(e.event_id)) continue;
-    // Key on store_id, NOT the name. Two branches of a chain can share a name
-    // (and several do), and merging them would report one location's numbers as
-    // both. RPH tiers are per physical store, so the id is the identity.
-    const skey = e.store_id != null ? "id:" + e.store_id : "name:" + store;
+    const skey = storeKey(e);
     const key = eloSeasonForDate(e.start_datetime, seasons);
-    evAt.set(e.event_id, {skey, season: key});
-    let st = byStore.get(skey);
-    if(!st){ st = {key: skey, store: store, store_id: e.store_id,
-                   city: e.city || null, state: e.state || null,
-                   per: new Map(), first_date: null, last_date: null};
-             byStore.set(skey, st); }
+    const st = byStore.get(skey) || newStore(skey, e);
     let cell = st.per.get(key);
     if(!cell){ cell = {events: 0, attendance: 0, players: new Set(), pre: new Set(),
                        unscanned: 0, unrecorded: 0}; st.per.set(key, cell); }
     cell.events++;
     if(scanned && !scanned.has(e.event_id)) cell.unscanned++;
     if(e.kind === "prerelease") cell.pre.add(e.set_name || key || "?");
+    // Pro-rated window. Only an event that has already run counts toward the
+    // bars — a dated history row can still be in the future — and one that
+    // hasn't is on the calendar, not in the count.
+    let proHeld = false, inProxy = false;
+    if(pro){
+      const ms = e.start_datetime ? Date.parse(e.start_datetime) : NaN;
+      // The comparison window is wholly in the past, so there is no "scheduled"
+      // half to it — an event in it counts or it doesn't.
+      if(pro.proxy && ms >= pro.proxy.start && ms < pro.proxy.end && ms <= pro.now){
+        inProxy = true;
+        const xc = proxyCell(st);
+        xc.events++;
+        if(scanned && !scanned.has(e.event_id)) xc.unscanned++;
+      }
+      if(ms >= pro.start && ms < pro.end){
+        const pc = proCell(st);
+        if(ms <= pro.now){
+          proHeld = true;
+          pc.events++;
+          if(scanned && !scanned.has(e.event_id)) pc.unscanned++;
+        } else pc.scheduled++;
+      }
+      if(e.kind === "prerelease" && e.set_name === pro.preSet){
+        const pc = proCell(st);
+        if(ms <= pro.now) pc.pre = "held";
+        else if(pc.pre !== "held") pc.pre = "scheduled";
+      }
+    }
+    evAt.set(e.event_id, {skey, season: key, pro: proHeld, proxy: inProxy});
     const d = e.start_datetime ? String(e.start_datetime).slice(0, 10) : null;
     if(d){
       if(!st.first_date || d < st.first_date) st.first_date = d;
@@ -33553,6 +34528,8 @@ function buildEloStoreActivity(events, played, fallback, scanned, seasons, track
     if(!cell) continue;
     cell.attendance++;
     cell.players.add(rphPersonKey(a));
+    if(at.pro){ st.pro.attendance++; st.pro.players.add(rphPersonKey(a)); }
+    if(at.proxy){ st.proxy.attendance++; st.proxy.players.add(rphPersonKey(a)); }
   }
 
   // Events nobody has a result in fall back to their registrations. Guarded on
@@ -33570,6 +34547,35 @@ function buildEloStoreActivity(events, played, fallback, scanned, seasons, track
     cell.attendance++;
     cell.players.add(rphPersonKey(a));
     cell.unrecorded++;
+    if(at.pro){ st.pro.attendance++; st.pro.players.add(rphPersonKey(a)); st.pro.unrecorded++; }
+    if(at.proxy){ st.proxy.attendance++; st.proxy.players.add(rphPersonKey(a)); st.proxy.unrecorded++; }
+  }
+
+  // What each store still has on the calendar before the pro-rated window
+  // closes, off the live feed. The feed overlaps the history for anything run
+  // in the last few days, so an event the history holds at all is skipped — it
+  // was already counted above, as run or as scheduled. An event on the feed
+  // whose date has passed isn't counted as scheduled either: it ran, and it
+  // joins the count on the next daily pull, same as every other number here.
+  if(pro && pro.upcoming && pro.upcoming.length){
+    const inHistory = new Set(events.map(e => e.event_id));
+    const seen = new Set();
+    for(const e of pro.upcoming){
+      if(inHistory.has(e.event_id) || seen.has(e.event_id)) continue;
+      seen.add(e.event_id);
+      if(!e.store_name) continue;
+      if(trackedIds && trackedIds.size && !trackedIds.has(e.store_id)) continue;
+      if(/^cancel{1,2}ed$/i.test(e.display_status || "")) continue;
+      const ms = e.start_datetime ? Date.parse(e.start_datetime) : NaN;
+      if(!(ms > pro.now)) continue;
+      const inWin = ms >= pro.start && ms < pro.end;
+      const isPre = e.kind === "prerelease" && e.set_name === pro.preSet;
+      if(!inWin && !isPre) continue;
+      const skey = storeKey(e);
+      const pc = proCell(byStore.get(skey) || newStore(skey, e));
+      if(inWin) pc.scheduled++;
+      if(isPre && pc.pre !== "held") pc.pre = "scheduled";
+    }
   }
 
   // Newest set first, ordered by the season's own release date where we have it.
@@ -33586,8 +34592,14 @@ function buildEloStoreActivity(events, played, fallback, scanned, seasons, track
     for(const [k, c] of st.per) per[k] = {events: c.events, attendance: c.attendance,
                                          players: Array.from(c.players), pre: Array.from(c.pre),
                                          unscanned: c.unscanned, unrecorded: c.unrecorded};
+    const p = st.pro, x = st.proxy;
     return {key: st.key, store: st.store, store_id: st.store_id,
             city: st.city, state: st.state, per,
+            pro: p ? {events: p.events, attendance: p.attendance, players: p.players.size,
+                      unscanned: p.unscanned, unrecorded: p.unrecorded,
+                      scheduled: p.scheduled, pre: p.pre} : null,
+            proxy: x ? {events: x.events, attendance: x.attendance, players: x.players.size,
+                        unscanned: x.unscanned, unrecorded: x.unrecorded} : null,
             first_date: st.first_date, last_date: st.last_date};
   });
   return {seasons: seasonList, stores};
@@ -33615,26 +34627,70 @@ const RPH_TIERS = [
 // but not sufficient.
 const RPH_ENTRY = {key: "entry", label: "Standard (entry)", events: 4, players: 0, tickets: 0};
 
-// The memo's pro-rating offer: during Sept 1 – Nov 1 2026 ONLY, 1/6 of the
-// Legendary bars plus the Hyperia City prerelease earns provisional Legendary.
-// Explicitly not repeated ("No additional pro-rating will occur"), and it has to
-// be held afterwards, so it's a softer bar over a much shorter window, not a
-// softer tier.
+// The memo's pro-rating offer: 1/6 of the Legendary bars, earned in September
+// and October 2026, plus the Hyperia City prerelease, earns provisional
+// Legendary. Explicitly not repeated ("No additional pro-rating will occur"),
+// and it has to be held afterwards, so it's a softer bar over a much shorter
+// window, not a softer tier.
 //
-// Two months is ONE set season's worth of activity, not four — so scoring 8/8/80
-// against a four-set window would clear it for everyone and mean nothing. The
-// lens therefore scores a SINGLE season: the most recent completed set. That is
-// the closest honest proxy for "where would this store stand under the
-// pro-rated bars", which is the question being asked, since the real window is
-// in the future and reads as zeroes today.
+// The window is Sept + Oct and nothing else — scored off each event's own date,
+// NOT a set season. Until 2026-09-29 this was a lens that scored the most recent
+// completed set as a stand-in, which a store owner pointed out answers the
+// wrong question: what counts is what a shop runs in these two months.
+//
+// Bounds are instants in Chicago time. Every tracked store is on Central time,
+// and CDT (UTC−5) holds for the whole window — DST ends 2am Nov 1 — so a fixed
+// offset is exact. Comparing UTC dates instead would move a Monday-night Aug 31
+// event into September and an Oct 31 evening event out of October.
 const RPH_PRORATED = {key: "prorated", label: "Legendary (pro-rated)",
                       events: 8, players: 8, tickets: 80, prereleaseSet: "Hyperia City"};
-const RPH_PRORATED_WINDOW = {start: "2026-09-01", end: "2026-11-01"};
+const RPH_PRORATED_WINDOW = {start: "2026-09-01T00:00:00-05:00", end: "2026-11-01T00:00:00-05:00",
+                             label: "Sept–Oct"};
+// The highlighted Sept–Oct columns are temporary. They stay up for a month after
+// the window closes so stores can read their final numbers, then drop out on
+// their own; delete the block once that has happened.
+const RPH_PRORATED_SHOW_UNTIL = "2026-12-01T00:00:00-06:00";
+// The comparison proxy: the two months just before the offer — Vine's first
+// month (Attack of the Vine released Jul 17) and August. Same length and same
+// bars, so "would we have cleared it then" reads straight across from the live
+// columns. Zaven's ask, 2026-09-29: "a proxy to see what said stats were for
+// month b4 & first month of vine". Wholly in the past, so nothing is scheduled.
+const RPH_PRORATED_PROXY = {start: "2026-07-01T00:00:00-05:00", end: "2026-09-01T00:00:00-05:00",
+                            label: "Jul–Aug"};
+const rphProratedShown = (now = Date.now()) => now < Date.parse(RPH_PRORATED_SHOW_UNTIL);
 
-// The newest FINISHED season — seasons are newest-first and index 0 is the set
-// currently running, whose numbers are still filling up.
-const eloProSeasonKey = (seasons) => !seasons || !seasons.length ? null
-  : (seasons.length > 1 ? seasons[1].key : seasons[0].key);
+// A store's standing against the pro-rated bars. `pro` is the store's Sept–Oct
+// bucket from buildEloStoreActivity; a store with none reads as all zeroes.
+// Only events that have already RUN count toward the bars; `scheduled` is what
+// the store still has on the calendar before Oct 31, shown beside the count
+// so a shop can see whether it is on course, never added to it.
+// "12 min ago" for the callout's freshness line. Null for no timestamp, so the
+// line is simply left off rather than claiming a time it doesn't have.
+function eloUpdatedAgo(iso, now = Date.now()){
+  const t = Date.parse(iso || "");
+  if(!Number.isFinite(t)) return null;
+  const mins = Math.max(0, Math.floor((now - t) / 60000));
+  if(mins < 2) return "just now";
+  if(mins < 60) return mins + " min ago";
+  const hrs = Math.floor(mins / 60);
+  if(hrs < 36) return hrs + (hrs === 1 ? " hr ago" : " hrs ago");
+  return Math.floor(hrs / 24) + " days ago";
+}
+
+function rphProratedTotals(pro){
+  const p = pro || {};
+  const events = p.events || 0, attendance = p.attendance || 0, players = p.players || 0;
+  const pre = p.pre === "held" ? "held" : p.pre === "scheduled" ? "scheduled" : null;
+  const b = RPH_PRORATED;
+  const gaps = [];
+  if(events < b.events)       gaps.push(`${b.events - events} more event${b.events - events === 1 ? "" : "s"}`);
+  if(players < b.players)     gaps.push(`${b.players - players} more fan${b.players - players === 1 ? "" : "s"}`);
+  if(attendance < b.tickets)  gaps.push(`${b.tickets - attendance} more ticket${b.tickets - attendance === 1 ? "" : "s"}`);
+  return {events, attendance, players, scheduled: p.scheduled || 0,
+          unscanned: p.unscanned || 0, unrecorded: p.unrecorded || 0,
+          pre, preRank: pre === "held" ? 2 : pre === "scheduled" ? 1 : 0,
+          clears: gaps.length === 0, gaps};
+}
 
 // What a Welcome-tier store still needs for Standard, so the badge explains
 // itself instead of just reading as a failure.
@@ -33690,26 +34746,24 @@ function EloStores({canViewStore, onStoreClick}){
     ["all", "custom", "recent"].includes(prefs0.mode) ? prefs0.mode : "complete");
   const [customKeys, setCustomKeys] = useState(Array.isArray(prefs0.keys) ? prefs0.keys : []);
   const [breakdown, setBreakdown] = useState(!!prefs0.breakdown);
-  // Pro-rating is a fixed Sept 1 – Nov 1 2026 window with its own (1/6) bars, so
-  // it replaces the set-season window rather than filtering within it.
-  // Pro-rated is a LENS, not a window: it re-scores the sets you've selected
-  // against the memo's 1/6 bars so a store can see where it'd stand under the
-  // easier requirement. The real offer is date-scoped (Sept 1 – Nov 1 2026), but
-  // showing a future window just reads as zeroes, so this answers the useful
-  // question instead.
-  const [proBars, setProBars] = useState(!!prefs0.proBars);
   const [showBars, setShowBars] = useState(prefs0.showBars !== false);
-  const [sortCol, setSortCol] = useState("attendance");
+  // Pro-rating is scored on its own fixed window (Sept–Oct 2026), so it is a
+  // highlighted column group of its own rather than a mode of the set chips:
+  // every store sees its four-set tier and its Sept–Oct standing side by side.
+  // While it's up it leads the sort as well — who is clearing it is the question
+  // stores are asking these few weeks.
+  const proShown = useMemo(() => rphProratedShown(), []);
+  const [sortCol, setSortCol] = useState(proShown ? "pro_status" : "attendance");
   const [sortDir, setSortDir] = useState("desc");
   const setSort = (col, dir) => { setSortCol(col); setSortDir(dir); };
 
   useEffect(() => {
-    try { localStorage.setItem(ELO_STORES_PREFS, JSON.stringify({mode: scopeMode, keys: customKeys, breakdown, showBars, proBars})); } catch {}
-  }, [scopeMode, customKeys, breakdown, showBars, proBars]);
+    try { localStorage.setItem(ELO_STORES_PREFS, JSON.stringify({mode: scopeMode, keys: customKeys, breakdown, showBars})); } catch {}
+  }, [scopeMode, customKeys, breakdown, showBars]);
 
   useEffect(() => {
     let cancelled = false;
-    const cached = readJsonCache(ELO_STORES_CACHE, ELO_STORES_TTL);
+    const cached = readJsonCache(ELO_STORES_CACHE, rphProratedShown() ? ELO_STORES_TTL_LIVE : ELO_STORES_TTL);
     if(cached && !cached.stale && cached.data){ setData(cached.data); return; }
     (async () => {
       try {
@@ -33745,11 +34799,7 @@ function EloStores({canViewStore, onStoreClick}){
     }
     return seasons.slice(0, ELO_RECENT_SETS).map(s => s.key);
   }, [seasons, scopeMode, customKeys]);
-  // The pro-rated bars are one season's worth of activity, so the lens scores
-  // one season — the set chips are overridden while it's on rather than left
-  // showing numbers the verdict doesn't come from.
-  const proKey = useMemo(() => eloProSeasonKey(seasons), [seasons]);
-  const selectedKeys = useMemo(() => (proBars && proKey) ? [proKey] : baseKeys, [proBars, proKey, baseKeys]);
+  const selectedKeys = baseKeys;
   const selected = useMemo(() => new Set(selectedKeys), [selectedKeys]);
 
   const toggleSeason = (key) => {
@@ -33769,20 +34819,31 @@ function EloStores({canViewStore, onStoreClick}){
     const out = data.stores
       .map(s => {
         const t = eloStoreTotals(s, selectedKeys);
-        const tier = proBars
-          ? ((t.events >= RPH_PRORATED.events && t.players >= RPH_PRORATED.players
-              && t.attendance >= RPH_PRORATED.tickets) ? RPH_PRORATED : null)
-          : rphTierFor(t);
-        return {...s, t, tier, tierRank: tier ? (tier.key === "legendary" ? 2 : 1) : 0};
+        const tier = rphTierFor(t);
+        const p = proShown ? rphProratedTotals(s.pro) : null;
+        const x = proShown ? rphProratedTotals(s.proxy) : null;
+        return {...s, t, p, x, tier, tierRank: tier ? (tier.key === "legendary" ? 2 : 1) : 0};
       })
-      // A store that ran nothing in the chosen window isn't in the window —
-      // except in pro mode before Sept 1, where EVERY store is legitimately at
-      // zero and hiding them all would look like the tab was broken.
-      .filter(s => s.t.events > 0)
+      // A store that ran nothing in the chosen sets isn't in the window — unless
+      // it is active in Sept–Oct, which the pro-rated columns score whatever the
+      // chips say. The default "Last 4 complete" leaves out the set running now,
+      // i.e. all of September, so without this a shop that only got going this
+      // month would be missing from the one number it most wants to see. Same for
+      // the Jul–Aug proxy, which also falls inside the running set.
+      .filter(s => s.t.events > 0 || (s.p && (s.p.events > 0 || s.p.scheduled > 0)) || (s.x && s.x.events > 0))
       .filter(s => !q || s.store.toLowerCase().includes(q));
-    // Per-set columns sort under a "<metric>:<season>" key; everything else is
+    // Per-set columns sort under a "<metric>:<season>" key, the pro-rated ones
+    // under "pro_<field>" and the proxy under "prx_<field>"; everything else is
     // either the store name or a field on the rolled-up totals.
     const valOf = (r) => {
+      if(sortCol.startsWith("prx_")) return r.x ? r.x[sortCol.slice(4)] : 0;
+      if(sortCol.startsWith("pro_")){
+        if(!r.p) return 0;
+        // Status ranks by how many of the three bars are cleared, then by the
+        // prerelease, then by tickets — so "nearly there" sorts above "idle".
+        if(sortCol === "pro_status") return (3 - r.p.gaps.length) * 1e7 + r.p.preRank * 1e6 + r.p.attendance;
+        return r.p[sortCol.slice(4)];
+      }
       const i = sortCol.indexOf(":");
       if(i < 0){
         if(sortCol === "store") return r.store;
@@ -33798,13 +34859,43 @@ function EloStores({canViewStore, onStoreClick}){
       if(typeof av === "string" || typeof bv === "string") return String(av || "").localeCompare(String(bv || "")) * dir;
       return ((av || 0) - (bv || 0)) * dir;
     });
-  }, [data, search, sortCol, sortDir, selectedKeys, proBars]);
+  }, [data, search, sortCol, sortDir, selectedKeys, proShown]);
+
+  // The headline for the callout, over EVERY tracked store — not the searched
+  // subset — so typing a name into the box doesn't change "how many clear it".
+  const proSummary = useMemo(() => {
+    if(!data || !proShown) return null;
+    const s = {active: 0, clears: 0, reach: 0, pre: 0, proxyActive: 0, proxyClears: 0};
+    for(const st of data.stores){
+      const x = rphProratedTotals(st.proxy);
+      if(x.events){ s.proxyActive++; if(x.clears) s.proxyClears++; }
+      const p = rphProratedTotals(st.pro);
+      if(!p.events && !p.scheduled && !p.pre) continue;
+      s.active++;
+      if(p.clears) s.clears++;
+      else if(p.events < RPH_PRORATED.events && p.events + p.scheduled >= RPH_PRORATED.events) s.reach++;
+      if(p.pre) s.pre++;
+    }
+    return s;
+  }, [data, proShown]);
 
   const totals = useMemo(() => {
     if(!rows) return null;
-    const t = {events: 0, attendance: 0, per: {}};
+    const t = {events: 0, attendance: 0, per: {},
+               pro: {events: 0, attendance: 0, scheduled: 0, pre: 0, clears: 0},
+               proxy: {events: 0, attendance: 0, clears: 0}};
     for(const r of rows){
       t.events += r.t.events; t.attendance += r.t.attendance;
+      if(r.p){
+        t.pro.events += r.p.events; t.pro.attendance += r.p.attendance;
+        t.pro.scheduled += r.p.scheduled;
+        if(r.p.pre) t.pro.pre++;
+        if(r.p.clears) t.pro.clears++;
+      }
+      if(r.x){
+        t.proxy.events += r.x.events; t.proxy.attendance += r.x.attendance;
+        if(r.x.clears) t.proxy.clears++;
+      }
       for(const k of selectedKeys){
         const c = r.per[k];
         if(!c) continue;
@@ -33828,13 +34919,11 @@ function EloStores({canViewStore, onStoreClick}){
   const scopeLabel = selectedKeys.length === seasons.length ? "all sets"
     : selectedKeys.length === 1 ? (seasons.find(s => s.key === selectedKeys[0]) || {}).label
     : selectedKeys.length + " sets";
-  const proSeasonLabel = (seasons.find(s => s.key === proKey) || {}).label || "";
   // Only a genuinely huge table needs the height cap — see the CSS note.
   const wide = cols.length > ELO_RECENT_SETS;
-  // Which bar the progress cells count toward. Outside pro mode the target is
-  // the NEXT rung: a store already clearing Standard is shown its Legendary gap.
+  // Which bar the progress cells count toward: the NEXT rung, so a store
+  // already clearing Standard is shown its Legendary gap.
   const barFor = (r) => {
-    if(proBars) return RPH_PRORATED;
     if(!showBars) return null;
     return (r.t.events >= RPH_TIERS[1].events && r.t.players >= RPH_TIERS[1].players
             && r.t.attendance >= RPH_TIERS[1].tickets) ? RPH_TIERS[0] : RPH_TIERS[1];
@@ -33853,7 +34942,72 @@ function EloStores({canViewStore, onStoreClick}){
   // left and the last Tickets column had no label at all.
   const TOTALS_COLS = 6;
 
+  // ── Pro-rated (Sept–Oct) ──
+  const proEnd = Date.parse(RPH_PRORATED_WINDOW.end);
+  const proOpen = Date.now() < proEnd;
+  const proDaysLeft = Math.max(0, Math.ceil((proEnd - Date.now()) / 86400000));
+  const proHead = html`<${React.Fragment}>
+    <${EloSortTh} label="Events"  col="pro_events"     sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-pro-col elo-stores-pro-first" numeric=${true}/>
+    <${EloSortTh} label="Tickets" col="pro_attendance" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-pro-col" numeric=${true}/>
+    <${EloSortTh} label="Fans"    col="pro_players"    sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-pro-col" numeric=${true}/>
+    <${EloSortTh} label="Hyperia pre" col="pro_preRank" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="elo-stores-pro-col" numeric=${true}/>
+    <${EloSortTh} label="Status"  col="pro_status"     sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="elo-stores-pro-col" numeric=${true}/>
+  </${React.Fragment}>`;
+  const PRO_COLS = 5;
+  // The Jul–Aug comparison: same bars, deliberately NOT highlighted — it is the
+  // yardstick, the live columns are the stat.
+  const proxyHead = html`<${React.Fragment}>
+    <${EloSortTh} label="Events"  col="prx_events"     sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-prx-first" numeric=${true}/>
+    <${EloSortTh} label="Tickets" col="prx_attendance" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num" numeric=${true}/>
+    <${EloSortTh} label="Fans"    col="prx_players"    sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num" numeric=${true}/>
+  </${React.Fragment}>`;
+  const PROXY_COLS = 3;
+  const updatedAgo = data && eloUpdatedAgo(data.updatedAt);
+  const proStatus = (p) => {
+    if(p.clears && p.pre === "held") return html`<span class="elo-tier elo-tier--legendary"
+      title="Events, fans and tickets all clear the pro-rated bars in Sept–Oct, and the store ran the ${RPH_PRORATED.prereleaseSet} prerelease.">Qualifies</span>`;
+    if(p.clears) return html`<span class="elo-tier elo-tier--standard"
+      title=${"Events, fans and tickets all clear the pro-rated bars. " + (p.pre === "scheduled"
+        ? `The ${RPH_PRORATED.prereleaseSet} prerelease is on the calendar — it qualifies once that runs.`
+        : `Still needs a ${RPH_PRORATED.prereleaseSet} prerelease, and none is on the calendar.`)}>Bars met</span>`;
+    return html`<span class="elo-tier elo-tier--welcome" title=${"Needs " + p.gaps.join(", ")
+      + (p.scheduled ? ` — ${p.scheduled} more event${p.scheduled === 1 ? "" : "s"} on the calendar before Oct 31` : "")
+      + (p.pre ? "" : `; no ${RPH_PRORATED.prereleaseSet} prerelease on the calendar`) + "."}>${proOpen ? "Not yet" : "Missed"}</span>`;
+  };
+  const proPre = (p) => p.pre === "held"
+    ? html`<span class="elo-prog met" title="Ran the ${RPH_PRORATED.prereleaseSet} prerelease.">Held</span>`
+    : p.pre === "scheduled"
+      ? html`<span title="A ${RPH_PRORATED.prereleaseSet} prerelease is on the store's calendar.">Booked</span>`
+      : html`<span class="muted" title="No ${RPH_PRORATED.prereleaseSet} prerelease on the store's calendar.">—</span>`;
+  const twoRowHead = proShown || (breakdown && cols.length > 0);
+
   return html`<div class="elo-stores">
+    ${proShown && proSummary ? html`<section class="elo-stores-pro" aria-label="Pro-rated Legendary, Sept–Oct">
+      <div class="elo-stores-pro-top">
+        <span class="elo-stores-pro-kicker">Pro-rated Legendary · Sept 1 – Oct 31</span>
+        <span class="elo-stores-pro-when">${proOpen
+          ? (proDaysLeft <= 1 ? "Last day" : proDaysLeft + " days left")
+          : "Closed Oct 31 — final numbers"}${updatedAgo ? html`<span class="elo-stores-pro-fresh"
+            title="Store events and rosters are pulled from Ravensburger Play every hour while the offer runs; an event counts once the store has entered its results."> · updated ${updatedAgo}</span>` : ""}</span>
+      </div>
+      <div class="elo-stores-pro-stats">
+        <div class="elo-stores-pro-stat"><b>${proSummary.clears}</b><span>of ${proSummary.active} active stores clear
+          all three bars</span></div>
+        ${proOpen ? html`<div class="elo-stores-pro-stat"><b>${proSummary.reach}</b><span>more reach ${RPH_PRORATED.events} events
+          with what's on their calendar</span></div>` : ""}
+        <div class="elo-stores-pro-stat"><b>${proSummary.pre}</b><span>${proOpen ? "have" : "ran"} a ${RPH_PRORATED.prereleaseSet}
+          ${" "}prerelease${proOpen ? " held or booked" : ""}</span></div>
+        <div class="elo-stores-pro-stat elo-stores-pro-stat--proxy"><b>${proSummary.proxyClears}</b><span>of ${proSummary.proxyActive} would
+          have cleared the bars in ${RPH_PRORATED_PROXY.label}</span></div>
+      </div>
+      <p class="elo-stores-pro-note">Ravensburger's one-off offer: <b>${RPH_PRORATED.events}</b> events,
+        ${" "}<b>${RPH_PRORATED.players}</b> unique fans and <b>${RPH_PRORATED.tickets}</b> tickets run between
+        ${" "}<b>Sept 1 and Oct 31</b>, plus a <b>${RPH_PRORATED.prereleaseSet}</b> prerelease, earns provisional
+        Legendary — no further pro-rating follows, and the status has to be held afterwards. The highlighted columns
+        count only events that have already run, by their date, whatever sets are picked below; <b>+N</b> is what a
+        store still has on the calendar before Oct 31. <b>${RPH_PRORATED_PROXY.label}</b> is the yardstick: the same bars
+        over the two months before the offer — Vine's first month and August.</p>
+    </section>` : ""}
     <p class="elo-stores-intro">Every event a store has run on Ravensburger Play — Set Championships, prereleases, locals,
       league nights — grouped by the shop and bucketed into set seasons by date. <strong>Tickets</strong> counts everyone who
       actually played, one per person per event, so a regular who shows up weekly is a ticket each week.${" "}
@@ -33862,35 +35016,33 @@ function EloStores({canViewStore, onStoreClick}){
       marked <span class="elo-stores-gap">~</span> — because a shop that runs events without recording pairings is not a
       shop nobody attended. <strong>Pre</strong> is how many sets the store ran a prerelease for. The tier verdict scores
       events, fans and tickets; prereleases carry the asterisk. A cancelled event isn't counted unless the store
-      recorded results for it.</p>
-    <p class="elo-stores-fresh">Store events and rosters refresh from Ravensburger Play once a day, so an event usually
-      shows up the day after it runs. <strong>Last ${ELO_RECENT_SETS} complete</strong> leaves out the set still running;
+      recorded results for it. Stores marked <span class="elo-stores-outside elo-stores-outside--inline">Not in Elo</span>${" "}
+      are outside the Chicagoland rating region: they're listed so they can follow their own tier progress, and their
+      events don't count toward anyone's rating.</p>
+    <p class="elo-stores-fresh">${proShown
+      ? html`<${React.Fragment}>Store events and rosters refresh from Ravensburger Play every hour while the pro-rated offer
+        runs, so an event shows up an hour or so after the store enters its results.</>`
+      : html`<${React.Fragment}>Store events and rosters refresh from Ravensburger Play once a day, so an event usually
+        shows up the day after it runs.</>`}${" "}<strong>Last ${ELO_RECENT_SETS} complete</strong> leaves out the set still running;
       pick <strong>Incl. current</strong> to see this season.</p>
 
     <div class="elo-stores-req">
-      ${proBars ? html`<${React.Fragment}><strong>Pro-rated bars</strong> — the memo's one-off 1/6 offer:${" "}
-        <b>${RPH_PRORATED.events}</b> events · <b>${RPH_PRORATED.players}</b> unique fans · <b>${RPH_PRORATED.tickets}</b> tickets ·${" "}
-        <b>Hyperia City</b> prerelease. The real offer is a two-month window (<b>Sept 1 – Nov 1 2026</b>), which is one set
-        season's worth of activity, not four — so this lens scores a single season, the most recent completed set
-        (<b>${proSeasonLabel || "—"}</b>), and ignores the set chips. It's a proxy for where a store would stand under the
-        easier bars; the memo is explicit that no further pro-rating follows and the status must be held afterwards.</>`
-      : html`<${React.Fragment}><strong>Maintaining a tier</strong> over four set seasons —${" "}
+      <strong>Maintaining a tier</strong> over four set seasons —${" "}
         <b>Standard</b>: ${RPH_TIERS[1].events} events · ${RPH_TIERS[1].players} unique fans · ${RPH_TIERS[1].tickets} tickets ·
         a prerelease for every available set. <b>Legendary</b>: ${RPH_TIERS[0].events} · ${RPH_TIERS[0].players} · ${RPH_TIERS[0].tickets} · same prereleases.${" "}
-        <b>Entry</b> to Standard is ${RPH_ENTRY.events} events with 4 players in each.</>`}
-      ${(!proBars && selectedKeys.length !== ELO_RECENT_SETS) ? html`<span class="elo-stores-req-warn">You've picked ${selectedKeys.length} set${selectedKeys.length===1?"":"s"}, not ${ELO_RECENT_SETS} — the bars are written for a four-season window, so read the verdict accordingly.</span>` : ""}
+        <b>Entry</b> to Standard is ${RPH_ENTRY.events} events with 4 players in each.
+      ${selectedKeys.length !== ELO_RECENT_SETS ? html`<span class="elo-stores-req-warn">You've picked ${selectedKeys.length} set${selectedKeys.length===1?"":"s"}, not ${ELO_RECENT_SETS} — the bars are written for a four-season window, so read the verdict accordingly.</span>` : ""}
     </div>
-    <div class="elo-stores-setbar ${proBars?"elo-stores-setbar--locked":""}"
-      title=${proBars ? "The pro-rated lens scores one season — turn it off to pick your own sets." : ""}>
+    <div class="elo-stores-setbar">
       <span class="elo-stores-setlbl">Sets</span>
-      <button class="elo-chip ${scopeMode==="complete"?"active":""}" disabled=${proBars} onClick=${()=>setScopeMode("complete")}
+      <button class="elo-chip ${scopeMode==="complete"?"active":""}" onClick=${()=>setScopeMode("complete")}
         title="The ${ELO_RECENT_SETS} most recent FINISHED sets — skips the set currently running, whose season is still filling up. Rolls forward on its own as sets release.">Last ${ELO_RECENT_SETS} complete</button>
-      <button class="elo-chip ${scopeMode==="recent"?"active":""}" disabled=${proBars} onClick=${()=>setScopeMode("recent")}
+      <button class="elo-chip ${scopeMode==="recent"?"active":""}" onClick=${()=>setScopeMode("recent")}
         title="The ${ELO_RECENT_SETS} most recent sets, including the one currently running.">Incl. current</button>
-      <button class="elo-chip ${scopeMode==="all"?"active":""}" disabled=${proBars} onClick=${()=>setScopeMode("all")}>All</button>
+      <button class="elo-chip ${scopeMode==="all"?"active":""}" onClick=${()=>setScopeMode("all")}>All</button>
       <span class="elo-stores-setdiv"></span>
       ${seasons.map(s => html`<button key=${s.key} class="elo-chip elo-chip--set ${selected.has(s.key)?"active":""}"
-        title=${s.key || "Events with no set recorded"} disabled=${proBars}
+        title=${s.key || "Events with no set recorded"}
         onClick=${()=>toggleSeason(s.key)}>${s.label}</button>`)}
     </div>
 
@@ -33900,12 +35052,8 @@ function EloStores({canViewStore, onStoreClick}){
                onChange=${e => setBreakdown(e.target.checked)}/>
         Per-set breakdown
       </label>
-      <label class="elo-stores-toggle" title="Score the most recent completed set on its own against the memo's pro-rated bars (8 / 8 / 80) — two months is one season's activity, not four.">
-        <input type="checkbox" checked=${proBars} onChange=${e => setProBars(e.target.checked)}/>
-        Pro-rated bars
-      </label>
       <label class="elo-stores-toggle">
-        <input type="checkbox" checked=${showBars} disabled=${proBars}
+        <input type="checkbox" checked=${showBars}
                onChange=${e => setShowBars(e.target.checked)}/>
         Show progress to next tier
       </label>
@@ -33919,14 +35067,20 @@ function EloStores({canViewStore, onStoreClick}){
     <div class="elo-table-wrap elo-stores-wrap ${wide?"elo-stores-wrap--wide":""}">
       <table class="elo-table elo-stores-table">
         <thead>
-          ${breakdown && cols.length > 0 ? html`<${React.Fragment}>
+          ${twoRowHead ? html`<${React.Fragment}>
             <tr>
               <${EloSortTh} label="Store" col="store" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort}
                 className="elo-stores-name" numeric=${false} rowspan=${2}/>
+              ${proShown ? html`<th colspan=${PRO_COLS} class="elo-stores-grp elo-stores-grp--pro"
+                title="Pro-rated Legendary: events that ran Sept 1 – Oct 31, against ${RPH_PRORATED.events} / ${RPH_PRORATED.players} / ${RPH_PRORATED.tickets}. Independent of the set chips.">Pro-rated · ${RPH_PRORATED_WINDOW.label}</th>
+              <th colspan=${PROXY_COLS} class="elo-stores-grp elo-stores-grp--prx"
+                title="The same pro-rated bars over the two months before the offer (Jul 1 – Aug 31): Vine's first month and August. A yardstick, not part of the offer.">Proxy · ${RPH_PRORATED_PROXY.label}</th>` : ""}
               <th colspan=${TOTALS_COLS} class="elo-stores-grp elo-stores-grp--tot">${scopeLabel}</th>
               ${cols.map(s => html`<th key=${s.key} colspan=${2} class="elo-stores-grp">${s.label}</th>`)}
             </tr>
             <tr>
+              ${proShown ? proHead : ""}
+              ${proShown ? proxyHead : ""}
               ${totalsHead}
               ${cols.map(s => html`<${React.Fragment} key=${s.key}>
                 <${EloSortTh} label="Events"  col=${"ev:" + s.key} sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num" numeric=${true}/>
@@ -33940,18 +35094,37 @@ function EloStores({canViewStore, onStoreClick}){
           </tr>`}
         </thead>
         <tbody>
-          ${rows.map(r => html`<tr key=${r.key || r.store}>
-            <td class="elo-stores-name">${canViewStore
+          ${rows.map(r => { const outside = ELO_STATUS_ONLY_STORE_IDS.has(r.store_id); return html`<tr key=${r.key || r.store}>
+            <td class="elo-stores-name">${canViewStore && !outside
               ? html`<${EloLink} to=${{tab:"store", store:r.store}} className="elo-name-btn elo-stores-nametxt"
                   title=${r.store} onClick=${() => onStoreClick && onStoreClick(r.store)}>${r.store}</${EloLink}>`
               : html`<span class="elo-stores-nametxt" title=${r.store}>${r.store}</span>`}
-              ${(r.city || r.state) ? html`<span class="elo-stores-loc">${[r.city, r.state].filter(Boolean).join(", ")}</span>` : ""}</td>
+              ${(r.city || r.state) ? html`<span class="elo-stores-loc">${[r.city, r.state].filter(Boolean).join(", ")}</span>` : ""}
+              ${outside ? html`<span class="elo-stores-outside"
+                title="Outside the Chicagoland Elo region. The store is listed here so it can follow its RPH tier progress; its events don't count toward Elo ratings.">Not in Elo</span>` : ""}</td>
+            ${r.p ? html`<${React.Fragment}>
+              <td class="num elo-stores-pro-col elo-stores-pro-first">${prog(r.p.events, RPH_PRORATED.events)}${r.p.scheduled
+                ? html`<span class="elo-stores-sched" title=${r.p.scheduled + " more on the store's calendar before Oct 31 — not counted until they run."}>+${r.p.scheduled}</span>` : ""}${r.p.unscanned
+                ? html`<span class="elo-stores-gap" title=${r.p.unscanned + " of these events have no roster pulled yet, so nobody from them is counted in Tickets or Fans."}>†</span>` : ""}</td>
+              <td class="num elo-stores-pro-col"><strong>${prog(r.p.attendance, RPH_PRORATED.tickets)}</strong>${r.p.unrecorded
+                ? html`<span class="elo-stores-gap" title=${r.p.unrecorded + " of these came from events where the store took registrations but never entered results, so they are counted as registered rather than confirmed played."}>~</span>` : ""}</td>
+              <td class="num elo-stores-pro-col" title="Distinct people who played at this store Sept 1 – Oct 31.">${prog(r.p.players, RPH_PRORATED.players)}</td>
+              <td class="elo-stores-pro-col">${proPre(r.p)}</td>
+              <td class="elo-stores-pro-col">${proStatus(r.p)}</td>
+            </>` : ""}
+            ${r.x ? html`<${React.Fragment}>
+              <td class="num elo-stores-prx-first">${prog(r.x.events, RPH_PRORATED.events)}${r.x.unscanned
+                ? html`<span class="elo-stores-gap" title=${r.x.unscanned + " of these events have no roster pulled, so nobody from them is counted in Tickets or Fans."}>†</span>` : ""}</td>
+              <td class="num">${prog(r.x.attendance, RPH_PRORATED.tickets)}${r.x.unrecorded
+                ? html`<span class="elo-stores-gap" title=${r.x.unrecorded + " of these came from events where the store took registrations but never entered results, so they are counted as registered rather than confirmed played."}>~</span>` : ""}</td>
+              <td class="num" title="Distinct people who played at this store Jul 1 – Aug 31.">${prog(r.x.players, RPH_PRORATED.players)}</td>
+            </>` : ""}
             <td class="num elo-stores-tot">${prog(r.t.events, barFor(r) && barFor(r).events)}${r.t.unscanned
               ? html`<span class="elo-stores-gap" title=${r.t.unscanned + " of these events have no roster pulled yet, so nobody from them is counted in Tickets or Fans."}>†</span>` : ""}</td>
             <td class="num elo-stores-tot"><strong>${prog(r.t.attendance, barFor(r) && barFor(r).tickets)}</strong>${r.t.unrecorded
               ? html`<span class="elo-stores-gap" title=${r.t.unrecorded + " of these came from events where the store took registrations but never entered results, so they are counted as registered rather than confirmed played."}>~</span>` : ""}</td>
             <td class="num elo-stores-tot" title="Distinct people who played at this store across the selected sets — a union, so a regular counts once no matter how many events they played.">${prog(r.t.players, barFor(r) && barFor(r).players)}</td>
-            <td class="num elo-stores-tot" title="Distinct sets this store ran a prerelease for. RPH wants one per available set; pro-rated Legendary wants Hyperia City specifically.">${r.t.pre || 0}</td>
+            <td class="num elo-stores-tot" title="Distinct sets this store ran a prerelease for. RPH wants one per available set.">${r.t.pre || 0}</td>
             <td class="num elo-stores-tot">${r.t.avg}</td>
             <td class="elo-stores-tiercell">${r.tier
                 ? html`<span class=${"elo-tier elo-tier--" + r.tier.key}
@@ -33964,11 +35137,22 @@ function EloStores({canViewStore, onStoreClick}){
                 <td class="num">${c ? num(c.attendance) : html`<span class="muted">—</span>`}</td>
               </${React.Fragment}>`;
             })}
-          </tr>`)}
+          </tr>`; })}
         </tbody>
         <tfoot>
           <tr>
             <td class="elo-stores-name"><span class="elo-stores-nametxt">${rows.length === data.stores.length ? "All stores" : "Shown stores"}</span></td>
+            ${proShown ? html`<${React.Fragment}>
+              <td class="num elo-stores-pro-col elo-stores-pro-first">${num(totals.pro.events)}${totals.pro.scheduled
+                ? html`<span class="elo-stores-sched">+${num(totals.pro.scheduled)}</span>` : ""}</td>
+              <td class="num elo-stores-pro-col">${num(totals.pro.attendance)}</td>
+              <td class="num elo-stores-pro-col"><span class="muted" title="Distinct players can't be summed across stores — the same person plays at several.">—</span></td>
+              <td class="elo-stores-pro-col" title="Stores with a ${RPH_PRORATED.prereleaseSet} prerelease held or booked.">${num(totals.pro.pre)}</td>
+              <td class="elo-stores-pro-col" title="Stores clearing all three pro-rated bars.">${num(totals.pro.clears)} clear</td>
+              <td class="num elo-stores-prx-first" title=${num(totals.proxy.clears) + " of these stores would have cleared all three bars in " + RPH_PRORATED_PROXY.label + "."}>${num(totals.proxy.events)}</td>
+              <td class="num">${num(totals.proxy.attendance)}</td>
+              <td class="num"><span class="muted" title="Distinct players can't be summed across stores — the same person plays at several.">—</span></td>
+            </>` : ""}
             <td class="num elo-stores-tot">${num(totals.events)}</td>
             <td class="num elo-stores-tot">${num(totals.attendance)}</td>
             <td class="num elo-stores-tot"><span class="muted" title="Distinct players can't be summed across stores — the same person plays at several.">—</span></td>
@@ -35342,6 +36526,9 @@ const SCREENER_STATE_FIELDS = [
   ["filterGraders","gdr","arr",[]],
   ["filterGrades","gde","arr",[]],
   ["soldFilter","sf","sold",null],
+  // Raw mode's graded-price tier ("PSA|10"). Present only on a view that sorts
+  // by a graded price column, where it decides which rows lead.
+  ["gradedTier","gt","nstr",null],
 ];
 // Escape ONLY this codec's own delimiters (and the escape character itself).
 // searchParams handles the rest of URL encoding; double-encoding here would
@@ -35765,10 +36952,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   useEffect(() => {
     if(!showGraded || !gradedPremium || gradedRollup != null || gradedRollupErr) return;
     let cancelled = false;
-    sbFetchAll("graded_sales_rollup", {
-      select: "card_id,grader,grade,printing,sale_count,last_sold_date,last_sold_price,avg_last_5,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,pct_1095d,pct_rel",
-      order: "card_id.asc,grader.asc,grade.asc,printing.asc",
-    }).then(rows => { if(!cancelled) setGradedRollup(rows || []); })
+    fetchScreenerGradedRollup().then(rows => { if(!cancelled) setGradedRollup(rows || []); })
       .catch(e => { if(!cancelled){ console.warn("graded rollup fetch:", e?.message || e); setGradedRollupErr(true); } });
     return () => { cancelled = true; };
   }, [showGraded, gradedPremium, gradedRollup, gradedRollupErr]);
@@ -35777,6 +36961,15 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // costs nothing. Resolves empty (never throws) before migration 165 lands, in
   // which case every pop column simply reads "—".
   const [gradedPop, setGradedPop] = useState(null);
+  // Which grader + grade Raw mode's graded price columns show ("PSA|10"). A
+  // column setting like visibility, so it persists per browser; it rides a
+  // saved view or a ?v= link only when that view SORTS by one of the columns
+  // (see screenerPayload), because then it decides which rows lead.
+  const [rawGradedTier, setRawGradedTier] = useState(() => {
+    try { return normGradedTier(localStorage.getItem("packsink:screener:gradedTier") || RAW_GRADED_TIER_DEFAULT); }
+    catch { return RAW_GRADED_TIER_DEFAULT; }
+  });
+  useEffect(() => { try { localStorage.setItem("packsink:screener:gradedTier", rawGradedTier); } catch {} }, [rawGradedTier]);
   useEffect(() => {
     if(!showGraded || !gradedPremium || gradedPop != null) return;
     let cancelled = false;
@@ -36098,6 +37291,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     setFilterSealedTypes(new Set(v.filterSealedTypes || []));
     setFilterGraders(new Set(v.filterGraders || []));
     setFilterGrades(new Set(v.filterGrades || []));
+    // Only a view that sorts by a graded price column carries a tier; any other
+    // leaves the viewer's own pick alone, like column visibility.
+    if(v.gradedTier) setRawGradedTier(normGradedTier(v.gradedTier));
   };
   // Consume the App-pushed view payload from a banner-title click on Home.
   // Apply once, then notify parent so we don't re-fire on prop re-renders.
@@ -36249,12 +37445,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     filterSealedTypes: Array.from(filterSealedTypes),
     filterGraders: Array.from(filterGraders),
     filterGrades: Array.from(filterGrades),
+    gradedTier: [sortKey, sortKey2].some(k => RAW_GRADED_COL_KEYS.includes(k)) ? rawGradedTier : null,
   }), [preset, moverWin, priceMode, filterSet, search, filterRarities, filterInks,
     collFilter, sigFilter, minPrice, maxPrice, floorAtStart, minPct, maxPct, pctWin, showAllWins,
     density, showGraded, showSealed, sortKey, sortDesc, sortKey2, sortDesc2, soldFilter,
     showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers,
     filterLores, filterInkable, filterLegality, filterDualInk, filterKeywords,
-    filterClassifications, filterIllustrators, filterSealedTypes, filterGraders, filterGrades]);
+    filterClassifications, filterIllustrators, filterSealedTypes, filterGraders, filterGrades, rawGradedTier]);
 
   // Mirror the whole screen into ?v=. replaceState, never push — a filter is
   // not a page, and pushing would make Back walk backwards through every chip
@@ -36478,6 +37675,20 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     }
     return m;
   }, [raw]);
+
+  // Raw mode's graded price columns: THE printing ladder (makeGradedPrintingLookup),
+  // over the rollup keyed by card_id — a raw row IS a card_id + printing, so no
+  // pid join is needed and a promo with a null pid still prices. Returns null
+  // until the rollup is loaded, which is what keeps the columns at "—" and the
+  // enrichment pass off entirely. See rawGradedFields for what a row gets.
+  const rawGradedHit = useMemo(() => {
+    if(showGraded || showSealed || !gradedPremium || !gradedRollup) return null;
+    const buckets = gradedCatalogBuckets(raw);
+    const hitFor = makeGradedPrintingLookup(
+      buildGradedPriceIndex(gradedRollup, null, r => r.card_id),
+      gradedSplitTiers(gradedRollup, buckets));
+    return (cardId, printing, tier) => rawGradedFields(hitFor(cardId, cardId, tier.grader.toLowerCase(), tier.grade, printing), buckets.get(cardId));
+  }, [showGraded, showSealed, gradedPremium, gradedRollup, raw]);
 
   // Raw-row index for graded mode — we splice metadata from the original
   // price_movers row (name/set/rarity/ink/image) onto each synthesized
@@ -36983,27 +38194,40 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     // rows are the shared price_movers objects, and writing pop fields onto them
     // would leak into every other consumer of those rows. After the filter so
     // only shown rows pay; before the sort so the pop columns order.
-    if(!showGraded && !showSealed && gradedPop){
+    // The graded price columns ride the same copy: gr_last / gr_avg5 are the
+    // column keys AND the fields, so the comparator's r[k] fall-through sorts
+    // them. A row with no sale at the chosen tier gets nulls, which sink.
+    if(!showGraded && !showSealed && (gradedPop || rawGradedHit)){
       const popCache = new Map();
+      const tier = parseGradedTier(rawGradedTier);
       out = out.map(r => {
-        const ck = r.card_id + "|" + (r.printing || "");
-        let st = popCache.get(ck);
-        if(st === undefined){
-          const cat = catalogByCardId.get(r.card_id);
-          const prows = cat ? (gradedPop.byCard.get(
-            popCardKey(cat.Set, cat["Product Name"], cat.Number)) || []) : [];
-          const picked = rawPopPick(prows, r.printing, r.card_id);
-          st = picked ? gradedPopStats(picked) : null;
-          popCache.set(ck, st);
+        const o = {...r};
+        if(gradedPop){
+          const ck = r.card_id + "|" + (r.printing || "");
+          let st = popCache.get(ck);
+          if(st === undefined){
+            const cat = catalogByCardId.get(r.card_id);
+            const prows = cat ? (gradedPop.byCard.get(
+              popCardKey(cat.Set, cat["Product Name"], cat.Number)) || []) : [];
+            const picked = rawPopPick(prows, r.printing, r.card_id);
+            st = picked ? gradedPopStats(picked) : null;
+            popCache.set(ck, st);
+          }
+          o._pop = st;
+          o.pop_total = st ? st.total : null;
+          o.pop_ten   = st ? st.ten : null;
+          o.pop_gem   = (st && st.total > 0) ? st.ten / st.total : null;
+          o.pop_qual  = st ? st.qualified : null;
+          for(const gk of ["10","9.5","9","8","7"]){
+            const hit = st && st.breakdown.find(b => b.key === gk);
+            o["pop_g" + gk.replace(".", "_")] = st ? (hit ? hit.n : 0) : null;
+          }
         }
-        const o = {...r, _pop: st,
-          pop_total: st ? st.total : null,
-          pop_ten:   st ? st.ten : null,
-          pop_gem:   (st && st.total > 0) ? st.ten / st.total : null,
-          pop_qual:  st ? st.qualified : null};
-        for(const gk of ["10","9.5","9","8","7"]){
-          const hit = st && st.breakdown.find(b => b.key === gk);
-          o["pop_g" + gk.replace(".", "_")] = st ? (hit ? hit.n : 0) : null;
+        if(rawGradedHit){
+          const g = rawGradedHit(r.card_id, r.printing, tier);
+          o.gr_last = g ? g.last : null;
+          o.gr_avg5 = g ? g.avg5 : null;
+          o._gr = g;
         }
         return o;
       });
@@ -37069,7 +38293,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     });
     return out;
   }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, floorAtStart, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes, gradedPop,
-    watchOnly, watchedKeys, watchedCardIds]);
+    rawGradedHit, rawGradedTier, watchOnly, watchedKeys, watchedCardIds]);
 
   // Plain click sets the primary sort; shift-click sets the tiebreaker applied
   // within equal primary values. A column can't be both, so promoting the
@@ -37313,11 +38537,29 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     fetchGradedPop().then(p => { if(!cancelled) setGradedPop(p); });
     return () => { cancelled = true; };
   }, [rawPopWanted, gradedPop]);
+  // Raw mode's graded price columns read the same rollup Graded mode does, and
+  // fetch it on the same terms as the pop columns: only when one is shown or
+  // sorted by. Graded prices sit behind the graded-data terms everywhere else,
+  // so they do here too — asking for the column raises the terms prompt, and
+  // until it is accepted the cells read "—" under a notice saying why.
+  const rawGradedWanted = !showGraded && !showSealed && (
+    RAW_GRADED_COL_KEYS.includes(sortKey) || RAW_GRADED_COL_KEYS.includes(sortKey2)
+    || RAW_GRADED_COL_KEYS.some(k => screenerColOn(colPrefs.raw, k)));
+  useEffect(() => {
+    if(!rawGradedWanted) return;
+    if(!gradedPremium){ signalGradedSurface(); return; }
+    if(gradedRollup != null || gradedRollupErr) return;
+    let cancelled = false;
+    fetchScreenerGradedRollup()
+      .then(rows => { if(!cancelled) setGradedRollup(rows || []); })
+      .catch(e => { if(!cancelled){ console.warn("graded rollup fetch:", e?.message || e); setGradedRollupErr(true); } });
+    return () => { cancelled = true; };
+  }, [rawGradedWanted, gradedPremium, gradedRollup, gradedRollupErr]);
 
   // ── Draggable column widths (hooks — must be before the early returns) ──
   // Persisted alongside order/hidden in colPrefs, so ⚙ Columns → Reset clears
-  // them too. Widths apply through a <colgroup>; the grips live in a sticky,
-  // zero-height bar pinned over the header rather than inside each <th>,
+  // them too. Widths apply through per-column rules; the grips live in a
+  // zero-height bar laid over the pinned header rather than inside each <th>,
   // because the <th>s come from the colDefs factories. Header-only grips also
   // mean no invisible dead strip down every row at each column boundary.
   //
@@ -37355,30 +38597,42 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   }, []);
   const gripKeysRef = useRef([]);
   const dragRef = useRef(null);
-  const [gripGeom, setGripGeom] = useState({headH: 0, edges: []});
+  // The body table's own header is the SIZER (see headRow): its cells take
+  // their widths from the header text and the rows beneath, exactly as the one
+  // table always did, and the pinned header is laid out FIXED to those widths.
+  // Measured fractionally, or the two tables drift apart by a pixel a column.
+  const sizeHeadRef = useRef(null);
+  const [gripGeom, setGripGeom] = useState({headH: 0, edges: [], widths: [], tableW: 0});
   useLayoutEffect(()=>{
-    const thead = theadRef.current; if(!thead) return;
+    const sizer = sizeHeadRef.current; if(!sizer) return;
     const measure = ()=>{
-      const ths = [...thead.querySelectorAll("th")];
+      const ths = [...sizer.querySelectorAll("th")];
       const keys = gripKeysRef.current;
-      const headH = thead.getBoundingClientRect().height;
+      const round = (v) => Math.round(v * 100) / 100;
+      const widths = ths.map(th => round(th.getBoundingClientRect().width));
+      const tableW = round(sizer.parentElement.getBoundingClientRect().width);
+      const head = theadRef.current;
+      const headH = head ? head.getBoundingClientRect().height : 0;
       const edges = [];
-      for(let i = 0; i < ths.length - 1; i++){
-        const w = ths[i].offsetWidth;
-        if(w === 0) continue;                   // display:none at this breakpoint
-        edges.push({key: keys[i] || ("c"+i), x: ths[i].offsetLeft + w});
+      let x = 0;
+      for(let i = 0; i < widths.length - 1; i++){
+        x += widths[i];
+        if(widths[i] === 0) continue;           // display:none at this breakpoint
+        edges.push({key: keys[i] || ("c"+i), x: round(x)});
       }
-      setGripGeom(prev => (prev.headH === headH
+      setGripGeom(prev => (prev.headH === headH && prev.tableW === tableW
+        && prev.widths.length === widths.length && prev.widths.every((w,i)=> w === widths[i])
         && prev.edges.length === edges.length
         && prev.edges.every((e,i)=> e.x === edges[i].x && e.key === edges[i].key))
-        ? prev : {headH, edges});
+        ? prev : {headH, edges, widths, tableW});
     };
     measure();
     const ro = new ResizeObserver(measure);
-    ro.observe(thead);
+    ro.observe(sizer.parentElement);
     // Observe each th too: column redistribution can move boundaries without
-    // changing the thead's own box (table width capped by the wrap).
-    for(const th of thead.querySelectorAll("th")) ro.observe(th);
+    // changing the table's own box (table width capped by the wrap).
+    for(const th of sizer.querySelectorAll("th")) ro.observe(th);
+    if(theadRef.current) ro.observe(theadRef.current);
     return ()=> ro.disconnect();
   }, [filtered, density, showAllWins, moverWin, preset, priceMode,
       sortKey, sortDesc, sortKey2, sortDesc2,
@@ -37386,7 +38640,60 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       // The star column appears/disappears with sign-in, and the vs-Market
       // column appears when its (async) fetch lands. Both change how many <th>s
       // there are and therefore where every grip belongs.
-      user, watchlistsUnavailable, benchmarkReady, showGraded]);
+      user, watchlistsUnavailable, benchmarkReady, showGraded, rawGradedTier]);
+  // The table scrolls with the PAGE (Zaven, 2026-09-28: "I dont like how the
+  // screener is stuck in a smaller box in the page … a weird sub scroll"). It
+  // used to be its own max-height scroll box, because a sticky thead only pins
+  // inside its nearest scroll container and the table needs one for sideways
+  // scrolling. So the header lives OUTSIDE that container now, as its own sticky
+  // strip pinned under the top nav, and three things scroll sideways together:
+  // the body (.price-db-tablewrap), the header strip, and a scrollbar pinned to
+  // the bottom of the window (.price-db-hscroll) — the body's own sits under the
+  // last row, a page away from anyone with a mouse. Only the sideways position
+  // is synced from here; the pinning itself is plain CSS sticky, so it never
+  // lags a frame behind the page the way a scroll-driven transform does.
+  const [tableBoxEl, setTableBoxEl] = useState(null);
+  useEffect(() => {
+    const box = tableBoxEl; if(!box) return;
+    const wrap = box.querySelector(".price-db-tablewrap");
+    const head = box.querySelector(".price-db-stickyhead");
+    const bar = box.querySelector(".price-db-hscroll");
+    if(!wrap || !head || !bar) return;
+    const barIn = bar.firstElementChild;
+    const nav = document.querySelector(".top-nav");
+    const fine = window.matchMedia ? window.matchMedia("(hover:hover) and (pointer:fine)") : null;
+    const scrollers = [wrap, head, bar];
+    // A scrollLeft we set comes back as a scroll event of its own; answering it
+    // would fight a momentum scroll on the element the user is actually moving.
+    const echo = new Map();
+    const sync = (src) => {
+      const x = src.scrollLeft;
+      const e = echo.get(src);
+      if(e){ echo.delete(src); if(Math.abs(e.x - x) < 1 && performance.now() - e.t < 250) return; }
+      for(const el of scrollers){
+        if(el === src || Math.abs(el.scrollLeft - x) < 1) continue;
+        el.scrollLeft = x;
+        echo.set(el, {x: el.scrollLeft, t: performance.now()});
+      }
+    };
+    const offs = scrollers.map(el => { const h = () => sync(el); el.addEventListener("scroll", h, {passive: true}); return () => el.removeEventListener("scroll", h); });
+    // The nav is sticky on phones and in flow on a desktop, so the header pins
+    // under it only where it pins at all. Measured, not assumed: a zoomed or
+    // wrapped nav is taller than any number written down here.
+    const layout = () => {
+      let top = 0;
+      if(nav){ const cs = getComputedStyle(nav); if(cs.position === "sticky" || cs.position === "fixed") top = Math.round(nav.getBoundingClientRect().height); }
+      box.style.setProperty("--pdb-top", top + "px");
+      if(barIn) barIn.style.width = wrap.scrollWidth + "px";
+      box.classList.toggle("has-hscroll", wrap.scrollWidth > wrap.clientWidth + 1 && !!(fine && fine.matches));
+    };
+    layout();
+    const ro = new ResizeObserver(layout);
+    ro.observe(wrap);
+    const tbl = wrap.querySelector("table"); if(tbl) ro.observe(tbl);
+    if(nav) ro.observe(nav);
+    return () => { offs.forEach(off => off()); ro.disconnect(); };
+  }, [tableBoxEl]);
   const onGripMove = useCallback((e)=>{
     const d = dragRef.current; if(!d) return;
     // 44px floor keeps a column from collapsing into an untouchable sliver.
@@ -37448,13 +38755,11 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // much cheaper than card tiles (no images past the thumbnail), so the slab is
   // bigger.
   //
-  // root stays the viewport rather than .price-db-tablewrap. The sentinel sits
-  // INSIDE that scroller, so a viewport-rooted observer already has its rect
-  // clipped by the container and fires exactly when the sentinel is scrolled
-  // into view — correct in both layouts. Rooting on the wrap itself would break
-  // the ≤600px-tall case, where max-height is lifted and the wrap no longer
-  // scrolls: the sentinel would then be permanently "inside" the root and the
-  // observer would page in the entire result set on mount.
+  // root is the viewport: the table scrolls with the page, so the sentinel
+  // under the last row intersects exactly when the page reaches it. Rooting on
+  // .price-db-tablewrap would be wrong — it only scrolls sideways, so the
+  // sentinel would be permanently "inside" it and the observer would page in
+  // the entire result set on mount.
   const ROWS_WINDOW = 250;
   const [visibleRows, setVisibleRows] = useState(ROWS_WINDOW);
   const rowSentinelRef = useRef(null);
@@ -37547,12 +38852,16 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     // NM Market view exported numbers that matched nothing it had shown.
     const WINS = ["1D", "1W", "1M", "3M", "6M", "1Y"];
     const PCT_KEYS = ["pct_1d", "pct_7d", "pct_30d", "pct_90d", "pct_180d", "pct_365d"];
+    // Raw mode's graded price columns ride along when they're on screen.
+    const grCsv = !showGraded && !showSealed && orderedCols.some(c => RAW_GRADED_COL_KEYS.includes(c.key));
+    const grCsvTier = parseGradedTier(rawGradedTier).label;
     const headers = ["Name", "Set", "Rarity", "Ink", "Printing", "Collector #",
       ...(premiumGraded ? ["Grader", "Grade", "Last Sold Date", "Sales"] : []),
       premiumGraded ? "Last Sold" : "Low",
       premiumGraded ? "Avg Last 5" : "NM Market",
       ...(premiumGraded ? WINS.map(w => w + " Δ%")
         : [...WINS.map(w => w + " Δ% (Low)"), ...WINS.map(w => w + " Δ% (NM Market)")]),
+      ...(grCsv ? [grCsvTier + " Last Sold", grCsvTier + " Avg Last 5"] : []),
       "TCGPlayer URL"];
     const esc = (v) => {
       const s = v == null ? "" : String(v);
@@ -37570,6 +38879,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         r.low_today, r.market_today,
         ...PCT_KEYS.map(k => r[k]),
         ...(premiumGraded ? [] : PCT_KEYS.map(k => r["mkt_" + k])),
+        ...(grCsv ? [r.gr_last, r.gr_avg5] : []),
         tcgUrl(r.tcgplayer_product_id, r.printing) || "",
       ].map(esc).join(","));
     }
@@ -37748,6 +39058,34 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       td:(r)=>{ const sd = lowStaleDays(r);
         return html`<td key="low" class="td-num">${fmtMoney(r.low_today)}${sd != null ? html`<span class="td-low-stale"
           title=${"Low unchanged for "+sd+" days — not fresh signal"}>${uiIcon("clock", 11)}</span>` : null}</td>`; }};
+    // Raw mode's graded PRICE columns (RAW_GRADED_COL_KEYS): one pair, whose
+    // grader + grade the gear picks, PSA 10 by default. Both headers name the
+    // tier, so a CGC 9.5 column can never be read as PSA 10's. The tooltip says
+    // why a cell is empty — no sale at that tier, the terms not accepted yet,
+    // still loading — because a bare dash reads the same in all four cases.
+    const grTier = parseGradedTier(rawGradedTier);
+    const grStatus = !gradedPremium ? "tos" : gradedRollupErr ? "err" : !rawGradedHit ? "loading" : "ok";
+    const grCell = (key, what) => (r) => {
+      const g = r._gr, v = r[key];
+      const tip = grStatus === "tos" ? "Accept the graded-data terms to see graded prices"
+        : grStatus === "err" ? "Couldn't load graded sales"
+        : grStatus === "loading" ? "Loading graded sales…"
+        : !g || v == null ? `No ${grTier.label} sale recorded for this printing`
+        : [`${grTier.label} ${what}`, g.date ? "most recent sale " + g.date : null,
+           g.n != null ? g.n + " sale" + (g.n === 1 ? "" : "s") + " recorded" : null, g.note].filter(Boolean).join(" · ");
+      return html`<td key=${key} class=${"td-num"+(g && g.note ? " td-gr-blend" : "")} title=${tip}>${v == null ? "—"
+        : html`${g && g.note ? html`<span class="td-gr-approx" aria-hidden="true">≈</span>` : null}${fmtMoney(v)}`}</td>`;
+    };
+    const grCol = (key, head, gearLbl, what, tip) => ({key, label: grTier.label + " " + gearLbl, defaultHidden: true,
+      th:()=>html`<th key=${key} class="sortable th-num" title=${tip + " Pick another grader or grade in the Columns menu."}
+        onClick=${(e)=>onSort(key, e)}>${grTier.label} ${head}${arrow(key)}</th>`,
+      td: grCell(key, what)});
+    const rawGradedCols = (showGraded || showSealed) ? [] : [
+      grCol("gr_last", "Last", "Last Sold", "last sold",
+        `Most recent recorded eBay sale of a ${grTier.label} copy of this printing.`),
+      grCol("gr_avg5", "Avg 5", "Avg Last 5", "average of the last 5 sales",
+        `Average of the last 5 recorded eBay sales of a ${grTier.label} copy of this printing.`),
+    ];
     // Raw mode's PSA columns: the population of THIS printing (rawPopPick), all
     // hidden until the gear turns them on. Every one says PSA, for the reason
     // the graded headers do — graded_pop holds no CGC, BGS, SGC or TAG counts.
@@ -37767,7 +39105,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     return [setCol, rarityCol,
       lowCol,
       money("market","NM Market","market","market_today","TCGplayer NM Market — smoothed average of recent Near Mint sales"),
-      ...winCols, ...(benchmarkReady && !showSealed ? [vsMktCol] : []), ...rawPopCols, signalsCol];
+      ...winCols, ...(benchmarkReady && !showSealed ? [vsMktCol] : []), ...rawGradedCols, ...rawPopCols, signalsCol];
   })();
   // Full ordered column list (incl. hidden) for the popover; visible subset for the table.
   const allColsOrdered = (()=>{
@@ -37786,12 +39124,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // column added since was, by omission, "shown" — and the eight Raw PSA columns
   // would all have landed at once. A column the prefs have not seen takes its own
   // default instead. Prefs saved before `known` existed get it reconstructed for
-  // Raw (every column today except the pop ones, which is what the Raw columns
-  // were); other modes keep the old rule, having gained no new columns.
+  // Raw (every column today except the pop and graded-price ones, which is what
+  // the Raw columns were); other modes keep the old rule, having gained no new
+  // columns.
   const _modePref = colPrefs[colModeKey] || {};
   const _savedHidden = _modePref.hidden;
   const _known = Array.isArray(_modePref.known) ? new Set(_modePref.known)
-    : colModeKey === "raw" ? new Set(colDefs.map(c=>c.key).filter(k=>!RAW_POP_COL_KEYS.includes(k)))
+    : colModeKey === "raw" ? new Set(colDefs.map(c=>c.key).filter(k=>!RAW_POP_COL_KEYS.includes(k) && !RAW_GRADED_COL_KEYS.includes(k)))
     : null;
   const colHidden = new Set(_savedHidden !== undefined
     ? [..._savedHidden, ...(_known ? colDefs.filter(c=>c.defaultHidden && !_known.has(c.key)).map(c=>c.key) : [])]
@@ -37820,6 +39159,19 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // every grip past it resizes the column to its left.
   const gripKeys = ["check", ...(user && !watchlistsUnavailable && !showGraded ? ["watch"] : []), "img", "name", ...orderedCols.map(c=>c.key)];
   gripKeysRef.current = gripKeys;
+  // The header row is rendered TWICE: once in the pinned header above the
+  // table (the one you see and click), and once inside the body table as an
+  // invisible, zero-height SIZER, so the body's columns still size to their
+  // header text. The pinned copy then takes the sizer's measured widths
+  // (gripGeom.widths), which is what keeps the two tables' columns in line.
+  const tableCls = "price-db-table" + (hasCustomWidths ? " pdb-resized" : "");
+  const headRow = () => html`<tr>
+    <th class="th-check"></th>
+    ${user && !watchlistsUnavailable && !showGraded && html`<th class="th-watch" title="Add to the active watchlist"></th>`}
+    <th></th>
+    <th class="sortable th-name" title="Click to sort by name — shift-click any column to set a tiebreaker" onClick=${(e) => onSort("name", e)}>Name${arrow("name")}</th>
+    ${orderedCols.map(c => c.th())}
+  </tr>`;
   const onGripDown = (e, key)=>{
     const thead = theadRef.current; if(!thead) return;
     const th = [...thead.querySelectorAll("th")][gripKeys.indexOf(key)];
@@ -37999,6 +39351,15 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             <span>Columns</span>
             <button class="price-db-colsmenu-reset" onClick=${resetCols}>Reset</button>
           </div>
+          ${colModeKey === "raw" && html`<label class="price-db-colsmenu-tier"
+            title="Which grader and grade the Last Sold and Avg 5 columns show">
+            <span>Graded price columns</span>
+            <select value=${rawGradedTier} onChange=${(e)=>setRawGradedTier(e.target.value)}>
+              ${gradedTierOptions(gradedRollup, rawGradedTier).map(g => html`<optgroup key=${g.grader} label=${g.grader}>
+                ${g.tiers.map(t => html`<option key=${t.value} value=${t.value}>${t.label}</option>`)}
+              </optgroup>`)}
+            </select>
+          </label>`}
           ${allColsOrdered.map((c,i)=>html`<div key=${c.key} class="price-db-colsmenu-row">
             <label class="price-db-colsmenu-lbl">
               <input type="checkbox" checked=${!colHidden.has(c.key)} onChange=${()=>toggleCol(c.key)}/>
@@ -38430,8 +39791,12 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         </div>
       </div>`}
     </div>`}
-    <div class="price-db-tablewrap">
-      <div class="price-db-tableinner">
+    ${rawGradedWanted && !gradedPremium && html`<${GradedTosGate} compact=${true}/>`}
+    ${rawGradedWanted && gradedPremium && gradedRollupErr && html`<div class="price-db-grnote muted">
+      Couldn't load graded prices.${" "}<button class="price-db-advbtn" onClick=${() => setGradedRollupErr(false)}>Try again</button></div>`}
+    <div class="price-db-tablebox" ref=${setTableBoxEl}>
+      <div class="price-db-stickyhead">
+      <div class="price-db-tableinner" style=${gripGeom.tableW ? {width: gripGeom.tableW + "px"} : null}>
       <div class="price-db-gripbar" aria-hidden="true">
         ${gripGeom.edges.map(g => html`<button key=${g.key} class="price-db-colgrip"
           tabIndex=${-1}
@@ -38442,17 +39807,20 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           onPointerUp=${onGripUp}
           onPointerCancel=${onGripUp}></button>`)}
       </div>
+      <table class=${tableCls + " price-db-table--head"}
+        style=${gripGeom.tableW ? {width: gripGeom.tableW + "px"} : null}>
+        ${gripGeom.widths.length > 0 && html`<colgroup>${gripGeom.widths.map((w, i) =>
+          html`<col key=${i} style=${{width: w + "px"}}/>`)}</colgroup>`}
+        <thead ref=${theadRef} onKeyDown=${onTheadKey}>${headRow()}</thead>
+      </table>
+      </div>
+      </div>
+    <div class="price-db-tablewrap">
       ${hasCustomWidths && html`<style>${gripKeys.map((k,i)=> colWidths[k]
         ? `.price-db-table.pdb-resized th:nth-child(${i+1}),.price-db-table.pdb-resized td:nth-child(${i+1}){width:${colWidths[k]}px;min-width:${colWidths[k]}px;max-width:${colWidths[k]}px;}`
         : "").join("")}</style>`}
-      <table class=${"price-db-table"+(hasCustomWidths?" pdb-resized":"")}>
-        <thead ref=${theadRef} onKeyDown=${onTheadKey}><tr>
-          <th class="th-check"></th>
-          ${user && !watchlistsUnavailable && !showGraded && html`<th class="th-watch" title="Add to the active watchlist"></th>`}
-          <th></th>
-          <th class="sortable th-name" title="Click to sort by name — shift-click any column to set a tiebreaker" onClick=${(e) => onSort("name", e)}>Name${arrow("name")}</th>
-          ${orderedCols.map(c => c.th())}
-        </tr></thead>
+      <table class=${tableCls}>
+        <thead ref=${sizeHeadRef} class="price-db-sizehead" aria-hidden="true">${headRow()}</thead>
         <tbody>
           ${filtered.slice(0, visibleRows).map((r) => {
             const img = r.image_small || r.image_normal;
@@ -38511,12 +39879,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           })}
         </tbody>
       </table>
-      </div>
       ${filtered.length > visibleRows && html`<div ref=${rowSentinelRef} class="price-db-more muted">
         Showing ${visibleRows.toLocaleString()} of ${filtered.length.toLocaleString()} — keep scrolling to load more.
         <button class="price-db-advbtn" onClick=${()=>setVisibleRows(filtered.length)}>Show all</button>
         <button class="price-db-advbtn" onClick=${exportCsv}>⇩ CSV (all ${filtered.length.toLocaleString()})</button>
       </div>`}
+    </div>
+      <div class="price-db-hscroll" aria-hidden="true"><div class="price-db-hscroll-in"></div></div>
     </div>
     <//>`}
     ${batchToast && html`<div class="price-db-toast">${batchToast}</div>`}
@@ -42508,10 +43877,9 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   </aside>`;
 };
 
-// Compact EV strip on Home: last 4 mainline sets, EV/box & EV/pack at
-// current pricing, plus the TCGPlayer Booster Box price (linked through
-// the affiliate wrapper when available). Tiny inline toggles let the
-// user adjust the EV semantics without leaving the page.
+// Home "Recent set EV": the last 4 mainline sets, EV per box at today's Low
+// prices against the cheapest TCGplayer Booster Box (affiliate-linked), with
+// two toggles that change what the EV counts without leaving the page.
 // A set not released yet sits at the top of every EV list the moment it has
 // a price, and its number is not comparable with the rest: pre-sale singles
 // run far above where they settle, and a rarity with no listings yet counts
@@ -42524,25 +43892,6 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav
     // sets is already MAINLINE_SETS oldest→newest; reverse + take 4.
     return (sets || []).slice().reverse().slice(0, 4);
   }, [sets]);
-  const boxBySet = useMemo(() => {
-    if(!sealedPrices) return {};
-    const out = {};
-    for(const row of sealedPrices){
-      if(row.product_type !== "Booster Box") continue;
-      const nm = (row.name || "").toLowerCase();
-      if(nm.includes("case")) continue;
-      const price = row.low_price != null ? parseFloat(row.low_price) : null;
-      if(price == null) continue;
-      const prev = out[row.set_id];
-      if(!prev || prev.price > price){
-        out[row.set_id] = {
-          price, name: row.name,
-          url: tcgUrl(row.tcgplayer_product_id),
-        };
-      }
-    }
-    return out;
-  }, [sealedPrices]);
   // setsMeta is the authoritative set_id↔name map. Prefer set_id-based
   // matching so we don't depend on TCGplayer's product naming staying
   // exactly in sync with our display names.
@@ -42575,59 +43924,91 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav
   };
   const excludeSet = useMemo(() => excludeBoth ? new Set(["Enchanted","Iconic"]) : new Set(), [excludeBoth]);
   if(!lastFour.length) return null;
+  const title = homePanelTitle({cls:"home-feed-title home-feed-title--chase home-ev-title",
+      label:"Recent set EV", panelKey:"setEv", panelNav})
+    || (onTitleClick
+      ? html`<button class="home-feed-title home-feed-title--chase home-ev-title home-title-link"
+          onClick=${onTitleClick} title="Open Analytics → Expected Value">Recent set EV</button>`
+      : html`<div class="home-feed-title home-feed-title--chase home-ev-title">Recent set EV</div>`);
+  // One card per set (2026-09-30, Zaven: "its ugly"), read top to bottom as
+  // the question it answers — is the box worth cracking: the verdict in the
+  // corner, a meter drawing EV against the box, then where to buy one. The
+  // meter's scale is whichever is bigger, so a +EV set fills it green and a
+  // tick marks where the box price sits inside it.
+  const anyLogo = lastFour.some(n => lorcanaSetArt(n));
   return html`<div class="home-ev-strip">
-    <div class="home-ev-strip-head">
-      ${homePanelTitle({cls:"home-ev-strip-title", label:"Recent set EV", panelKey:"setEv", panelNav})
-        || (onTitleClick
-        ? html`<button class="home-ev-strip-title home-title-link" onClick=${onTitleClick}
-            title="Open Analytics → Expected Value">Recent set EV</button>`
-        : html`<div class="home-ev-strip-title">Recent set EV</div>`)}
-      <${Tip} text="EV (Expected Value) = the average total price of the cards you'd pull from one booster box at today's market prices. Compare it to the box price to see whether a set is 'worth cracking'."><span class="tip-info-glyph" aria-label="What is EV?">ⓘ</span><//>
-      <div class="home-ev-strip-toggles">
-        <label title="Treat cards under $1 as $0 — filters bulk pennies out of the average.">
-          <input type="checkbox" checked=${nc} onChange=${e=>setNc(e.target.checked)}/>${" <$1→$0"}
-        </label>
-        <label title="Drop Enchanted + Iconic from EV. Excludes ultra-rare chase pulls.">
-          <input type="checkbox" checked=${excludeBoth} onChange=${e=>setExcludeBoth(e.target.checked)}/> No chase
-        </label>
+    <div class="home-ev-head">
+      <div class="home-ev-titlewrap">
+        ${title}
+        <${Tip} text="EV (Expected Value) = the average total price of the cards you'd pull from one booster box at today's market prices. Compare it to the box price to see whether a set is 'worth cracking'."><span class="tip-info-glyph" aria-label="What is EV?">ⓘ</span><//>
+      </div>
+      <div class="home-ev-opts" role="group" aria-label="EV options">
+        <button type="button" class=${"home-ev-opt" + (nc ? " on" : "")} aria-pressed=${nc}
+          onClick=${() => setNc(v => !v)}
+          title="Count every card under $1 as $0 — takes bulk pennies out of the EV.">No bulk</button>
+        <button type="button" class=${"home-ev-opt" + (excludeBoth ? " on" : "")} aria-pressed=${excludeBoth}
+          onClick=${() => setExcludeBoth(v => !v)}
+          title="Leave Enchanted and Iconic pulls out of the EV — what a box is worth without the chase.">No chase</button>
       </div>
     </div>
-    <div class="home-ev-strip-table">
-      <div class="home-ev-strip-row home-ev-strip-head-row">
-        <div>Set</div>
-        <div class="num">EV / box</div>
-        <div class="num" title="Booster box price on TCGplayer — the price links there">Box · TCGplayer</div>
-        <div class="num" title="EV per box against the box price: positive means the cards inside are worth more than the sealed box.">vs box</div>
-        <div class="home-ev-strip-amzn-cell"></div>
-      </div>
+    <ul class="home-ev-list">
       ${lastFour.map(setName => {
         const ev = calcEV(avgs, setName, nc, excludeSet, "low");
+        const logo = lorcanaSetArt(setName);
         const box = boxForSet(setName);
-        // ⚠ One line per set (2026-09-24, Zaven: "too spread out"). EV/pack is
-        // EV/box ÷ 24, so it moved to the tooltip and its column went to the
-        // one number the strip exists to answer — is the box worth cracking.
         const diff = ev != null && box && box.price > 0 ? (ev / box.price - 1) * 100 : null;
         const az = box && box.row ? amazonForSealed(box.row, setName) : null;
-        return html`<div key=${setName} class="home-ev-strip-row">
-          <div class="home-ev-strip-set" title=${PRERELEASE_SETS.has(setName) ? setName + " — " + EV_PRESALE_TIP : setName}>${setName}${PRERELEASE_SETS.has(setName) && html` <span class="ev-presale-tag">Pre-sale</span>`}</div>
-          <div class="num" title=${ev ? `${fmt(ev/24)} per pack` : ""}>${fmt(ev)}</div>
-          <div class="num home-ev-strip-box">
-            ${box
-              ? (box.url
-                  ? html`<a href=${box.url} target="_blank" rel="noopener nofollow sponsored" class="home-ev-strip-box-link" title="Booster box on TCGplayer (affiliate link)">${fmt(box.price)}<span class="home-ev-strip-box-ext" aria-hidden="true">${extIcon()}</span></a>`
-                  : fmt(box.price))
-              : html`<span class="muted">—</span>`}
+        const presale = PRERELEASE_SETS.has(setName);
+        const scale = diff != null ? Math.max(ev, box.price) : null;
+        const fillPct = scale ? Math.max(2, ev / scale * 100) : 0;
+        const tickPct = scale && ev > box.price ? box.price / scale * 100 : null;
+        const tone = diff == null ? "muted" : diff >= 0 ? "green" : "red";
+        const pctTxt = diff == null ? "—" : `${diff >= 0 ? "+" : "−"}${Math.abs(diff).toFixed(0)}%`;
+        const verdictTip = diff == null
+          ? "No booster box price to compare against yet."
+          : diff >= 0
+            ? `The cards inside are worth ${Math.abs(diff).toFixed(0)}% more than the sealed box.`
+            : `The cards inside are worth ${Math.abs(diff).toFixed(0)}% less than the sealed box.`;
+        return html`<li key=${setName} class=${"home-ev-row home-ev-row--" + tone}>
+          <div class="home-ev-top">
+            <span class="home-ev-name" title=${presale ? setName + " — " + EV_PRESALE_TIP : setName}>
+              ${/* The set's wordmark in a fixed-width slot, so the names line
+                   up down the list; a set with no logo yet keeps the empty
+                   slot while any other row has one. */""}
+              ${anyLogo && html`<span class="home-ev-logo-slot">${logo && html`<${SetLogo} set=${setName} klass="home-ev-logo"/>`}</span>`}
+              <span class="home-ev-name-txt">${setName}</span>
+              ${presale && html`<span class="ev-presale-tag">Pre-sale</span>`}
+            </span>
+            <span class=${"home-ev-verdict " + tone} title=${verdictTip}>
+              <span class="home-ev-verdict-lbl">vs box</span>${pctTxt}
+            </span>
           </div>
-          <div class=${"num home-ev-strip-diff " + (diff == null ? "muted" : diff >= 0 ? "green" : "red")}>
-            ${diff == null ? "—" : `${diff >= 0 ? "+" : "−"}${Math.abs(diff).toFixed(0)}%`}
+          <div class="home-ev-meter" role="img"
+            aria-label=${diff == null ? "No box price to compare" : `EV ${fmt(ev)} against a ${fmt(box.price)} box`}>
+            ${diff != null && html`<span class="home-ev-fill" style=${{width: fillPct.toFixed(1) + "%"}}></span>`}
+            ${tickPct != null && html`<span class="home-ev-tick" style=${{left: tickPct.toFixed(1) + "%"}}></span>`}
           </div>
-          ${/* ⚠ Its OWN column, after "vs box" — not beside the price. Sat
-               beside the number it read as a caption on it, i.e. as if the $
-               were Amazon's price, which is exactly what it must not say. */""}
-          <div class="home-ev-strip-amzn-cell">${amazonPill(az, {cls: "home-ev-strip-amzn"})}</div>
-        </div>`;
+          <div class="home-ev-foot">
+            <span class="home-ev-ev" title=${ev ? `${fmt(ev/24)} per pack` : ""}>
+              <span class="home-ev-lbl">EV</span>${fmt(ev)}
+            </span>
+            <span class="home-ev-buy">
+              ${box
+                ? (box.url
+                    ? html`<a href=${box.url} target="_blank" rel="noopener nofollow sponsored" class="home-ev-tcg"
+                        title="Booster box on TCGplayer — opens TCGplayer (affiliate link)">
+                        <span class="home-ev-tcg-px">${fmt(box.price)}</span><span class="home-ev-tcg-src">TCGplayer</span><span class="home-ev-tcg-ext" aria-hidden="true">${extIcon()}</span></a>`
+                    : html`<span class="home-ev-tcg is-static"><span class="home-ev-tcg-px">${fmt(box.price)}</span><span class="home-ev-tcg-src">TCGplayer</span></span>`)
+                : html`<span class="home-ev-nobox muted">No box price yet</span>`}
+              ${/* ⚠ The Amazon button carries NO price and sits in its own
+                   pill, beside TCGplayer's — the price lives INSIDE the
+                   TCGplayer button, so it cannot read as Amazon's. */""}
+              ${amazonPill(az, {cls: "home-ev-amzn"})}
+            </span>
+          </div>
+        </li>`;
       })}
-    </div>
+    </ul>
   </div>`;
 };
 
@@ -55987,6 +57368,14 @@ function DeckImageImport({raw, onUseText}){
   </div>`;
 }
 
+// The list is a plain "N Name" line per card, grouped by type and sorted by
+// cost, with NO section headers and NO blank lines. It used to head each group
+// with "# Characters" and leave a gap after it, and Discord (where most lists
+// get pasted) renders a line starting "# " as a heading: 16 lines became a
+// screenful of big type. A plain list is also the one format every other
+// Lorcana importer reads. The two comments it can still write (a Coconut
+// leader, a card the catalog lost) use "//", which Discord leaves alone;
+// parseDeckText still reads "#" comments, so a list copied before this imports.
 function deckToText(deck, cardById){
   const lines = [];
   // A Coconut deck's leader sits OUTSIDE the 60, so it is not in deck.cards —
@@ -55994,7 +57383,7 @@ function deckToText(deck, cardById){
   // A comment, so a tool that doesn't know Coconut skips it; parseDeckText
   // reads it back.
   const leader = deck.coconut_card ? getCoconutCard(deck.coconut_card) : null;
-  if(leader) lines.push(`# Coconut leader: ${coconutDisplayName(leader)}`, "");
+  if(leader) lines.push(`// Coconut leader: ${coconutDisplayName(leader)}`);
   const sections = DECK_SECTIONS.map(s => ({...s, items: []}));
   const fallback = {key:"Other", label:"Other", items:[]};
   const unknown = [];
@@ -56018,23 +57407,18 @@ function deckToText(deck, cardById){
   }
   if(fallback.items.length) sections.push(fallback);
   for(const s of sections){
-    if(!s.items.length) continue;
-    lines.push(`# ${s.label}`);
     s.items.sort((a,b) => a.cost - b.cost || a.name.localeCompare(b.name));
     for(const it of s.items) lines.push(`${it.qty} ${it.name}`);
-    lines.push("");
   }
   // A card the catalog no longer knows can't be named. Written as a comment
   // rather than "4 crd_…", which no importer — ours included — can read.
-  if(unknown.length){
-    lines.push("# Not in the catalog");
-    for(const c of unknown) lines.push(`# ${c.quantity} × ${c.card_id}`);
-  }
+  for(const c of unknown) lines.push(`// ${c.quantity} × ${c.card_id} (not in the catalog)`);
   return lines.join("\n").trim();
 }
 
 // Parse a pasted decklist. Lenient — accepts "4 Name", "4x Name", "4 - Name",
-// ignores blank lines and "# Section" headers. Returns {entries, unmatched}.
+// ignores blank lines and "#" / "//" comment lines (section headers included).
+// Returns {entries, unmatched}.
 // Matches against the catalog by exact name then a normalized fallback.
 function parseDeckText(text, raw){
   // Score-and-pick: a card name can match multiple rows once promo / D23 /
@@ -56109,7 +57493,8 @@ function parseDeckText(text, raw){
   const lines = text.split(/\r?\n/);
   for(const raw_line of lines){
     const line = raw_line.trim();
-    // "# Coconut leader: Moana - Curious Explorer" — what deckToText writes.
+    // "// Coconut leader: Moana - Curious Explorer" — what deckToText writes
+    // ("# Coconut leader:" in lists copied before 2026-09-29).
     const lm = line.match(/^(?:#|\/\/)\s*coconut(?:\s+leader)?\s*:\s*(.+?)\s*$/i);
     if(lm){
       const want = foldCardName(lm[1]);
@@ -56848,6 +58233,47 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard, defaultInk
         </span>
       </div>
     </div>
+  </div>`;
+};
+
+// The deck editor's image grid and stacked pile: an auto-fill grid in which a
+// run of Locations shares one cell at 1.4 columns per card, the deck poster's
+// rule (groupLandscapeRuns). One column drew them at 71% of the cards beside
+// them (Zaven, 2026-09-30: "locations look too small here, not full card
+// size?"). The poster knows its column count; an auto-fill grid does not, so
+// it is measured, from the same `min` and `gap` the grid is built from, never
+// read back off the grid, whose track list grows implicit columns the moment a
+// span is too wide for it. renderItem(item, width) sizes a landscape tile.
+const DeckTileGrid = ({className, items, renderItem, min, gap}) => {
+  const ref = useRef(null);
+  const runs = useMemo(() => groupLandscapeRuns(items), [items]);
+  const hasRun = runs.some(r => r.landscape);
+  const [cols, setCols] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if(!hasRun || !el) return;
+    const measure = () => {
+      const n = Math.max(1, Math.floor((el.clientWidth + gap) / (min + gap)));
+      setCols(c => c === n ? c : n);
+    };
+    measure();
+    if(typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [hasRun, min, gap]);
+  return html`<div ref=${ref} class=${className}
+    style=${{gridTemplateColumns:`repeat(auto-fill,minmax(${min}px,1fr))`,gap}}>
+    ${runs.map(r => {
+      if(!r.landscape) return renderItem(r.items[0]);
+      const span = landscapeRunSpan(r.items.length, cols || 2);
+      const width = landscapeRunCardWidth(span, gap);
+      const first = r.items[0];
+      return html`<div key=${"lrun:" + first.card_id + ":" + first.printing} class="deck-lscape-run"
+        style=${{gridColumn:`span ${span}`,gap}}>
+        ${r.items.map(it => renderItem(it, width))}
+      </div>`;
+    })}
   </div>`;
 };
 
@@ -58000,8 +59426,13 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         </button>`;
       };
 
-      const renderItem = (item) => {
+      // `lscapeW` is set only by DeckTileGrid, for a Location in a run: the
+      // width that makes it the size of the cards around it. (The list view
+      // maps renderItem directly, so its second argument is an index there.)
+      const renderItem = (item, lscapeW) => {
         const meta = item.meta || {};
+        const lscape = isLandscapeCard(meta);
+        const lscapeStyle = typeof lscapeW === "string" ? {width:lscapeW} : undefined;
         const price = cheapestCardPrice(cardById[item.card_id] || []);
         const aff = tcgUrl(meta.tcgplayer_product_id, item.printing);
         const k = item.card_id+":"+item.printing;
@@ -58030,14 +59461,15 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         // unnecessary here but kept available for the hover preview below.
         const tileImg = meta.img_normal || meta.img_small;
         if(viewLayout === "grid"){
-          return html`<div key=${k} class=${"deck-grid-tile"+dimClass+(gridOverLimit?" coconut-over":"")}>
+          return html`<div key=${k} class=${"deck-grid-tile"+(lscape?" deck-grid-tile--lscape":"")+dimClass+(gridOverLimit?" coconut-over":"")}
+            style=${lscapeStyle}>
             ${tileImg
-              ? (isLandscapeCard(meta)
+              ? (lscape
                   ? landscapeArt(html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy" role="button" tabIndex="0"
                       onClick=${()=>openCardModal(item.card_id)} onKeyDown=${keyActivate(()=>openCardModal(item.card_id))}/>`)
                   : html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy" role="button" tabIndex="0"
                       onClick=${()=>openCardModal(item.card_id)} onKeyDown=${keyActivate(()=>openCardModal(item.card_id))}/>`)
-              : html`<div style=${{aspectRatio:"5/7",background:"var(--bg-surface)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"var(--text-muted)",padding:6,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
+              : html`<div style=${{aspectRatio:lscape?"7/5":"5/7",background:"var(--bg-surface)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"var(--text-muted)",padding:6,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
             ${(!coconutCard || item.quantity > 1 || gridOverLimit) && html`
               <span class=${"deck-grid-tile-qty"+(gridOverLimit?" over":"")}
                 title=${gridOverLimit ? `${item.quantity} copies — ${COCONUT_SET_NAME} allows ${gridCocoLimit === Infinity ? "any number" : gridCocoLimit}` : null}>
@@ -58051,22 +59483,26 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         }
         if(viewLayout === "stacked"){
           const peeks = Math.max(0, item.quantity - 1);
-          return html`<div key=${k} class=${"deck-stack-tile"+(highlightOn && short > 0?" missing-fade":"")}
-            onClick=${()=>openCardModal(item.card_id)}>
+          // A Location's peeks are turned too, so each strip shows the top edge
+          // of the card as it lies: art, with the cost at the right.
+          return html`<div key=${k} class=${"deck-stack-tile"+(lscape?" deck-stack-tile--lscape":"")+(highlightOn && short > 0?" missing-fade":"")}
+            style=${lscapeStyle} onClick=${()=>openCardModal(item.card_id)}>
             ${Array.from({length: peeks}).map((_, i) => html`<div key=${i} class="deck-stack-peek">
-              ${meta.img_small ? html`<img src=${meta.img_small} alt=""/>` : null}
+              ${meta.img_small
+                ? (lscape ? landscapeArt(html`<img src=${meta.img_small} alt=""/>`) : html`<img src=${meta.img_small} alt=""/>`)
+                : null}
             </div>`)}
             <div class="deck-stack-top">
               <span class="deck-stack-qty">${item.quantity}×</span>
               ${buildVariantChevron(item, meta, "deck-variant-btn--tile")}
               ${ownedFracBadge}
               ${tileImg
-                ? (isLandscapeCard(meta)
+                ? (lscape
                     ? landscapeArt(html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy"
                         role="button" tabIndex="0" onKeyDown=${keyActivate(()=>openCardModal(item.card_id))}/>`)
                     : html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy"
                         role="button" tabIndex="0" onKeyDown=${keyActivate(()=>openCardModal(item.card_id))}/>`)
-                : html`<div style=${{aspectRatio:"5/7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"var(--text-muted)",padding:8,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
+                : html`<div style=${{aspectRatio:lscape?"7/5":"5/7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"var(--text-muted)",padding:8,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
               ${price!=null && aff && html`<a class="deck-stack-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>${fmtUSD(price)}</a>`}
               ${makeCounter(item, cardMax, "deck-stack-counter")}
             </div>
@@ -58201,9 +59637,11 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         : sectioned.map(section => html`<div key=${section.key} class="deck-section">
             <div class="deck-section-title">${section.label} <span class="muted">${section.items.reduce((s,i)=>s+i.quantity,0)}</span></div>
             ${viewLayout === "grid"
-              ? html`<div class="deck-section-grid">${section.items.map(renderItem)}</div>`
+              ? html`<${DeckTileGrid} className="deck-section-grid" items=${section.items}
+                  renderItem=${renderItem} min=${110} gap=${8}/>`
               : viewLayout === "stacked"
-                ? html`<div class="deck-section-stack">${section.items.map(renderItem)}</div>`
+                ? html`<${DeckTileGrid} className="deck-section-stack" items=${section.items}
+                    renderItem=${renderItem} min=${160} gap=${22}/>`
                 : html`<div class="deck-section-list">${section.items.map(renderItem)}</div>`}
           </div>`)}
       ${variantPicker && (() => {

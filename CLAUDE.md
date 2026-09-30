@@ -1167,8 +1167,22 @@ so nothing here has to re-derive that.
 - **⚠ The box is IN FLOW, never absolutely positioned.** That is what gives the row a height at
   all — an absolutely positioned box gives its row none, which is the collapse the old
   `aspectRatio` on the CELL existed to prevent.
-- **⚠ The quantity badge lives INSIDE the box.** On the row it would pin to the far corner of the
-  whole grid rather than to the card it counts.
+- **⚠ A Location's quantity badge sits ABOVE the card, right-aligned over its cost hexagon**
+  (2026-09-30, Zaven: *"line up above the ink cost, it's weirdly to the left"*). The quarter turn
+  puts the cost in the top-right corner, so the badge can't sit where a portrait card's does. Each
+  card lives in a wrapper with `paddingTop: POSTER_LSCAPE_BADGE_ROOM` (6 + the 25px badge + 4),
+  so the badge is level with the portrait badges beside it and a row of nothing but Locations
+  still has room for it. **⚠ The run's flex line is `alignItems:"flex-start"` and must stay so:**
+  stretched (the default), each card's 7/5 box grew to the row's height and the badge pinned to
+  its top floated above the card and left of the cost — the reported bug.
+- **The deck editor's image grid and stacked pile use the same runs** (`DeckTileGrid`, 2026-09-30:
+  *"locations look too small here, not full card size?"*). Their grids are auto-fill, so the
+  component MEASURES its column count, from the same `min` / `gap` it builds the template from
+  (styles.css no longer carries those two numbers). Never read the count back off the grid: a span
+  too wide for it makes CSS Grid add implicit columns, which the read would then report. There the
+  badge drops just BELOW the cost hexagon (a tile has no room above it), and the owned count and
+  version chevron move to the top-left, which is art. `groupLandscapeRuns`, `landscapeRunSpan` and
+  `landscapeRunCardWidth` (beside `landscapeArt`) are the one copy of the rule.
 - Measured in Chromium against the shipped math: a 1-item run (`spanCols=2`) shares the current
   row and lands **10.0px** from the previous card — zero dead air; a 2-item run (`spanCols=3`)
   shares the row AND its own two Locations sit **10.0px** apart, the exact hole the full-width fix
@@ -1495,7 +1509,7 @@ This is where catalog correctness lives. Structural cleanups:
 2. **`EXTRAS_MAP`** — `tcgplayer_product_id` → `{originSet, variantLabel, [excludeFromBaseSet], [standalone]}`. Three active buckets: "Starter Deck Exclusive Foil" (12 cards across Wilds Unknown/Fabled/Whispers), "Deep Trouble" (5 cards), "Palace Heist" (4 cards). `excludeFromBaseSet:true` suppresses from origin set. `standalone:{...}` includes cards Lorcast doesn't index (rows come from `patch_pid_overrides.py`).
 3. **`CONNECTING_FOILS`** — `base_product_id` → `foil_product_id` for cards whose foil is a separate TCGPlayer SKU. 24 entries (Winterspell, Wilds Unknown, Reign of Jafar). Foil row emitted under base card's `card_id`; companion suppressed.
 4. **`CUSTOM_VARIANTS`** — for cards Lorcast doesn't index that live INSIDE a mainline set (Genie - On the Job Two Swords, Peter Pan - Pirate's Bane Text Error). Clones base row with distinct `card_id` (`<base>::variant::<slug>`), null prices.
-5. **`CUSTOM_CARDS`** — placeholder; currently empty. Kept as infra.
+5. **`CUSTOM_CARDS`** — client-only rows for things with no `cards` row and no TCGplayer product. Holds the two Japanese ink drop counter cards (Extras & Oddities, under Hyperia City). An entry takes an optional short `id` and an `originSet`; rows carry `isCustomCard`, which keeps them out of the graded tracking buckets.
 6. **`SET_DISPLAY_NAMES`** — `{"Challenge Promo": "Lorcana Challenge Promo (C1)", "Lorcana Challenge Year 3": "Lorcana Challenge Promo (C2)", "EPCOT Festival of the Arts": "Magical Places Promos"}`. **All in-code set comparisons use the DISPLAY name.** The last entry (2026-09-18, Zaven): Lorcast names this set after its first three cards (the EPCOT drop), but `N/DIS` is Ravensburger's whole promo LINE — Mickey/Elsa/Buzz Lightyear's promos share the set and aren't EPCOT cards. EPCOT is a sub-label inside the set, like a grading sub-designation, not a set of its own.
 7. **`COLLECTOR_NUMBER_OVERRIDES`** — keyed by `<set_id>|<lorcast_cn>`. Currently renumbers Challenge Promo's Lorcast #25/41/42/43 → community #1/2/3/4.
 8. **`UNIFIED_TILE_SETS`** — collapses Normal/Foil/Enchanted to one row in Collection grid: Promo Set 1/2/3/4, PD1, D23 Collection, Magical Places Promos, Curator's Collection. **C1 and C2 are NOT here** — both have real Non-Foil/Foil splits.
@@ -1737,7 +1751,13 @@ The Screener has parity with the Cards browse filters as of 2026-05-26 via the c
 - ≤720px: hide the checkbox column (invisible behind sticky NAME anyway), tighten NAME column to 110-135px max. Default no-scroll view fits NAME + Low + NM Market + 1W on a 360px phone. Batch-select via checkbox stays available on tablet/desktop.
 - Filter chips wrap to multiple rows naturally.
 - **Rarity icon chips fit on one line (2026-05-27):** at ≤720px `.price-db-raritybtns` gap drops to 2px and `.price-db-raritybtn-icon` padding drops to `4px 5px` so all 9 canonical rarity chips fit a single row on a ~375px phone (the 9th, Promo, was wrapping at the desktop `4px 10px`/`3px gap` sizing).
-- **Landscape / short viewport (2026-05-27):** `.price-db-tablewrap` normally caps at `max-height: calc(100vh - 280px)` with an internal scroll. On a landscape phone (~411px tall) that left only ~1.5 rows. At `@media (max-height:600px)` the cap is removed (`max-height:none`) so the table flows into natural page scroll instead of a nested "sub-menu". Tradeoff: the sticky `thead` only pins within its scroll container, so once you scroll past the table top the column headers scroll off with it (pinning headers to viewport while keeping horizontal scroll needs a header/body structural split — deferred). Horizontal scroll on the wrap is preserved (table is wider than the viewport).
+- **The table scrolls with the PAGE — there is no box within the page** (2026-09-28, Zaven: *"I dont like how the screener is stuck in a smaller box … a weird sub scroll"*). It used to be a `max-height: calc(100vh - 280px)` scroll box, because a sticky `thead` only pins inside its nearest scroll container and the table needs one to scroll sideways. That is the "header/body structural split" this note once called deferred, and it is built now. Guarded by section 5 of `node scripts/test_screener_graded_cols.mjs`.
+  - **The header is its own sticky strip ABOVE the sideways scroller** (`.price-db-stickyhead`, `top: var(--pdb-top)`), so pinning is plain CSS and never lags the page. `--pdb-top` is MEASURED from `.top-nav` (sticky on phones, ~90px; in flow on a desktop, 0).
+  - **⚠ The header row renders TWICE.** The body table keeps an invisible, zero-height SIZER copy (`thead.price-db-sizehead`), so its columns still size to their header text exactly as the one table always did; the pinned copy is `table-layout:fixed` to the sizer's measured, fractional widths (`gripGeom.widths` / `tableW`). Measured aligned within 0.25px in Raw, Graded and Sealed, and after a column drag. `theadRef` is the VISIBLE copy (clicks, keyboard sort, grip height); `sizeHeadRef` is the one measured.
+  - **Three things scroll sideways together** (one effect, echo-guarded so a set `scrollLeft` never fights a momentum scroll): the body (`.price-db-tablewrap`), the header strip, and **`.price-db-hscroll`, a scrollbar pinned to the bottom of the window** — the body's own sits under the last row, a page away. The pinned bar shows only on a fine pointer when the table is wider than the page, and the body's own scrollbar is then hidden; touch keeps swiping the table.
+  - **⚠ `overflow:clip` on `.price-db-tablebox`, never `hidden`** — hidden makes it a scroll container and the header would pin to it instead of to the window.
+  - **⚠ A HIDDEN Browser pane never delivers ResizeObserver callbacks**, so the bar's width and the header's column widths look stuck there. Verify in headless Chromium, not the backgrounded pane.
+  - The windowed-rows sentinel observes the viewport, which is now simply right: the wrap only scrolls sideways.
 
 ### PSA population columns in RAW mode (2026-09-27)
 
@@ -1766,6 +1786,32 @@ the graded ones do: `graded_pop` holds no CGC, BGS, SGC or TAG counts. Guarded b
   saved before `known` get it reconstructed WITHOUT the pop keys. **Other modes' legacy prefs
   keep the old rule** (they gained no columns), so a future column added to Graded or Sealed
   wants the same reconstruct line, or it will pop up for every legacy user until their next toggle.
+
+### Graded PRICE columns in RAW mode (2026-09-28)
+
+Zaven, from the Screener: *"add columns for PSA 10 last sold price and last 5 avg price (and I
+guess for other graders/grades too … don't add like 5000 columns but maybe a custom ability w/
+drop down? main one is just psa 10)"*. So ONE pair — **Last Sold** and **Avg Last 5**
+(`RAW_GRADED_COL_KEYS` = `gr_last` / `gr_avg5`, also the row fields) — whose grader + grade is
+picked at the top of ⚙ Columns (`packsink:screener:gradedTier`, default `PSA|10`). Both hidden
+by default; both headers name the tier. Guarded by `node scripts/test_screener_graded_cols.mjs`.
+
+- **⚠ Priced through THE ladder, `makeGradedPrintingLookup`, over the rollup keyed by card_id**
+  (`buildGradedPriceIndex(rollup, null, r => r.card_id)`). A raw row IS one printing, so a C1
+  Prize Wall row reads $557.99 and its Top Prize row $5,500 — never each other's. A price from a
+  split card's unclassified tier, or from a card sold in both finishes whose sales were never
+  split, renders `≈` with the reason in the tooltip (`rawGradedFields`).
+- **`buildGradedPriceIndex` is also the Graded collection's `priceByKey` now** (keyed by pid) —
+  one two-pass index instead of two copies.
+- **Fetched only when shown or sorted by** (`rawGradedWanted`, below `colPrefs` for the TDZ
+  reason), sharing Graded mode's rollup state and its one read (`fetchScreenerGradedRollup`).
+  Behind the graded-data terms like every graded surface: asking for a column raises the terms
+  prompt and shows the compact `GradedTosGate`; cells read "—" with a tooltip saying why.
+- **The tier rides a saved view / `?v=` (`gt`) ONLY when the view sorts by one of the columns**
+  — then it decides which rows lead. Otherwise it is a column setting like visibility, and
+  applying a view leaves the viewer's own pick alone.
+- Legacy Raw prefs reconstruct `known` without these two keys, same as the pop columns, so they
+  don't appear for everyone who ever customised their table. They ride the CSV when on screen.
 
 ## Screener saved views
 
@@ -2710,6 +2756,19 @@ so #7 there is five different cards.
   SC pair (Maleficent - Monstrous Dragon), unpriced synthetic rows from `supabase/160` labelled via
   `REGIONAL_EXCLUSIVE_LABEL`; #63 JP Buzz IS on TCGplayer (714954), so it keeps its price and gets
   its label from `PRICED_REGIONAL_LABEL_BY_ID`.
+- **P4 #17 is Japan's Hyperia City box promo** (2026-09-30): Minnie Mouse - Urban Visionary, printed
+  `17/P4 · JA · 14`, packed in Takara Tomy's booster box. The English buy-a-box printing is a
+  different number, `4/RPH` (set "Ravensburger Play Hub Promos"). The row is the prestage
+  `crd_prestage_p4_17` with the JP card as its own art, labelled through `REGIONAL_EXCLUSIVE_LABEL`.
+- **The ink drop counter cards in that box are Extras & Oddities entries under Hyperia City**
+  (`CUSTOM_CARDS`, ids `extras:ink-drop-ja-baymax` / `-merlin`, bucket "Japanese Box Bonus"). One
+  of the two comes per Japanese box; they are printed `JA · 14` with no collector number and say
+  on their face that they are not cards, which is why they are not in the set. Art is the FRONT
+  only, from Takara Tomy's box-bonus graphic (`card-art/extras/`); the Baymax and Merlin backs are
+  still wanted. **⚠ Nothing official says they are foil** (checked 2026-09-30): English packs carry
+  the same two designs in the marketing slot and Ravensburger said there are no foil ink drops yet;
+  Takara Tomy's renders show a sparkle texture the English ones lack, and Zaven heard they are
+  Japan-only foils. Keep "foil" off the tile until a source says it.
 - **A single-printing promo gets exactly ONE row** — one add box — whatever emitted it.
   `collapsePromoPrintings` runs last in `transformSupabaseData` over every `UNIFIED_TILE_SETS` set and
   keeps the priced row, then foil over Normal. Reported 2026-09-18: unpriced PD1 cards rendered a
@@ -3412,13 +3471,20 @@ Highest wins, tiebreak by iteration order.
 tournament upload) have to agree, and every way they disagree is silent. Guarded by
 `node scripts/test_deck_text.mjs`, which replays the real functions.
 
-- **A Coconut deck's leader is exported as `# Coconut leader: <Name - Version>`** and read back
+- **⚠ The export is a PLAIN list — no `# Section` headers, no blank lines** (2026-09-29).
+  It used to head each type group with `# Characters` and a gap, and Discord, where most lists
+  get pasted, renders a line starting `# ` as a heading: a 16-card list became a screenful of
+  big type (reported from a Discord share). Cards stay grouped by type and sorted by cost; the
+  headers are gone. A plain `N Name` list is also the one format every other Lorcana importer
+  reads. **Comments use `//`, never `#`** — Discord leaves `//` alone. The parser still skips
+  `#` lines, so a list copied before this still imports (pinned).
+- **A Coconut deck's leader is exported as `// Coconut leader: <Name - Version>`** and read back
   (and applied via `onUpdateMeta`). The leader sits OUTSIDE the 60, so it is not in
   `deck.cards`, and the export used to drop the one card that defines the deck. A comment, so a
   tool that doesn't know Coconut skips it.
 - **One line per CARD, not per printing** — a base + its Enchanted exported as two lines with
   the same name, which a tool that doesn't sum duplicate lines reads as half the copies. A card
-  missing from the catalog is a `# N × <card_id>` comment, never `N crd_…`.
+  missing from the catalog is a `// N × <card_id> (not in the catalog)` comment, never `N crd_…`.
 - **Import folds accents** (a third key, `foldCardName`, after the normalized and squashed ones),
   so "Te Ka" finds "Te Kā".
 - **A `(set-cn)` wins over the name only when it names a printing OF that card** (its job:
@@ -3458,11 +3524,11 @@ spelling in each direction.
 
 ## Print proxies (deck → print-and-cut PDF)
 
-`ProxyPrintModal` (Index.html, just after `DeckPosterModal`). DeckEditor toolbar → **🖨 Print Proxies**. Renders each card to a canvas, encodes JPEG, and writes a PDF: 9 cards per page at true card size (63×88mm), colour or B&W, PROXY watermark, crop marks, Save / Open-and-print.
+`ProxyPrintModal` (Index.html, just after `DeckPosterModal`). DeckEditor toolbar → **🖨 Print Proxies**. Renders each card to a canvas, encodes JPEG, and writes a PDF: 9 cards per page at true card size (63×88mm), three card faces (the card image, the image with its art box blank, or the card redrawn printer-friendly — see below), colour or B&W, PROXY watermark, crop marks, Save / Open-and-print.
 
 **The PDF writer is hand-rolled — deliberately.** `buildProxyPdfBlob` emits raw PDF syntax and embeds each JPEG as a `/DCTDecode` image XObject, which means the JPEG bytes pass through verbatim and the whole writer is ~100 lines. The alternative was vendoring jsPDF (~350KB) into `/vendor/` and lazy-loading it, which buys nothing here: the only PDF feature used is "place image at rect". Same reasoning as the canvas card posters — it ships inside Index.html (network-first) so a stale service worker can't break it.
 
-- **The watermark is painted into the card's PIXELS, not laid over the page.** It survives whatever the user does with the PDF afterwards. `drawProxyWatermark` — `subtle` = a corner tag, `bold` = tag + repeated diagonal, `none`. The corner tag renders in all modes except `none`.
+- **The watermark is painted into the card's PIXELS, not laid over the page.** It survives whatever the user does with the PDF afterwards. `drawProxyWatermark` — `subtle` = a corner tag, `bold` = tag + repeated diagonal, `none`. The corner tag renders in all modes except `none`. **It sits bottom RIGHT, inside the border** (`drawProxyTag`; moved 2026-09-30 — centred, it covered the card's rarity symbol). A Location is printed sideways, so its mark is drawn on the turned card (`{landscape: true}` — the portrait image's top-right); in the portrait corner it landed on the first line of the location's rules text. The printer-friendly face passes `{tag: false}` and draws the same pill in its own footer.
 - **White ground before drawing art.** Lorcast art is transparent outside the rounded corners and JPEG has no alpha — skip the `fillRect` and every card prints four black corners.
 - **Identical copies share ONE embedded image.** A 60-card deck carries ~20 XObjects, not 60. `indexOf` maps card_id → image index; the page slots reference it repeatedly. Dropping this multiplies file size ~3x.
 - **B&W applies a gamma lift** (`pow(g/255, 0.58)`, the "Lighten" checkbox). A straight luminance conversion turns a full-bleed dark Lorcana frame into a toner-soaked black rectangle with unreadable rules text.
@@ -3474,6 +3540,40 @@ spelling in each direction.
 **Guarded by `node scripts/test_proxy_pdf.mjs`**, which extracts the real writer out of Index.html. The two ways this breaks are silent and total — a wrong xref byte offset or a wrong stream `/Length` makes the file unopenable in every reader with no clue why — and both are arithmetic that shifts the moment anyone edits what the writer emits. It caught an off-by-one in `objCount` that emitted a phantom xref row. Verified end-to-end in Chromium's PDFium viewer, and the embedded streams check out as baseline (SOF0) 3-component JPEGs at the declared dimensions.
 
 **htm fragments are `` html`<${React.Fragment}>…</>` ``, never `` html`<>…</>` ``.** htm compiles a bare `<>` to `h("", …)` and `React.createElement("")` throws. Cost a debugging cycle here; the rest of the file already uses the `React.Fragment` form.
+
+### Blank-art face — the real card, art window left blank (2026-09-29)
+
+**Card face → Blank art box** (`face: "blank"`; the chip read "No art" for its first day) prints the ACTUAL card — black frame, cost hex, name bar, stat shields, rules text, artist line — with its art window painted white (Zaven: *"less custom and more: the actual card but the art box is just blank"*). It is not the printer-friendly option: the frame is still solid black. That is the next section.
+
+**Which pixels are art is MEASURED, not drawn.** `scripts/bake_proxy_blank_mask.py` stacks ~90 real Lorcast renders per layout: pixels most cards agree on are frame, pixels they disagree on are art. The frame is pixel-identical across every set since The First Chapter (the classification band ends at y=626 of 940 on all of them), which is what makes this possible at all. Output is **`Logos/proxy-blank.png`**: six 674x940 RGBA tiles, one per layout, in `PROXY_BLANK_TILES` order (`char_ink char_unk other_ink other_unk loc_ink loc_unk`) — white over the art window, frame colour over a ~30px band of border around it, transparent everywhere else. Drawn over the card with the same cover crop as the card (`drawProxyBlankTile`).
+
+- **Six tiles, because the frame differs in exactly three places**: the inkwell ring vs the tighter black blob behind an uninkable cost, the stat shields that poke above a character's name bar, and a Location's sideways layout (art left of a vertical plate at x≈325).
+- **The window stops at the name plate** (y≈491–497, measured per column off the opaque action/item plates). A character's plate is TRANSLUCENT, so a little tinted art still shows through it under the name — that's the plate as printed, and blanking it would take the name with it.
+- **The band paints frame colour over art that breaks out of the frame** (Buzz - Jungle Ranger's leaves over the left border, Snow White's hair over the top). Without it a blank window keeps colourful slivers around its edge.
+- **The same band decides whether a card is on the standard frame at all** (`proxyFrameScore`: share of band pixels that are dark on this card). Every base-rarity card measured ≥ 0.91 (464 cards); `PROXY_FRAME_MIN` is 0.85. A card below it prints WITH its art and the dialog says so ("isn't on the standard card frame") — blanking a "window" on a full-art card prints half a painting.
+- **Enchanted / Iconic / Epic / promo printings are swapped for a booster printing of the same Product Name** (`framedSrcOf`, base rarities in `MAINLINE_SETS`) before any of that runs — the Common is the same card with a window to blank. A card with no such printing keeps its own image and goes through the frame check. Coconut leaders (beta renders) always fail it and print with art.
+- ⚠ **The sprite lives in `Logos/`, NOT `Logos/lorcana/`** — that directory is `bake_brand_assets.py`'s manifest output and `test_brand_art.mjs` fails on anything in it the brand code doesn't reference.
+- ⚠ **Bump `?v=` on `PROXY_BLANK_SRC` whenever the sprite is re-baked.** It loads as an image, so the service worker's `packsink-img-v1` cache — which survives deploys — would keep serving the old template forever.
+- **Re-bake only if Ravensburger changes the card frame**: `python scripts/bake_proxy_blank_mask.py --contact sheet.png` (needs `.env` and a Pillow that reads AVIF), then LOOK at the sheet — a template a few pixels off fails as a coloured sliver or a nick in the border, never as an error. It also prints the standard-frame scores for base and full-art cards, which is where `PROXY_FRAME_MIN` came from.
+- The Lighten checkbox and the "no image" warnings apply to both faces now — both are the card image.
+- Guarded by `scripts/test_proxy_pdf.mjs` ("no-art template"), which DECODES the sprite and asserts, per tile, that the art window is white and the cost hex, name bar, stats and rules text are untouched, and that the client's tile order matches the bake script's.
+
+### Printer-friendly face — the card REDRAWN in outline (2026-09-30)
+
+What the friend who asked for "no art" proxies actually wanted: jorcana.ink's test cards (now retired) — *"official looking but also minimal"*. **Card face → Printer-friendly** (`face: "lite"`, `drawProxyLiteFace`) draws the card from catalog data in the printed card's own layout, in line art: cost hex (inside the grey inkwell ring when inkable), the NAME where the art would be, the ink band with strength / willpower badges, ink + classification line, rules text with lore pips down the right, artist / number / set / rarity in the footer. No image is loaded, so a 60-card deck builds in about half a second, and the only solid ink on the page is type.
+
+It is modelled on Jorcana, not copied: own type (Barlow), rounded frame, tagged ability names, dual-ink split band, our footer. A stored `face: "text"` (the first hand-drawn layout, 2026-09-29, which put the name beside the cost over a small empty box) maps to it.
+
+- **Layout is the official card's, so it reads at the table.** One function lays out a `W x H` box; a **Location** runs the same layout in a canvas turned a quarter turn, with only the cost left upright in the portrait corner — exactly as the real card does it.
+- **The art box is the flex.** Short text gets the printed proportions; long text takes the art box back (down to the name block plus a margin) before the type shrinks (29px to a 17px floor). Fairy Godmother - Mystic Armorer, the longest card in the catalog, still prints whole.
+- **The name goes on two lines only when that buys >20% more size** (`fitProxyName`): "THE BLACK / CAULDRON" yes, "BE OUR GUEST" no.
+- **The glyph SVGs are LAYERED, and painting them as one silhouette is a black blob** — the toner this face exists to save. On `strength` / `willpower` / `move-cost`, `cls-1` is the linework and `cls-2` the fill behind it (`PROXY_BADGE_PAINT`: fill white, lines dark — a badge with the number inside). On `inkable`, `cls-3` is the ring and hex outline over a solid `cls-1` backing; on `uninkable` the outline is `cls-2` (`PROXY_COST_PAINT` skips the backings). `loadProxyGlyphs` keeps each shape's class for this, and the test pins the class names, because `bake_brand_assets.py` rewrites those files and a renamed class paints as NOTHING.
+- **Glyphs are `Path2D`s, not `drawImage`**: an SVG image can taint the canvas in some engines and has no natural size in others. A glyph that fails to load degrades — a plain ring for a badge, a drawn hex for the cost, the word for an inline symbol ("pay 6 ink").
+- **Rules text has four voices** (`parseProxyRules`): keyword + value **bold** (`Shift 6`, `Boost 2 {I}`, a whole `Evasive, Ward` list), an ALL-CAPS ability name in an **outlined tag** (`n: true`), parenthesised reminder text *italic*, `{I} {L} {S} {W} {E}` as symbols. A caps run needs 3+ capitals (so "A character…" stays plain) and may open on a number ("10,000 MEDICAL PROCEDURES"). ⚠ **Never "up to the first paren"** — the catalog carries `Shift 4 I'LL COUNT YOU IN Whenever…` on one line with no reminder. Tag padding is part of the wrap maths (`PROXY_TAG_PAD`), or a tag's border lands on the next word.
+- **Type is VENDORED** (`vendor/fonts/barlow-*.woff2`, OFL, ~120 KB, five files) and loaded with `FontFace` on the first build. A canvas falls back to the generic family without a word when a face isn't loaded, and a print has to look the same on every machine — a Google Fonts request would also be one more thing that fails offline. Subsets cover Latin through Latin Extended-A ("Te Kā"). No flavour text: it isn't in the catalog rows, and it's ink.
+- **Colour** tints the band by ink (dual ink: two tints, split on a slant). **B&W** makes the band one light grey and writes the ink's NAME in it, since the tint was the only thing saying which ink a card is. The face picks its own palette, so it skips the greyscale pixel pass — and the Lighten checkbox and every "no image" warning are hidden for it.
+- Coconut leaders print with no cost and "Leader" as the type line.
+- Guarded by `scripts/test_proxy_pdf.mjs`: the parser cases, that every declared font file exists and is woff2, the glyph class names, and where the PROXY mark lands.
 
 ## Artist Alley poster
 
@@ -3527,6 +3627,37 @@ The avatar gate is one-shot — closing the picker once flips `packsink:avatarPr
 
 - **No "Lorcana Market" h1 or "Click a card for details" subtitle** — both removed 2026-05-26. The search bar sits directly under the top nav. The logo IS the home click target (the title was redundant).
 - **Tournament Results panel: `.ht-place` is `white-space: nowrap`** and `.home-tourney-deck` grid is `auto minmax(0,1fr) auto` (was `28px 1fr auto`). The 28px column wasn't wide enough for `"Top 4"` / `"Top 8"` — the place text wrapped to two lines, doubling row height on the narrow signed-in mobile home grid. Auto-width + nowrap keeps each row on a single line; player column's `minmax(0,1fr)` still shrinks with ellipsis when needed.
+
+### Recent set EV — one card per set (2026-09-30)
+
+Zaven, off his phone: *"Reimagine this section, its ugly."* It was a five-column table
+that stacked into orphaned numbers under misaligned headers, with four amber Amazon pills
+down the right edge and two native checkboxes (`<$1→$0`). `HomeEvStrip` now draws one
+card per set: name and verdict (`vs box −47%`) on top, then EV and the two buy buttons,
+with a meter along the card's bottom edge (EV against the box; green past a tick when a
+set is +EV). The title takes the Toolbox's Cinzel gold, and the toggles are chips
+(**No bulk** / **No chase**, same semantics as before) set in Cinzel capitals to match
+it. Each set's official wordmark sits left of its name (Zaven, same day).
+
+- **⚠ The box price lives INSIDE TCGplayer's own button** (`$190.00 TCGplayer ↗`), with
+  the number-less Amazon pill beside it — see the Amazon section for why that satisfies
+  the "Amazon must never read as a caption on a price" rule.
+- **⚠ Every layout switch is a CONTAINER query on the panel (`hev`), never a media
+  query**, for the reason the Toolbox grid uses auto-fit: which rail the panel lands in is
+  decided by the home layout. Measured by forcing the panel from 220px to 900px, nothing
+  overflows or ellipses: under ~312px of content (the 240px rail, phones under ~345px) a
+  card goes to three lines — name, EV + verdict, buttons — and from 620px it goes two
+  across. ⚠ Both numbers were measured, not picked: at 320px the one-line foot's Amazon
+  pill overflowed by 2px, and two across below 620 overflows every card.
+- A container query cannot style the container itself — only descendants — so the
+  panel's own padding does not change with width.
+- It is ~50% taller than the table on a phone (320px against ~202px for four sets). That
+  was the price of buttons that look like buttons; the meter costs no height.
+- **⚠ The set logo sits in a FIXED slot** (`.home-ev-logo-slot`, 56x28, 44x24 in the
+  narrow layout), not sized by height: the wordmarks run from 1.25:1 (Whispers in the
+  Well) to 2.67:1 (Winterspell), so a shared height starts every name at a different x.
+  A set with no logo yet (the weeks after a release, before the next brand-bundle drop)
+  keeps an EMPTY slot while any other row has one, so the names still line up.
 
 ### Configurable layout (2026-08-04)
 
@@ -4412,7 +4543,7 @@ non-compliant one.
 - **What KEEPS its Amazon twin**, every one of them sealed or product: the Sealed detail
   modal, Sealed collection tiles, the Screener's SEALED rows (`isSealedRow`-gated), the Price
   Graphing single-product preview (sealed only), both EV box prices (`.ev-box-amzn`,
-  `.home-ev-strip-amzn`), the home "Lorcana on Amazon" shelf and `/gear`. `.td-amzn-link`,
+  `.home-ev-amzn`), the home "Lorcana on Amazon" shelf and `/gear`. `.td-amzn-link`,
   `.gc-card-buy--amazon` and `.mt-amzn-link` are still live for exactly those — don't sweep
   them as orphans.
   **Deliberately NOT twinned:** a *price* that merely happens to be a TCGplayer link (Cards
@@ -4625,13 +4756,15 @@ caption ON that price, i.e. as though the $ were Amazon's.
   tiles and the calendar's product links; `AmazonBuyLink` (sealed modal) gained the
   cart and the same amber; the icon-only twins (Screener sealed rows, movers-tile
   corner) take the amber so a cart is never mistaken for the TCGplayer link.
-- **The price says whose it is.** Column headers read "Box · TCGplayer" (home strip
-  + Analytics EV), the price link carries a small ↗, and the sealed tile's chip reads
+- **The price says whose it is.** The Analytics EV column header reads "Box ·
+  TCGplayer", the price link carries a small ↗, and the sealed tile's chip reads
   "TCGplayer ↗" (was "TCG ↗").
-- **⚠ On the home EV strip the pill is its OWN column, after "vs box"** — never in
-  the price cell. Below 640px (and in the 240px left rail) the row stacks: set name +
-  pill on line one, the three numbers on line two; five columns left a phone's set
-  name 17px wide.
+- **⚠ On the home Recent set EV card the box price lives INSIDE TCGplayer's own
+  button** (`.home-ev-tcg`: "$179.99 TCGplayer ↗"), and the Amazon pill sits
+  beside it carrying no number. That is a stronger answer than the old separate
+  column: the price is enclosed in a button that names its shop, so there is no
+  neighbouring number for the Amazon pill to be read as a caption on. See
+  "Recent set EV" under Home page surface.
 
 ### Disclosure
 
@@ -4859,8 +4992,8 @@ Zaven's ask: call a card in Discord and get its picture and price history, plus
 trend reports, with **plain-English, typo-tolerant lookup as the main
 requirement** — "people will say mowgli and not know the subtitle, but there is
 one main one that is played, or spell mowgli slightly wrong". `/card`, `/price`,
-`/trade`, `/deck`, `/set`, `/open`, `/new`, `/movers`, `/meta`, `/events`, `/calendar`,
-`/help`, `/reports` and a **Price check** message menu (v2 additions below).
+`/set`, `/open`, `/new`, `/meta`, `/events`, `/calendar`, `/help` and `/reports`
+(v2 additions below; what changed on 2026-09-29 is in its own section).
 Setup (the steps only Zaven can do) is `discord/README.md`.
 Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
 `python scripts/test_discord_reports.py`.
@@ -4945,6 +5078,29 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
   - **The tile URL carries `?d=<price date>`** — Discord caches by URL, and the
     footer date changes daily, so every tile is re-uploaded each day (wrangler
     skips unchanged files, so a second deploy the same day uploads nothing).
+  - **⚠ The tile is UPLOADED with the reply, not linked** (2026-09-29). Linked,
+    Discord dropped it from the FIRST edit of a deferred `/card` reply — the
+    stored message had no image at all, even after a reload — and showed it on
+    every later edit of the same message (a button, a foil switch), which is
+    how it read as "no picture until you mess with it". TCGplayer and Supabase
+    pictures in the same first edit were fine, so it is our workers.dev assets
+    in particular; the cause on Discord's side was not pinned down, and the
+    upload sidesteps it. `withUploads` (interactions.js) reads any embed
+    picture under `<origin>/tile/` or `/art/` through the **`ASSETS` binding**
+    (wrangler.toml) and sends it as `files[n]` with `attachment://` in the embed.
+    Every plain edit carries `attachments: []`, or switching to the chart would
+    leave the tile hanging loose under the embed. A refused upload (any
+    status) is re-sent once with the link, then the plain-text fallback as
+    before; a file the asset store can't produce stays a link.
+  - **⚠ Charts are uploaded too** (same day, Zaven: *"now when I click over to
+    price graph, that wont load unless I click through all the options"*).
+    `withUploads` draws them in-process with `chartResponse` — the very route
+    Discord would have fetched, so the picture is identical — and a chart whose
+    database read fails keeps its link. A live tail showed Discord downloads a
+    linked chart THREE times (~2 s after the edit, three different IPs, GET
+    with a Discordbot UA, never HEAD), each a fresh Supabase read and redraw
+    at 27–35 ms of CPU, not the ~5 ms the render alone costs. TCGplayer
+    thumbnails and the instant `/set` / `/open` replies stay links.
   - History is fetched per product for 45 days, then a year for the few whose
     1M reference (or latest price) sits further back (`needsLonger`), so the
     numbers match the site's card page. The art is cached between runs in
@@ -4957,15 +5113,10 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
     late-running 21:45 schedule.
 - **Every TCGplayer link is the affiliate link** (`buyUrl()`: `tcgUrl` for a
   listed printing, `tcgSetSearchUrl` — a TCGplayer search for the name — for one
-  that isn't). Card titles, the Buy/Find button, /movers, /deck and Price check
-  all go through it, and every message carrying one ends its footer with
+  that isn't). Card titles, the Buy/Find button and /meta's card list all go
+  through it, and every message carrying one ends its footer with
   "Links may earn packs.ink a commission". The guard fails a reply with a
   non-affiliate TCGplayer link or without that line.
-- **`/movers` defaults to NM Market and drops stale rows.** Low produced a $7 →
-  $0.50 "crash" on the first live test. And `price_movers` repeats a SKU's last
-  change after its listing disappears, so a mover only counts when
-  `prices_daily` holds the same price for it on the newest date (`fetchMovers`).
-  The window floor is on the STARTING price, the home banners' rule.
 - **On a promo TCGplayer cannot price, eBay leads** — the site's raw-sales
   rule (see "Raw eBay sales"): Last sold + Avg of last N come first, TCGplayer
   Low / Mkt second, and the chart draws each eBay sale as a DOT over the Market
@@ -4973,25 +5124,13 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
   alone (`/chart/r/...`) for a card with no TCGplayer product. The split bucket
   goes through `gradedSlotBucket` / `rawSaleMatch`, copied from the site, so a
   Challenge card's Top Prize and Prize Wall sales never share a chart.
-- **`/deck` opens a text box** (a modal, type 9) because a slash-command option
-  cannot hold line breaks, and **Price check on a message that is mostly
-  `N Name` lines totals it as a deck** (`looksLikeDeck`: ≥5 card lines and ≥60%
-  of the lines). Each card is priced at its CHEAPEST printing, NM Market and Low.
-  Three matching tiers, cheapest first: the exact normalized name; a full name
-  within 1–2 letters of exactly ONE card (`Be Prepard`, `Tinker Bel - Giant
-  Fairy`; close to two cards means neither); then the resolver, only when it is
-  unambiguous and sure (score ≥ 0.9, or a corrected typo ≥ 0.75). A guessed row
-  says `(closest match)`; an unknown line is listed as not counted, never
-  guessed. **⚠ The resolver runs at most `MAX_GUESSES` (8) times a list** — it is
-  ~1 ms a call, a real exported list needs none, and the Worker has a small CPU
-  budget. The name index is built at startup (`prepareDeckIndex`), not per request.
 - **`/reports`** stores (server, channel, cadence) in
   `discord_report_subscriptions` (**migration 173, APPLIED 2026-09-28**) through the service
   key; `scripts/discord_reports.py` posts the report through the bot token,
   daily and on Mondays for weekly. The movers data, the standing maths and the
   freshness rules come from `discord_digest.py`; the LAYOUT is the report's
-  own (see "The channel report's layout" below). It adds the same stale-row
-  filter the Worker uses. A 403/404 is written to `last_error`, which
+  own (see "The channel report's layout" below). It drops a mover whose
+  "today" is not today (`drop_stale`). A 403/404 is written to `last_error`, which
   `/reports status` shows.
   - **⚠ It runs when an ETL run FINISHES** (`workflow_run` on "ETL", which
     cron-job.org dispatches on time), with the 21:20 / 23:20 UTC schedule kept
@@ -5021,8 +5160,9 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
 ### v2 (2026-09-28): /trade, /set, /open, /meta, boards you browse
 
 - **The free plan's 10 ms of CPU is the binding constraint, and v1 was over it
-  on two paths**: a cold first lookup (~11 ms) and Price check on a long chat
-  message (~15–17 ms) — over the limit the reply simply never arrives. The
+  on two paths**: a cold first lookup (~11 ms) and Price check (since retired)
+  on a long chat message (~15–17 ms) — over the limit the reply simply never
+  arrives. The
   resolver now precomputes the popularity priors and each character's versions,
   skips an edit distance when the two tokens' LETTER SETS differ by more than
   2 per allowed edit (exact: one edit changes the set by at most two symbols —
@@ -5038,32 +5178,12 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
 - **⚠ Every component in a message needs a DIFFERENT custom_id** — Discord
   refuses the message otherwise. The boards highlight the current state on
   several controls at once, so each control carries a letter:
-  `m|<w|d|b|g>|…` (movers), `e|<k|r>|…` (events), `cl|<k|r>|…` (calendar),
+  `e|<k|r>|…` (events), `cl|<k|r>|…` (calendar),
   and a second card menu is `o|card|1` beside the first's `o|card`.
   `checkMessage` in the guard asserts uniqueness on every reply.
-- **`/trade` prices each card at the VERSION the words name** — "enchanted
-  elsa" is the Enchanted — never at its cheapest printing (that is /deck's
-  question, not a trade's). Prices come from the index (rebuilt daily after
-  the ETL), so the reply needs no database read. Commas split items EXCEPT
-  between the word pairs real card names hold ("Fix-It Felix, Jr.", "Wake Up,
-  Alice!" — built from the index); "and", "&" and "for" never split (55 names
-  hold "and"/"&", 20 hold "for"). A whole line that is an exact card name wins
-  over reading its first number as a count ("99 Puppies"). Capped at 15 items
-  a side and 24 resolver calls a trade.
-- **The trade hands off to the site's Trade Compare through its ORIGINAL inline
-  form, `?trade=<base64url JSON>`** — still decoded by `decodeTrade` — rather
-  than `create_trade`: no database write, and that RPC's per-IP rate limit
-  would see every bot user as one Worker. Keys are the site's `tradeGroupKey`,
-  so a Challenge Promo (C1) card carries its printing (`sets[].sp` in the index).
-- **Price check reads a trade post as a trade** (`H:`/`Have:`/`W:`/`Want:`/`LF`/
-  `FT`/`ISO` markers, one-line or multi-line, markdown-bold or bulleted), then
-  a decklist as a deck, then free text card by card (only that last path is
-  capped at 1,200 characters).
-- **Box EV, sealed movers and play shares are computed in the daily index
-  build** with the site's own code: `processData` + `calcEV` (the EV tool's
-  defaults — nothing excluded, Low and NM Market), `computeSealedDeltas` as of
-  the index's price date (so a delisted product reports no move), and
-  `playDecks` (the recency-weighted count of top-cut decks, so a card's `pl`
+- **Box EV and play shares are computed in the daily index build** with the
+  site's own code: `processData` + `calcEV` (the EV tool's defaults — nothing
+  excluded, Low and NM Market), and `playDecks` (the recency-weighted count of top-cut decks, so a card's `pl`
   reads as "in 38% of decks"). An unreleased set shows no box EV — its prices
   are pre-sale.
 - **`/open` is the site's `simPack` with `getPull`** (copied by
@@ -5105,9 +5225,7 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
   first (they share a weekend); weekly play is one line per store.
 - **`/set`'s chase list is its own embed's description, not a field**: every
   name is a ~220-character affiliate link and a field's 1,024 clipped the list
-  mid-link. Same reason `/deck`'s one-cart TCGplayer link (the site's
-  `tcgMassEntryParts` + `tcgMassName`, with `tcgplayer_names` carried in the
-  index) is a second embed.
+  mid-link.
 - **Commands are registered BEFORE the deploy** (`register_commands.mjs --ids
   src/command-ids.json`) so their ids are bundled and /help shows them as
   clickable `</name:id>` mentions; the interactions endpoint is set AFTER
@@ -5118,6 +5236,80 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
 - **The channel report has its own layout** (see the next section); the
   digest's embed (`build_embed`, shared with the site's never-configured
   webhook) is untouched.
+
+### 2026-09-29: four commands retired, /meta by ink pair, send now, card text
+
+Zaven: *"lets kill trade, deck, price check, movers"*. `/trade`, `/deck`,
+`/movers` and the **Price check** message menu are gone, with `trade.js`,
+`deck.js`, the movers board, the deck modal and `tcgplayer_names` in the index.
+Registration is a bulk PUT, so the next deploy removes them from Discord; a
+client still showing one gets "Unknown command." (guarded). The resolver's
+`findInText` stays: it is tested, and cheap.
+
+- **`/meta` leads with the ink pairs of every top-8 deck** (Zaven: *"what decks
+  are meta"*). One read of `tournament_results_v` (`place_rank <= 8`) since the
+  newest booster set already ON SHELVES (`metaSet`: `main` and `date <= today`,
+  so an announced set's empty window is never used), Core only, grouped by ink
+  pair in ink order. `deck_name` is empty on most tournament decks, so the pair
+  is the only exact archetype. Under three events since the set it widens to
+  the last 45 days and says so. Each line: the marks, a ten-cell bar **scaled
+  to the leading pair** (an absolute bar gave every pair two or three cells, and
+  two pairs both at "25%" came out a cell apart on rounding), the share, decks,
+  top 4s and wins. Measured on the day: 224 decks from 31 Core events since
+  Attack of the Vine!, Amber/Emerald 25% and 11 wins.
+- **"Latest big events" is chosen, not just the newest three** (*"decide recent
+  tournaments better"*): the three with the most players in the last three
+  weeks that recorded at least four decks, shown newest first; under three, it
+  reaches back 45 days. A winner-only record (a single row) is a stub and
+  skipped. Infinity events can appear and say so. The breakdown, the most
+  played cards and the events come to ~4,300 of the 6,000 characters.
+- **`/reports send`** (server managers) posts the latest daily or weekly report
+  in the channel, now. `discord_reports.py` keeps both every day it runs with
+  `--post`, **whether or not any channel subscribes** (`store_latest`), in
+  `discord_report_latest` (**migration 175, STAGED**), built once a day per
+  cadence. Its pictures go to the public `discord-reports` bucket under
+  `<cadence>/<price date>/`, because Discord caches an image by URL; yesterday's
+  are deleted once today's are kept. If a picture fails to store, the kept
+  report is the plain one rather than a broken image. The Worker reads the row
+  and `withUploads` uploads those pictures with the reply (`REPORT_PICTURE`),
+  like every other picture. **A refusal (not a manager, not switched on) is
+  answered privately and at once**, before any read; only the report itself,
+  or "no report yet", is public. Storing can never cost a subscriber their
+  post: it is wrapped, and it runs before the subscriber loop.
+- **`/card` shows the card's rules text and stats** (*"the text of the card
+  under the name above the image"*). The index carries `x` (the NEWEST booster
+  printing's wording), `st` (strength / willpower / lore / move) and `ik`
+  (inkable). `rulesText`: one quoted line per ability, the printed ALL-CAPS
+  ability name bold (three capitals at least, so "A character…" stays plain), a
+  keyword the card has bold with its number and the ink it's paid in ("Shift 6
+  ink"), reminder text italic, `{I}` / `{E}` / `{L}`… as words (Discord has no
+  glyph for them), markdown escaped. Checked over all 3,195 catalog texts: no
+  odd output, the longest 428 characters. An uninkable card says so.
+- **Card pickers show the card's stats** (Zaven: *"a small sub line under each
+  option saying the stats … amethyst 6c inkable 5/6 2lore and any keywords"*).
+  `src/stats.js` builds them once for every surface: ink, cost, inkable, S/W
+  (a Location's move + willpower, an action's type), lore, keywords with their
+  numbers read off the card's own line ("Shift 6", "Resist +1").
+  - **⚠ Discord's `/card` suggestions have NO sub-line** — one line of ≤100
+    characters is all an autocomplete choice can show — so the stats go ON
+    that line: `Demona - Scourge of the Wyvern Clan — 🟪 6c · inkable · 5/6 ·
+    2 lore | Legendary · Non-foil · $39.14`. Too long, the set name goes
+    first, then "inkable", the last keywords, "uninkable", the word
+    "Location", then "willpower" → "wp", and last the stats trim behind a
+    "…" (`fitParts`'s `trim` group) so **the finish and price are never cut**.
+    Measured over all 6,252 printings: none over 100, none lose the price, 20
+    trim with "…". The guard checks every fixture printing.
+  - **Select menus DO have a sub-line** (`description`), so every card menu
+    carries the stats in words there, before what it already said (rank,
+    rarity, price): "Did you mean", `/meta`'s card list, `/set`'s chase list,
+    `/new`, `/open`. In the versions menu only ANOTHER version gets them — the
+    card's own printings share the stats already shown above.
+- **Every event links to its page on packs.ink** (`eventPageUrl` →
+  `/calendar?ce=<id>`), which links on to the organiser: `/events` uses
+  `ev:<rph event id>` (the calendar fetches one the reader doesn't follow),
+  `/calendar` the entry's own id (a curated uuid, `set:…`, `product:…`).
+  Before, an RPH row linked straight to RPH and a curated one to its
+  registration page or nowhere.
 
 ### The channel report's layout (2026-09-28)
 
@@ -5383,8 +5575,10 @@ a dispatch input on the existing workflow rather than a script you run on its ow
 ### Taking a store OUT of scope (2026-09-12)
 
 `EXCLUDED_STORE_IDS` is the other half of `elo_scope.py`: this shop is not Chicagoland,
-past and future, whatever the rules infer. Today it holds the two central-Indiana stores
-(Good Games - Indianapolis, Storming Good Games — both ~165 mi out).
+past and future, whatever the rules infer. It started with the two central-Indiana stores
+(Good Games - Indianapolis, Storming Good Games — both ~165 mi out) and since 2026-09-13
+holds 15: all of Michigan, plus anything over a 3 h 30 m DRIVE (the Fox Valley / Green Bay
+corridor and Springfield). The per-store drive times are in `elo_scope.py`.
 
 **⚠ Both of these were true at once, and a store excluded months earlier was still on the
 Scout tab** (reported 2026-09-12, and either one alone is enough to reproduce it):
@@ -5422,6 +5616,41 @@ Scout tab** (reported 2026-09-12, and either one alone is enough to reproduce it
   importers (identity, not equality — a local copy holding the same ids today is how they
   drifted and it compares equal), that neither pass tracks an excluded store, that an
   existing row is deleted, and that an unmatched one is not.
+
+### …but a store cut from Elo STAYS on Store Status (2026-09-29)
+
+Zaven, after WorldClassCards (5392 / 5393) asked why they had vanished: *"add back wcc and
+any other previous elo store we cut, so they can track progress."* Cutting a store from the
+rating is a statement about where the scene plays, not about the shop, and the Store Status
+tab is how a shop follows its own RPH tier progress. **The cut took them off that tab only
+because the tab, the history top-up and the roster scrape all read `elo_tracked_stores`** —
+the same table `prune_excluded()` deletes them from.
+
+- **`elo_scope.STATUS_ONLY_STORE_IDS`** is the list, and it is `frozenset(EXCLUDED_STORE_IDS)`:
+  derived, so a future exclusion keeps its Store Status row by default. To take a store off
+  that tab too, subtract it there with a reason. Checked 2026-09-29: the 15 exclusions are the
+  only stores ever cut. Battle City, Grognard and Zeek's each have an `is_ignored` event, but
+  that was a data-quality call on one event, and all three are still tracked.
+- **⚠ It is deliberately NOT written into `elo_tracked_stores`.** That table also gates Upcoming
+  SCs, the Scout tab, scouting sheets and the SC roster scrape, and a cut store belongs on none
+  of them. Instead the Store Status consumers union it in: `scrape_store_history.store_status_ids()`
+  (the daily 30-day and hourly 2-day top-ups), `scrape_event_attendance.target_events()`,
+  `report_store_tiers`, and the client.
+- **⚠ The client carries a COPY, `ELO_STATUS_ONLY_STORE_IDS`**, because the browser cannot read
+  a Python file. `test_excluded_stores.py` fails when the two disagree: an id only in the copy
+  is a row whose numbers froze the day it was cut; an id only in `elo_scope` is scraped and
+  never shown. Adding an exclusion therefore means adding the id to Index.html too.
+- **The client unions only once `elo_tracked_stores` answered.** An empty tracked list means "no
+  filter" (the pivot's fixture rule), and 15 ids would turn that into a tab of just the cut
+  stores.
+- **Their rows say "Not in Elo"** and have no store-report link: that report is built from the
+  Elo events these stores no longer have (their `elo_events` rows are `is_ignored`).
+- **Several were cut before their full history was ever pulled** — Chimera, Draw 7, Fanfare,
+  Gnome Games and Titan Games had history back to August 2026 only, and every roster since
+  the cut was unscraped. Actions → Discover Lorcana events → `backfill_stores: status` +
+  `skip_discover: true` runs `scrape_store_history.py --status-only` (full history for just
+  those 15); the next hourly store-stats refresh then scrapes every roster they are missing.
+- Guarded by section 5 of `python scripts/elo/test_excluded_stores.py`.
 
 ## Intentional draws — flat, not skipped (2026-09-08)
 
@@ -5592,7 +5821,7 @@ Both tab strips — `.elo-innertabs` and Analytics' `.market-subtabs` — are **
 - **The "Exclude org" toggle is GONE** (2026-09-12, Zaven) — it hid I&L⟡Zaven / I&L⟡jacobayy from every avg-Elo stat, and appeared on four different surfaces. The `p_exclude_org` parameter survives on `get_store_report` / `get_event_roster` / `get_roster_scout` / `get_tracked_store_strength` with its `false` default; nothing passes it any more. Don't re-add the toggle without a reason — it was four controls answering a question nobody was asking.
 - Store names link to the gated store report only when `can_view_store_report()` passes; everyone else sees plain text. The tab itself is public — it aggregates data the Tournaments tab already lists per-event.
 - **RPH tier verdicts (`RPH_TIERS` / `rphTierFor`)** are the doc's published bars over "the four most recent set seasons" — Standard 25/25/250, Legendary 50/50/500 (events / unique fans / tickets). All three are scored now that Fans is a real head count. The window still matters — three sets can't clear a four-set bar and ten sets clears it trivially — so the legend warns when the selection isn't four sets rather than blanking the column. The **Prerelease requirement is NOT scored**: `Pre` counts sets the store ran a prerelease for, but not which sets RPH considered available to it, hence the asterisk.
-- **The pro-rated lens scores ONE season, not the selection.** The memo's 8/8/80 is 1/6 of Legendary over a two-month window — one set season's worth of activity, not four — so applying it to a four-set window cleared it for everybody. `eloProSeasonKey` picks the most recent *completed* set (seasons are newest-first; index 0 is the set still running) and the lens overrides the set chips while it's on, so the numbers shown and the verdict come from the same window.
+- **Pro-rated Legendary is scored on Sept + Oct 2026 by EVENT DATE — its own highlighted column group, not a set season.** The memo's 8/8/80 (+ a Hyperia City prerelease) is 1/6 of Legendary earned in September and October. Until 2026-09-29 it was a lens that scored the most recent completed *set* as a stand-in; a store owner pointed out that answers the wrong question, and the lens (`eloProSeasonKey`, the `proBars` pref) is gone. `buildEloStoreActivity(..., pro)` now gives every store a `pro` bucket: events/tickets/fans for events that have already RUN inside `RPH_PRORATED_WINDOW` (bounds are Chicago-time instants, `-05:00`, since CDT holds the whole window; slicing the UTC date would move a Monday-night Aug 31 event into September), plus `scheduled` (future-dated history rows + `lorcana_events` rows not in the history, not cancelled) and `pre` (`held`/`scheduled`). Scheduled events are shown as `+N` beside the count, never added to it. The columns ignore the set chips, and a store active in Sept–Oct stays in the table even when the chosen sets hide it ("Last 4 complete" leaves out the running set, i.e. all of September). A plain **Jul–Aug proxy** group sits beside it (`RPH_PRORATED_PROXY`, bucketed as `proxy`: the same bars over the two months before the offer — Vine's first month + August — Zaven's ask so stores have a yardstick). **Near-live:** `store_stats_refresh.yml` re-runs just the history top-up (2 days) + roster scrape (`--recheck-days 2`) HOURLY (~70s; the daily Discover cron was landing ~15:00 UTC), the tab's cache drops to 15 min while the counter is up (`ELO_STORES_TTL_LIVE`), and the callout shows "updated N ago" from max(`last_seen_at`, `scraped_at`). The history fetch is scoped server-side to `elo_tracked_stores` now, plus `ELO_STATUS_ONLY_STORE_IDS` (see "…but a store cut from Elo STAYS on Store Status") — it was the whole 32.8k-row worldwide table for 4.4k useful rows. Temporary: `RPH_PRORATED_SHOW_UNTIL` (2026-12-01) takes the callout and columns down on its own — delete the block after that, and drop or thin the hourly cron in mid-November. Guarded by `test_elo_store_activity.mjs` + `scripts/elo/test_attendance_targets.py` (hourly wiring).
 - **Guarded by `node scripts/test_elo_store_activity.mjs`**, which extracts `buildEloStoreActivity` + `eloStoreTotals` out of Index.html so they can't drift. Run it after touching the pivot or the rollup.
 
 ## Scouting is a TEAM tool now (migration 143, 2026-09-12)
@@ -8040,6 +8269,11 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
+- **`supabase/175_discord_report_latest.sql`** — **STAGED 2026-09-29, needs a paste.** The
+  latest daily and weekly Discord report, kept for `/reports send`, plus the public
+  `discord-reports` storage bucket for its pictures. Additive only. Safe in either order:
+  before it lands the report job prints that `/reports send` stays off and posts to
+  subscribers as before, and the command answers "isn't switched on yet".
 - ~~`supabase/174_calendar_chattanooga_london_youth.sql`~~ — **APPLIED 2026-09-25 by Zaven; verified
   via REST** (both rows read back: Chattanooga CCQ confirmed Nov 7-8, DLC London carries the Youth
   Division notes; re-checked 2026-09-28). From two Ravensburger OP graphics. ⚠ It was applied under

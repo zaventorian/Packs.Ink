@@ -24,6 +24,15 @@ So both halves are pinned here, plus the one thing that must NOT happen: a store
 that merely failed to match this run is reported, never deleted. Pass 2 resolves
 store_ids over the live RPH API, so one 404 would otherwise drop a real shop off
 four surfaces on a green run.
+
+The last section pins the other side of the same ruling (2026-09-29): a store cut
+from Elo STAYS on the Store Status tab, so it can follow its own RPH tier progress.
+That reaches the tab through elo_scope.STATUS_ONLY_STORE_IDS — never through
+elo_tracked_stores, which would put it back on Upcoming SCs and the Scout tab — and
+through a copy in Index.html, because the browser cannot read a Python file. Both
+ways that fails are silent: a store only in the copy is shown with numbers that
+stopped updating the day it was cut, and one only in elo_scope is scraped every day
+and never shown.
 """
 from __future__ import annotations
 import os, sys
@@ -169,6 +178,74 @@ _, killed, out = run(
 check("an unmatched store is NOT deleted", killed, [])
 ok("but it is named in the output", "Blipped Out Games" in out)
 ok("and the report says how to remove it", "EXCLUDED_STORE_IDS" in out)
+
+
+# ── 5. …but a cut store stays on the Store Status tab ─────────────────────
+print("\na store cut from Elo stays on the Store Status tab")
+import re                               # noqa: E402
+import scrape_store_history as sh       # noqa: E402
+import scrape_event_attendance as att   # noqa: E402
+import report_store_tiers as tiers      # noqa: E402
+
+WCC = {5392, 5393}                      # WorldClassCards, Appleton + Green Bay
+ok("elo_scope owns STATUS_ONLY_STORE_IDS", hasattr(elo_scope, "STATUS_ONLY_STORE_IDS"))
+ok("WorldClassCards (both stores) is on it", WCC <= set(elo_scope.STATUS_ONLY_STORE_IDS))
+check("every store cut from Elo keeps its Store Status row",
+      set(elo_scope.EXCLUDED_STORE_IDS) - set(elo_scope.STATUS_ONLY_STORE_IDS), set())
+ok("the history scrape shares the object", sh.STATUS_ONLY_STORE_IDS is elo_scope.STATUS_ONLY_STORE_IDS)
+ok("the roster scrape shares the object", att.STATUS_ONLY_STORE_IDS is elo_scope.STATUS_ONLY_STORE_IDS)
+ok("the tier report shares the object", tiers.STATUS_ONLY_STORE_IDS is elo_scope.STATUS_ONLY_STORE_IDS)
+
+# The browser's copy. Parsed out of Index.html, comments and all, so the test
+# reads what ships.
+html_src = (HERE.parents[1] / "Index.html").read_text(encoding="utf-8")
+found = re.search(r"const ELO_STATUS_ONLY_STORE_IDS = new Set\(\[(.*?)\]\);", html_src, re.S)
+ok("Index.html defines ELO_STATUS_ONLY_STORE_IDS", found)
+client = {int(n) for n in re.findall(r"\b\d+\b", re.sub(r"//[^\n]*", "", found.group(1)))} if found else set()
+check("Index.html's copy matches elo_scope exactly", client, set(elo_scope.STATUS_ONLY_STORE_IDS))
+ok("the tab widens its store list only once elo_tracked_stores answered",
+   re.search(r"if\(trackedIds\.size\) for\(const id of ELO_STATUS_ONLY_STORE_IDS\) trackedIds\.add\(id\);",
+             html_src))
+
+# The history top-up reads the union; the Elo sync still never tracks them.
+real_tracked = sh.tracked_store_ids
+sh.tracked_store_ids = lambda: [IN_REGION]
+try:
+    ids = set(sh.store_status_ids())
+finally:
+    sh.tracked_store_ids = real_tracked
+check("the history top-up covers the tracked stores AND the cut ones",
+      ids, {IN_REGION} | set(elo_scope.STATUS_ONLY_STORE_IDS))
+
+rows, killed, _ = run(scs=[sc(5392, "WorldClassCards", lat=44.26, lng=-88.41, state="WI"),
+                           sc(IN_REGION, "Dice Dojo")],
+                      tracked_now=[{"store_id": IN_REGION, "store_name": "Dice Dojo"}])
+check("…while elo_tracked_stores (Upcoming SCs, Scout) still leaves them out",
+      5392 in {r["store_id"] for r in rows}, False)
+check("…and the sync never deletes anything over it", killed, [])
+
+# The roster scrape: a cut store's unscanned event is queued alongside a tracked one.
+queries = []
+def fake_get(path):
+    if path.startswith("elo_tracked_stores"):
+        return [{"store_id": IN_REGION}]
+    if path.startswith("rph_event_attendance_scans"):
+        return []
+    if path.startswith("lorcana_events_history"):
+        queries.append(path)
+        wanted = {int(x) for x in re.search(r"store_id=in\.\(([^)]*)\)", path).group(1).split(",")}
+        pool = [{"event_id": 1, "store_id": IN_REGION, "start_datetime": "2026-09-01T23:00:00+00:00"},
+                {"event_id": 2, "store_id": 5392, "start_datetime": "2026-09-02T23:00:00+00:00"},
+                {"event_id": 3, "store_id": 777, "start_datetime": "2026-09-03T23:00:00+00:00"}]
+        return [r for r in pool if r["store_id"] in wanted and "offset=0" in path]
+    raise AssertionError(path)
+real_get = att._get
+att._get = fake_get
+try:
+    got = [r["event_id"] for r in att.target_events(False, None, 0)]
+finally:
+    att._get = real_get
+check("the roster scrape queues the cut store's event, not a stranger's", got, [1, 2])
 
 print("\n" + (f"{len(failures)} FAILED" if failures else "all passed"))
 sys.exit(1 if failures else 0)

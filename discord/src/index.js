@@ -15,7 +15,6 @@ import indexText from "./card-index.json";
 // mentions. build_index.mjs leaves an empty {} for local runs.
 import COMMAND_IDS from "./command-ids.json";
 import { createResolver } from "./resolver.js";
-import { prepareDeckIndex } from "./deck.js";
 import { handleInteraction } from "./interactions.js";
 import { verifyDiscordRequest } from "./verify.js";
 import { makeDb } from "./db.js";
@@ -23,13 +22,11 @@ import { chartResponse } from "./charts.js";
 
 const INDEX = typeof indexText === "string" ? JSON.parse(indexText) : indexText;
 const R = createResolver(INDEX);
-prepareDeckIndex(R);
 // Warm the resolver's hot paths while the isolate starts. The first lookup in
 // a fresh isolate is several times slower than every later one (the JIT has
 // not compiled anything yet), and on the free plan's 10 ms a request can't
 // afford to pay for that; startup has its own, much larger allowance.
 for (const q of ["mickey mouse brave little tailor", "enchanted elsa", "mogli", "azurite sea box"]) R.resolve(q);
-R.findInText("anyone have an enchanted elsa for trade? lf stich", 3);
 R.suggest("mog", 25);
 
 // View Channel + Send Messages + Embed Links: what posting a report needs.
@@ -51,6 +48,7 @@ export default {
         const interaction = JSON.parse(body);
         const out = await handleInteraction(interaction, {
           R, index: INDEX, db: makeDb(env), origin: url.origin, commandIds: COMMAND_IDS,
+          assets: env.ASSETS,
           appId: env.DISCORD_APPLICATION_ID, discordApi: env.DISCORD_API_BASE,
           fetch: (...a) => fetch(...a),
           waitUntil: (p) => ctx.waitUntil(p),

@@ -1,6 +1,6 @@
 # Packs.Ink Discord bot
 
-Card lookups, prices, charts, movers, events and the Lorcana calendar, in
+Card lookups, prices, charts, the meta, events and the Lorcana calendar, in
 Discord. A Cloudflare Worker that answers Discord's HTTP interactions — no
 server to keep running, and a **separate Worker from the site** (`packs-ink-discord`
 on workers.dev), so deploying it can never touch packs.ink.
@@ -9,22 +9,19 @@ on workers.dev), so deploying it can never touch packs.ink.
 
 | | |
 |---|---|
-| `/card mowgli` | The site's card tile (the art, NM Market / Low and the 1D / 1W / 1M changes, drawn by the site's own code), with graded sales, its ink / cost / type, and how much it's played in recent tournament top cuts. |
+| `/card mowgli` | The site's card tile (the art, NM Market / Low and the 1D / 1W / 1M changes, drawn by the site's own code), with the card's rules text and stats as printed, graded sales, its ink / cost / type, and how much it's played in recent tournament top cuts. |
 | `/price mowgli` | The same, as a price chart (1M / 3M / 1Y / All buttons), card art as a thumbnail. |
 | `/price elsa psa 10` | Graded: every grade's last sale and average of the last 5, and a chart of the PSA 10 sales. |
 | `/price azurite sea box` | Sealed product: price, changes, chart, TCGplayer + Amazon links. |
-| `/trade` | Is a trade fair? Both sides priced (each card at the version named — `enchanted elsa` is the Enchanted), sealed and cash too, a verdict in words, and a button that opens it in the site's Trade Compare. Type both sides inline (`give:` / `get:`) or leave them empty for a box. |
-| `/deck` | Opens a box: paste a decklist, get what it costs to build (each card at its cheapest printing, NM Market and Low) and one TCGplayer cart for the whole list. |
 | `/set azurite` | A set at a glance: release dates, booster box price vs box EV (the site's own EV maths) with an open-or-hold verdict, chase cards, sealed prices. |
 | `/new` | The newest cards: everything added to packs.ink in the last four days (the site's reveal reel), grouped by day, with a picture grid and a menu to open any of them. Cards added since the bot's daily rebuild are included. |
 | `/open` | Open a simulated booster pack — or `box: True`, a whole box — with the site's pull rates and real prices. |
-| `/movers` | A board of the biggest gains or drops: buttons switch 1D–1Y, gains/drops and NM Market/Low; a menu switches rarity group, or sealed product. |
-| `/meta` | The most-played cards in recent tournament top cuts, and the top four of the latest events with links to their decks. |
-| `/events 60614` | Near a postal code or town: Set Championships, prereleases (nearest first, seats and fees), and weekly play one line per store. Buttons change the kind and the radius. |
-| `/calendar` | Set releases, Challenges and qualifiers by month; buttons and a menu narrow the kind and the region. |
+| `/meta` | What's winning: every top-8 deck since the newest set came out, by ink pair (share, top 4s, wins); the most-played cards; and the top four of the three biggest events of the last three weeks, with links to their decks. |
+| `/events 60614` | Near a postal code or town: Set Championships, prereleases (nearest first, seats and fees), and weekly play one line per store, each linking to its page on packs.ink. Buttons change the kind and the radius. |
+| `/calendar` | Set releases, Challenges and qualifiers by month, each linking to its page on packs.ink (which links on to the organiser); buttons and a menu narrow the kind and the region. |
 | `/help` | What it does, with clickable commands and "Try it" buttons. |
-| **Apps → Price check** | Right-click any message: a trade post (`H: … W: …`) is priced as a trade, a decklist as a deck, anything else card by card. |
-| `/reports daily` | (Server managers) the daily movers report, posted into a channel. |
+| `/reports daily` | (Server managers) the daily movers report, posted into a channel; `weekly` on Mondays. |
+| `/reports send` | (Server managers) post the latest daily or weekly report here, now. |
 
 **Names are forgiving by design.** `mowgli`, `mogli`, `moglie`, `how much is
 mowgli` all find Mowgli; with no subtitle you get **the version people actually
@@ -36,8 +33,8 @@ filter (`elsa enchanted`, `moana foil`, `elsa #42`, `mickey brave little tailor
 promo`); a sealed word (`box`, `trove`, `gift set`) finds product.
 
 It cannot be @mentioned in chat: reading ordinary messages needs a 24/7 gateway
-connection (a server), which this deliberately isn't. Slash commands and the
-Price check menu cover the same ground.
+connection (a server), which this deliberately isn't. Slash commands cover the
+same ground.
 
 ## Setting it up (once)
 
@@ -53,7 +50,8 @@ Price check menu cover the same ground.
    - Nothing extra for `/reports`: the workflow hands the bot the repo's
      existing `SUPABASE_SERVICE_KEY` (a `DISCORD_BOT_SUPABASE_KEY` secret, if
      you ever add one, overrides it). It does need
-     `supabase/173_discord_reports.sql` applied.
+     `supabase/173_discord_reports.sql` applied, and
+     `supabase/175_discord_report_latest.sql` for `/reports send`.
    - `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` already exist for the site.
 3. **Cloudflare**: the account needs a workers.dev subdomain (Workers & Pages →
    the subdomain shown on the overview). The first deploy fails and says so if
@@ -80,9 +78,8 @@ discord/
   src/interactions.js   commands, buttons, menus, autocomplete — deferred + PATCH
   src/resolver.js       plain-English fuzzy card/sealed/set lookup
   src/text.js           normalisation + bounded edit distance
-  src/trade.js          /trade and trade posts: parse, price, verdict, site link
   src/set.js            /set (overview, box EV), /open (simulated packs) and /new (reveals)
-  src/data.js           the Supabase reads (prices, graded, movers, events, calendar, tournaments)
+  src/data.js           the Supabase reads (prices, graded, the meta, events, calendar, new cards)
   src/db.js             PostgREST over fetch
   src/embeds.js         Discord message payloads (pure)
   src/charts.js         the /chart routes Discord's image proxy fetches
@@ -118,9 +115,6 @@ discord/
 - **Charts are drawn by the Worker** (no canvas in a Worker): ~5 ms for an
   800×340 PNG. The URL carries the price date, so Discord re-fetches it when the
   day's prices change and an old message keeps the chart it was sent with.
-- **Movers drop stale rows.** `price_movers` repeats a SKU's last change after
-  its listing disappears; a mover only counts when `prices_daily` holds the same
-  price for it on the newest date. `scripts/discord_reports.py` does the same.
 - **Card art is TCGplayer's photo, or art baked for the Worker.** Discord shows
   no AVIF (Lorcast's only format) and rejects a whole reply whose image is a
   `data:` URI or a relative path, so a card TCGplayer hasn't listed yet (a new
@@ -140,6 +134,13 @@ discord/
   Nothing about the tiles can fail a build — a card with none just shows its
   picture. The art they are drawn from is cached in `.tile-art-cache/`
   (actions/cache in CI). `--no-tiles` skips them; `--no-art` does too.
+- **Every picture the bot makes is UPLOADED with the reply, not linked**: the
+  tile, baked art and the price charts. Linked, Discord dropped them from some
+  edits (the first `/card` reply, the Price chart button) and only showed them
+  after a later edit. `withUploads` in `interactions.js` reads files through
+  the `ASSETS` binding and draws charts with `chartResponse`; anything it can't
+  produce keeps its link, and a refused upload is re-sent with the plain link.
+  `node tools/simulate.mjs` prints `uploaded:` for each file it catches.
 - **Every TCGplayer link is the affiliate link** (`tcgUrl` / `tcgSetSearchUrl`,
   copied from the site): the product page when TCGplayer lists the printing, a
   TCGplayer search for the name when it doesn't. Every message carrying one
@@ -149,13 +150,27 @@ discord/
   message), because a reply can echo what somebody typed.
 - **Sized for the free Workers plan's 10 ms of CPU per request.** The resolver
   precomputes what it can at startup and is warmed there (startup has its own,
-  larger allowance); a lookup is ~0.1–0.6 ms, a trade ~2 ms, a long chat
-  message ~4 ms. Anything that searches or resolves many names is capped.
+  larger allowance); a lookup is ~0.1–0.6 ms.
 - **A reply Discord refuses is re-sent as plain text**, so nobody is left on
   "thinking…". A button's failed update goes to the clicker privately.
-- **Box EV, sealed movers and the /meta play shares are computed in the daily
-  index build** with the site's own code (`processData`/`calcEV`,
-  `computeSealedDeltas`), so those replies need no database read.
+- **Box EV and the /meta play shares are computed in the daily index build**
+  with the site's own code (`processData`/`calcEV`), so those need no database
+  read.
+- **/meta's ink-pair breakdown is one read** of `tournament_results_v`: every
+  top-8 deck since the newest set already on shelves (`metaSet`), Core only,
+  grouped by ink pair — `deck_name` is empty on most tournament decks, and the
+  inks are exact. Under three events since the set it widens to the last 45
+  days and says so. "Latest big events" are the three biggest of the last three
+  weeks that recorded at least four decks (a winner-only record is a stub).
+- **A card's rules text comes from the index** (`x`, the newest booster
+  printing's wording, with `st` strength / willpower / lore / move and `ik`
+  inkable): ability names bold, keywords bold with their number, reminder text
+  italic, the `{I}` / `{E}` symbols as words.
+- **/reports send posts a stored report.** `scripts/discord_reports.py` keeps
+  the day's daily and weekly report in `discord_report_latest` (migration 175)
+  with its pictures in the public `discord-reports` bucket under a dated path;
+  the Worker reads the row and uploads the pictures with its reply. A refusal
+  (not a manager, not switched on) is private and immediate.
 - **/new runs the site's reveal reel when someone asks.** The daily build
   stores the reel's inputs (every card inside the window, and when each card's
   name was first seen); the Worker runs the site's `revealRotation` over them
@@ -166,7 +181,7 @@ discord/
   A card links to TCGplayer only when its printing has a listing of its own: a
   card still being revealed has none, and a search link on every line left room
   for 13 of 36 reveals.
-- **Boards are browsed, not re-typed**: /movers, /events and /calendar carry
+- **Boards are browsed, not re-typed**: /events and /calendar carry
   their state in each control's custom_id and redraw in place. Every control
   in a message has a DIFFERENT custom_id — Discord refuses a message with two
   the same, and the guard checks every reply for it.

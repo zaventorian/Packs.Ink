@@ -17,6 +17,13 @@ applies to it.
 | `ort/ort.wasm.min.js`, `ort/ort-wasm-simd-threaded.{mjs,wasm}` | onnxruntime-web | 1.20.1 | Copyright (c) Microsoft Corporation |
 | `opencv/opencv.js` | @techstark/opencv-js | 4.10.0-release.1 | OpenCV contributors — **Apache-2.0**, not MIT; its license text is `opencv/LICENSE` |
 
+`fonts/barlow-*.woff2` are Barlow Condensed (ExtraBold) and Barlow Semi
+Condensed (Regular, Italic, SemiBold, SemiBold Italic), Copyright 2017 The
+Barlow Project Authors, under the **SIL Open Font License 1.1** (`fonts/OFL.txt`).
+They are subsets (Latin, Latin-1, Latin Extended-A, punctuation) cut with
+fontTools from the TTFs in github.com/google/fonts, and are used only to draw
+the printer-friendly proxy face.
+
 `opencv/opencv.js` is the card scanner's detector, loaded inside a worker. It
 was jsDelivr's copy until 2026-09-26; the vendored file is the npm registry's
 tarball, byte-identical to it (sha256 19b46167…c048d). The PP-OCRv3 models under

@@ -59,6 +59,15 @@
 // one; and the pre-rotation image width comes back bit-identical to a
 // portrait card's own width at both spanCols=2 and spanCols=3.
 //
+// THE BADGE AND THE DECK EDITOR (2026-09-30). The run's flex line stretched
+// each card's box to the row's height, so a Location's quantity badge, pinned
+// to the box's top, floated above the card and left of its cost ("line up
+// above the ink cost, it's weirdly to the left"): the line is flex-start now
+// and the badge sits above the card, right-aligned over the cost hexagon, in
+// room reserved for it. The deck editor's image grid and stacked pile drew a
+// Location one column wide ("too small ... not full card size?"); they share
+// the poster's run helpers through DeckTileGrid, checked below.
+//
 // There is no client-side CI, so it is manual — but it reads the real markup out
 // of Index.html rather than restating it, so it cannot drift from what ships.
 import { readFileSync } from "node:fs";
@@ -87,55 +96,152 @@ if (grid) {
     "the grid is back to `repeat(${cols},1fr)`");
 }
 
-// Landscape cards are grouped into runs by ADJACENCY, so the grouping still
-// works if a Location ever stops sorting last — it just takes a row of its own.
-const groupMemo = src.match(/const posterGroups = useMemo\(\(\) => \{\r?\n([\s\S]*?)\r?\n  \}, \[cards\]\);/);
-check("the poster still groups landscape cards into runs", !!groupMemo,
-  "the `posterGroups` useMemo is gone — without it every Location is its own " +
-  "cell again and neighbouring Locations go back to sitting ~100px apart.");
-if (groupMemo) {
-  const body = groupMemo[1];
+// The run rule lives in module-level helpers shared with the deck editor's
+// image grid and stacked pile (2026-09-30). They are lifted out of Index.html
+// and RUN here, so the arithmetic is checked, not just its spelling.
+const helperSrc = (() => {
+  const a = src.indexOf("const isLandscapeCard = (row) =>");
+  const b = src.indexOf("const POSTER_LSCAPE_BADGE_ROOM = ");
+  if (a < 0 || b < 0 || b < a) return null;
+  return src.slice(a, src.indexOf("\n", b) + 1);
+})();
+check("the shared landscape-run helpers are still in Index.html", !!helperSrc,
+  "isLandscapeCard .. POSTER_LSCAPE_BADGE_ROOM no longer read as one block");
+let H = null;
+if (helperSrc) {
+  H = new Function("html", helperSrc +
+    "; return {groupLandscapeRuns, landscapeRunSpan, landscapeRunCardWidth, POSTER_LSCAPE_BADGE_ROOM};")(() => null);
+}
+if (H) {
+  // Grouped by ADJACENCY, so a Location that somehow isn't last still renders
+  // correctly — it just takes a cell of its own.
+  const loc = (id) => ({ card_id: id, meta: { card_type: "Location" } });
+  const chr = (id) => ({ card_id: id, meta: { card_type: "Character" } });
+  const runs = H.groupLandscapeRuns([chr("a"), loc("b"), loc("c"), chr("d"), loc("e")]);
+  const shape = JSON.stringify(runs.map(r => [r.landscape, r.items.map(i => i.card_id).join("")]));
   check("grouping is by adjacency, not by card type",
-    /prev\s*&&\s*prev\.landscape/.test(body) && /isLandscapeCard/.test(body),
-    "the run grouping no longer joins a landscape card to the landscape card " +
-    "BEFORE it. Grouping on 'is a Location' alone would put a Location that " +
-    "isn't last into the same row as one that is.");
+    shape === JSON.stringify([[false, "a"], [true, "bc"], [false, "d"], [true, "e"]]),
+    "got " + shape + ". Grouping on 'is a Location' alone would put a Location " +
+    "that isn't last into the same row as one that is.");
+
+  // spanCols = max(2, ceil(1.4n)), capped at the grid's own column count.
+  const spans = [1, 2, 3, 4, 5].map(n => H.landscapeRunSpan(n, 99));
+  check("a run spans max(2, ceil(1.4n)) columns",
+    JSON.stringify(spans) === JSON.stringify([2, 3, 5, 6, 7]), "got " + JSON.stringify(spans));
+  check("a run never spans more columns than the grid has",
+    H.landscapeRunSpan(4, 3) === 3 && H.landscapeRunSpan(1, 1) === 1,
+    "a span wider than the grid makes CSS Grid add implicit columns, which " +
+    "breaks the whole grid");
+
+  // PROVABLY enough room: n cards at 1.4W plus (n-1) gaps fit in the span.
+  let roomy = true;
+  for (let n = 1; n <= 12; n++) for (const gap of [8, 10, 22]) for (const W of [80, 110, 127, 180]) {
+    const S = H.landscapeRunSpan(n, 99);
+    if (n * 1.4 * W + (n - 1) * gap > S * W + (S - 1) * gap + 1e-9) roomy = false;
+  }
+  check("an uncapped span always holds its n cards at 1.4W plus their gaps", roomy);
+
+  // The card is 1.4W of ITS OWN cell, whatever the span: evaluate the calc()
+  // for a cell S*W + (S-1)*gap wide and it must come back to exactly 1.4W.
+  // Sizing off the grid's full `cols` renders the wrong size the moment a
+  // run's span is narrower than the grid.
+  let exact = true, form = "";
+  for (const [S, gap] of [[2, 10], [3, 10], [2, 8], [5, 22]]) {
+    form = H.landscapeRunCardWidth(S, gap);
+    const m = form.match(/^min\(100%, calc\(\(100% - (\d+)px\) \/ (\d+) \* 1\.4\)\)$/);
+    const W = 127, cell = S * W + (S - 1) * gap;
+    if (!m || Math.abs((cell - Number(m[1])) / Number(m[2]) * 1.4 - 1.4 * W) > 1e-9) exact = false;
+  }
+  check("a landscape card is 1.4 columns of its own cell, capped at the cell", exact,
+    "got `" + form + "`. Without min(100%, ...) a one-column grid draws the " +
+    "card 40% wider than the grid.");
+
+  // The poster's badge room: 6px down (level with the portrait badges beside
+  // it) + the 25px badge (14px/800 type, 3px padding) + a gap, above the card.
+  check("the poster reserves room ABOVE a Location for its badge",
+    H.POSTER_LSCAPE_BADGE_ROOM >= 6 + 25 + 2,
+    "POSTER_LSCAPE_BADGE_ROOM is " + H.POSTER_LSCAPE_BADGE_ROOM);
 }
 
-// spanCols is computed per run, sized so n cards at 1.4W plus their internal
-// gaps provably fit — never a fixed/forced full-width span.
-const spanRe = /const spanCols = Math\.min\(cols, Math\.max\(2, Math\.ceil\(g\.items\.length \* 1\.4\)\)\);/;
-check("spanCols is derived from the run's own item count",
-  spanRe.test(src),
-  "the landscape run's column span is no longer computed from the number of " +
-  "cards in the run (max(2, ceil(n*1.4)), capped at `cols`) — without it either " +
-  "it can't hold n cards without overlap, or it over-reserves a whole row again.");
+check("the poster still groups landscape cards into runs",
+  /const posterGroups = useMemo\(\(\) => groupLandscapeRuns\(cards\), \[cards\]\);/.test(src),
+  "the `posterGroups` useMemo no longer calls groupLandscapeRuns — without it " +
+  "every Location is its own cell again and neighbouring Locations go back to " +
+  "sitting ~100px apart.");
+check("the poster sizes each run from the shared helpers",
+  /const spanCols = landscapeRunSpan\(g\.items\.length, cols\);/.test(src) &&
+    /width:landscapeRunCardWidth\(spanCols, 10\),paddingTop:POSTER_LSCAPE_BADGE_ROOM/.test(src),
+  "the poster's landscape run no longer takes its span from landscapeRunSpan and " +
+  "its card width from landscapeRunCardWidth, or lost the badge's room");
 
 // The run is placed with a SPAN and no explicit start, so plain grid
 // auto-placement shares the current row when it fits and wraps when it
 // doesn't — the fix for "keep the locations on the same line ... if there is
 // room". A hardcoded "1 / -1" forces a brand-new, always-empty row every time.
-check("a landscape run is auto-placed by span, not forced to its own row",
-  /gridColumn:`span \$\{spanCols\}`,display:"flex",flexWrap:"wrap",gap:10/.test(src),
-  "the landscape run is no longer placed with an unanchored `span ${spanCols}` " +
-  "— either it's back to `gridColumn:\"1 / -1\"` (which can never share a row, " +
-  "even one with room to spare) or an explicit start crept in.");
+// alignItems flex-start (2026-09-30): stretched to the row's height, the 7/5
+// box grew past its aspect and the badge pinned to its top floated above the
+// card, left of the cost ("weirdly to the left").
+check("a landscape run is auto-placed by span, top-aligned, not stretched",
+  /gridColumn:`span \$\{spanCols\}`,display:"flex",flexWrap:"wrap",alignItems:"flex-start",gap:10/.test(src),
+  "the landscape run is no longer an unanchored `span ${spanCols}` flex line " +
+  "with alignItems flex-start — it's back to `gridColumn:\"1 / -1\"` (which can " +
+  "never share a row), an explicit start crept in, or the cards stretch to the " +
+  "row's height again.");
 check("the old forced full-width span is gone",
   !/gridColumn:"1 \/ -1",display:"flex",flexWrap:"wrap"/.test(src),
   "found the reverted `gridColumn:\"1 / -1\"` full-row force — that's what " +
   "stops a Location sharing a row with room left in it.");
 
-// The card's own footprint: 1.4 * the column width the grid itself is using,
-// which is exactly a portrait card's long edge. aspect-ratio 7/5 makes the
-// short edge W. Sized off `spanCols` (the run's own cell), NOT the grid's
-// `cols` — algebraically the same W either way (see header), but only the
-// spanCols form is correct once the run's cell is narrower than the full grid.
-// IN FLOW, so a row of nothing but Locations still has a height.
-check("landscape card box is 1.4 * spanCols-relative column width, at aspect-ratio 7/5",
-  /width:`calc\(\(100% - \$\{\(spanCols-1\)\*10\}px\) \/ \$\{spanCols\} \* 1\.4\)`,aspectRatio:"7\/5"/.test(src),
-  "the landscape card box is no longer sized at 1.4 of ITS OWN CELL's column " +
-  "width (via spanCols) — sizing off the grid's full `cols` instead would " +
-  "render the wrong size the moment a run's span is narrower than the full grid.");
+// The card's own box is 7/5 and IN FLOW, so a row of nothing but Locations
+// still has a height. Its badge is right-aligned over the cost hexagon.
+check("a Location's box is 7/5, with its badge above the cost",
+  src.includes('? html`<${React.Fragment}><div style=${{position:"relative",aspectRatio:"7/5"}}>${art}</div>${qty}</>`') &&
+    src.includes("top:6,right:landscape ? 0 : 6,"),
+  "the landscape box lost its 7/5 aspect, or its badge is no longer right-" +
+  "aligned over the cost (Zaven, 2026-09-30: \"line up above the ink cost\").");
+
+// THE DECK EDITOR (2026-09-30, "locations look too small here, not full card
+// size?"): its image grid and stacked pile drew a Location one column wide,
+// the 71% the poster was fixed for. Both go through DeckTileGrid, which
+// measures its auto-fill column count from the same min/gap it builds the
+// template from — one source, so the span can never exceed the real grid.
+const tileGrid = src.match(/const DeckTileGrid = \(\{className, items, renderItem, min, gap\}\) => \{\r?\n([\s\S]*?)\r?\n\};/);
+check("DeckTileGrid is still in Index.html", !!tileGrid);
+if (tileGrid) {
+  const body = tileGrid[1];
+  check("DeckTileGrid measures columns from the min/gap it builds the grid from",
+    body.includes("Math.floor((el.clientWidth + gap) / (min + gap))") &&
+      body.includes("gridTemplateColumns:`repeat(auto-fill,minmax(${min}px,1fr))`,gap"),
+    "the measured column count and the grid template no longer share `min` and " +
+    "`gap` — a run's span can then exceed the real column count");
+  check("DeckTileGrid sizes runs with the shared helpers",
+    body.includes("groupLandscapeRuns(items)") &&
+      body.includes("landscapeRunSpan(r.items.length, cols || 2)") &&
+      body.includes("landscapeRunCardWidth(span, gap)"));
+}
+check("the deck editor's grid and stacked views both use DeckTileGrid",
+  /<\$\{DeckTileGrid\} className="deck-section-grid" items=\$\{section\.items\}\s+renderItem=\$\{renderItem\} min=\$\{110\} gap=\$\{8\}\/>/.test(src) &&
+    /<\$\{DeckTileGrid\} className="deck-section-stack" items=\$\{section\.items\}\s+renderItem=\$\{renderItem\} min=\$\{160\} gap=\$\{22\}\/>/.test(src),
+  "a deck-editor tile view is back to mapping renderItem into a plain grid, " +
+  "which draws a Location one column wide");
+
+const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+const cssRule = (sel) => {
+  const i = css.indexOf("\n" + sel + "{");
+  return i < 0 ? null : css.slice(i + sel.length + 2, css.indexOf("}", i));
+};
+check("styles.css does not also carry the deck grids' columns",
+  cssRule(".deck-section-grid") === "display:grid;" && cssRule(".deck-section-stack") === "display:grid;",
+  "`.deck-section-grid` / `.deck-section-stack` set their own columns again — " +
+  "DeckTileGrid sets them inline, from the same numbers it measures with");
+check("a run of Locations is top-aligned, not stretched to the row",
+  /align-items:flex-start/.test(cssRule(".deck-lscape-run") || ""),
+  "`.deck-lscape-run` lost align-items:flex-start — each tile then stretches to " +
+  "a portrait row's height, leaving an empty band under the card");
+check("a Location tile's quantity sits below its cost hexagon",
+  /\.deck-grid-tile--lscape \.deck-grid-tile-qty,\s*\.deck-stack-tile--lscape \.deck-stack-qty\{top:calc\(18% \+ 4px\);\}/.test(css),
+  "the landscape quantity badge left the column under the cost hexagon — at " +
+  "the tile's top-right corner it covers the cost");
 
 // 71.4286% is 5/7: laid out portrait at that width inside the 7/5 box, a quarter
 // turn lands the image exactly on the box's edges — EXACT fit, no cropping.

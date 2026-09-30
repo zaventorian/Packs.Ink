@@ -67,7 +67,7 @@ const site = loadSite([
 ]);
 
 const CARDS_COLS = "id,set_id,name,version,rarity,ink,inks,collector_number,cost,inkable,card_type,"
-  + "classifications,text,image_small,image_normal,image_large,tcgplayer_product_id,inserted_at";
+  + "classifications,text,strength,willpower,lore,move_cost,image_small,image_normal,image_large,tcgplayer_product_id,inserted_at";
 const PRICE_COLS = "tcgplayer_product_id,printing,low_price,market_price,price_date";
 const SEALED_COLS = "tcgplayer_product_id,set_id,product_type,name,clean_name,low_price,market_price,image_url,printing,price_date,is_stale";
 
@@ -85,9 +85,6 @@ const [sets, prices, cards, sealed, tournaments, tdecks, gradedRoll, rawRoll] = 
   sbAll("graded_sales_rollup", { select: "card_id,sale_count", order: "card_id.asc,grader.asc,grade.asc,printing.asc" }),
   sbAll("raw_sales_rollup", { select: "card_id", order: "card_id.asc" }).catch(() => []),
 ]);
-// TCGplayer's own spelling of a product where it differs from ours (migration
-// 169): mass entry matches names exactly, so /deck's one-cart link needs them.
-const tcgNames = await sbAll("tcgplayer_names", { select: "product_id,name", order: "product_id.asc" }).catch(() => []);
 console.log(`  ${cards.length} cards, ${prices.length} prices, ${sets.length} sets, ${sealed.length} sealed, `
   + `${tournaments.length} tournaments / ${tdecks.length} top decks`);
 
@@ -254,6 +251,11 @@ for (const r of rows) {
     ident.n = name; ident.c = dash > 0 ? name.slice(0, dash) : name; ident.v = dash > 0 ? name.slice(dash + 3) : "";
     ident.spellMain = true;
   }
+  // A reprint's wording is the current one (errata land on the newer
+  // printing), so the NEWEST booster printing's text wins.
+  if (ident && r.text && site.MAINLINE_SETS.includes(r.Set) && setIdx.get(r.Set) > (ident.xs ?? -1)) {
+    ident.x = r.text; ident.xs = setIdx.get(r.Set);
+  }
   if (!ident) {
     const dash = name.indexOf(" - ");
     ident = {
@@ -265,9 +267,17 @@ for (const r of rows) {
       w: r.keywords || [],
       i: r.inks || (r.ink ? [r.ink] : []),
       cost: r.cost ?? null,
+      // What /card prints under the name: the rules text, and strength /
+      // willpower / lore (move cost on a Location) and whether it is inkable.
+      x: r.text || null,
+      st: [r.strength ?? null, r.willpower ?? null, r.lore ?? null, r.move_cost ?? null],
+      // A CUSTOM_CARDS row with no inkable value is a counter, not a card:
+      // it is neither, so it says neither.
+      ik: r.inkable === false ? 0 : (r.inkable == null && r.isCustomCard ? null : 1),
       pl: 0, gs: 0,
       p: new Map(),
       spellMain: site.MAINLINE_SETS.includes(r.Set),
+      xs: r.text && site.MAINLINE_SETS.includes(r.Set) ? setIdx.get(r.Set) : -1,
     };
     byName.set(fam, ident);
   }
@@ -307,7 +317,7 @@ const identities = [...byName.values()].map((ident) => {
     pr.f.sort((a, b) => (a[0] === "N" ? 0 : 1) - (b[0] === "N" ? 0 : 1));
   }
   printings.sort((a, b) => (a.s - b.s) || ((RARITY_RANK[a.r] ?? 9) - (RARITY_RANK[b.r] ?? 9)) || String(a.no).localeCompare(String(b.no)));
-  const { spellMain, ...rest } = ident;
+  const { spellMain, xs, ...rest } = ident;
   return { ...rest, pl: Math.round((plays.get(famOf(ident.n)) || 0) * 1000) / 1000, p: printings };
 });
 identities.sort((a, b) => a.n.localeCompare(b.n));
@@ -452,7 +462,6 @@ const out = {
   playDecks,
   // The reel's inputs (see above), newest first.
   reveals,
-  tcgNames: Object.fromEntries(tcgNames.map((r) => [String(r.product_id), r.name])),
   newestMain: site.MAINLINE_SETS[site.MAINLINE_SETS.length - 1],
   sets: setsOut,
   cards: identities,
@@ -479,12 +488,10 @@ if (process.argv.includes("--fixture")) {
     "Heart of Te Fiti", "A Whole New World", "Friends on the Other Side", "Moana", "Belle", "Gaston",
     "Cruella De Vil", "HeiHei", "Heihei", "Grandmother Willow", "Ursula", "Scar", "Flounder", "The Queen"]);
   const fxCards = identities.filter((i) => WANT.has(i.c));
-  const fxPids = new Set(fxCards.flatMap((c) => c.p.flatMap((p) => p.f.map((f) => String(f[1])))));
   const fxIds = new Set(fxCards.flatMap((c) => c.p.map((p) => p.id)));
   const fx = { ...out, cards: fxCards,
     reveals: out.reveals.filter((r) => fxIds.has(r.id)),
-    sealed: sealedOut.filter((s) => s.sn === "Azurite Sea" || s.sn === out.newestMain),
-    tcgNames: Object.fromEntries(Object.entries(out.tcgNames).filter(([pid]) => fxPids.has(pid))) };
+    sealed: sealedOut.filter((s) => s.sn === "Azurite Sea" || s.sn === out.newestMain) };
   mkdirSync(new URL("../test/", import.meta.url), { recursive: true });
   writeFileSync(FIXTURE, JSON.stringify(fx));
   console.log(`wrote fixture: ${fx.cards.length} cards, ${fx.sealed.length} sealed`);

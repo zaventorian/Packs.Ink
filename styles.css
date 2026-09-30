@@ -970,27 +970,46 @@ body:has(.cards-bulk-bar--docked) .cards-toast{bottom:calc(78px + env(safe-area-
   border-radius:5px;outline:none;}
 .price-db-search{min-width:180px;flex:1;}
 .price-db-count{font-size:11px;}
-/* Table scrolls in both directions inside its own wrapper so the sticky
-   thead + sticky name column actually work — sticky requires a scrolling
-   ancestor closer than the viewport. */
-.price-db-tablewrap{overflow:auto;max-height:calc(100vh - 280px);max-height:calc(100svh - 280px);
-  border:1px solid var(--border);border-radius:8px;}
-/* Landscape phones / short windows: the desktop 280px header reservation eats
-   so much of the viewport that the table itself rendered at 1.5 rows on a
-   411px landscape Android. Drop the cap entirely so the table flows into
-   the page and natural page scroll reveals more rows — instead of forcing
-   the user to scroll inside a 311px "sub-menu" while the page below sits
-   empty. Horizontal scroll on the wrap is preserved (the table is wider
-   than the viewport). Tradeoff: the sticky thead stays anchored to the
-   top of the wrap (its scroll container) and scrolls with the page rather
-   than pinning to the viewport top; pinning the thead to viewport while
-   keeping horizontal scroll needs a structural split of header/body and
-   is deferred. */
-@media (max-height:600px){
-  .price-db-tablewrap{max-height:none;}
+/* The table scrolls with the PAGE, not in a box of its own (Zaven, 2026-09-28:
+   "stuck in a smaller box … a weird sub scroll"). A sticky thead only pins
+   inside its nearest scroll container, and the table needs one to scroll
+   sideways, so the header is a separate sticky strip ABOVE that container,
+   pinned under the top nav (--pdb-top, measured in JS: the nav is sticky on
+   phones and in flow on a desktop). Three things scroll sideways together, kept
+   in step by one effect: the body, the header strip, and a scrollbar pinned to
+   the bottom of the window — the body's own sits under the last row, which is a
+   page away. `clip`, never `hidden`, on the box: hidden makes it a scroll
+   container and the header would pin to it instead of to the window. */
+.price-db-tablebox{position:relative;border:1px solid var(--border);border-radius:8px;overflow:clip;}
+.price-db-stickyhead{position:sticky;top:var(--pdb-top,0px);z-index:6;
+  overflow-x:auto;overflow-y:hidden;scrollbar-width:none;
+  background:var(--bg-solid);border-bottom:1px solid var(--border);
+  box-shadow:0 3px 8px -4px rgba(0,0,0,0.35);}
+.price-db-stickyhead::-webkit-scrollbar{display:none;}
+.price-db-tablewrap{overflow-x:auto;overflow-y:hidden;}
+/* The body table's own header only SIZES the columns: invisible and zero
+   height, so the rows sit straight under the pinned strip. Keeps its side
+   padding, which is part of every column's width. */
+.price-db-table thead.price-db-sizehead th{visibility:hidden;height:0;line-height:0;
+  padding-top:0;padding-bottom:0;border:0;box-shadow:none;}
+.price-db-hscroll{display:none;position:sticky;bottom:0;z-index:6;overflow-x:auto;overflow-y:hidden;
+  background:var(--bg-solid);border-top:1px solid var(--border);}
+.price-db-hscroll-in{height:1px;}
+.price-db-tablebox.has-hscroll .price-db-hscroll{display:block;}
+.price-db-tablebox.has-hscroll .price-db-tablewrap{scrollbar-width:none;}
+.price-db-tablebox.has-hscroll .price-db-tablewrap::-webkit-scrollbar{display:none;}
+.price-db-hscroll::-webkit-scrollbar{height:10px;}
+.price-db-hscroll::-webkit-scrollbar-track{background:transparent;}
+.price-db-hscroll::-webkit-scrollbar-thumb{background:var(--border);border-radius:5px;}
+.price-db-hscroll::-webkit-scrollbar-thumb:hover{background:var(--text-muted);}
+@supports not selector(::-webkit-scrollbar){
+  .price-db-hscroll{scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
 }
 .price-db-table{width:100%;border-collapse:collapse;font-size:12px;}
-.price-db-table thead{position:sticky;top:0;z-index:3;background:var(--bg-solid);}
+.price-db-table thead{position:relative;z-index:3;background:var(--bg-solid);}
+/* The pinned strip is laid out FIXED to the sizer's measured widths (colgroup). */
+.price-db-table--head{table-layout:fixed;}
+.price-db-table--head thead th{border-bottom:0;box-shadow:none;}
 .price-db-table thead th{background:var(--bg-solid);border-bottom:1px solid var(--border);
   box-shadow:0 1px 0 var(--border);}
 .price-db-table th{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.3px;
@@ -1255,6 +1274,16 @@ tbody tr:hover .price-db-star.on{opacity:1;}
 .price-db-colsmenu-reset{appearance:none;background:transparent;border:1px solid var(--border);border-radius:5px;
   font-size:10px;font-weight:700;padding:2px 7px;cursor:pointer;color:var(--text-dim);text-transform:none;letter-spacing:0;}
 .price-db-colsmenu-reset:hover{border-color:var(--accent);color:var(--accent);}
+/* Raw mode's graded-price tier picker: one pair of columns, whichever grader +
+   grade is picked here. Sits above the column list it governs. */
+.price-db-colsmenu-tier{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:4px 6px 8px;margin-bottom:4px;border-bottom:1px solid var(--border);font-size:12px;color:var(--text-dim);}
+.price-db-colsmenu-tier select{padding:3px 6px;font-size:12px;background:var(--bg-surface);color:var(--text);
+  border:1px solid var(--border);border-radius:5px;}
+/* A graded price that isn't this printing's own (a blend of both finishes) is
+   marked, not passed off; the cell's tooltip says which blend. */
+.price-db-table .td-gr-approx{color:var(--text-muted);margin-right:2px;font-weight:600;}
+.price-db-grnote{font-size:12px;padding:4px 2px;}
 .price-db-colsmenu-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 6px;border-radius:5px;}
 .price-db-colsmenu-row:hover{background:var(--bg-surface);}
 .price-db-colsmenu-lbl{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);cursor:pointer;flex:1;min-width:0;}
@@ -1374,10 +1403,10 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
    the mobile nth-child rules (0,2,1), so only dragged columns change. */
 .price-db-table.pdb-resized td, .price-db-table.pdb-resized th{overflow:hidden;}
 .price-db-table.pdb-resized .td-num{text-overflow:ellipsis;}
-/* Zero-height sticky bar so the grips ride the sticky <thead> instead of
-   scrolling away from it — and so they never cover the rows, which would put a
-   dead strip down the table at every column boundary. */
-.price-db-gripbar{position:sticky;top:0;height:0;z-index:6;overflow:visible;}
+/* Zero-height bar inside the pinned header strip, so the grips ride the header
+   (pinned and sideways-scrolled with it) and never cover the rows, which would
+   put a dead strip down the table at every column boundary. */
+.price-db-gripbar{position:absolute;top:0;left:0;right:0;height:0;z-index:6;overflow:visible;}
 .price-db-colgrip{position:absolute;top:0;width:9px;margin-left:-5px;padding:0;border:0;
   background:transparent;cursor:col-resize;touch-action:none;}
 .price-db-colgrip::after{content:"";position:absolute;left:4px;top:2px;bottom:2px;width:2px;
@@ -3724,64 +3753,120 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .sc-modal-cta:hover{filter:brightness(1.07);}
 .sc-modal-link{font-size:12px;color:var(--accent);text-decoration:none;font-weight:600;}
 .sc-modal-link:hover{text-decoration:underline;}
-.home-ev-strip{width:100%;box-sizing:border-box;
+/* ── Home "Recent set EV" (reimagined 2026-09-30) ──────────────────────────
+   One card per set, in the Toolbox's chip language right above it: a verdict
+   in the corner, a meter of EV against the box, then the two buy buttons.
+   ⚠ The panel is a size CONTAINER, and every layout switch below keys on the
+   panel's OWN width rather than the viewport — the same reason the Toolbox
+   grid uses auto-fit: where this panel lands (240px left rail, 360px right
+   rail, a phone's full width, the wide main column) is decided by the home
+   layout, which no media query can see. */
+.home-ev-strip{width:100%;box-sizing:border-box;container:hev / inline-size;
   background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;
-  padding:8px 10px;font-size:11px;}
-.home-ev-strip-head{display:flex;justify-content:space-between;align-items:center;
-  gap:10px;margin-bottom:4px;}
-.home-ev-strip-title{font-size:10px;font-weight:700;letter-spacing:0.5px;
+  padding:8px 8px 9px;}
+.home-ev-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;
+  gap:6px 10px;margin:0 0 7px;}
+.home-ev-titlewrap{display:flex;align-items:center;gap:6px;min-width:0;}
+.home-ev-strip .home-ev-title{margin:0;white-space:nowrap;}
+/* The two toggles are chips, not native checkboxes: they change what the EV
+   counts, and a 11px checkbox beside cryptic "<$1→$0" read as debris. Set in
+   Cinzel capitals like the panel's own title and the movers picker's chips,
+   so the head of the panel reads as one display line. */
+.home-ev-opts{display:flex;gap:5px;}
+.home-ev-opt{font:inherit;font-family:'Cinzel',serif;font-size:10px;font-weight:700;
+  line-height:1.3;letter-spacing:0.08em;text-transform:uppercase;
+  padding:3px 9px;border-radius:999px;cursor:pointer;white-space:nowrap;
+  border:1px solid var(--border);background:var(--btn-bg);color:var(--text-muted);
+  transition:border-color .1s,background .1s,color .1s;}
+.home-ev-opt:hover{border-color:var(--border-accent);color:var(--accent);}
+.home-ev-opt.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent);}
+.home-ev-list{list-style:none;margin:0;padding:0;display:grid;gap:5px;}
+/* A card is two flex lines — name | verdict over EV | buy buttons. The narrow
+   layout below dissolves both lines (display:contents) and deals the same four
+   pieces into a grid instead, so it needs no second copy of the markup.
+   ⚠ Not a 2x2 grid at every width: the two lines' right-hand items would then
+   share one column track, and the buy buttons' width squeezed every set name
+   down to "Rise of the …". */
+.home-ev-row{position:relative;overflow:hidden;min-width:0;
+  display:flex;flex-direction:column;gap:6px;
+  padding:7px 10px 10px;border-radius:8px;
+  background:var(--bg-card);border:1px solid var(--border);}
+.home-ev-top,.home-ev-foot{display:flex;align-items:center;justify-content:space-between;
+  gap:10px;min-width:0;}
+.home-ev-top{align-items:center;}
+.home-ev-name{grid-area:name;display:flex;align-items:center;min-width:0;
+  font-size:13px;font-weight:700;color:var(--text);line-height:1.25;}
+.home-ev-name-txt{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* A fixed slot, not a height-sized logo: the wordmarks run from 1.25:1
+   (Whispers in the Well) to 2.67:1 (Winterspell), so a shared height would
+   start every name at a different x. Contained in the same box, each keeps
+   its own shape and the names line up. At this size a wordmark is a
+   recognisable SHAPE rather than readable type, which is how players know a
+   set; the name beside it carries the words. The narrow layout shrinks the
+   slot, where "Whispers in the Well" needs the width. */
+.home-ev-logo-slot{flex:0 0 56px;width:56px;height:28px;margin-right:8px;
+  display:flex;align-items:center;justify-content:center;}
+.home-ev-logo-slot .set-logo.home-ev-logo{width:100%;height:100%;object-fit:contain;}
+.home-ev-verdict{grid-area:verdict;justify-self:end;display:inline-flex;align-items:baseline;gap:5px;
+  font-size:15px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1;white-space:nowrap;}
+.home-ev-verdict-lbl{font-size:9px;font-weight:700;letter-spacing:0.5px;
   text-transform:uppercase;color:var(--text-muted);}
-.home-ev-strip-toggles{display:flex;gap:10px;font-size:10px;color:var(--text-muted);}
-.home-ev-strip-toggles label{display:flex;align-items:center;gap:3px;cursor:pointer;}
-.home-ev-strip-toggles input{margin:0;width:11px;height:11px;accent-color:var(--accent);}
-.home-ev-strip-table{display:flex;flex-direction:column;gap:1px;}
-.home-ev-strip-row{display:grid;grid-template-columns:minmax(0,1fr) 62px 96px 42px 76px;
-  gap:6px;align-items:center;padding:3px 4px;border-radius:4px;}
-.home-ev-strip-head-row{font-size:9px;font-weight:700;letter-spacing:0.4px;
+/* The meter runs along the card's bottom edge, so it costs no height and every
+   card's bar is the same length — the rows compare at a glance. Track = the
+   bigger of EV and the box, fill = EV: below the box it is a red bar short of
+   the end, above it a green one past a tick at the box price. */
+.home-ev-meter{position:absolute;left:0;right:0;bottom:0;height:4px;
+  background:color-mix(in srgb,var(--text-muted) 22%,transparent);}
+.home-ev-fill{position:absolute;left:0;top:0;bottom:0;border-radius:0 999px 999px 0;
+  background:var(--text-muted);}
+.home-ev-row--red .home-ev-fill{background:linear-gradient(90deg,
+  color-mix(in srgb,var(--red) 35%,transparent),var(--red));}
+.home-ev-row--green .home-ev-fill{background:linear-gradient(90deg,
+  color-mix(in srgb,var(--green) 35%,transparent),var(--green));}
+.home-ev-tick{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;
+  background:var(--text);}
+.home-ev-ev{grid-area:ev;display:inline-flex;align-items:baseline;gap:5px;white-space:nowrap;
+  font-size:13px;font-weight:700;color:var(--text);font-variant-numeric:tabular-nums;}
+.home-ev-lbl{font-size:9px;font-weight:700;letter-spacing:0.5px;
   text-transform:uppercase;color:var(--text-muted);}
-.home-ev-strip-row:not(.home-ev-strip-head-row):hover{background:var(--bg-card);}
-.home-ev-strip-row .num{text-align:right;font-variant-numeric:tabular-nums;}
-.home-ev-strip-set{font-weight:600;color:var(--text);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.home-ev-strip-box-link{color:var(--text);text-decoration:none;font-weight:600;}
-.home-ev-strip-box{white-space:nowrap;}
-.home-ev-strip-diff{font-weight:700;}
-.home-ev-strip-box-link:hover{color:var(--accent);}
-.home-ev-strip-box-ext{font-size:8.5px;opacity:0.55;margin-left:1px;}
-.home-ev-strip-amzn-cell{display:flex;justify-content:flex-end;}
-.home-ev-strip-head-row > div{white-space:nowrap;}
-/* Five columns leave a phone's set name ~17px. Below 640px the row takes the
-   left rail's stacked shape: set name + Amazon pill on line one, the three
-   numbers under their headers on line two. */
-@media (max-width:640px){
-  .home-ev-strip-row{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:1px;}
-  .home-ev-strip-set{grid-row:1;grid-column:1/3;}
-  .home-ev-strip-amzn-cell{grid-row:1;grid-column:3;}
-  .home-ev-strip-head-row > div:first-child,
-  .home-ev-strip-head-row .home-ev-strip-amzn-cell{display:none;}
+.home-ev-buy{grid-area:buy;justify-self:end;display:flex;align-items:center;gap:5px;min-width:0;}
+.home-ev-buy > a,.home-ev-buy > .home-ev-tcg{height:22px;box-sizing:border-box;}
+/* TCGplayer's buy button carries its OWN price, so the number can only be
+   read as TCGplayer's; the Amazon pill beside it carries none, by design. */
+.home-ev-tcg{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;
+  padding:0 8px;border-radius:999px;text-decoration:none;
+  border:1px solid var(--border);background:var(--bg-surface);color:var(--text);
+  transition:border-color .1s,background .1s;}
+a.home-ev-tcg:hover{border-color:var(--border-accent);background:var(--accent-glow);}
+.home-ev-tcg-px{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;}
+.home-ev-tcg-src{font-size:9.5px;font-weight:600;color:var(--text-muted);}
+.home-ev-tcg-ext{font-size:9px;opacity:0.6;line-height:0;}
+.home-ev-nobox{font-size:11px;}
+/* Two across once the panel is wide enough for two cards that each still fit
+   EV and both buttons on one line (~282px inside a card) — the main column,
+   or a phone held sideways. Below 620px two cards would each overflow. */
+@container hev (min-width:620px){
+  .home-ev-list{grid-template-columns:repeat(2,minmax(0,1fr));}
 }
-/* ⚠ In the 240px left rail the four-column row gives the set name ~40px, so
-   the name takes a line of its own and the three numbers sit under the
-   headers. DESKTOP ONLY: below 1100px this panel spans the full column
-   (see the width override in the stacked-rail block), where the stacked shape
-   doubled every row for nothing — "too spread out" (2026-09-24). */
-@media (min-width:1101px){
-  .home-left-col .home-ev-strip-row{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:1px;}
-  .home-left-col .home-ev-strip-set{grid-column:1/-1;}
-  .home-left-col .home-ev-strip-head-row > div:first-child{display:none;}
-  .home-left-col .home-ev-strip-box{white-space:normal;}
-  /* The Amazon pill rides the set-name line, far right, rather than costing
-     each set a third line. */
-  .home-left-col .home-ev-strip-set{grid-row:1;grid-column:1/3;}
-  .home-left-col .home-ev-strip-amzn-cell{grid-row:1;grid-column:3;}
-  .home-left-col .home-ev-strip-head-row .home-ev-strip-amzn-cell{display:none;}
+/* ⚠ Under ~312px of panel (the 240px desktop rail, a phone narrower than
+   ~345px) a card cannot hold EV and both buy buttons on one line — measured,
+   the Amazon pill overflowed by 2px at 320px. The name takes the whole first
+   line (no ellipsis on "Whispers in the Well"), EV and the verdict share the
+   second, and the buttons split the third. */
+@container hev (max-width:311px){
+  .home-ev-row{display:grid;grid-template-columns:minmax(0,1fr) auto;
+    grid-template-areas:"name name" "ev verdict" "buy buy";align-items:center;
+    padding:7px 8px 10px;gap:5px 8px;}
+  .home-ev-top,.home-ev-foot{display:contents;}
+  .home-ev-buy{justify-self:stretch;}
+  .home-ev-tcg{flex:1 1 auto;justify-content:center;padding:0 7px;}
+  /* The two ↗ are the ~20px the buy line is short by; both are plainly
+     buttons without them, and each keeps its shop's name. */
+  .home-ev-tcg-ext,.home-ev-amzn .amz-btn-ext{display:none;}
+  .home-ev-verdict{font-size:14px;}
+  .home-ev-opt{padding:3px 7px;font-size:9.5px;letter-spacing:0.06em;}
+  .home-ev-logo-slot{flex-basis:44px;width:44px;height:24px;margin-right:7px;}
 }
-/* The title and its two checkboxes do not fit one 222px line, and a flex row
-   that cannot fit breaks INSIDE the words — "RECENT SET / EV" and "No /
-   chase". Let the toggles drop to their own line instead, and keep both of
-   them whole. It self-adjusts: where the three fit, nothing wraps. */
-.home-left-col .home-ev-strip-head{flex-wrap:wrap;gap:4px 10px;}
-.home-left-col .home-ev-strip-toggles label{white-space:nowrap;}
 
 /* Following feed — left column above the first banner. Single-line rows:
    green/yellow dot (new vs updated) · deck name · creator + time · ink icons.
@@ -7153,6 +7238,19 @@ body:has(.deck-quickadd){padding-bottom:calc(78px + env(safe-area-inset-bottom))
    the qty badge — nudge the chevron one row further down to clear it. */
 .deck-grid-tile:has(.deck-tile-owned-frac) .deck-variant-btn--tile{top:57px;}
 .deck-stack-tile:has(.deck-tile-owned-frac) .deck-variant-btn--tile{top:59px;}
+/* A Location lies with its COST in the top-right corner (the quarter turn), so
+   on its tile the quantity drops just below the cost hexagon, lined up under
+   it (the hexagon ends 18% of the way down), and the owned count and version
+   chevron take the top-left, which is art. Stacked down the right they would
+   cover the willpower shield. */
+.deck-grid-tile--lscape .deck-grid-tile-qty,
+.deck-stack-tile--lscape .deck-stack-qty{top:calc(18% + 4px);}
+.deck-grid-tile--lscape .deck-tile-owned-frac,
+.deck-grid-tile--lscape .deck-variant-btn--tile{top:5px;right:auto;left:5px;}
+.deck-grid-tile--lscape:has(.deck-tile-owned-frac) .deck-variant-btn--tile{top:30px;}
+.deck-stack-tile--lscape .deck-tile-owned-frac,
+.deck-stack-tile--lscape .deck-stack-top .deck-variant-btn--tile{top:7px;right:auto;left:7px;}
+.deck-stack-tile--lscape:has(.deck-tile-owned-frac) .deck-stack-top .deck-variant-btn--tile{top:32px;}
 /* Popover dropdown — fixed-positioned, anchored by JS to the clicked chevron. */
 .deck-variant-popover{z-index:300;background:var(--bg-modal);border:1px solid var(--border);
   border-radius:10px;box-shadow:0 12px 28px rgba(0,0,0,0.35);
@@ -7227,8 +7325,13 @@ a.deck-row-price:hover{background:rgba(22,163,74,0.18);border-color:rgba(22,163,
   border:1px solid var(--border);overflow:hidden;background:var(--bg-card);}
 .deck-hover-preview img{width:100%;display:block;}
 
-/* Image-grid layout for the card list. */
-.deck-section-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;}
+/* Image-grid layout for the card list. Its columns and gap are set inline by
+   DeckTileGrid, which has to know them to size a run of Locations. */
+.deck-section-grid{display:grid;}
+/* A run of Locations: one grid cell holding the landscape tiles at 1.4 columns
+   each. Top-aligned, so a tile is its card's height, not the row's. */
+.deck-lscape-run{display:flex;flex-wrap:wrap;align-items:flex-start;min-width:0;}
+.deck-lscape-run > *{flex:none;}
 .deck-grid-tile{position:relative;background:var(--bg-card);border:1px solid var(--border);
   border-radius:6px;overflow:hidden;display:flex;flex-direction:column;cursor:pointer;
   transition:transform 0.12s ease-out,box-shadow 0.12s ease-out;}
@@ -7278,7 +7381,7 @@ a.deck-row-price:hover{background:rgba(22,163,74,0.18);border-color:rgba(22,163,
    Sized so each peek shows the upper card frame (cost circle + title bar)
    instead of a thin meaningless strip. Strong drop shadows separate the
    layers so the eye reads "physical card stack" not "stacked JPEGs". */
-.deck-section-stack{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:22px;}
+.deck-section-stack{display:grid;}
 .deck-stack-tile{position:relative;display:flex;flex-direction:column;cursor:pointer;
   transition:transform 0.12s ease-out;}
 .deck-stack-tile:hover{transform:translateY(-4px);}
@@ -8797,10 +8900,40 @@ html[data-mode="light"] .elo-rank-top{color:var(--accent);}
    every few months, and a hidden chip is a filter nobody knows is on. */
 .elo-stores-fresh{font-size:12px;line-height:1.45;color:var(--text-dim);margin:0 0 12px;}
 .elo-stores-setbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:12px;}
-/* Locked while the pro-rated lens is on — it scores one season, so the set
-   chips would be describing a window the verdict doesn't come from. */
-.elo-stores-setbar--locked{opacity:0.5;}
-.elo-stores-setbar--locked .elo-chip{cursor:not-allowed;}
+/* Pro-rated Legendary, Sept–Oct 2026 — temporary (RPH_PRORATED_SHOW_UNTIL in
+   Index.html takes it down). Loud on purpose: for these few weeks it is the
+   number stores come here for. The callout and its column group share the tint
+   so the eye links them. */
+.elo-stores-pro{border:1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-left:4px solid var(--accent);border-radius:10px;
+  background:color-mix(in srgb, var(--accent) 9%, var(--bg-modal));
+  padding:12px 14px;margin:0 0 16px;max-width:820px;}
+.elo-stores-pro-top{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;
+  gap:4px 12px;margin-bottom:10px;}
+.elo-stores-pro-kicker{font-size:11px;font-weight:800;letter-spacing:0.6px;text-transform:uppercase;
+  color:var(--accent);}
+.elo-stores-pro-when{font-size:12px;font-weight:700;color:var(--text);}
+.elo-stores-pro-stats{display:flex;flex-wrap:wrap;gap:10px 28px;margin-bottom:10px;}
+.elo-stores-pro-stat{display:flex;align-items:center;gap:8px;min-width:0;}
+.elo-stores-pro-stat b{font-size:28px;line-height:1;font-weight:800;color:var(--text);
+  font-variant-numeric:tabular-nums;}
+.elo-stores-pro-stat span{font-size:12px;line-height:1.3;color:var(--text-dim);max-width:170px;}
+.elo-stores-pro-note{margin:0;font-size:12px;line-height:1.55;color:var(--text-muted);}
+.elo-stores-pro-note b{color:var(--text);font-weight:700;}
+.elo-stores-table .elo-stores-pro-col{background:color-mix(in srgb, var(--accent) 8%, transparent);}
+.elo-stores-table .elo-stores-pro-first{border-left:2px solid var(--accent);}
+/* Left-aligned: centred over five columns, the label sat half off a phone screen.
+   The extra `thead` outranks the generic .elo-stores-grp rule further down. */
+.elo-stores-table thead th.elo-stores-grp--pro{color:var(--accent);border-left:2px solid var(--accent);text-align:left;
+  background:color-mix(in srgb, var(--accent) 14%, transparent);}
+/* "+3": events still on the store's calendar before the window closes. */
+.elo-stores-pro-fresh{font-weight:600;color:var(--text-dim);cursor:help;}
+/* The Jul–Aug proxy: the yardstick, so plain — a divider and a muted label, no tint. */
+.elo-stores-pro-stat--proxy b{color:var(--text-dim);}
+.elo-stores-table .elo-stores-prx-first{border-left:1px solid var(--border-accent);}
+.elo-stores-table thead th.elo-stores-grp--prx{color:var(--text-dim);text-align:left;
+  border-left:1px solid var(--border-accent);}
+.elo-stores-sched{font-size:0.8em;color:var(--text-dim);margin-left:4px;cursor:help;}
 /* Coverage marker: some of the row's events have no roster pulled yet. */
 .elo-stores-gap{color:var(--text-muted);font-size:0.8em;margin-left:2px;cursor:help;}
 .elo-stores-setlbl{font-size:10px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;
@@ -8868,6 +9001,13 @@ html[data-mode="light"] .elo-rank-top{color:var(--accent);}
    part of the identity, not decoration. */
 .elo-stores-loc{display:block;font-size:10.5px;color:var(--text-muted);
   max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* A store cut from the Elo region that stays on the tab to follow its tier
+   progress (ELO_STATUS_ONLY_STORE_IDS). Its own line, not a suffix on the
+   location: at the 124px phone clamp the location ellipsis would eat it. */
+.elo-stores-outside{display:inline-block;margin-top:2px;padding:0 6px;border-radius:999px;
+  border:1px solid var(--btn-border);font-size:9.5px;font-weight:800;letter-spacing:0.4px;
+  text-transform:uppercase;line-height:15px;color:var(--text-muted);white-space:nowrap;cursor:help;}
+.elo-stores-outside--inline{margin-top:0;vertical-align:1px;cursor:default;}
 @media (max-width:600px){
   .elo-stores-nametxt{max-width:124px;}
 }

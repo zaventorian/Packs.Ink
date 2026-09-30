@@ -1,8 +1,9 @@
 """Backfill public.lorcana_events_history with every PAST event our tracked
 stores have run on Ravensburger Play.
 
-    python scripts/elo/scrape_store_history.py                # all tracked stores
+    python scripts/elo/scrape_store_history.py                # every Store Status store
     python scripts/elo/scrape_store_history.py --store 2717   # just one
+    python scripts/elo/scrape_store_history.py --status-only  # just the ones cut from Elo
     python scripts/elo/scrape_store_history.py --since 2025-01-01
     python scripts/elo/scrape_store_history.py --dry-run
 
@@ -52,6 +53,7 @@ from discover_wu_scs import (  # noqa: E402
 from discover_prereleases import (  # noqa: E402
     classify as classify_prerelease, derive_prerelease_templates, fetch_launch_sets,
 )
+from elo_scope import STATUS_ONLY_STORE_IDS  # noqa: E402
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -97,6 +99,15 @@ def tracked_store_ids() -> list[int]:
     with urllib.request.urlopen(req, timeout=60) as r:
         rows = json.loads(r.read().decode("utf-8", "ignore") or "[]")
     return [r["store_id"] for r in rows if r.get("store_id") is not None]
+
+
+def store_status_ids() -> list[int]:
+    """Every store the Store Status tab reports on: the ones Elo tracks, plus the
+    ones cut from Elo that keep their Store Status row (elo_scope). Those are not
+    in elo_tracked_stores — that table also gates Upcoming SCs, the Scout tab and
+    the SC roster scrape — so reading the table alone left their history frozen
+    on the day they were cut."""
+    return sorted(set(tracked_store_ids()) | set(STATUS_ONLY_STORE_IDS))
 
 
 def fetch_store_feed(store_id: int, status: str = "past", since: str | None = None) -> list[dict]:
@@ -166,7 +177,10 @@ def upsert_history(rows: list[dict], chunk: int = 200) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--store", type=int, action="append",
-                    help="only this store_id (repeatable); default = all tracked")
+                    help="only this store_id (repeatable); default = every Store Status store")
+    ap.add_argument("--status-only", action="store_true",
+                    help="only the stores cut from Elo that stay on the Store Status tab "
+                         "(elo_scope.STATUS_ONLY_STORE_IDS) — their full-history backfill")
     ap.add_argument("--since", default=None,
                     help="YYYY-MM-DD; only events starting after this (cheap re-runs)")
     ap.add_argument("--dry-run", action="store_true", help="scrape but don't write")
@@ -175,7 +189,8 @@ def main() -> None:
     if not (SUPABASE_URL and SERVICE_KEY):
         raise SystemExit("SUPABASE_URL / SUPABASE_SERVICE_KEY not set (scripts/.env)")
 
-    stores = args.store or tracked_store_ids()
+    stores = (args.store or (sorted(STATUS_ONLY_STORE_IDS) if args.status_only
+                             else store_status_ids()))
     print(f"Backfilling past events for {len(stores)} store(s)"
           + (f" since {args.since}" if args.since else "") + "\n")
 

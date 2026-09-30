@@ -122,96 +122,95 @@ export async function rawSales(db, cardId) {
   });
 }
 
-// ── movers ───────────────────────────────────────────────────────────────
-export const MOVER_WINDOWS = {
-  "1d": { col: "1d", prior: "prev", label: "1D" }, "1w": { col: "7d", prior: "7d", label: "1W" },
-  "1m": { col: "30d", prior: "30d", label: "1M" }, "3m": { col: "90d", prior: "90d", label: "3M" },
-  "6m": { col: "180d", prior: "180d", label: "6M" }, "1y": { col: "365d", prior: "365d", label: "1Y" },
-};
-export const MOVER_GROUPS = {
-  all: { label: "All rarities", rarities: null },
-  chase: { label: "Chase (Enchanted / Epic / Iconic)", rarities: ["Enchanted", "Epic", "Iconic"] },
-  rareleg: { label: "Rare – Legendary", rarities: ["Rare", "Super Rare", "Legendary"] },
-  promo: { label: "Promos", rarities: ["Promo"] },
-  sealed: { label: "Sealed product (boxes, troves, gift sets)", sealed: true },
-};
+// ── the meta ─────────────────────────────────────────────────────────────
+// Every top-8 deck since the newest booster set reached stores, grouped by INK
+// PAIR. deck_name is empty on most tournament decks (nobody names an archetype
+// the same way twice), and the inks are exact. One read covers both halves of
+// /meta: the breakdown and the pick of recent events.
+export const META_TOP = 8;
+export const META_MIN_EVENTS = 3;      // fewer than this since the set: widen
+export const META_FALLBACK_DAYS = 45;
+export const META_RECENT_DAYS = 21;    // "latest big events" look back this far
+export const META_EVENTS = 3;
+export const META_EVENT_MIN_DECKS = 4; // an event with fewer recorded is a stub
+const INK_ORDER = ["Amber", "Amethyst", "Emerald", "Ruby", "Sapphire", "Steel"];
 
-// Sealed movers need no query: the index build runs the site's
-// computeSealedDeltas over a year of history each day (see build_index.mjs),
-// and the candidates are the site's Sealed Movers row — boxes, troves and
-// specials, never packs or cases. Same floor as the cards: the price a product
-// STARTED the window at.
-export function sealedMovers(index, { win = "1d", dir = "up", basis = "market", min = 5, limit = 10 } = {}) {
-  const at = basis === "low" ? 0 : 1;
-  const rows = [];
-  for (const s of index.sealed || []) {
-    const d = s.d && s.d[win];
-    const pctv = d ? d[at] : null;
-    const now = basis === "low" ? s.low : s.mkt;
-    if (pctv == null || !Number.isFinite(pctv) || pctv === 0 || now == null) continue;
-    if (dir === "down" ? pctv > 0 : pctv < 0) continue;
-    const prior = now / (1 + pctv / 100);
-    if (!(prior >= Number(min || 0))) continue;
-    rows.push({ s, pct: pctv, now, prior });
+// The newest booster set already on shelves (a set with a future date is only
+// announced, and its window would be empty).
+export function metaSet(sets, today) {
+  let best = null;
+  for (const s of sets || []) if (s.main && s.date && s.date <= today && (!best || s.date > best.date)) best = s;
+  return best;
+}
+
+export async function fetchMetaRows(db, { since }) {
+  return db.all("tournament_results_v", {
+    select: "tournament_id,tournament_name,event_date,tournament_format,num_players,place,place_rank,player_name,deck_id,deck_name,deck_inks,deck_share_token,deck_visibility",
+    event_date: "gte." + since, place_rank: "lte." + META_TOP,
+    order: "event_date.desc,tournament_id.asc,place_rank.asc,player_name.asc",
+  }, { maxRows: 4000 });
+}
+
+export function metaSince(sets, today) {
+  const s = metaSet(sets, today);
+  const back = calAddDays(today, -META_FALLBACK_DAYS);
+  return s && s.date < back ? s.date : back;
+}
+
+// The whole /meta read. A failed read is an empty meta, not a failed reply:
+// the most-played list comes from the index and still has something to say.
+export async function fetchMeta(db, sets, { today = calTodayYmd(), log } = {}) {
+  const rows = await fetchMetaRows(db, { since: metaSince(sets, today) })
+    .catch((e) => { log && log("meta read failed", e && e.message); return []; });
+  return buildMeta(rows, { sets, today });
+}
+
+export function buildMeta(rows, { sets, today }) {
+  const byId = new Map();
+  for (const r of rows || []) {
+    if (!r || !r.tournament_id) continue;
+    let e = byId.get(r.tournament_id);
+    if (!e) byId.set(r.tournament_id, e = {
+      id: r.tournament_id, name: r.tournament_name || "Tournament", date: String(r.event_date || "").slice(0, 10),
+      format: r.tournament_format || null, players: r.num_players || null, top: [],
+    });
+    e.top.push(r);
   }
-  rows.sort((a, b) => (dir === "down" ? a.pct - b.pct : b.pct - a.pct));
-  return { latest: index.priceDate, rows: rows.slice(0, limit), sealed: true };
-}
+  const events = [...byId.values()];
+  for (const e of events) e.top.sort((a, b) => (a.place_rank || 99) - (b.place_rank || 99));
 
-// ⚠ price_movers carries a SKU's LAST change forever: when a listing drops out,
-// low_prev is "the Low before the last Low we saw", so an old move keeps being
-// reported as today's 1D. A mover only counts when prices_daily has a row for
-// it on the newest price date carrying the same value the matview calls
-// "today" — checked in one query against the candidates, not the catalog.
-export async function fetchMovers(db, { win = "1d", dir = "up", group = "all", basis = "low", min = 5, limit = 10 } = {}) {
-  const w = MOVER_WINDOWS[win] || MOVER_WINDOWS["1d"];
-  const g = MOVER_GROUPS[group] || MOVER_GROUPS.all;
-  const pre = basis === "market" ? "mkt_pct_" : "pct_";
-  const col = pre + w.col;
-  const todayCol = basis === "market" ? "market_today" : "low_today";
-  const priorCol = (basis === "market" ? "market_" : "low_") + w.prior;
-  const params = {
-    select: `card_id,name,version,rarity,printing,tcgplayer_product_id,image_normal,${todayCol},${priorCol},${col}`,
-    [col]: dir === "down" ? "lt.0" : "gt.0",
-    // The floor is on the price the card STARTED the window at — the home
-    // banners' rule. On today's price a 10-cent card that became $22 leads
-    // every board.
-    [priorCol]: "gte." + Number(min || 0),
-    order: `${col}.${dir === "down" ? "asc" : "desc"}`,
-    limit: Math.max(limit * 4, 40),
-  };
-  if (g.rarities) params.rarity = `in.(${g.rarities.map((r) => `"${r}"`).join(",")})`;
-  const [latest, rows] = await Promise.all([latestPriceDate(db), db.get("price_movers", params)]);
-  if (!rows || !rows.length || !latest) return { latest, rows: [] };
-  const pids = [...new Set(rows.map((r) => r.tcgplayer_product_id).filter(Boolean))];
-  const today = await db.all("prices_daily", {
-    select: "tcgplayer_product_id,printing,low_price,market_price",
-    source: "eq.tcgcsv", grade: "eq.raw", date: "eq." + latest,
-    tcgplayer_product_id: `in.(${pids.join(",")})`,
-    order: "tcgplayer_product_id.asc,printing.asc",
-  });
-  const field = basis === "market" ? "market_price" : "low_price";
-  const live = new Map(today.map((r) => [r.tcgplayer_product_id + "|" + r.printing, r[field]]));
-  const fresh = rows.filter((r) => {
-    const v = live.get(r.tcgplayer_product_id + "|" + r.printing);
-    return v != null && Math.abs(Number(v) - Number(r[todayCol])) < 0.005;
-  });
-  return { latest, rows: fresh.slice(0, limit), col, todayCol, priorCol, dropped: rows.length - fresh.length };
-}
+  // The breakdown: Core only (Infinity is a different game), since the set.
+  const set = metaSet(sets, today);
+  const core = (from) => events.filter((e) => e.format === "core" && e.date >= from);
+  let from = set ? set.date : null, sinceSet = set ? set.n : null;
+  let pool = from ? core(from) : [];
+  if (pool.length < META_MIN_EVENTS) {
+    from = calAddDays(today, -META_FALLBACK_DAYS); sinceSet = null; pool = core(from);
+  }
+  const pairs = new Map();
+  let decks = 0;
+  for (const e of pool) for (const r of e.top) {
+    const inks = [...new Set((r.deck_inks || []).filter(Boolean))]
+      .sort((a, b) => INK_ORDER.indexOf(a) - INK_ORDER.indexOf(b));
+    if (!inks.length) continue;
+    const key = inks.join("/");
+    let p = pairs.get(key);
+    if (!p) pairs.set(key, p = { key, inks, n: 0, t4: 0, wins: 0 });
+    p.n++; decks++;
+    if (r.place_rank <= 4) p.t4++;
+    if (r.place_rank === 1) p.wins++;
+  }
+  const breakdown = [...pairs.values()].sort((a, b) => b.n - a.n || b.wins - a.wins || (a.key < b.key ? -1 : 1));
 
-// ── tournaments ──────────────────────────────────────────────────────────
-// The newest events the site holds (3-star events imported from inkDecks and
-// the Chicagoland scene), each with its top four. Two small reads rather than
-// one big one: a Challenge can carry 60+ decks, and only the top matters here.
-export async function recentResults(db, { events = 3, places = 4 } = {}) {
-  const ts = await db.get("tournaments", { select: "id,name,event_date,format,num_players", order: "event_date.desc,id.asc", limit: events });
-  if (!ts || !ts.length) return [];
-  const rows = await db.get("tournament_results_v", {
-    select: "tournament_id,place,place_rank,player_name,deck_id,deck_name,deck_inks,deck_share_token,deck_visibility",
-    tournament_id: `in.(${ts.map((t) => t.id).join(",")})`, place_rank: "lte." + places,
-    order: "place_rank.asc,player_name.asc", limit: events * places * 3,
-  });
-  return ts.map((t) => ({ ...t, top: (rows || []).filter((r) => r.tournament_id === t.id).slice(0, places) }));
+  // Latest big events: the biggest few of the last three weeks, shown newest
+  // first. An event with only a winner recorded says nothing about a meta.
+  const full = events.filter((e) => e.top.length >= META_EVENT_MIN_DECKS);
+  let cands = full.filter((e) => e.date >= calAddDays(today, -META_RECENT_DAYS));
+  if (cands.length < META_EVENTS) cands = full.filter((e) => e.date >= calAddDays(today, -META_FALLBACK_DAYS));
+  const recent = cands.sort((a, b) => (b.players || 0) - (a.players || 0) || (a.date < b.date ? 1 : -1))
+    .slice(0, META_EVENTS).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+
+  return { from, sinceSet, events: pool.length, decks, breakdown, recent };
 }
 
 // ── events near a place ──────────────────────────────────────────────────

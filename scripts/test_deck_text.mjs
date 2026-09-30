@@ -18,6 +18,8 @@
 //      the name, and is reported; one that names a printing OF the named card
 //      (the Enchanted) still wins, which is the reason the suffix exists.
 //   6. A quantity over the copy limit is trimmed AND reported.
+//   7. The export is a plain list: no "# " headers and no blank lines, which
+//      Discord turns into big headings and gaps. Old "#" lists still import.
 //
 // Reads the real code out of Index.html rather than restating it.
 import { readFileSync } from "node:fs";
@@ -84,10 +86,16 @@ const deck = {coconut_card: "moana-curious-explorer", cards: [
 ]};
 const text = deckToText(deck, cardById);
 const lines = text.split("\n");
-ok("leader is the first line", lines[0], "# Coconut leader: Moana - Curious Explorer");
+ok("leader is the first line", lines[0], "// Coconut leader: Moana - Curious Explorer");
 ok("two printings of one card are one line", lines.filter(l => /Elsa - Snow Queen$/.test(l)), ["4 Elsa - Snow Queen"]);
-ok("sections still head their cards", lines.includes("# Characters") && lines.includes("# Songs"), true);
-ok("a card missing from the catalog is a comment", lines.includes("# 1 × gone"), true);
+// Discord renders a line starting "# " as a heading and a blank line as a gap,
+// which turned a pasted 16-card list into a screenful of big type.
+ok("no line is a markdown heading", lines.filter(l => /^#/.test(l)), []);
+ok("no blank lines", lines.filter(l => !l.trim()), []);
+ok("every line is a card or a // comment", lines.filter(l => !/^\d+ \S/.test(l) && !l.startsWith("// ")), []);
+ok("still grouped by type: characters, then songs", lines.filter(l => /^\d/.test(l)),
+   ["4 Tipo - Growing Son", "4 Elsa - Snow Queen", "3 A Whole New World"]);
+ok("a card missing from the catalog is a comment", lines.includes("// 1 × gone (not in the catalog)"), true);
 ok("no raw card_id is ever a card line", lines.some(l => /^\d+ gone$/.test(l)), false);
 ok("a 0-quantity row is not exported", deckToText({cards: [{card_id: "tipo", quantity: 0}]}, cardById), "");
 
@@ -100,6 +108,11 @@ ok("the missing-card comment is not an unmatched line", back.unmatched, []);
 ok("a leader named by slug also reads", parseDeckText("// coconut: robin-hood-sharpshooter", rows).coconut, "robin-hood-sharpshooter");
 ok("an unknown leader is ignored, not guessed", parseDeckText("# Coconut leader: Nobody - At All", rows).coconut, null);
 ok("an ordinary section header is not a leader", parseDeckText("# Coconut\n4 Tipo - Growing Son", rows).coconut, null);
+// Lists copied before 2026-09-29 carry "# Characters" headers and a "#" leader.
+const legacy = parseDeckText("# Coconut leader: Moana - Curious Explorer\n\n# Characters\n4 Tipo - Growing Son\n\n# Songs\n3 A Whole New World\n", rows);
+ok("an old #-headed list still imports", legacy.entries.map(e => e.card_id + ":" + e.quantity).sort(), ["sing:3", "tipo:4"]);
+ok("...with its leader", legacy.coconut, "moana-curious-explorer");
+ok("...and no header lines left over", legacy.unmatched, []);
 
 console.log("\n== import ==");
 ok("accents fold", parseDeckText("2 Te Ka - The Burning One", rows).entries, [{card_id: "teka", quantity: 2}]);
