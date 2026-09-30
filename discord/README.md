@@ -9,10 +9,10 @@ on workers.dev), so deploying it can never touch packs.ink.
 
 | | |
 |---|---|
-| `/card mowgli` | The site's card tile (the art, NM Market / Low and the 1D / 1W / 1M changes, drawn by the site's own code), with the card's rules text and stats as printed, graded sales, its ink / cost / type, and how much it's played in recent tournament top cuts. |
-| `/price mowgli` | The same, as a price chart (1M / 3M / 1Y / All buttons), card art as a thumbnail. |
-| `/price elsa psa 10` | Graded: every grade's last sale and average of the last 5, and a chart of the PSA 10 sales. |
-| `/price azurite sea box` | Sealed product: price, changes, chart, TCGplayer + Amazon links. |
+| `/card mowgli` | The site's card tile (the art, NM Market / Low and the 1D / 1W / 1M changes, drawn by the site's own code), with the card's rules text and stats as printed, graded sales, its ink / cost / type, how much it's played in recent tournament top cuts, and the price of its other finish. |
+| `/price mowgli` | The number: price, changes, the other finish, a playset's cost on a played card, and a price chart (1M / 3M / 1Y / All buttons) — the rules text stays on `/card`. |
+| `/price elsa psa 10` | Graded: that grade's last sale (with its date) and average of the last 5 lead, the raw price follows, every other grade is a field, and the chart is the PSA 10 sales. |
+| `/price azurite sea box` | Sealed product: price, changes, chart, TCGplayer + Amazon links. A booster box adds the set's box EV ("worth about 50% of the box"), an **Open a box** button and **Set at a glance**. |
 | `/set azurite` | A set at a glance: release dates, booster box price vs box EV (the site's own EV maths) with an open-or-hold verdict, chase cards, sealed prices. |
 | `/new` | The newest cards: everything added to packs.ink in the last four days (the site's reveal reel), grouped by day, with a picture grid and a menu to open any of them. Cards added since the bot's daily rebuild are included. |
 | `/open` | Open a simulated booster pack — or `box: True`, a whole box — with the site's pull rates and real prices. |

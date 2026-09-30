@@ -38,6 +38,10 @@ export const shortDate = (ymd) => {
   return m ? `${MONTHS[+m[2] - 1]} ${+m[3]}` + (new Date().getUTCFullYear() !== +m[1] ? `, ${m[1]}` : "") : "";
 };
 const clip = (s, n) => { s = String(s || ""); return s.length <= n ? s : s.slice(0, n - 1) + "…"; };
+// "1,056 sales", never "1056 sales".
+export const count = (n) => (Number.isFinite(Number(n)) ? Number(n).toLocaleString("en-US") : String(n ?? ""));
+const sameTier = (row, g) => !!(row && g && row.grader === g.grader && String(row.grade) === String(g.grade));
+const BASE_RARITY = new Set(["Common", "Uncommon", "Rare", "Super Rare", "Legendary"]);
 // As many WHOLE lines as fit in `budget` characters, then "…and N more". Any
 // text holding links goes through this, never clip(): a line cut mid-way is a
 // broken markdown link, which Discord shows as raw brackets and a URL.
@@ -107,6 +111,19 @@ export function parseOpenId(id) {
   const m = /^o\|([a-z]+)(?:\|\d)?$/.exec(String(id || ""));
   return m && VIEWS.includes(m[1]) ? { view: m[1] } : null;
 }
+// "Open a pack" / "Open a box": custom_id "k|<set index>|<packs>". A set
+// message, a pack message and a booster box's price reply all carry one.
+export const packId = (si, n) => `k|${si}|${n}`;
+export function parsePackId(id) {
+  const m = /^k\|(\d{1,3})\|(1|24)$/.exec(String(id || ""));
+  return m ? { si: Number(m[1]), n: Number(m[2]) } : null;
+}
+// "Set at a glance" from a sealed reply: the /set overview, as a new message.
+export const setId = (si) => `st|${si}`;
+export function parseSetId(id) {
+  const m = /^st\|(\d{1,3})$/.exec(String(id || ""));
+  return m ? { si: Number(m[1]) } : null;
+}
 
 // ── one card ─────────────────────────────────────────────────────────────
 // ctx: { R (resolver), res (resolve() result), price (priceSummary or null),
@@ -140,11 +157,16 @@ export function cardMessage(ctx) {
   // that decides which version "mowgli" means.
   const ident = gameplayLine(c);
   if (ident) lines.push(`*${ident}*`);
-  // What the card DOES, under its name (Zaven, 2026-09-29).
-  const stats = statsLine(c);
-  if (stats) lines.push(stats);
-  const rules = rulesText(c);
-  if (rules) lines.push(rules);
+  // What the card DOES, under its name (Zaven, 2026-09-29) — on the CARD
+  // view. /price is asked about a number, and the same eight lines of rules
+  // text above every chart pushed the chart, the changes and the graded
+  // tiers below the fold; the card is one button away.
+  if (view === "card") {
+    const stats = statsLine(c);
+    if (stats) lines.push(stats);
+    const rules = rulesText(c);
+    if (rules) lines.push(rules);
+  }
   const play = playLine(R, res.index, ctx.playDecks);
   if (play) lines.push(play);
   lines.push("");
@@ -155,41 +177,64 @@ export function cardMessage(ctx) {
   // as the site's card page does: eBay's last sale and average lead, and
   // TCGplayer's number — the fossil on exactly these cards — follows, plain.
   const rawLead = !!(ctx.raw && ctx.raw.last_sold_price != null);
+  // A grade that was ASKED FOR leads the same way: "elsa psa 10" is a question
+  // about the slab, and the answer used to sit fourth, in a grid of six tiers,
+  // under the raw price and its changes. cardPayload puts that tier first.
+  const gradeLead = ctx.grade && (ctx.graded || [])[0] && sameTier((ctx.graded || [])[0], ctx.grade) ? ctx.graded[0] : null;
+  const tcgBits = () => [mkt != null ? `${money(mkt)} NM Market` : null, low != null ? `${money(low)} Low` : null].filter(Boolean);
   if (rawLead) {
     const n = ctx.raw.last_5_count || 0;
     lines.push(`**${money(ctx.raw.last_sold_price)}** last sold on eBay (${shortDate(ctx.raw.last_sold_date)})` +
       (ctx.raw.avg_last_5 != null && n > 1 ? ` · avg of last ${n} ${money(ctx.raw.avg_last_5)}` : ""));
-    lines.push(`${ctx.raw.sale_count} raw sale${ctx.raw.sale_count === 1 ? "" : "s"} on record`);
-    const tcg = [mkt != null ? `${money(mkt)} NM Market` : null, low != null ? `${money(low)} Low` : null].filter(Boolean);
-    lines.push("TCGplayer: " + (noListing || !tcg.length ? "no price" : tcg.join(" · ")));
+    lines.push(`${count(ctx.raw.sale_count)} raw sale${ctx.raw.sale_count === 1 ? "" : "s"} on record`);
+    lines.push("TCGplayer: " + (noListing || !tcgBits().length ? "no price" : tcgBits().join(" · ")));
+  } else if (gradeLead) {
+    const g = gradeLead;
+    lines.push(`**${money(g.last_sold_price)}** last ${g.grader} ${g.grade} sale` +
+      (g.last_sold_date ? ` (${shortDate(g.last_sold_date)})` : "") +
+      (g.avg_last_5 != null && g.sale_count > 1 ? ` · avg of last 5 ${money(g.avg_last_5)}` : ""));
+    lines.push(`${count(g.sale_count)} ${g.grader} ${g.grade} sale${g.sale_count === 1 ? "" : "s"} on record · sold on eBay`);
+    lines.push("Raw: " + (noListing || !tcgBits().length ? "no TCGplayer price" : tcgBits().join(" · ")));
   } else if (noListing) {
     lines.push("No TCGplayer listing of its own — TCGplayer files it with the regular printing.");
   } else if (mkt != null || low != null) {
     const bits = [];
     if (mkt != null) bits.push(`**${money(mkt)}** NM Market`);
     if (low != null) bits.push(`${money(low)} Low`);
+    // A card that is PLAYED is bought four at a time.
+    const playset = play && mkt != null && BASE_RARITY.has(p.r) ? money(mkt * 4) : null;
+    if (playset) bits.push(`playset ${playset}`);
     lines.push(bits.join(" · "));
   } else {
     lines.push("No TCGplayer price yet.");
   }
   // The change line and the "Cheapest in 12 months" note are judgements ON
   // TCGplayer's price, so they are left off where that price isn't the market.
-  if (price && !noListing && !rawLead) {
+  if (price && !noListing && !rawLead && !gradeLead) {
     const d = price.market != null ? price.mktDelta : price.lowDelta;
     const ch = [["1d", "1D"], ["1w", "1W"], ["1m", "1M"], ["1y", "1Y"]]
       .map(([k, l]) => (d && d[k] != null ? `${l} ${pct(d[k])}` : null)).filter(Boolean);
     if (ch.length) lines.push(ch.join(" · "));
     if (price.standing) lines.push((price.standing.tone === "high" ? "↗ " : "↘ ") + price.standing.label);
   }
+  // The card's OTHER finish, priced, on the same reply: "and the foil?" is the
+  // one follow-up every price reply gets, and it cost a menu pick. Prices are
+  // the index's (as of its price date), like the versions menu's.
+  if (!rawLead && !gradeLead && !noListing) {
+    const others = p.f.map((x, i) => ({ x, i })).filter(({ x, i }) => i !== res.fi && !x[6] && (x[5] ?? x[4]) != null)
+      .map(({ x, i }) => `${R.finishLabel(p, i) || FIN_PRINTING[x[0]] || "Other"} **${money(x[5] ?? x[4])}**`);
+    if (others.length) lines.push(others.join(" · "));
+  }
 
   const fields = [];
   for (const g of ctx.graded || []) {
+    if (g === gradeLead) continue;   // already the headline
     fields.push({
       name: `${g.grader} ${g.grade}`,
       value: [
-        `Last **${money(g.last_sold_price)}**`,
+        `Last **${money(g.last_sold_price)}**` + (g.last_sold_date ? ` · ${shortDate(g.last_sold_date)}` : ""),
         g.avg_last_5 != null ? `Avg 5 ${money(g.avg_last_5)}` : null,
-        `${g.sale_count} sale${g.sale_count === 1 ? "" : "s"}`,
+        `${count(g.sale_count)} sale${g.sale_count === 1 ? "" : "s"}`,
       ].filter(Boolean).join("\n"),
       inline: true,
     });
@@ -382,6 +427,7 @@ export function versionOptions(R, res) {
 // ── sealed ───────────────────────────────────────────────────────────────
 export function sealedMessage(ctx) {
   const { R, res, price, view = "chart", range = DEFAULT_RANGE, origin } = ctx;
+  if (!ctx.today) ctx = { ...ctx, today: new Date().toISOString().slice(0, 10) };
   const it = res.item;
   const key = R.sealedKey(it);
   const lines = [[it.ty, it.sn].filter(Boolean).join(" · "), ""];
@@ -397,12 +443,24 @@ export function sealedMessage(ctx) {
     if (ch.length) lines.push(ch.join(" · "));
     if (price.standing) lines.push((price.standing.tone === "high" ? "↗ " : "↘ ") + price.standing.label);
   }
+  // A booster box is the one product somebody asks the price of while deciding
+  // whether to OPEN it, and the site's box EV is the answer — the same number
+  // /set shows, computed in the daily build.
+  const set = it.s != null ? R.sets[it.s] : null;
+  const isBox = it.ty === "Booster Boxes";
+  const ev = isBox && set && set.ev && set.ev.mkt != null ? set.ev.mkt : null;
+  if (ev != null) {
+    const ratio = mkt ? ev / mkt : null;
+    lines.push(`Box EV **${money(ev)}** at NM Market` +
+      (ratio != null ? ` — the cards inside are worth about **${Math.round(ratio * 100)}%** of the box${ratio >= 1 ? ", more than it costs" : ""}` : ""));
+  }
   const embed = {
     title: clip(it.n, 256),
     url: tcgUrl(it.pid, "Normal"),
     color: BRAND_COLOR,
     description: lines.join("\n"),
-    footer: { text: (price && price.date ? `TCGplayer prices as of ${shortDate(price.date)} · ` : "") + AFFILIATE_NOTE },
+    footer: { text: (price && price.date ? `TCGplayer prices as of ${shortDate(price.date)} · ` : "") +
+      (ev != null ? "box EV as Analytics » Expected Value computes it · " : "") + AFFILIATE_NOTE },
   };
   const date = ctx.chartDate || (price && price.date) || "";
   if (view === "card") { if (it.img) embed.image = { url: it.img }; }
@@ -426,7 +484,14 @@ export function sealedMessage(ctx) {
   const links = [{ type: 2, style: 5, label: "TCGplayer", url: tcgUrl(it.pid, "Normal") }];
   const az = amazonForSealed({ name: it.n, product_type: it.ty, set_id: null }, it.sn);
   if (az && az.url) links.push({ type: 2, style: 5, label: az.exact ? "Amazon" : "Find on Amazon", url: az.url });
-  components.push({ type: 1, components: links });
+  // A box or a pack of a booster set that is OUT can be opened right here
+  // (the site's simulator, at these prices); any set's overview is a click.
+  if (set && set.main) {
+    const out = !(set.rel && set.rel.lgs && set.rel.lgs > ctx.today);
+    if (out && (isBox || it.ty === "Booster Packs")) links.push({ type: 2, style: 2, label: isBox ? "Open a box" : "Open a pack", custom_id: packId(it.s, isBox ? 24 : 1) });
+    links.push({ type: 2, style: 2, label: "Set at a glance", custom_id: setId(it.s) });
+  }
+  components.push({ type: 1, components: links.slice(0, 5) });
   return { embeds: [embed], components };
 }
 
@@ -443,6 +508,7 @@ export function notFoundMessage(R, res, query, ids) {
   } else if (R.resolveSet && R.resolveSet(q) >= 0 && /\S/.test(q)) {
     lines.push(`For a whole set, try ${cmdMention(ids, "set")} \`${clip(q, 30)}\`.`);
   }
+  if (!sug.length && lines.length === 1) lines.push(`Card names work best on their own — \`mowgli\`, \`elsa enchanted\`, \`azurite box\`. ${cmdMention(ids, "help")} shows everything it can do.`);
   const embed = { title: "No match", color: 0x6b6480, description: lines.join("\n") };
   const components = [];
   if (sug.length) {
@@ -673,9 +739,10 @@ export function helpMessage(ids) {
         "No subtitle? You get the version people actually play — switch versions from the menu under any card.",
       fields: [
         { name: "Look something up", value: [
-          `${c("card")} \`mowgli\` — the card and what it's worth`,
-          `${c("price")} \`elsa psa 10\` — price chart, graded and eBay sales`,
-          `${c("set")} \`azurite\` — box price vs box EV, chase cards`,
+          `${c("card")} \`mowgli\` — the card: picture, text, stats, price and how much it's played`,
+          `${c("price")} \`mowgli foil\` — the price chart, recent changes, both finishes`,
+          `${c("price")} \`elsa psa 10\` — a slab: last sale, average of the last 5, and a chart of its sales`,
+          `${c("set")} \`azurite\` — box price vs box EV, chase cards, sealed prices`,
           `${c("new")} — the newest cards, as they're revealed`,
         ].join("\n") },
         { name: "Play", value: [

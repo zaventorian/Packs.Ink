@@ -177,8 +177,10 @@ if (!process.argv.slice(2).length) {
     const other = sel.components[0].options.find((o) => !o.default);
     if (other) await click({ custom_id: sel.components[0].custom_id, component_type: 3, values: [other.value] }, `pick "${other.label}" from the versions menu`);
   }
+  // The chart is uploaded with the reply now (attachment://…), so the direct
+  // fetch below only runs when a reply still links one.
   const img = first && first.body.embeds[0].image && first.body.embeds[0].image.url;
-  if (img) {
+  if (img && /^https?:/.test(img)) {
     const t = Date.now();
     const r = await fetch(img);
     const buf = Buffer.from(await r.arrayBuffer());
