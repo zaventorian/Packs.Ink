@@ -36,6 +36,12 @@ node scripts/build_dist.mjs && npx wrangler@4 deploy
 ```
 
 - `build_dist.mjs` is an explicit include-list → `dist/` (55 files). It refuses to build if the native/worker markers go missing.
+- **The deploy copy has its comments stripped (2026-09-30).** Comments were 28% of `Index.html` and 30% of `styles.css` (1.06 MB + 248 KB), and every visitor downloaded them. `scripts/strip_comments.mjs` removes them from `dist/index.html` and `dist/styles.css` only; the source files, the guards (which read the source) and the Discord bot's `sitecode.mjs` are untouched. Measured at brotli 5 (about what Cloudflare serves): the two files together go from 1.19 MB to 0.68 MB.
+  - **⚠ It uses a real tokenizer (acorn, vendored at `scripts/vendor/acorn.mjs` because `deploy.yml` runs no `npm ci`), never a regex.** The file is full of `//` inside URLs, regex literals and htm templates, and `// proxied to /img-proxy/*` reads as a block-comment opener — the `test_no_emoji.mjs` trap.
+  - **Line numbers are preserved** (a comment is replaced by the newlines it held), so a Sentry trace from prod still names the right source line.
+  - `stripIndexHtml` re-tokenizes its output and throws if the token stream changed; `build_dist.mjs` then ships that file unstripped with a `::warning::`. A bigger download, never a broken one.
+  - **Prod is therefore not byte-identical to the dev server's page.** When a bug reproduces only on prod, `node scripts/build_dist.mjs` and serve `dist/`.
+  - Guarded by `node scripts/test_strip_comments.mjs`, which replays it over the real files.
 - **A deploy is safe with respect to `.env`.** The runbook warns that Wrangler auto-loads it; verified via `wrangler deploy --dry-run` that the only binding is `env.ASSETS` — no vars, no secrets, and `dist/` contains no `.env` or service key. Re-check with `--dry-run` if `wrangler.toml` ever grows a `[vars]` block.
 - **Then purge the Cloudflare cache, or the HTML stays stale.** The deploy updated `sw.js` immediately but `/` kept serving the old document (`CF-Cache-Status: HIT`) with the previous `styles.css?v=`. Because the SPA fallback means every route and query-string variant caches its own copy of the HTML, a by-URL purge misses most of them — use **Purge Everything** (Caching → Configuration). Traffic is ~0.1 req/sec, so the origin-load cost is nil. To tell a stale edge from a stale origin, curl a path that cannot be cached: `curl -s https://packs.ink/__nope-$RANDOM | grep -o 'styles.css?v=[0-9]*'` hits the SPA fallback and shows what the Worker is really serving.
 - Rollback: grey-cloud `A packs.ink → 75.2.60.5` in the dashboard. Instant, no redeploy.
@@ -57,7 +63,7 @@ node scripts/build_dist.mjs && npx wrangler@4 deploy
 - **ETL** (`.github/workflows/etl.yml`):
   1. `scripts/etl_tcgcsv_daily.py` — TCGCSV → `prices_daily`, then refreshes the 4 raw-price matviews. Idempotent: skips fetch when today's snapshot is already loaded; exits 0 (not error) when TCGCSV hasn't published yet (>95% byte-identical to yesterday's).
   2. Daily Lorcast metadata refresh: 21:00 UTC (bumped weekly→daily so a pre-order set fills in within a day of each spoiler; deliberately NOT fired by `job=='both'`, which pings thrice daily).
-  3. **RETIRED 2026-06-30 — there is no graded ETL.** The third-party graded feed was discontinued; the legacy client paths were deleted 2026-07-29 and `graded_prices_daily` / `graded_prices_latest` were **DROPPED 2026-08-22** (migration 112; archive on Desktop). All graded value comes from the in-house `graded_sales` scrape (see "Graded pricing: legacy vs current"). `scripts/etl_tcgpricelookup_daily.py`, `scripts/graded_overrides.json`, and the `probe_/backfill_/cleanup_*graded*` scripts remain on disk for reference but are **invoked nowhere and cannot run** (the API is gone). Don't wire them back up; don't chase "graded is stale" alerts.
+  3. **RETIRED 2026-06-30 — there is no graded ETL.** The third-party graded feed was discontinued; the legacy client paths were deleted 2026-07-29 and `graded_prices_daily` / `graded_prices_latest` were **DROPPED 2026-08-22** (migration 112; archive on Desktop). All graded value comes from the in-house `graded_sales` scrape (see "Graded pricing: legacy vs current"). Its scripts (`etl_tcgpricelookup_daily.py`, `graded_overrides.json`, the `probe_/backfill_/cleanup_*graded*` helpers) were deleted 2026-07-29. A `scrape_stale` finding from the catalog watch is about the IN-HOUSE scrape and is worth chasing; see "Catalog watch".
 - **Card metadata**: Lorcast (`scripts/load_lorcast.py`).
 - **Sealed catalog**: `scripts/load_sealed_products.py`.
 - **MCP**: Supabase, Sentry and Gmail are **claude.ai account connectors** (claude.ai → Customize → Connectors), so they reach desktop, cloud and phone sessions alike — direct DB query/mutation access without paste-back. **There is no project `.mcp.json`**: its `supabase` and `netlify` entries and a local-scope `sentry` were removed 2026-09-27. The CLI copies' sign-ins had lapsed, so every session opened with "need authorizing" (and signed in, they'd double every tool); Netlify never had a token and stopped building the site 2026-09-05. Don't re-add them — git history has the old file. ⚠ `claude mcp list` does not show the connectors even with the app's environment stripped, so their absence there proves nothing; per the docs a terminal session on the claude.ai login lists them under `/mcp`.
@@ -1284,7 +1290,7 @@ ETL → Supabase → client fetches once → localStorage cache → render. **Ne
 
 The PWA works offline after one online visit. Layers:
 
-- **Shell**: SW precaches Index.html + vendored libs + styles; navigations fall back to cached Index.html. (Pre-existing.)
+- **Shell**: SW precaches `/` + vendored libs + styles; navigations fall back to the cached shell. `'/Index.html'` is NOT in `CORE_ASSETS` since 2026-09-30: on Cloudflare it is a second URL answering with the same 1 MB shell, so every install downloaded it twice. The navigation handler still writes and reads that key and falls back to `/`.
 - **Catalog**: IndexedDB (see "Client cache rules") — Cards browse, search (incl. body text), and cached prices render offline. Boot-error screen shows an offline-specific message (`isOnline` in App) when there's no catalog at all.
 - **User data mirrors**: every successful fetch of collection / sealed(+meta) / pack-arts / graded items+goals / graded_prices_latest / own decks (incl. `deck_cards`, decoded) writes an IDB mirror (`offlineMirrorWrite("<what>:<uid>")`); the same fetch's failure path hydrates from the mirror. Decks mirror at `refreshDecks` covers both the list and opening a deck (DeckEditor reads from `decks` state). Offline is READ-ONLY: mutators fail → existing rollback + an offline-aware toast. Screener graded ownership + home portfolio chart intentionally NOT mirrored (market surfaces, online-only).
 - **Images**: SW caches every `destination === "image"` request (plus lorcast.io) into **`packsink-img-v1`** — a cache that SURVIVES deploys (activate purge keeps it; so does **`packsink-scan-v1`**, the scanner's models, wasm and indexes — see the scanner section). Two critical gotchas fixed 2026-07: (1) opaque (no-cors cross-origin) responses have `res.ok === false` — the old `if (res.ok)` guard meant NO image was ever cached; use `cacheable(res)` (`ok || type === 'opaque'`). (2) The image branch runs BEFORE the data-API skip so Supabase-storage prestaged art is cacheable; PostgREST responses are never destination "image" so data stays uncached. Catalog `img_normal` URLs are same-origin `/img-proxy/...` paths, so cache keys line up between browsing, the downloader, and tile requests.
@@ -2827,6 +2833,9 @@ default, guarded by `python scripts/test_import_duels_art.py`) upgrades only row
 | `missing_set` | Lorcast published a set id we've never seen — **not the same as a set we don't have**, see below |
 | `review_due` | a **scheduled review** came due — see below |
 | `pop_stale` | **PSA population data is over a week old** — see below |
+| `scrape_stale` | **a feed refreshed from Zaven's own machine has gone quiet** (2026-09-30): `graded_sales` with nothing scraped for 3 days, or no tournament newer than 14 days. `STALE_FEEDS` in `reconcile_catalog.py`; the key carries the date, like `pop_stale` |
+
+**⚠ A red run cannot get redder, so new findings are called out separately (2026-09-30).** The watch sat red from 9/24 to 9/30 on the same twelve findings, and a thirteenth would have sent the identical failure email. Each run now restores the previous run's report from `actions/cache` (`--prev`), prints a "NEW since the last run" block, rewrites the body of ONE tracking issue ("Catalog watch: open findings") with the whole open list, and **comments on it only when something is new** — GitHub emails that comment, with the finding's name in it. No previous report (first run, evicted cache) means nothing is called new. The calendar watch is its own job in the same workflow, so a red catalog job no longer hides it.
 
 ### ⚠ `missing_set` is an ID test, and a set id is not a set (2026-09-13)
 
@@ -5007,8 +5016,11 @@ migration 130 — retuning means a deliberate edit in both places.
   a real mover its slot — and logs each skip with its last-priced date. The test reads the
   newest price_movers migration and fails if `WINDOW_DAYS` drifts from its guard, and runs
   `main()` end to end against the pre-172 Cruella row.
-- **It has never posted** (as of 2026-09-27): the `DISCORD_WEBHOOK_URL` repo secret was
-  never created, so every run ends at the clean exit above.
+- **It has never posted, and its schedule was removed 2026-09-30**: the `DISCORD_WEBHOOK_URL`
+  repo secret was never created, so three weeks of daily runs each ended at the clean exit
+  above. The workflow is manual-only now; `discord_reports.py` still imports this module.
+  To use a plain webhook after all, create the secret and restore the cron (the workflow's
+  header says how).
 
 Guarded by `python scripts/test_discord_digest.py` (54 checks), which the workflow runs
 BEFORE the digest for the same reason `catalog-watch.yml` tests its ack layer first: a
@@ -5414,11 +5426,11 @@ Epics and promos "(foil)". Mocked up, then built. Guarded by
 
 ## The guards RUN now — `.github/workflows/guards.yml` (2026-09-21)
 
-The repo carries **52 guard tests** (35 `scripts/test_*.mjs`, 17 `scripts/test_*.py` +
-`scripts/elo/test_*.py`) and until this workflow **nothing executed a single one of them**
+The repo carries **79 guard tests** as of 2026-09-30 (55 `scripts/test_*.mjs`, 24 `scripts/test_*.py` +
+`scripts/elo/test_*.py`; the workflow globs them, so a new one runs without an edit) and until this workflow **nothing executed a single one of them**
 — every one was "run it when you remember", which for a file this size means a silent
 regression ships between the day a guard is written and the day someone thinks to run it.
-It runs all 52 on every push and PR.
+It runs them on every PR and on every push to `main` (a PR commit used to run the suite twice).
 
 - **All 52 were green when it landed**, so it starts from a true baseline rather than
   normalising a red build — which is the failure this repo already names elsewhere ("a red
@@ -5460,6 +5472,16 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 `permissions: contents: read` is pinned at the workflow level — required when repo workflow permissions setting is anything other than "Read and write".
 
 **Phantom-spike smoothing ETL** (`smooth_low_prices.py`, added 2026-05-30) is chained `needs: prices` after the TCGCSV daily ETL. See "Collection Value chart: phantom-spike smoothing" for details. Idempotent; safe to fire alongside cron-job.org + GH safety-net pings.
+
+### What fails loudly now (2026-09-30)
+
+An audit found several failures that ended a green run. Each now speaks:
+
+- **Every job has `timeout-minutes`.** A hung TCGCSV or Lorcast call used to hold the `etl` concurrency group for GitHub's six-hour default and queue every later ping behind it.
+- **`synthetic_monitor.py` checks five more relations are populated** (`POPULATED`: sealed prices, graded rollup, market index, rarity averages, events), each against a floor near half its size. The market index once sat empty for three weeks with every read a 500 and nothing red.
+- **`discord_reports.py` exits 1 when EVERY owed post failed** (a bad token), and warns when some did. One channel refusing is that server's business and stays on `/reports status`.
+- **A short event pull turns `discover_scs.yml` red at its LAST step** (`partial_pull` output), so the roster and history steps after discovery still run.
+- **The Discord bot skips a rebuild that would change nothing**: after an ETL run, a `gate` job asks the live Worker for its `priceDate` and `built`, and skips when it has today's prices and was built under six hours ago. The daily schedule and a manual run always build; any doubt builds.
 
 ### Auth / grants
 

@@ -49,10 +49,54 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  bot:
-    # An ETL that failed changed nothing worth a deploy.
+  # The ETL workflow finishes about eight times a day (prices, retries, two
+  # self-heal sweeps) and prices change once. Each of those used to rebuild the
+  # whole index, bake ~5,800 tiles and redeploy. After an ETL run this asks the
+  # live Worker what it carries, and skips when it already has today's prices
+  # and was built in the last six hours. The daily schedule and a manual run
+  # always build, and any doubt (Worker unreachable, odd answer) builds.
+  gate:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.g.outputs.go }}
+    steps:
+      - id: g
+        env:
+          EVENT: ${{ github.event_name }}
+          WORKER: https://packs-ink-discord.packs-ink-app.workers.dev/
+          SB: https://umwqowkiatjjltologrd.supabase.co/rest/v1/card_prices_latest?select=price_date&order=price_date.desc&limit=1
+          # The site's publishable key: the same one every browser is sent.
+          KEY: sb_publishable_B2qq0Dsfij-7X2CZSxl2uQ_7PWc6Ob0
+        run: |
+          go=true
+          if [ "$EVENT" = "workflow_run" ]; then
+            have=$(curl -fsS --max-time 20 "$WORKER" || true)
+            live=$(curl -fsS --max-time 20 -H "apikey: $KEY" "$SB" || true)
+            verdict=$(HAVE="$have" LIVE="$live" python3 - <<'PY'
+          import json, os, datetime as dt
+          try:
+              have = json.loads(os.environ["HAVE"]); live = json.loads(os.environ["LIVE"])
+              built = dt.datetime.fromisoformat(have["built"].replace("Z", "+00:00"))
+              age_h = (dt.datetime.now(dt.timezone.utc) - built).total_seconds() / 3600
+              same = have["priceDate"] == live[0]["price_date"]
+              print("skip" if (same and 0 <= age_h < 6) else "build",
+                    f"(worker has {have['priceDate']}, built {age_h:.1f}h ago; live {live[0]['price_date']})")
+          except Exception as e:
+              print("build (could not compare:", type(e).__name__, ")")
+          PY
+            )
+            echo "$verdict"
+            case "$verdict" in skip*) go=false ;; esac
+          fi
+          echo "go=$go" >> "$GITHUB_OUTPUT"
+
+  bot:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     defaults:
       run:
         working-directory: discord

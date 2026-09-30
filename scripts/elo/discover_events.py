@@ -50,7 +50,7 @@ Usage:
     python discover_events.py --no-prune       # upsert only
 """
 from __future__ import annotations
-import argparse, datetime, json, sys, time, urllib.request, urllib.error
+import argparse, datetime, json, os, sys, time, urllib.request, urllib.error
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -311,18 +311,23 @@ def add_tracked_store_feeds(raw: list[dict]) -> list[dict]:
     return raw + missed
 
 
-def prune(run_start_iso: str, pulled: int, before_upcoming: int) -> None:
+def prune(run_start_iso: str, pulled: int, before_upcoming: int) -> bool:
     """Delete upcoming rows RPH has stopped listing (cancelled/removed) plus
     long-past rows. Guarded twice: a partial pull must never mass-delete live
     events, and a row has to go unseen for PRUNE_GRACE_HOURS, so one scan's miss
-    can't delete it."""
+    can't delete it.
+
+    Returns False when the pull looked PARTIAL and the prune was skipped, so
+    main() can end the run red: the rows it did pull are already written, but a
+    short scan on a green run is how the finder goes stale with nobody told."""
     if pulled < MIN_PULL_ABSOLUTE:
-        print(f"  ! prune SKIPPED — pull of {pulled} is below the {MIN_PULL_ABSOLUTE} floor")
-        return
+        print(f"::error::Event pull of {pulled} is below the {MIN_PULL_ABSOLUTE} floor; "
+              f"prune skipped and this pull treated as partial.")
+        return False
     if before_upcoming and pulled < before_upcoming * MIN_PULL_RATIO:
-        print(f"  ! prune SKIPPED — pulled {pulled} vs {before_upcoming} upcoming on file "
-              f"(< {MIN_PULL_RATIO:.0%}); treating this pull as partial")
-        return
+        print(f"::error::Pulled {pulled} events vs {before_upcoming} upcoming on file "
+              f"(< {MIN_PULL_RATIO:.0%}); prune skipped and this pull treated as partial.")
+        return False
 
     now = datetime.datetime.now(datetime.timezone.utc)
     unseen_since = (datetime.datetime.fromisoformat(run_start_iso)
@@ -447,11 +452,22 @@ def main() -> None:
               f"(the Elo pipeline reads that table)")
         upsert_set_championships(sc_rows)
 
+    complete = True
     if not args.no_prune:
-        prune(run_start, len(rows), before_upcoming)
+        complete = prune(run_start, len(rows), before_upcoming) is not False
 
     print(f"\nDone — {len(rows)} events in public.lorcana_events "
           f"({kinds['sc']} SC / {kinds['prerelease']} prerelease / {kinds['other']} other)")
+    if not complete:
+        # After the upsert on purpose: what was pulled is saved either way. In
+        # CI the job's LAST step turns the run red (the workflow reads this
+        # output), so the roster and history steps after this one still run.
+        out = os.environ.get("GITHUB_OUTPUT")
+        if out:
+            with open(out, "a", encoding="utf-8") as fh:
+                fh.write("partial_pull=true\n")
+        else:
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

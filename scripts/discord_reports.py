@@ -860,6 +860,16 @@ def run(args, sb=None, session=requests, now=None):
             print(f"  FAILED {where}: {reason}")
         time.sleep(0.4)   # well under Discord's per-route rate limits
     print(f"Done: {posted} posted, {failed} failed, {len(owed) - posted - failed} skipped.")
+    if failed:
+        # One channel refusing is that server's business (the bot was removed,
+        # the channel deleted) and is already on /reports status. EVERY post
+        # failing is ours - a bad token, Discord refusing the app - and used to
+        # end a green run with nobody receiving a report.
+        print(f"::warning::{failed} Discord report post(s) failed; /reports status in that "
+              f"server shows why.")
+        if not posted:
+            print("::error::Every report post failed. Check DISCORD_BOT_TOKEN and the app's access.")
+            return 1
     return 0
 
 
