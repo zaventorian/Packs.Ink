@@ -77,6 +77,14 @@ Converge = move `cards` + `sealed_products` to Lorcast's id, move `tcgplayer_gro
 `retire_prestaged.py` (dry, then `--commit`), then delete the placeholder set row. Always prestage
 into Lorcast's id once it exists.
 
+⚠ **The gallery's card DATA is readable even when its IMAGES are blocked.** `ravensburger.cloud`
+(the image host) has been unreachable from cloud sessions, but `cards.disneylorcana.com` answers, and
+`import_official_set.parse_card(html, cn, setnum)` gives the official English name, version, text and
+flavor. Before committing a batch, check it against the gallery (every translated card especially) —
+it caught 7 wrong names/texts on 2026-09-29 (Madam Mim, Flippant Taunt, Arthur - Jousting Knight's
+VICTORY PURSE, Lady Tremaine's HARSH CRITIQUE). Gallery text uses Title Case ability names and blank
+lines between abilities; keep our CAPS + single newline convention and only take the words.
+
 ⚠ `Supabase.update(table, match, patch)` takes `match` as PLAIN values (`{"id": "crd_x"}`) and
 adds `eq.` itself. Passing `{"id": "eq.crd_x"}` matches nothing and returns no error.
 
