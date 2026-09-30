@@ -2710,6 +2710,12 @@ so #7 there is five different cards.
   SC pair (Maleficent - Monstrous Dragon), unpriced synthetic rows from `supabase/160` labelled via
   `REGIONAL_EXCLUSIVE_LABEL`; #63 JP Buzz IS on TCGplayer (714954), so it keeps its price and gets
   its label from `PRICED_REGIONAL_LABEL_BY_ID`.
+- **P4 #17 is Japan's Hyperia City box promo** (2026-09-30): Minnie Mouse - Urban Visionary, printed
+  `17/P4 · JA · 14`, packed in Takara Tomy's booster box. The English buy-a-box printing is a
+  different number, `4/RPH` (set "Ravensburger Play Hub Promos"). The row is the prestage
+  `crd_prestage_p4_17` with the JP card as its own art, labelled through `REGIONAL_EXCLUSIVE_LABEL`.
+  The ink drop counter cards in the same box are NOT tracked: they carry no collector number, say
+  on their face that they are not cards, and come in English booster packs too.
 - **A single-printing promo gets exactly ONE row** — one add box — whatever emitted it.
   `collapsePromoPrintings` runs last in `transformSupabaseData` over every `UNIFIED_TILE_SETS` set and
   keeps the priced row, then foil over Normal. Reported 2026-09-18: unpriced PD1 cards rendered a
