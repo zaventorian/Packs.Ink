@@ -3569,6 +3569,37 @@ The avatar gate is one-shot — closing the picker once flips `packsink:avatarPr
 - **No "Lorcana Market" h1 or "Click a card for details" subtitle** — both removed 2026-05-26. The search bar sits directly under the top nav. The logo IS the home click target (the title was redundant).
 - **Tournament Results panel: `.ht-place` is `white-space: nowrap`** and `.home-tourney-deck` grid is `auto minmax(0,1fr) auto` (was `28px 1fr auto`). The 28px column wasn't wide enough for `"Top 4"` / `"Top 8"` — the place text wrapped to two lines, doubling row height on the narrow signed-in mobile home grid. Auto-width + nowrap keeps each row on a single line; player column's `minmax(0,1fr)` still shrinks with ellipsis when needed.
 
+### Recent set EV — one card per set (2026-09-30)
+
+Zaven, off his phone: *"Reimagine this section, its ugly."* It was a five-column table
+that stacked into orphaned numbers under misaligned headers, with four amber Amazon pills
+down the right edge and two native checkboxes (`<$1→$0`). `HomeEvStrip` now draws one
+card per set: name and verdict (`vs box −47%`) on top, then EV and the two buy buttons,
+with a meter along the card's bottom edge (EV against the box; green past a tick when a
+set is +EV). The title takes the Toolbox's Cinzel gold, and the toggles are chips
+(**No bulk** / **No chase**, same semantics as before) set in Cinzel capitals to match
+it. Each set's official wordmark sits left of its name (Zaven, same day).
+
+- **⚠ The box price lives INSIDE TCGplayer's own button** (`$190.00 TCGplayer ↗`), with
+  the number-less Amazon pill beside it — see the Amazon section for why that satisfies
+  the "Amazon must never read as a caption on a price" rule.
+- **⚠ Every layout switch is a CONTAINER query on the panel (`hev`), never a media
+  query**, for the reason the Toolbox grid uses auto-fit: which rail the panel lands in is
+  decided by the home layout. Measured by forcing the panel from 220px to 900px, nothing
+  overflows or ellipses: under ~312px of content (the 240px rail, phones under ~345px) a
+  card goes to three lines — name, EV + verdict, buttons — and from 620px it goes two
+  across. ⚠ Both numbers were measured, not picked: at 320px the one-line foot's Amazon
+  pill overflowed by 2px, and two across below 620 overflows every card.
+- A container query cannot style the container itself — only descendants — so the
+  panel's own padding does not change with width.
+- It is ~50% taller than the table on a phone (320px against ~202px for four sets). That
+  was the price of buttons that look like buttons; the meter costs no height.
+- **⚠ The set logo sits in a FIXED slot** (`.home-ev-logo-slot`, 56x28, 44x24 in the
+  narrow layout), not sized by height: the wordmarks run from 1.25:1 (Whispers in the
+  Well) to 2.67:1 (Winterspell), so a shared height starts every name at a different x.
+  A set with no logo yet (the weeks after a release, before the next brand-bundle drop)
+  keeps an EMPTY slot while any other row has one, so the names still line up.
+
 ### Configurable layout (2026-08-04)
 
 Every home section except the movers stack is a **user-arrangeable panel**: show/hide, move between columns, reorder within a column. Edited from the settings popover ("Home page layout"), persisted to `localStorage["packsink:homeLayout"]` as an ordered `[{key, col, on}]`.
@@ -4453,7 +4484,7 @@ non-compliant one.
 - **What KEEPS its Amazon twin**, every one of them sealed or product: the Sealed detail
   modal, Sealed collection tiles, the Screener's SEALED rows (`isSealedRow`-gated), the Price
   Graphing single-product preview (sealed only), both EV box prices (`.ev-box-amzn`,
-  `.home-ev-strip-amzn`), the home "Lorcana on Amazon" shelf and `/gear`. `.td-amzn-link`,
+  `.home-ev-amzn`), the home "Lorcana on Amazon" shelf and `/gear`. `.td-amzn-link`,
   `.gc-card-buy--amazon` and `.mt-amzn-link` are still live for exactly those — don't sweep
   them as orphans.
   **Deliberately NOT twinned:** a *price* that merely happens to be a TCGplayer link (Cards
@@ -4666,13 +4697,15 @@ caption ON that price, i.e. as though the $ were Amazon's.
   tiles and the calendar's product links; `AmazonBuyLink` (sealed modal) gained the
   cart and the same amber; the icon-only twins (Screener sealed rows, movers-tile
   corner) take the amber so a cart is never mistaken for the TCGplayer link.
-- **The price says whose it is.** Column headers read "Box · TCGplayer" (home strip
-  + Analytics EV), the price link carries a small ↗, and the sealed tile's chip reads
+- **The price says whose it is.** The Analytics EV column header reads "Box ·
+  TCGplayer", the price link carries a small ↗, and the sealed tile's chip reads
   "TCGplayer ↗" (was "TCG ↗").
-- **⚠ On the home EV strip the pill is its OWN column, after "vs box"** — never in
-  the price cell. Below 640px (and in the 240px left rail) the row stacks: set name +
-  pill on line one, the three numbers on line two; five columns left a phone's set
-  name 17px wide.
+- **⚠ On the home Recent set EV card the box price lives INSIDE TCGplayer's own
+  button** (`.home-ev-tcg`: "$179.99 TCGplayer ↗"), and the Amazon pill sits
+  beside it carrying no number. That is a stronger answer than the old separate
+  column: the price is enclosed in a button that names its shop, so there is no
+  neighbouring number for the Amazon pill to be read as a caption on. See
+  "Recent set EV" under Home page surface.
 
 ### Disclosure
 

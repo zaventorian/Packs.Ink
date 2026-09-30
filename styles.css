@@ -3724,64 +3724,120 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .sc-modal-cta:hover{filter:brightness(1.07);}
 .sc-modal-link{font-size:12px;color:var(--accent);text-decoration:none;font-weight:600;}
 .sc-modal-link:hover{text-decoration:underline;}
-.home-ev-strip{width:100%;box-sizing:border-box;
+/* ── Home "Recent set EV" (reimagined 2026-09-30) ──────────────────────────
+   One card per set, in the Toolbox's chip language right above it: a verdict
+   in the corner, a meter of EV against the box, then the two buy buttons.
+   ⚠ The panel is a size CONTAINER, and every layout switch below keys on the
+   panel's OWN width rather than the viewport — the same reason the Toolbox
+   grid uses auto-fit: where this panel lands (240px left rail, 360px right
+   rail, a phone's full width, the wide main column) is decided by the home
+   layout, which no media query can see. */
+.home-ev-strip{width:100%;box-sizing:border-box;container:hev / inline-size;
   background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;
-  padding:8px 10px;font-size:11px;}
-.home-ev-strip-head{display:flex;justify-content:space-between;align-items:center;
-  gap:10px;margin-bottom:4px;}
-.home-ev-strip-title{font-size:10px;font-weight:700;letter-spacing:0.5px;
+  padding:8px 8px 9px;}
+.home-ev-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;
+  gap:6px 10px;margin:0 0 7px;}
+.home-ev-titlewrap{display:flex;align-items:center;gap:6px;min-width:0;}
+.home-ev-strip .home-ev-title{margin:0;white-space:nowrap;}
+/* The two toggles are chips, not native checkboxes: they change what the EV
+   counts, and a 11px checkbox beside cryptic "<$1→$0" read as debris. Set in
+   Cinzel capitals like the panel's own title and the movers picker's chips,
+   so the head of the panel reads as one display line. */
+.home-ev-opts{display:flex;gap:5px;}
+.home-ev-opt{font:inherit;font-family:'Cinzel',serif;font-size:10px;font-weight:700;
+  line-height:1.3;letter-spacing:0.08em;text-transform:uppercase;
+  padding:3px 9px;border-radius:999px;cursor:pointer;white-space:nowrap;
+  border:1px solid var(--border);background:var(--btn-bg);color:var(--text-muted);
+  transition:border-color .1s,background .1s,color .1s;}
+.home-ev-opt:hover{border-color:var(--border-accent);color:var(--accent);}
+.home-ev-opt.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent);}
+.home-ev-list{list-style:none;margin:0;padding:0;display:grid;gap:5px;}
+/* A card is two flex lines — name | verdict over EV | buy buttons. The narrow
+   layout below dissolves both lines (display:contents) and deals the same four
+   pieces into a grid instead, so it needs no second copy of the markup.
+   ⚠ Not a 2x2 grid at every width: the two lines' right-hand items would then
+   share one column track, and the buy buttons' width squeezed every set name
+   down to "Rise of the …". */
+.home-ev-row{position:relative;overflow:hidden;min-width:0;
+  display:flex;flex-direction:column;gap:6px;
+  padding:7px 10px 10px;border-radius:8px;
+  background:var(--bg-card);border:1px solid var(--border);}
+.home-ev-top,.home-ev-foot{display:flex;align-items:center;justify-content:space-between;
+  gap:10px;min-width:0;}
+.home-ev-top{align-items:center;}
+.home-ev-name{grid-area:name;display:flex;align-items:center;min-width:0;
+  font-size:13px;font-weight:700;color:var(--text);line-height:1.25;}
+.home-ev-name-txt{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* A fixed slot, not a height-sized logo: the wordmarks run from 1.25:1
+   (Whispers in the Well) to 2.67:1 (Winterspell), so a shared height would
+   start every name at a different x. Contained in the same box, each keeps
+   its own shape and the names line up. At this size a wordmark is a
+   recognisable SHAPE rather than readable type, which is how players know a
+   set; the name beside it carries the words. The narrow layout shrinks the
+   slot, where "Whispers in the Well" needs the width. */
+.home-ev-logo-slot{flex:0 0 56px;width:56px;height:28px;margin-right:8px;
+  display:flex;align-items:center;justify-content:center;}
+.home-ev-logo-slot .set-logo.home-ev-logo{width:100%;height:100%;object-fit:contain;}
+.home-ev-verdict{grid-area:verdict;justify-self:end;display:inline-flex;align-items:baseline;gap:5px;
+  font-size:15px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1;white-space:nowrap;}
+.home-ev-verdict-lbl{font-size:9px;font-weight:700;letter-spacing:0.5px;
   text-transform:uppercase;color:var(--text-muted);}
-.home-ev-strip-toggles{display:flex;gap:10px;font-size:10px;color:var(--text-muted);}
-.home-ev-strip-toggles label{display:flex;align-items:center;gap:3px;cursor:pointer;}
-.home-ev-strip-toggles input{margin:0;width:11px;height:11px;accent-color:var(--accent);}
-.home-ev-strip-table{display:flex;flex-direction:column;gap:1px;}
-.home-ev-strip-row{display:grid;grid-template-columns:minmax(0,1fr) 62px 96px 42px 76px;
-  gap:6px;align-items:center;padding:3px 4px;border-radius:4px;}
-.home-ev-strip-head-row{font-size:9px;font-weight:700;letter-spacing:0.4px;
+/* The meter runs along the card's bottom edge, so it costs no height and every
+   card's bar is the same length — the rows compare at a glance. Track = the
+   bigger of EV and the box, fill = EV: below the box it is a red bar short of
+   the end, above it a green one past a tick at the box price. */
+.home-ev-meter{position:absolute;left:0;right:0;bottom:0;height:4px;
+  background:color-mix(in srgb,var(--text-muted) 22%,transparent);}
+.home-ev-fill{position:absolute;left:0;top:0;bottom:0;border-radius:0 999px 999px 0;
+  background:var(--text-muted);}
+.home-ev-row--red .home-ev-fill{background:linear-gradient(90deg,
+  color-mix(in srgb,var(--red) 35%,transparent),var(--red));}
+.home-ev-row--green .home-ev-fill{background:linear-gradient(90deg,
+  color-mix(in srgb,var(--green) 35%,transparent),var(--green));}
+.home-ev-tick{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;
+  background:var(--text);}
+.home-ev-ev{grid-area:ev;display:inline-flex;align-items:baseline;gap:5px;white-space:nowrap;
+  font-size:13px;font-weight:700;color:var(--text);font-variant-numeric:tabular-nums;}
+.home-ev-lbl{font-size:9px;font-weight:700;letter-spacing:0.5px;
   text-transform:uppercase;color:var(--text-muted);}
-.home-ev-strip-row:not(.home-ev-strip-head-row):hover{background:var(--bg-card);}
-.home-ev-strip-row .num{text-align:right;font-variant-numeric:tabular-nums;}
-.home-ev-strip-set{font-weight:600;color:var(--text);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.home-ev-strip-box-link{color:var(--text);text-decoration:none;font-weight:600;}
-.home-ev-strip-box{white-space:nowrap;}
-.home-ev-strip-diff{font-weight:700;}
-.home-ev-strip-box-link:hover{color:var(--accent);}
-.home-ev-strip-box-ext{font-size:8.5px;opacity:0.55;margin-left:1px;}
-.home-ev-strip-amzn-cell{display:flex;justify-content:flex-end;}
-.home-ev-strip-head-row > div{white-space:nowrap;}
-/* Five columns leave a phone's set name ~17px. Below 640px the row takes the
-   left rail's stacked shape: set name + Amazon pill on line one, the three
-   numbers under their headers on line two. */
-@media (max-width:640px){
-  .home-ev-strip-row{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:1px;}
-  .home-ev-strip-set{grid-row:1;grid-column:1/3;}
-  .home-ev-strip-amzn-cell{grid-row:1;grid-column:3;}
-  .home-ev-strip-head-row > div:first-child,
-  .home-ev-strip-head-row .home-ev-strip-amzn-cell{display:none;}
+.home-ev-buy{grid-area:buy;justify-self:end;display:flex;align-items:center;gap:5px;min-width:0;}
+.home-ev-buy > a,.home-ev-buy > .home-ev-tcg{height:22px;box-sizing:border-box;}
+/* TCGplayer's buy button carries its OWN price, so the number can only be
+   read as TCGplayer's; the Amazon pill beside it carries none, by design. */
+.home-ev-tcg{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;
+  padding:0 8px;border-radius:999px;text-decoration:none;
+  border:1px solid var(--border);background:var(--bg-surface);color:var(--text);
+  transition:border-color .1s,background .1s;}
+a.home-ev-tcg:hover{border-color:var(--border-accent);background:var(--accent-glow);}
+.home-ev-tcg-px{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;}
+.home-ev-tcg-src{font-size:9.5px;font-weight:600;color:var(--text-muted);}
+.home-ev-tcg-ext{font-size:9px;opacity:0.6;line-height:0;}
+.home-ev-nobox{font-size:11px;}
+/* Two across once the panel is wide enough for two cards that each still fit
+   EV and both buttons on one line (~282px inside a card) — the main column,
+   or a phone held sideways. Below 620px two cards would each overflow. */
+@container hev (min-width:620px){
+  .home-ev-list{grid-template-columns:repeat(2,minmax(0,1fr));}
 }
-/* ⚠ In the 240px left rail the four-column row gives the set name ~40px, so
-   the name takes a line of its own and the three numbers sit under the
-   headers. DESKTOP ONLY: below 1100px this panel spans the full column
-   (see the width override in the stacked-rail block), where the stacked shape
-   doubled every row for nothing — "too spread out" (2026-09-24). */
-@media (min-width:1101px){
-  .home-left-col .home-ev-strip-row{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:1px;}
-  .home-left-col .home-ev-strip-set{grid-column:1/-1;}
-  .home-left-col .home-ev-strip-head-row > div:first-child{display:none;}
-  .home-left-col .home-ev-strip-box{white-space:normal;}
-  /* The Amazon pill rides the set-name line, far right, rather than costing
-     each set a third line. */
-  .home-left-col .home-ev-strip-set{grid-row:1;grid-column:1/3;}
-  .home-left-col .home-ev-strip-amzn-cell{grid-row:1;grid-column:3;}
-  .home-left-col .home-ev-strip-head-row .home-ev-strip-amzn-cell{display:none;}
+/* ⚠ Under ~312px of panel (the 240px desktop rail, a phone narrower than
+   ~345px) a card cannot hold EV and both buy buttons on one line — measured,
+   the Amazon pill overflowed by 2px at 320px. The name takes the whole first
+   line (no ellipsis on "Whispers in the Well"), EV and the verdict share the
+   second, and the buttons split the third. */
+@container hev (max-width:311px){
+  .home-ev-row{display:grid;grid-template-columns:minmax(0,1fr) auto;
+    grid-template-areas:"name name" "ev verdict" "buy buy";align-items:center;
+    padding:7px 8px 10px;gap:5px 8px;}
+  .home-ev-top,.home-ev-foot{display:contents;}
+  .home-ev-buy{justify-self:stretch;}
+  .home-ev-tcg{flex:1 1 auto;justify-content:center;padding:0 7px;}
+  /* The two ↗ are the ~20px the buy line is short by; both are plainly
+     buttons without them, and each keeps its shop's name. */
+  .home-ev-tcg-ext,.home-ev-amzn .amz-btn-ext{display:none;}
+  .home-ev-verdict{font-size:14px;}
+  .home-ev-opt{padding:3px 7px;font-size:9.5px;letter-spacing:0.06em;}
+  .home-ev-logo-slot{flex-basis:44px;width:44px;height:24px;margin-right:7px;}
 }
-/* The title and its two checkboxes do not fit one 222px line, and a flex row
-   that cannot fit breaks INSIDE the words — "RECENT SET / EV" and "No /
-   chase". Let the toggles drop to their own line instead, and keep both of
-   them whole. It self-adjusts: where the three fit, nothing wraps. */
-.home-left-col .home-ev-strip-head{flex-wrap:wrap;gap:4px 10px;}
-.home-left-col .home-ev-strip-toggles label{white-space:nowrap;}
 
 /* Following feed — left column above the first banner. Single-line rows:
    green/yellow dot (new vs updated) · deck name · creator + time · ink icons.
