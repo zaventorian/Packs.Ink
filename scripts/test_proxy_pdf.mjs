@@ -281,8 +281,98 @@ PROXY_BLANK_TILES.forEach((name, t) => {
   }
   ok(band > 500, `${name}: carries a frame-coloured border band for the standard-frame check`);
 });
-ok(!/(?<!saved.)face === "text"|drawProxyTextFace|parseProxyRules/.test(src),
-   "the hand-drawn text face is gone (a stored \"text\" pref maps to no-art)");
+
+// ── Printer-friendly face ──────────────────────────────────────────────────────────
+// The card redrawn in outline. parseProxyRules decides what prints bold
+// (keywords), in a tag (ABILITY NAMES), italic (reminder text) and as a symbol.
+// Its heuristics are the fiddly part, and a wrong call is silent: a whole
+// card's rules in one voice, or a sentence opening "A character…" rendered as
+// an ability name.
+console.log("\nprinter-friendly face: rules-text voices");
+const { parseProxyRules } = new Function(
+  grab("const PROXY_KEYWORD_LINE_RE =", ";\n") + grab("const parseProxyRules = (text) => {", "\n};")
+    + "\nreturn {parseProxyRules};",
+)();
+// Flatten one parsed line to a readable string: **bold**, «NAME», _italic_, [G]lyph.
+const show = (pieces) => pieces.map(p => p.g ? "[" + p.g + "]" : p.n ? "«" + p.t + "»"
+  : p.b ? "**" + p.t + "**" : p.i ? "_" + p.t + "_" : p.t).join("");
+const genie = parseProxyRules(
+  "Shift 6 (You may pay 6 {I} to play this on top of one of your characters named Genie.)\n"
+  + "Evasive (Only characters with Evasive can challenge this character.)\n"
+  + "PHENOMENAL COSMIC POWER! Whenever this character quests, you may play an action with cost 5 or less for free.");
+ok(genie.length === 3, "one paragraph per line of card text");
+ok(show(genie[0]) === "**Shift 6** _(You may pay 6 _[I]_ to play this on top of one of your characters named Genie.)_",
+   "a keyword is bold up to its reminder, which is italic with the symbol inline");
+ok(show(genie[2]).startsWith("«PHENOMENAL COSMIC POWER!» Whenever"), "an all-caps ability name goes in a tag");
+ok(show(parseProxyRules("(A character with cost 2 or more can {E} to sing this song for free.)\nLook at the top 4 cards.")[0])
+   === "_(A character with cost 2 or more can _[E]_ to sing this song for free.)_",
+   "a song's reminder line is all italic — '(A' is not an ability name");
+ok(!/\*\*|«/.test(show(parseProxyRules("A character with Bodyguard may enter play exerted.")[0])),
+   "a sentence opening with 'A' stays plain");
+ok(show(parseProxyRules("SEARCH THE SANDS {E} 2 {I} – Return an Illusion character card.")[0])
+   === "«SEARCH THE SANDS» [E] 2 [I] – Return an Illusion character card.",
+   "an ability name stops at the cost symbols that follow it");
+ok(show(parseProxyRules("10,000 MEDICAL PROCEDURES {E} - Choose one:")[0])
+   === "«10,000 MEDICAL PROCEDURES» [E] - Choose one:",
+   "an ability name may open on a number (a real card's)");
+ok(!/\*\*|«/.test(show(parseProxyRules("2 damage is dealt to each character.")[0])),
+   "a sentence opening on a number stays plain");
+ok(show(parseProxyRules("OHANA - FAMILY Draw a card.")[0]) === "«OHANA - FAMILY» Draw a card.",
+   "a letterless token rides along inside an ability name");
+ok(show(parseProxyRules("Shift 4 I'LL COUNT YOU IN Whenever this character quests, draw a card.")[0])
+   === "**Shift 4** «I'LL COUNT YOU IN» Whenever this character quests, draw a card.",
+   "a keyword with no reminder is bold, the ability name after it is tagged — not the whole line (catalog data)");
+ok(show(parseProxyRules("Shift: Discard a song card (You may discard a song card to play this.)")[0])
+   === "**Shift: Discard a song card **_(You may discard a song card to play this.)_",
+   "a Shift's alternate cost is bold up to its reminder");
+ok(show(parseProxyRules("Boost 2 {I} (Once during your turn, you may pay 2 {I}.)")[0])
+   === "**Boost 2 **[I] _(Once during your turn, you may pay 2 _[I]_.)_",
+   "a keyword's ink value stays with it");
+ok(show(parseProxyRules("Evasive, Ward")[0]) === "**Evasive, Ward**", "a bare keyword list is all bold");
+ok(parseProxyRules(null).length === 0 && parseProxyRules("").length === 0, "a vanilla card has no paragraphs");
+
+// A canvas falls back to the generic family without a word when a face is
+// missing, and a glyph whose layers were renamed paints as nothing at all.
+console.log("\nprinter-friendly face: type and glyphs");
+import { existsSync } from "node:fs";
+const { PROXY_FONT_FILES } = new Function(grab("const PROXY_FONT_FILES = [", "];") + "\nreturn {PROXY_FONT_FILES};")();
+ok(PROXY_FONT_FILES.length >= 4, "the face declares its type files");
+for (const [family, file, weight, style] of PROXY_FONT_FILES) {
+  const fp = new URL(".." + file, import.meta.url);
+  ok(existsSync(fp) && readFileSync(fp).subarray(0, 4).toString("latin1") === "wOF2",
+     `${family} ${weight} ${style} is vendored as woff2 (${file})`);
+}
+const glyphSvg = (f) => readFileSync(new URL("../Logos/lorcana/card/" + f, import.meta.url), "utf8");
+for (const f of ["strength.svg", "willpower.svg", "move-cost.svg"]) {
+  const svg = glyphSvg(f);
+  ok(/class="cls-1"/.test(svg) && /class="cls-2"/.test(svg),
+     `${f} still has its linework (cls-1) over its fill (cls-2) — what a stat badge is painted from`);
+}
+ok(/class="cls-3"/.test(glyphSvg("inkable.svg")), "inkable.svg still carries its ring as cls-3");
+ok(/class="cls-2"/.test(glyphSvg("uninkable.svg")), "uninkable.svg still carries its hex outline as cls-2");
+ok(/saved\.face === "lite" \|\| saved\.face === "text" \? "lite"/.test(src),
+   "a stored \"text\" preference (the first hand-drawn face) maps to the printer-friendly face");
+
+// The corner mark used to sit bottom-centre, on top of the rarity symbol.
+console.log("\nproxy mark placement");
+const pills = [];
+const stubCtx = new Proxy({ measureText: () => ({ width: 60 }) },
+  { get: (t, k) => (k in t ? t[k] : () => {}), set: () => true });
+const { drawProxyWatermark } = new Function("roundRectPath",
+  grab("const drawProxyTag = (", "\n};") + "\n" + grab("const drawProxyWatermark = (", "\n};")
+    + "\nreturn {drawProxyWatermark};")((ctx, x, y, w, h) => pills.push({ x, y, w, h }));
+drawProxyWatermark(stubCtx, 744, 1039, "subtle");
+ok(pills.length === 1 && pills[0].x > 744 / 2 && pills[0].x + pills[0].w <= 744 - 26,
+   "the PROXY mark sits bottom RIGHT, inside the card's border");
+ok(pills.length === 1 && pills[0].y > 1039 * 0.9 && pills[0].y + pills[0].h < 1039 - 20,
+   "…along the bottom edge, clear of the cut line");
+pills.length = 0;
+drawProxyWatermark(stubCtx, 744, 1039, "subtle", { landscape: true });
+ok(pills.length === 1 && pills[0].x > 1039 / 2 && pills[0].x + pills[0].w <= 1039 - 26 && pills[0].y > 744 * 0.85,
+   "a Location's mark is laid out on the turned card: bottom right of the LANDSCAPE face");
+pills.length = 0;
+drawProxyWatermark(stubCtx, 744, 1039, "bold", { tag: false });
+ok(pills.length === 0, "the printer-friendly face can ask for no corner mark (it draws the mark in its own footer)");
 
 console.log(failures ? `\n${failures} FAILED\n` : "\nall passed\n");
 process.exit(failures ? 1 : 0);
