@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=499">
+<link rel="stylesheet" href="styles.css?v=500">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -56436,6 +56436,14 @@ function DeckImageImport({raw, onUseText}){
   </div>`;
 }
 
+// The list is a plain "N Name" line per card, grouped by type and sorted by
+// cost, with NO section headers and NO blank lines. It used to head each group
+// with "# Characters" and leave a gap after it, and Discord (where most lists
+// get pasted) renders a line starting "# " as a heading: 16 lines became a
+// screenful of big type. A plain list is also the one format every other
+// Lorcana importer reads. The two comments it can still write (a Coconut
+// leader, a card the catalog lost) use "//", which Discord leaves alone;
+// parseDeckText still reads "#" comments, so a list copied before this imports.
 function deckToText(deck, cardById){
   const lines = [];
   // A Coconut deck's leader sits OUTSIDE the 60, so it is not in deck.cards —
@@ -56443,7 +56451,7 @@ function deckToText(deck, cardById){
   // A comment, so a tool that doesn't know Coconut skips it; parseDeckText
   // reads it back.
   const leader = deck.coconut_card ? getCoconutCard(deck.coconut_card) : null;
-  if(leader) lines.push(`# Coconut leader: ${coconutDisplayName(leader)}`, "");
+  if(leader) lines.push(`// Coconut leader: ${coconutDisplayName(leader)}`);
   const sections = DECK_SECTIONS.map(s => ({...s, items: []}));
   const fallback = {key:"Other", label:"Other", items:[]};
   const unknown = [];
@@ -56467,23 +56475,18 @@ function deckToText(deck, cardById){
   }
   if(fallback.items.length) sections.push(fallback);
   for(const s of sections){
-    if(!s.items.length) continue;
-    lines.push(`# ${s.label}`);
     s.items.sort((a,b) => a.cost - b.cost || a.name.localeCompare(b.name));
     for(const it of s.items) lines.push(`${it.qty} ${it.name}`);
-    lines.push("");
   }
   // A card the catalog no longer knows can't be named. Written as a comment
   // rather than "4 crd_…", which no importer — ours included — can read.
-  if(unknown.length){
-    lines.push("# Not in the catalog");
-    for(const c of unknown) lines.push(`# ${c.quantity} × ${c.card_id}`);
-  }
+  for(const c of unknown) lines.push(`// ${c.quantity} × ${c.card_id} (not in the catalog)`);
   return lines.join("\n").trim();
 }
 
 // Parse a pasted decklist. Lenient — accepts "4 Name", "4x Name", "4 - Name",
-// ignores blank lines and "# Section" headers. Returns {entries, unmatched}.
+// ignores blank lines and "#" / "//" comment lines (section headers included).
+// Returns {entries, unmatched}.
 // Matches against the catalog by exact name then a normalized fallback.
 function parseDeckText(text, raw){
   // Score-and-pick: a card name can match multiple rows once promo / D23 /
@@ -56558,7 +56561,8 @@ function parseDeckText(text, raw){
   const lines = text.split(/\r?\n/);
   for(const raw_line of lines){
     const line = raw_line.trim();
-    // "# Coconut leader: Moana - Curious Explorer" — what deckToText writes.
+    // "// Coconut leader: Moana - Curious Explorer" — what deckToText writes
+    // ("# Coconut leader:" in lists copied before 2026-09-29).
     const lm = line.match(/^(?:#|\/\/)\s*coconut(?:\s+leader)?\s*:\s*(.+?)\s*$/i);
     if(lm){
       const want = foldCardName(lm[1]);

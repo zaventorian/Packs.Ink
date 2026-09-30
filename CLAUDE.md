@@ -3412,13 +3412,20 @@ Highest wins, tiebreak by iteration order.
 tournament upload) have to agree, and every way they disagree is silent. Guarded by
 `node scripts/test_deck_text.mjs`, which replays the real functions.
 
-- **A Coconut deck's leader is exported as `# Coconut leader: <Name - Version>`** and read back
+- **⚠ The export is a PLAIN list — no `# Section` headers, no blank lines** (2026-09-29).
+  It used to head each type group with `# Characters` and a gap, and Discord, where most lists
+  get pasted, renders a line starting `# ` as a heading: a 16-card list became a screenful of
+  big type (reported from a Discord share). Cards stay grouped by type and sorted by cost; the
+  headers are gone. A plain `N Name` list is also the one format every other Lorcana importer
+  reads. **Comments use `//`, never `#`** — Discord leaves `//` alone. The parser still skips
+  `#` lines, so a list copied before this still imports (pinned).
+- **A Coconut deck's leader is exported as `// Coconut leader: <Name - Version>`** and read back
   (and applied via `onUpdateMeta`). The leader sits OUTSIDE the 60, so it is not in
   `deck.cards`, and the export used to drop the one card that defines the deck. A comment, so a
   tool that doesn't know Coconut skips it.
 - **One line per CARD, not per printing** — a base + its Enchanted exported as two lines with
   the same name, which a tool that doesn't sum duplicate lines reads as half the copies. A card
-  missing from the catalog is a `# N × <card_id>` comment, never `N crd_…`.
+  missing from the catalog is a `// N × <card_id> (not in the catalog)` comment, never `N crd_…`.
 - **Import folds accents** (a third key, `foldCardName`, after the normalized and squashed ones),
   so "Te Ka" finds "Te Kā".
 - **A `(set-cn)` wins over the name only when it names a printing OF that card** (its job:
