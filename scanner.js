@@ -19,8 +19,8 @@
   var GRID = 12;
   var DIMS = GRID * GRID * 3; // 432
   var BASE = "scanner/";
-  var IDXV = "?v=6"; // bump when color.bin/index.json content changes (v6 = 3396 cards incl. Hyperia City + CC2, the 4 image_large-only C1 promos, no Coconut/suppressed rows, 2026-09-26; v5 = Locations rotated upright + 3210 cards, 2026-07-29; v4 = Set 13 REAL Lorcast art)
-  var TXTV = "?v=6"; // bump when text.json content/shape changes (v6 = 3396 cards incl. Hyperia City + `d` release dates, the same card set as index.json, 2026-09-26; v5 = +rarity code `r` for base-before-chase ordering, 2026-07-23)
+  var IDXV = "?v=7"; // bump when color.bin/index.json content changes (v7 = 3456 cards: duels.ink art for 46 stand-ins + 5 promos, art_key keeps its card-art folder, 2026-09-30; v6 = 3396 cards incl. Hyperia City + CC2, the 4 image_large-only C1 promos, no Coconut/suppressed rows, 2026-09-26; v5 = Locations rotated upright + 3210 cards, 2026-07-29; v4 = Set 13 REAL Lorcast art)
+  var TXTV = "?v=7"; // bump when text.json content/shape changes (v7 = the same 3456 cards as index.json v7, 2026-09-30; v6 = 3396 cards incl. Hyperia City + `d` release dates, the same card set as index.json, 2026-09-26; v5 = +rarity code `r` for base-before-chase ordering, 2026-07-23)
 
   var state = {
     loaded: false,
