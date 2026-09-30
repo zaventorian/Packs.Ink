@@ -103,7 +103,9 @@ field is unreadable, **leave it out** (null) rather than guess.
   | multicolour gem (full-art foil) | Enchanted |
   Epic/Iconic/Promo: compare against `Logos/rarity/*.svg` (open one in the browser pane to see it).
 - **card_type** — `Character`, `Action`, `Action - Song`, `Item`, `Location` (exact strings the
-  catalog already uses). Items/actions have no strength/willpower/lore/classifications.
+  catalog already uses). Items/actions have no strength/willpower/lore/classifications. A song is
+  the TYPE `Action - Song` and never a `Song` classification; the importer refuses that shape
+  (three Hyperia City songs went in as `Action` + `["Song"]` and dropped out of the Song filter).
 - **illustrators** — the name after the brush icon, bottom-left. Several → list.
 
 ### Translating (IT / FR / DE / JA / ZH …)
@@ -120,8 +122,14 @@ copy their phrasing. Conventions:
   `Resist +1 (Damage dealt to this character is reduced by 1.)`,
   `Bodyguard (This character may enter play exerted. An opposing character who challenges one of your characters must choose one with Bodyguard if able.)`,
   `Singer 5 (This character counts as cost 5 to sing songs.)`,
-  songs: `(A character with cost N or more can {E} to sing this song for free.)`,
-  ink drops: `get 1 ink drop. (Each ink drop may be removed to pay 1 {I}.)`.
+  songs: `(A character with cost N or more can {E} to sing this song for free.)`.
+- A keyword the card GAINS takes "them/they" in its reminder, not "this character":
+  `gains Resist +2. (Damage dealt to them is reduced by 2.)`, `gains Singer 3. (They count as
+  cost 3 to sing songs.)`, `gains Evasive. (Only characters with Evasive can challenge them.)`.
+- Ink drops, as the official gallery words them: getting ONE is
+  `get 1 ink drop. (You may remove an ink drop to pay 1 {I}.)`; more than one drop or player
+  (`get 2 ink drops`, `each player gets 1 ink drop`) is `(Each ink drop may be removed to pay 1 {I}.)`.
+- An activated ability's cost ends in an em dash: `{E}, 1 {I} — Draw a card.`, never ` - `.
 - Glossary: JA 変身 Shift · 回避 Evasive · 支援 Support · 耐久 Resist · 護衛 Bodyguard ·
   突進 Rush · 歌声 Singer · 守り Ward · エグザート exerted · インクウェル inkwell · ロア lore ·
   捨て札 discard · 追放 banish. IT Classico / FR Storyborn / DE Sagengestalt / JA
@@ -129,7 +137,10 @@ copy their phrasing. Conventions:
   ヒーロー Hero; Alleato/Allié/Verbündeter/仲間 Ally; ヴィランズ Villain; 探偵 Detective;
   発明家 Inventor; プリンセス Princess.
 - Character names are the known English Disney names; the subtitle (version), ability names and
-  flavor text are your translation. Use a song's English title when the copyright line names it.
+  flavor text are your translation. A song's name is the title the card PRINTS, translated. The
+  copyright line only names the licensed song, and Lorcana often names a song card after a lyric
+  (Let the Storm Rage On is credited to Let It Go). Using the credit is how Hyperia City #27 went in
+  as "On the Open Road" when the card prints "That's Not Like Max, Is It?".
 - **Tell Zaven which names are your translations** — they're provisional until the official
   English card appears (which then overwrites ours automatically).
 

@@ -87,6 +87,13 @@ ASPECT_TOL = 0.14
 RARITIES = {"Common", "Uncommon", "Rare", "Super Rare", "Legendary",
             "Enchanted", "Epic", "Iconic", "Promo"}
 INKS = {"Amber", "Amethyst", "Emerald", "Ruby", "Sapphire", "Steel"}
+# Every card_type the catalog holds (checked 2026-09-30 over all official rows).
+# ⚠ A song is the TYPE "Action - Song" and never a "Song" classification.
+# Manifests wrote three Hyperia City songs as plain "Action" + ["Song"], and a
+# card typed that way silently drops out of the site's Song filter. Across the
+# whole catalog, "sing this song" appears on 172 cards and every one is an
+# "Action - Song".
+CARD_TYPES = {"Character", "Action", "Action - Song", "Item", "Location"}
 
 # ⚠ A mainline Lorcana set is numbered in six EQUAL INK BLOCKS, in this order.
 # That makes the collector number a second, independent witness for the ink —
@@ -141,6 +148,13 @@ def validate(c, idx):
     for ink in (c.get("inks") or []):
         if ink not in INKS:
             errs.append("ink %r is not one of %s" % (ink, sorted(INKS)))
+    ctype = c.get("card_type")
+    if ctype and ctype not in CARD_TYPES:
+        errs.append("card_type %r is not canonical %s" % (ctype, sorted(CARD_TYPES)))
+    if "Song" in (c.get("classifications") or []):
+        errs.append("'Song' is a card_type ('Action - Song'), not a classification")
+    if "sing this song" in (c.get("text") or "") and ctype != "Action - Song":
+        errs.append("the text sings this song, so card_type must be 'Action - Song', not %r" % (ctype,))
     crop = c.get("crop")
     if crop is not None and (not isinstance(crop, list) or len(crop) != 4):
         errs.append("crop must be [x, y, w, h]")
@@ -289,7 +303,7 @@ def main():
             "collector_number": cn, "name": c["name"], "version": c.get("version"),
             "rarity": c.get("rarity"), "ink": (inks[0] if inks else None), "inks": inks,
             "cost": c.get("cost"), "inkable": c.get("inkable"),
-            "card_type": c.get("card_type"), "classifications": c.get("classifications"),
+            "card_type": c.get("card_type"), "classifications": c.get("classifications") or None,
             "strength": c.get("strength"), "willpower": c.get("willpower"),
             "lore": c.get("lore"), "move_cost": c.get("move_cost"),
             "text": c.get("text"), "flavor_text": c.get("flavor_text"),
