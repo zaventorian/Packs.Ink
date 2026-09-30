@@ -1167,8 +1167,22 @@ so nothing here has to re-derive that.
 - **⚠ The box is IN FLOW, never absolutely positioned.** That is what gives the row a height at
   all — an absolutely positioned box gives its row none, which is the collapse the old
   `aspectRatio` on the CELL existed to prevent.
-- **⚠ The quantity badge lives INSIDE the box.** On the row it would pin to the far corner of the
-  whole grid rather than to the card it counts.
+- **⚠ A Location's quantity badge sits ABOVE the card, right-aligned over its cost hexagon**
+  (2026-09-30, Zaven: *"line up above the ink cost, it's weirdly to the left"*). The quarter turn
+  puts the cost in the top-right corner, so the badge can't sit where a portrait card's does. Each
+  card lives in a wrapper with `paddingTop: POSTER_LSCAPE_BADGE_ROOM` (6 + the 25px badge + 4),
+  so the badge is level with the portrait badges beside it and a row of nothing but Locations
+  still has room for it. **⚠ The run's flex line is `alignItems:"flex-start"` and must stay so:**
+  stretched (the default), each card's 7/5 box grew to the row's height and the badge pinned to
+  its top floated above the card and left of the cost — the reported bug.
+- **The deck editor's image grid and stacked pile use the same runs** (`DeckTileGrid`, 2026-09-30:
+  *"locations look too small here, not full card size?"*). Their grids are auto-fill, so the
+  component MEASURES its column count, from the same `min` / `gap` it builds the template from
+  (styles.css no longer carries those two numbers). Never read the count back off the grid: a span
+  too wide for it makes CSS Grid add implicit columns, which the read would then report. There the
+  badge drops just BELOW the cost hexagon (a tile has no room above it), and the owned count and
+  version chevron move to the top-left, which is art. `groupLandscapeRuns`, `landscapeRunSpan` and
+  `landscapeRunCardWidth` (beside `landscapeArt`) are the one copy of the rule.
 - Measured in Chromium against the shipped math: a 1-item run (`spanCols=2`) shares the current
   row and lands **10.0px** from the previous card — zero dead air; a 2-item run (`spanCols=3`)
   shares the row AND its own two Locations sit **10.0px** apart, the exact hole the full-width fix
