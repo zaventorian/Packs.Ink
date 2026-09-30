@@ -12,7 +12,7 @@ import {
   SET_DISPLAY_NAMES, SET_ORDER, PROMO_RARITY_SETS, normalizeRarity,
   SUPPRESSED_CARD_IDS, TCG_PID_OVERRIDES, COLLECTOR_NUMBER_OVERRIDES, EXTRAS_MAP, CONNECTING_FOILS,
 } from "./site.generated.js";
-import { money, shortDate, BRAND_COLOR, cardImage, buyUrl, AFFILIATE_NOTE, openId, inkMarks } from "./embeds.js";
+import { money, shortDate, BRAND_COLOR, cardImage, buyUrl, AFFILIATE_NOTE, openId, inkMarks, packId } from "./embeds.js";
 import { FIN_PRINTING } from "./data.js";
 import { statsLineFor } from "./stats.js";
 
@@ -413,14 +413,12 @@ export function newCardsMessage(R, index, cards, { origin, now = Date.now() } = 
 }
 
 // ── /open ────────────────────────────────────────────────────────────────
-// custom_id "k|<set index>|<packs>". The site's simPack takes the site's pool
-// shape, built here from the index: commons by ink (one of each per pack),
-// uncommons, the three rare tiers, their foils, and the three chase rarities.
-export const packId = (si, n) => `k|${si}|${n}`;
-export function parsePackId(id) {
-  const m = /^k\|(\d{1,3})\|(1|24)$/.exec(String(id || ""));
-  return m ? { si: Number(m[1]), n: Number(m[2]) } : null;
-}
+// custom_id "k|<set index>|<packs>" (packId, in embeds.js — a booster box's
+// price reply offers "Open a box" too). The site's simPack takes the site's
+// pool shape, built here from the index: commons by ink (one of each per
+// pack), uncommons, the three rare tiers, their foils, and the three chase
+// rarities.
+export { packId, parsePackId } from "./embeds.js";
 
 const POOLS = new WeakMap();
 export function packPools(R, si) {

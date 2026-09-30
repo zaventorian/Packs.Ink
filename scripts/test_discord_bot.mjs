@@ -884,6 +884,79 @@ const D = await mod("discord/src/data.js");
   ok(pf.content.startsWith("**T**"), "the plain fallback keeps the title");
 }
 
+// ── 13. what a reply LEADS with (2026-09-30) ─────────────────────────────
+// /price is asked about a number and /card about the card; a grade asked for
+// is the headline; the other finish is on the reply; a played card prices
+// its playset; a booster box says whether it is worth opening.
+{
+  const price = D.priceSummary(Array.from({ length: 60 }, (_, i) => ({ date: new Date(Date.UTC(2026, 6, 1) + i * 86400000).toISOString().slice(0, 10), low_price: 2, market_price: 3 })), "2026-08-29");
+  const res = R.resolve("mowgli");
+  const base = { R, res, price, graded: [], raw: null, range: "3m", origin: "https://bot.example", inkColors: index.inkColors, playDecks: index.playDecks, gradedTarget: { cardId: res.printing.id, bucket: "" } };
+  const chart = E.cardMessage({ ...base, view: "chart" }).embeds[0].description;
+  const card = E.cardMessage({ ...base, view: "card" }).embeds[0].description;
+  ok(/^> /m.test(card) && /strength/.test(card), "/card carries the rules text and stats");
+  ok(!/^> /m.test(chart) && !/strength/.test(chart), "/price leaves the rules text and stats to /card");
+  ok(/Amber/.test(chart) && /NM Market/.test(chart), "/price keeps the card's ink line and its price");
+  // Mowgli's fixture printing has two priced finishes.
+  ok(/\bFoil \*\*\$7\.93\*\*/.test(chart), `the other finish's price is on the reply (${chart.split("\n").pop()})`);
+  const foilRes = { ...res, fi: res.printing.f.findIndex((f) => f[0] !== "N") };
+  const foil = E.cardMessage({ ...base, res: foilRes, view: "chart" }).embeds[0].description;
+  ok(/Non-foil \*\*\$2\.25\*\*/.test(foil), "…and the non-foil's on the foil's reply");
+  ok(/playset \$12\.00/.test(chart), `a played base-rarity card prices its playset (${chart.split("\n").find((l) => /NM Market/.test(l))})`);
+  const chase = R.resolve("enchanted elsa");
+  const chaseTxt = E.cardMessage({ ...base, res: chase, view: "chart", gradedTarget: { cardId: chase.printing.id, bucket: "" } }).embeds[0].description;
+  ok(!/playset/.test(chaseTxt), "a chase card gets no playset price");
+
+  // A grade asked for leads, with its date; raw follows plain; the tier is not
+  // repeated as a field; the change line (a judgement on the raw price) is off.
+  const tiers = [
+    { grader: "PSA", grade: "10", last_sold_price: 3000, avg_last_5: 3095, sale_count: 1056, last_sold_date: "2026-09-12", printing: "" },
+    { grader: "PSA", grade: "9", last_sold_price: 799, avg_last_5: 905, sale_count: 330, last_sold_date: "2026-09-01", printing: "" },
+  ];
+  const g = E.cardMessage({ ...base, res: chase, view: "graded", grade: { grader: "PSA", grade: "10" }, graded: tiers, gradedTarget: { cardId: chase.printing.id, bucket: "" } });
+  const gd = g.embeds[0].description;
+  ok(/\*\*\$3,000\*\* last PSA 10 sale \(Sep 12\) · avg of last 5 \$3,095/.test(gd), `a graded ask leads with that grade's last sale (${gd.split("\n").find((l) => /last PSA/.test(l))})`);
+  ok(gd.indexOf("last PSA 10 sale") < gd.indexOf("NM Market") && /^Raw: \$3\.00 NM Market/m.test(gd), "the raw price follows, plain");
+  ok(/1,056 PSA 10 sales on record/.test(gd), "sale counts carry a thousands separator");
+  ok(!/1D /.test(gd), "no raw change line under a graded headline");
+  ok(g.embeds[0].fields.length === 1 && g.embeds[0].fields[0].name === "PSA 9", "the headline tier is not repeated as a field");
+  ok(/Sep 1$/m.test(g.embeds[0].fields[0].value.split("\n")[0]), `a graded tier says when it last sold (${g.embeds[0].fields[0].value.split("\n")[0]})`);
+  // The same tiers with no grade asked: all fields, raw leads as before.
+  const plain = E.cardMessage({ ...base, res: chase, view: "chart", graded: tiers, gradedTarget: { cardId: chase.printing.id, bucket: "" } });
+  ok(plain.embeds[0].fields.length === 2 && /^\*\*\$3\.00\*\* NM Market/m.test(plain.embeds[0].description), "with no grade asked, the raw price leads and every tier is a field");
+  checkMessage(g, "graded-led card");
+
+  // A booster box: box EV, and the way to open one or see its set.
+  const box = R.resolve("azurite sea box");
+  const sm = E.sealedMessage({ R, res: box, price, view: "chart", range: "3m", origin: "https://bot.example", today: "2026-09-30" });
+  const sd = sm.embeds[0].description;
+  ok(/Box EV \*\*\$58\.91\*\* at NM Market — the cards inside are worth about \*\*\d+%\*\* of the box/.test(sd), `a box reply carries the set's box EV (${sd.split("\n").pop()})`);
+  const labels = sm.components.flatMap((r) => r.components).map((c) => c.label);
+  ok(labels.includes("Open a box") && labels.includes("Set at a glance"), `a box reply offers Open a box + Set at a glance (${labels.join(", ")})`);
+  const stBtn = sm.components.flatMap((r) => r.components).find((c) => c.label === "Set at a glance");
+  eq(E.parseSetId(stBtn.custom_id) && E.parseSetId(stBtn.custom_id).si, box.item.s, "Set at a glance round-trips to the box's set");
+  eq(E.parsePackId(sm.components.flatMap((r) => r.components).find((c) => c.label === "Open a box").custom_id).n, 24, "Open a box opens 24 packs of that set");
+  checkMessage(sm, "box with EV");
+  // A set not out yet can't be opened; a non-box product carries no EV.
+  const hcBox = index.sealed.find((s) => s.ty === "Booster Boxes" && index.sets[s.s] && index.sets[s.s].rel && index.sets[s.s].rel.lgs > "2026-09-30");
+  if (hcBox) {
+    const um = E.sealedMessage({ R, res: { kind: "sealed", item: hcBox, alts: [] }, price: null, view: "chart", range: "3m", origin: "https://bot.example", today: "2026-09-30" });
+    const ul = um.components.flatMap((r) => r.components).map((c) => c.label);
+    ok(!ul.includes("Open a box") && ul.includes("Set at a glance"), `an unreleased set's box can't be opened yet (${ul.join(", ")})`);
+    ok(!/Box EV/.test(um.embeds[0].description), "an unreleased set's box shows no EV (its prices are pre-sale)");
+  }
+  const trove = index.sealed.find((s) => s.ty !== "Booster Boxes" && s.ty !== "Booster Packs" && s.s === box.item.s);
+  if (trove) {
+    const tm = E.sealedMessage({ R, res: { kind: "sealed", item: trove, alts: [] }, price: null, view: "chart", range: "3m", origin: "https://bot.example", today: "2026-09-30" });
+    ok(!/Box EV/.test(tm.embeds[0].description) && !tm.components.flatMap((r) => r.components).some((c) => /^Open a/.test(c.label)), `a ${trove.ty} reply carries no box EV and no opener`);
+  }
+  // No match, nothing to suggest: the reply says how to ask.
+  const nf = E.notFoundMessage(R, R.resolve("asdfgh"), "asdfgh", { help: "5234567890123" });
+  ok(/<\/help:5234567890123>/.test(nf.embeds[0].description), "a dead-end no-match points at /help");
+  const helpTxt = JSON.stringify(E.helpMessage());
+  ok(/the card: picture, text, stats/.test(helpTxt) && /price chart, recent changes/.test(helpTxt), "help tells /card and /price apart");
+}
+
 // ── commands ─────────────────────────────────────────────────────────────
 {
   const { COMMANDS } = await mod("discord/tools/commands.js");
@@ -993,6 +1066,20 @@ const D = await mod("discord/src/data.js");
   const again = op.data.components[1].components.find((c) => c.label === "Open another pack");
   const op2 = await handleInteraction({ type: 3, token: "t17", application_id: "123", message: { flags: 64 }, data: { custom_id: again.custom_id, component_type: 2 } }, deps);
   ok(op2.type === 4 && op2.data.flags === 64, "Open another pack posts a new message, private when the first one was");
+  // A booster box's price reply: "Set at a glance" answers from the index at
+  // once, as a new message; "Open a box" opens 24 packs of THAT set.
+  patches.length = 0;
+  const bx = await handleInteraction({ type: 2, token: "t18", application_id: "123", data: { type: 1, name: "price", options: [{ type: 3, name: "name", value: "azurite sea box" }] } }, deps);
+  eq(bx.type, 5, "/price of a box defers");
+  await Promise.all(pending.splice(0));
+  const boxRow = patches[0] && patches[0].body.components.flatMap((r) => r.components);
+  const stBtn = boxRow && boxRow.find((c) => c.label === "Set at a glance");
+  const obBtn = boxRow && boxRow.find((c) => c.label === "Open a box");
+  ok(stBtn && obBtn, "a box reply carries Set at a glance + Open a box");
+  const st = stBtn && await handleInteraction({ type: 3, token: "t19", application_id: "123", message: { flags: 0 }, data: { custom_id: stBtn.custom_id, component_type: 2 } }, deps);
+  ok(st && st.type === 4 && /Azurite Sea/.test(st.data.embeds[0].title) && !st.data.flags, `Set at a glance answers at once with the set (${st && st.data.embeds[0].title})`);
+  const ob = obBtn && await handleInteraction({ type: 3, token: "t19b", application_id: "123", message: { flags: 0 }, data: { custom_id: obBtn.custom_id, component_type: 2 } }, deps);
+  ok(ob && ob.type === 4 && /opened an Azurite Sea booster box/i.test(ob.data.embeds[0].title), `Open a box opens a box of that set (${ob && ob.data.embeds[0].title})`);
   // /new asks the database for cards added since the index was built, so it
   // defers; if that read fails the reply still comes, from the index alone.
   patches.length = 0;

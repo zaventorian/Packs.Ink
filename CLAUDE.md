@@ -5311,6 +5311,38 @@ client still showing one gets "Unknown command." (guarded). The resolver's
   Before, an RPH row linked straight to RPH and a curated one to its
   registration page or nowhere.
 
+### 2026-09-30: what a reply LEADS with
+
+A read of every reply from the user's seat (Zaven: *"think about how a user would use
+it, what they would want"*). The replies were correct and answered the wrong question
+first. Guarded by section 13 of `test_discord_bot.mjs`.
+
+- **`/price` leaves the rules text and stats to `/card`.** The two commands were one
+  reply with a different picture: eight lines of rules text sat above every chart and
+  pushed the chart, the changes and the graded tiers below the fold. `/price` keeps the
+  set line, the ink / cost / type line, the play line and the numbers.
+- **The other finish is on the reply** ("Foil **$7.93**" under the non-foil's price, and
+  the reverse), from the index's prices like the versions menu. "And the foil?" is the
+  follow-up every price reply got, and it cost a menu pick.
+- **A played base-rarity card prices its playset** (`playset $8.84`, 4 × NM Market) on the
+  price line — competitive players buy four. Never on a chase card.
+- **A grade asked for is the HEADLINE.** `/price elsa psa 10` led with the raw price and its
+  1D/1W changes and put the PSA 10 sale fourth, in a grid of six tiers, with no date.
+  Now: "**$3,000** last PSA 10 sale (Sep 12) · avg of last 5 $3,095", the count of sales,
+  then "Raw: $951 NM Market · $855 Low" plain; the raw change line and standing are off
+  (they judge the raw price, the same rule the eBay-led promos follow); that tier is not
+  repeated as a field. Every tier field now carries its last-sale date, and counts read
+  "1,056 sales".
+- **A booster box says whether to open it**: "Box EV **$58.91** at NM Market — the cards
+  inside are worth about **50%** of the box" (the daily build's `set.ev`, `/set`'s
+  number), plus **Open a box** (`packId`, moved into embeds.js — set.js re-exports it) and
+  **Set at a glance** (`setId` → `st|<si>`, an instant new message via `setReplyAt`). A
+  pack reply offers Open a pack. Neither opener on a set not yet out, no EV on it either
+  (pre-sale prices), and nothing of this on a trove or gift set.
+- A no-match with nothing to suggest points at `/help`; help and the command
+  descriptions now tell `/card` and `/price` apart.
+- `simulate.mjs` no longer tries to fetch an `attachment://` chart at the end of a run.
+
 ### The channel report's layout (2026-09-28)
 
 Zaven, on the first live report: *"foil prices aren't super important, base

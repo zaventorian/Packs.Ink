@@ -19,12 +19,12 @@ const rangeChoices = [
 export const COMMANDS = [
   {
     name: "card", type: 1, ...EVERYWHERE,
-    description: "Show a Lorcana card with its price",
+    description: "A Lorcana card: its picture, text, stats, price and how much it's played",
     options: [nameOpt, privOpt],
   },
   {
     name: "price", type: 1, ...EVERYWHERE,
-    description: "A card or sealed product's price, recent changes and price chart",
+    description: "The price chart and recent changes of a card, a graded slab or sealed product",
     options: [nameOpt, { type: 3, name: "range", description: "Chart range (default 3 months)", choices: rangeChoices }, privOpt],
   },
   {

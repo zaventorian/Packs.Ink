@@ -287,7 +287,7 @@ export async function cardPayload(res, { view, range, query }, deps) {
 
 async function sealedPayload(res, { view, range }, deps) {
   const price = await D.priceHistory(deps.db, res.item.pid, "Normal").then((rows) => D.priceSummary(rows, deps.index.priceDate), () => null);
-  return E.sealedMessage({ R: deps.R, res, price, view, range, origin: deps.origin });
+  return E.sealedMessage({ R: deps.R, res, price, view, range, origin: deps.origin, today: deps.today });
 }
 
 // No command opens a form any more (/deck and /trade are gone); a form left
@@ -310,6 +310,13 @@ function component(it, deps) {
     const set = deps.R.sets[pk2.si];
     if (!set) return { type: R_.MESSAGE, data: { content: "That set is gone from the catalog.", flags: EPHEMERAL } };
     return instant(packReply(set.n, pk2.n, it, deps), eph);
+  }
+  // "Set at a glance" from a sealed reply: the /set overview, as a new message.
+  const st = E.parseSetId(id);
+  if (st) {
+    const eph = it.message && (Number(it.message.flags) & EPHEMERAL);
+    if (!deps.R.sets[st.si]) return { type: R_.MESSAGE, data: { content: "That set is gone from the catalog.", flags: EPHEMERAL } };
+    return instant(setReplyAt(st.si, deps), eph);
   }
   const cal = E.parseCalendarId(id);
   if (cal) {
@@ -475,6 +482,9 @@ const noSet = (name) => ({ content: `No set called “${String(name).slice(0, 60
 export function setReply(name, deps) {
   const si = pickSet(deps.R, deps.index, name);
   if (si < 0) return noSet(name);
+  return setReplyAt(si, deps);
+}
+export function setReplyAt(si, deps) {
   return setMessage(setOverview(deps.R, deps.index, si), { origin: deps.origin });
 }
 
