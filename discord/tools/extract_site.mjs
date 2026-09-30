@@ -32,8 +32,6 @@ export const WANT = [
   // /open: the site's pack slots and pull rates, so a simulated pack is the
   // same pack Analytics » Simulator opens
   "simPack", "getPull",
-  // /deck: one TCGplayer cart for the whole list, spelled TCGplayer's way
-  "tcgMassEntryParts", "tcgMassName",
   // /new: the reveal reel, run when someone asks — over the daily index plus
   // any card that has landed since — and the catalog rules a card that landed
   // after the build still has to pass (display names, promo rarity,

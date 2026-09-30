@@ -100,8 +100,11 @@ def index_rows(latest=TODAY):
 
 
 class FakeSb:
-    def __init__(self, subs, price_date=TODAY, table_missing=False, movers=None, index_latest=TODAY):
+    def __init__(self, subs, price_date=TODAY, table_missing=False, movers=None, index_latest=TODAY, latest=None):
         self.subs = subs
+        self.latest = latest          # None: migration 175 not applied
+        self.upserts = []
+        self.url = "https://example.supabase.co"
         self.price_date = price_date
         self.table_missing = table_missing
         self.movers = MOVERS if movers is None else movers
@@ -114,6 +117,10 @@ class FakeSb:
             if self.table_missing:
                 raise RuntimeError("Select discord_report_subscriptions failed (404): relation does not exist")
             return [dict(s) for s in self.subs]
+        if table == rep.LATEST_TABLE:
+            if self.latest is None:
+                raise RuntimeError("Select discord_report_latest failed (404): relation does not exist")
+            return [dict(r) for r in self.latest]
         if table == "card_prices_latest":
             return [{"price_date": self.price_date.isoformat()}]
         if table == "sets":
@@ -153,6 +160,12 @@ class FakeSb:
     def update(self, table, match, patch, params=None):
         self.updates.append((table, dict(match), dict(patch)))
 
+    def upsert(self, table, rows, on_conflict=None, batch=100):
+        self.upserts.append((table, [dict(r) for r in rows], on_conflict))
+
+    def auth_headers(self):
+        return {"apikey": "service", "Authorization": "Bearer service"}
+
 
 def tiny_jpeg():
     from PIL import Image
@@ -185,6 +198,23 @@ class FakeDiscord(FakeCdn):
         self.posts.append({"url": url, "headers": headers, "json": body, "files": files})
         status = 400 if (files and self.refuse_files) else self.status
         return SimpleNamespace(status_code=status, text="{}")
+
+
+class FakeStorage(FakeDiscord):
+    def __init__(self, fail=False):
+        super().__init__()
+        self.fail = fail
+        self.stored, self.deleted = [], []
+
+    def post(self, url, headers=None, json=None, data=None, files=None, timeout=None):
+        if "/storage/v1/object/" in url:
+            self.stored.append(url)
+            return SimpleNamespace(status_code=500 if self.fail else 200, ok=not self.fail, text="{}")
+        return super().post(url, headers=headers, json=json, data=data, files=files, timeout=timeout)
+
+    def delete(self, url, headers=None, json=None, timeout=None):
+        self.deleted.append((url, json))
+        return SimpleNamespace(status_code=200, ok=True, text="{}")
 
 
 def args(**kw):
@@ -399,6 +429,45 @@ sb9 = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_po
 disc9 = FakeDiscord()
 _, out9 = run(sb9, disc9, post=False)
 check(not disc9.posts and "DRY RUN" in out9, "a dry run posts nothing")
+
+# ── /reports send: the latest report is kept, with its pictures stored ──
+yesterday = (TODAY - dt.timedelta(days=1)).isoformat()
+sb10 = FakeSb([], latest=[{"cadence": "daily", "price_date": yesterday, "files": []},
+                          {"cadence": "weekly", "price_date": yesterday, "files": ["weekly/%s/market.png" % yesterday]}])
+st10 = FakeStorage()
+code10, out10 = run(sb10, st10)
+check(code10 == 0 and "No servers have asked" in out10, "no subscribers still exits 0")
+kept = {rows[0]["cadence"]: rows[0] for (t, rows, oc) in sb10.upserts if t == rep.LATEST_TABLE}
+check(set(kept) == {"daily", "weekly"} and all(r["price_date"] == TODAY.isoformat() for r in kept.values()),
+      f"both reports are kept for /reports send even with no subscribers ({sorted(kept)})")
+check(all((t, oc) == (rep.LATEST_TABLE, "cadence") for (t, _, oc) in sb10.upserts), "kept one row per cadence")
+wk = kept.get("weekly", {})
+pics = [(e.get("image") or {}).get("url", "") for e in wk.get("embeds", [])]
+check(wk.get("files") and all(u.startswith("https://example.supabase.co/storage/v1/object/public/discord-reports/weekly/" + TODAY.isoformat() + "/") for u in pics if u),
+      f"the weekly report's pictures point at their stored, dated copies ({[u for u in pics if u][:2]})")
+check(not any(u.startswith("attachment://") for e in wk.get("embeds", []) for u in [(e.get("image") or {}).get("url", ""), (e.get("thumbnail") or {}).get("url", "")]),
+      "a kept report has no attachment:// left in it")
+check(st10.deleted and st10.deleted[0][1] == {"prefixes": ["weekly/%s/market.png" % yesterday]}, "yesterday's pictures are deleted once today's are kept")
+check(not st10.posts, "keeping a report posts nothing to Discord")
+
+sb11 = FakeSb([], latest=[{"cadence": "daily", "price_date": TODAY.isoformat(), "files": []},
+                          {"cadence": "weekly", "price_date": TODAY.isoformat(), "files": []}])
+run(sb11, FakeStorage())
+check(not sb11.upserts, "a report already kept today is not built or kept again")
+
+sb12 = FakeSb([], latest=[])
+st12 = FakeStorage(fail=True)
+run(sb12, st12)
+wk12 = next((rows[0] for (t, rows, oc) in sb12.upserts if t == rep.LATEST_TABLE and rows[0]["cadence"] == "weekly"), {})
+check(wk12 and not any((e.get("image") or {}).get("url", "") for e in wk12["embeds"]) and wk12["files"] == [],
+      "if a picture can't be stored, the kept report is the plain one (no broken picture)")
+
+sb13 = FakeSb([], latest=[])
+run(sb13, FakeStorage(), post=False)
+check(not sb13.upserts, "a dry run keeps nothing")
+
+_, out14 = run(FakeSb([]), FakeStorage())
+check("migration 175" in out14, "before migration 175 it says so and carries on")
 
 print("FAILS:", FAILS)
 sys.exit(1 if FAILS else 0)

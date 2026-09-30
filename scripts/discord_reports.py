@@ -79,6 +79,8 @@ from supabase_client import Supabase  # noqa: E402
 
 API = "https://discord.com/api/v10"
 TABLE = "discord_report_subscriptions"
+LATEST_TABLE = "discord_report_latest"
+REPORT_BUCKET = "discord-reports"
 WINDOW = {"daily": "1d", "weekly": "7d"}
 # How far into the next UTC day a report may still post. The ETL lands a
 # day's prices from about 20:30 UTC; runs after midnight (a late schedule, the
@@ -704,6 +706,80 @@ def write_preview(folder, cadence, report):
             f.write(data)
 
 
+def load_latest(sb):
+    """{cadence: row} for the stored reports, or None when migration 175 is
+    not applied yet."""
+    try:
+        rows = sb.select(LATEST_TABLE, columns="cadence,price_date,files", order="cadence.asc")
+    except RuntimeError as e:
+        msg = str(e)
+        if "404" in msg or "42P01" in msg or "PGRST205" in msg or "does not exist" in msg:
+            return None
+        raise
+    return {r["cadence"]: r for r in rows}
+
+
+def stored_embeds(report, urls):
+    """The report's embeds with each attachment:// picture pointing at its
+    stored copy. If any picture failed to store, the plain version (no
+    attachments, card-art thumbnails instead) rather than a broken image."""
+    names = {n for n, _ in report["files"]}
+    if names - set(urls):
+        return report["plain"]
+    out = []
+    for e in report["embeds"]:
+        e = dict(e)
+        for slot in ("image", "thumbnail"):
+            u = (e.get(slot) or {}).get("url", "")
+            if u.startswith("attachment://"):
+                e[slot] = {"url": urls[u[len("attachment://"):]]}
+        out.append(e)
+    return out
+
+
+def store_latest(sb, price_date, report_for, session=requests):
+    """Keep today's daily and weekly report for /reports send. Built once a day
+    per cadence (this job runs several times a day). The pictures go to a
+    public bucket under a DATED path: Discord caches an image by its URL, so
+    yesterday's chart must not come back under today's."""
+    have = load_latest(sb)
+    if have is None:
+        print(f"{LATEST_TABLE} does not exist yet (migration 175 not applied); /reports send stays off.")
+        return 0
+    stored = 0
+    base = f"{sb.url}/storage/v1/object"
+    for cadence in ("daily", "weekly"):
+        old = have.get(cadence) or {}
+        if str(old.get("price_date") or "")[:10] == price_date.isoformat():
+            continue
+        rep = report_for(cadence)
+        if not rep:
+            continue
+        paths, urls = [], {}
+        for name, data in rep["files"]:
+            path = f"{cadence}/{price_date.isoformat()}/{name}"
+            r = session.post(f"{base}/{REPORT_BUCKET}/{path}", data=data, timeout=60,
+                             headers={**sb.auth_headers(), "Content-Type": "image/png", "x-upsert": "true"})
+            if not r.ok:
+                print(f"  could not store {path}: HTTP {r.status_code}")
+                continue
+            paths.append(path)
+            urls[name] = f"{base}/public/{REPORT_BUCKET}/{path}"
+        sb.upsert(LATEST_TABLE, [{
+            "cadence": cadence, "price_date": price_date.isoformat(),
+            "embeds": stored_embeds(rep, urls), "plain": rep["plain"], "files": paths,
+            "built_at": dt.datetime.now(dt.timezone.utc).isoformat()}], on_conflict="cadence")
+        stored += 1
+        print(f"  stored the {cadence} report for /reports send ({len(paths)} pictures)")
+        gone = [p for p in (old.get("files") or []) if p not in paths]
+        if gone:
+            r = session.delete(f"{base}/{REPORT_BUCKET}", json={"prefixes": gone}, timeout=60,
+                               headers={**sb.auth_headers(), "Content-Type": "application/json"})
+            if not r.ok:
+                print(f"  could not delete yesterday's pictures: HTTP {r.status_code}")
+    return stored
+
+
 def run(args, sb=None, session=requests, now=None):
     token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
     if args.post and not token:
@@ -715,9 +791,6 @@ def run(args, sb=None, session=requests, now=None):
         print(f"{TABLE} does not exist yet (migration 173 not applied). Exiting 0.")
         return 0
     preview = getattr(args, "preview", None)
-    if not subs and not preview:
-        print("No servers have asked for reports. Exiting 0.")
-        return 0
     price_date = digest.latest_price_date(sb)
     now = now or dt.datetime.now(dt.timezone.utc)
     if not price_date:
@@ -727,10 +800,27 @@ def run(args, sb=None, session=requests, now=None):
         print(f"Newest price date is {price_date}, too old at {now:%Y-%m-%d %H:%M} UTC — today's ETL has not landed yet. Skipping.")
         return 0
 
+    built = {}
+
+    def report_for(cadence):
+        if cadence not in built:
+            built[cadence] = build_report(sb, price_date, WINDOW[cadence], session=session)
+        return built[cadence]
+
+    # Kept whether or not any channel subscribes: /reports send posts it.
+    if args.post:
+        try:
+            store_latest(sb, price_date, report_for, session=session)
+        except Exception as e:   # never let it cost a subscriber their post
+            print(f"  could not store the latest report ({type(e).__name__}: {str(e)[:200]})")
+    if not subs and not preview:
+        print("No servers have asked for reports. Exiting 0.")
+        return 0
+
     owed = [s for s in subs if due(s, price_date, args.force_weekly)]
     if preview:
         for cadence in ("daily", "weekly"):
-            rep = build_report(sb, price_date, WINDOW[cadence], session=session)
+            rep = report_for(cadence)
             if rep:
                 write_preview(preview, cadence, rep)
                 print(f"  preview {cadence}: {len(rep['embeds'])} embeds, "
@@ -740,9 +830,7 @@ def run(args, sb=None, session=requests, now=None):
     if not owed:
         print(f"All {len(subs)} subscriptions already have today's report.")
         return 0
-    reports = {}
-    for cadence in sorted({s["cadence"] for s in owed}):
-        reports[cadence] = build_report(sb, price_date, WINDOW[cadence], session=session)
+    reports = {cadence: report_for(cadence) for cadence in sorted({s["cadence"] for s in owed})}
 
     posted = failed = 0
     for s in owed:

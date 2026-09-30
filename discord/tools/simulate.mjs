@@ -114,23 +114,13 @@ function parseLine(line) {
   const [, name, rest] = m;
   if (name === "price" || name === "card") return cmd(name, [{ type: 3, name: "name", value: rest }]);
   if (name === "events") return cmd(name, [{ type: 3, name: "near", value: rest || "60614" }]);
-  if (name === "movers") {
-    const [window = "1d", direction = "up", rarity = "all"] = rest.split(/\s+/).filter(Boolean);
-    return cmd(name, [{ type: 3, name: "window", value: window }, { type: 3, name: "direction", value: direction }, { type: 3, name: "rarity", value: rarity }]);
-  }
-  // /trade 2x mowgli, $20 vs enchanted elsa   ("vs": Git Bash rewrites "//")
-  if (name === "trade") {
-    const [give = "", get = ""] = rest.split(/\s+vs\s+/i).map((s) => s.trim());
-    return cmd(name, [give && { type: 3, name: "give", value: give }, get && { type: 3, name: "get", value: get }].filter(Boolean));
-  }
   if (name === "set" || name === "open") return cmd(name, rest ? [{ type: 3, name: "set", value: rest }] : []);
   return cmd(name, []);
 }
 
 const script = process.argv.slice(2).length ? process.argv.slice(2) : [
   "/price mowgli", "/card enchanted elsa", "/price elsa psa 10", "/price azurite sea box",
-  "/price asdfgh", "/movers 1w up chase", "/movers 1d down all", "/movers 1m up sealed", "/events 60614", "/calendar", "/help",
-  "/trade 2x mowgli, enchanted elsa, $20 vs stitch rock star foil, azurite sea box", "/set azurite", "/set", "/open fabled", "/new",
+  "/price asdfgh", "/events 60614", "/calendar", "/meta", "/help", "/set azurite", "/set", "/open fabled", "/new",
 ];
 
 const bad = await (async () => {
@@ -187,29 +177,6 @@ if (!process.argv.slice(2).length) {
     const other = sel.components[0].options.find((o) => !o.default);
     if (other) await click({ custom_id: sel.components[0].custom_id, component_type: 3, values: [other.value] }, `pick "${other.label}" from the versions menu`);
   }
-  const before = captured.length;
-  const pc = await send({ ...base_(), type: 2, data: { id: "c", type: 3, name: "Price check", target_id: "m1",
-    resolved: { messages: { m1: { id: "m1", content: "anyone got an enchanted elsa or a mowgli for trade? also lf stich" } } } } });
-  const fu = await waitFollowUp(before + 1);
-  console.log(`\nPrice check on a chat message  [initial type ${pc.json && pc.json.type}]`);
-  for (const e of (fu && fu.body.embeds) || []) console.log("  -", e.title, "|", String(e.description).split("\n").join(" | "));
-
-  // /deck: the text box, then what submitting it returns
-  const dm = await send(cmd("deck", []));
-  console.log(`\n/deck  [initial type ${dm.json && dm.json.type}] -> "${dm.json && dm.json.data && dm.json.data.title}"`);
-  const deckList = `4 Mowgli - Man Cub
-4x mogli
-4 Elsa - Spirit of Winter
-2 Be Prepard
-3 Tinker Bel - Giant Fairy
-2 Totally Not A Card`;
-  const ds = await send({ ...base_(), type: 5, data: { custom_id: dm.json.data.custom_id,
-    components: [{ type: 1, components: [{ type: 4, custom_id: "list", value: deckList }] }] } });
-  const de = ds.json && ds.json.data && ds.json.data.embeds && ds.json.data.embeds[0];
-  console.log(`submit the box  [initial type ${ds.json && ds.json.type}]`);
-  if (de) console.log("  " + de.title + "\n  " + String(de.description).split("\n").join("\n  ") + "\n  " + de.footer.text);
-  writeFileSync(new URL("deck.json", OUT), JSON.stringify(ds.json, null, 2));
-
   const img = first && first.body.embeds[0].image && first.body.embeds[0].image.url;
   if (img) {
     const t = Date.now();
