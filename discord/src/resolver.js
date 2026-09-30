@@ -26,6 +26,7 @@
 //     so a fuzzy near-miss on the version can't add a bonus on top of an exact
 //     hit on the character.
 import { norm, tokens, dl, FILLER, STOP } from "./text.js";
+import { statParts, fitParts } from "./stats.js";
 
 export const RARITIES = ["Common", "Uncommon", "Rare", "Super Rare", "Legendary", "Enchanted", "Epic", "Iconic", "Promo"];
 const CHASE = new Set(["Enchanted", "Epic", "Iconic"]);
@@ -634,7 +635,7 @@ export function createResolver(index) {
       const key = cardKey(p, fi);
       if (seen.has(key)) return;
       seen.add(key);
-      out.push({ kind: "card", i, p, fi, value: key, label: cardLabel(cards[i], p, fi) });
+      out.push({ kind: "card", i, p, fi, value: key, label: suggestLabel(cards[i], p, fi), plain: cardLabel(cards[i], p, fi) });
     };
     const pushSealed = (x, front) => {
       const key = sealedKey(x.p);
@@ -847,6 +848,22 @@ export function createResolver(index) {
     if (label.length > 100) label = label.slice(0, 99) + "…";
     return label;
   }
+  // What a /card suggestion says: the name, then the card's stats (Discord's
+  // autocomplete has no sub-line, so they share the line), then which
+  // printing. Too long for Discord's 100, the set name goes first, then
+  // "inkable", the last keywords, "uninkable" and the word "Location" (stats.js);
+  // the finish and the price stay, because two suggestions for one card are
+  // told apart by them.
+  function suggestLabel(c, p, fi) {
+    const set = sets[p.s] || {};
+    const fl = finishLabel(p, fi);
+    const f = p.f[fi] || [];
+    const printing = [{ k: "rar", t: p.r }, { k: "var", t: p.var }, { k: "fin", t: fl && fl !== p.var ? fl : null },
+      { k: "set", t: set.n }, { k: "px", t: money(f[5] ?? f[4]) }];
+    const room = 100 - c.n.length - 3;
+    if (room < 12) return cardLabel(c, p, fi);
+    return c.n + " — " + fitParts([statParts(c, { marks: true }), printing], room, ["set", "inkable", "kw", "uninkable", "type"], " | ", 0);
+  }
   function sealedLabel(p) {
     const px = money(p.mkt ?? p.low);
     let label = p.n + (px ? " · " + px : "");
@@ -855,7 +872,7 @@ export function createResolver(index) {
   }
 
   return {
-    resolve, suggest, findInText, parse, cardLabel, sealedLabel, finishLabel, sameCharAlts, resolveSet, suggestSets,
+    resolve, suggest, findInText, parse, cardLabel, suggestLabel, sealedLabel, finishLabel, sameCharAlts, resolveSet, suggestSets,
     pickPrinting: (i, dims = {}, words = []) => pickPrinting(cards[i], dims, [], words),
     cardKey, sealedKey, cards, sets, sealed, byCardId, sealedByPid, newestMainIdx, meta,
   };

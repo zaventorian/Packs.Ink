@@ -1,11 +1,18 @@
 // embeds.js — Discord message payloads. Pure: every function takes data that
 // has already been fetched and returns {embeds, components} JSON, which is what
 // lets the guard test check a reply without a network.
-import { tcgUrl, tcgSetSearchUrl, amazonForSealed, calEventTitle, calEventSubtitle, scLocalTime12, tcgMassEntryParts, tcgMassName } from "./site.generated.js";
-import { FIN_PRINTING, RANGES, DEFAULT_RANGE, MOVER_WINDOWS, MOVER_GROUPS, CAL_FILTERS } from "./data.js";
+import { tcgUrl, tcgSetSearchUrl, amazonForSealed, calEventTitle, calEventSubtitle, scLocalTime12 } from "./site.generated.js";
+import { FIN_PRINTING, RANGES, DEFAULT_RANGE, CAL_FILTERS, META_FALLBACK_DAYS } from "./data.js";
 import { tileUrl } from "./tile.js";
+import { INK_MARK, inkMarks, statsLineFor } from "./stats.js";
+export { INK_MARK, inkMarks };
 
 export const SITE = "https://packs.ink";
+// One event on the site's calendar (its detail view: when, where, the map,
+// and the organiser's own registration link). The calendar opens any id it
+// holds, and fetches an RPH event ("ev:<id>") the reader doesn't follow.
+export const eventPageUrl = (id) => (id == null || id === "" ? null
+  : `${SITE}/calendar?ce=${encodeURIComponent(String(id))}`);
 export const BRAND_COLOR = 0xe3b341;
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -133,6 +140,11 @@ export function cardMessage(ctx) {
   // that decides which version "mowgli" means.
   const ident = gameplayLine(c);
   if (ident) lines.push(`*${ident}*`);
+  // What the card DOES, under its name (Zaven, 2026-09-29).
+  const stats = statsLine(c);
+  if (stats) lines.push(stats);
+  const rules = rulesText(c);
+  if (rules) lines.push(rules);
   const play = playLine(R, res.index, ctx.playDecks);
   if (play) lines.push(play);
   lines.push("");
@@ -246,15 +258,60 @@ export function cardMessage(ctx) {
 // ── a card's identity and play ───────────────────────────────────────────
 // The six inks as Discord's coloured squares: the nearest colour Discord can
 // draw inline, and they read at a glance in a list.
-export const INK_MARK = { Amber: "🟨", Amethyst: "🟪", Emerald: "🟩", Ruby: "🟥", Sapphire: "🟦", Steel: "⬜" };
-export const inkMarks = (inks) => (inks || []).map((k) => INK_MARK[k] || "").join("");
 
 export function gameplayLine(c) {
   const bits = [];
   if (c.i && c.i.length) bits.push(`${inkMarks(c.i)} ${c.i.join("/")}`);
   if (c.cost != null) bits.push(`${c.cost} cost`);
+  if (c.ik === 0) bits.push("uninkable");
   if (c.t) bits.push(c.t + (c.k && c.k.length ? " — " + c.k.slice(0, 4).join(", ") : ""));
   return bits.join(" · ");
+}
+
+// ── the card's own text ──────────────────────────────────────────────────
+// Strength / willpower / lore (a Location's move cost instead of strength),
+// only what the card has: an action or an item has none of them.
+export function statsLine(c) {
+  const [str, wil, lore, move] = c.st || [];
+  const bits = [];
+  if (str != null) bits.push(`**${str}** strength`);
+  if (move != null) bits.push(`**${move}** to move`);
+  if (wil != null) bits.push(`**${wil}** willpower`);
+  if (lore != null) bits.push(`**${lore}** lore`);
+  return bits.join(" · ");
+}
+// The rules text as Discord shows it: one quoted line per ability, the
+// ability's NAME bold (the printed ALL-CAPS words), a keyword the card has
+// bold with its number ("Shift 4"), reminder text in italics, and the card's
+// symbols as words — Discord has no {I} glyph, and a word reads anywhere.
+const RULE_SYMBOLS = { I: "ink", E: "exert", L: "lore", S: "strength", W: "willpower", IW: "inkwell" };
+const escRule = (s) => String(s).replace(/[\\*_~`|>]/g, "\\$&");
+export function rulesText(c) {
+  if (!c || !c.x) return "";
+  const keywords = (c.w || []).slice().sort((a, b) => b.length - a.length);
+  return String(c.x).split(/\r?\n/).map((raw) => {
+    let line = escRule(raw.trim()).replace(/\{([A-Z]{1,2})\}/g, (m, k) => RULE_SYMBOLS[k] || m);
+    if (!line) return null;
+    let head = "";
+    // An ability name: the run of all-caps words that opens the line, three
+    // capitals at least, so "A character with…" stays plain.
+    const caps = /^((?:[A-Z0-9][A-Z0-9'’!?.,&-]*\s+)*[A-Z0-9][A-Z0-9'’!?.,&-]*)(?=\s+[A-Z]?[a-z(]|\s*$)/.exec(line);
+    if (caps && (caps[1].match(/[A-Z]/g) || []).length >= 3 && !/[a-z]/.test(caps[1])) {
+      head = `**${caps[1]}**`; line = line.slice(caps[1].length);
+    } else {
+      const kw = keywords.find((k) => line.toLowerCase().startsWith(k.toLowerCase()) && !/[a-z]/i.test(line.charAt(k.length) || ""));
+      if (kw) {
+        // "Shift 4 {I}": the number, and the ink it is paid in, belong to the keyword.
+        const num = /^\s*[+-]?\d+(?:\s+ink\b)?/.exec(line.slice(kw.length));
+        const len = kw.length + (num ? num[0].length : 0);
+        head = `**${line.slice(0, len)}**`; line = line.slice(len);
+      }
+    }
+    line = line.replace(/\(([^()]*)\)/g, (m, inner) => `*(${inner.trim()})*`);
+    // An ability that costs exerting opens with it: "Exert, 1 ink — …".
+    line = line.replace(/^(\s*)exert\b/, "$1Exert");
+    return "> " + (head + line).trim();
+  }).filter(Boolean).join("\n");
 }
 
 // Rank among every card with a recent top-cut appearance, most played first.
@@ -305,8 +362,11 @@ export function versionOptions(R, res) {
     const px = money(f[5] ?? f[4]);
     out.push({
       label: clip(i === res.index ? [set.n, p.r, fin].filter(Boolean).join(" · ") : c.n, 100),
-      description: clip([i === res.index ? (p.no ? "#" + p.no : null) : set.n, i === res.index ? null : p.r,
-        i === res.index ? p.var : fin, px].filter(Boolean).join(" · "), 100) || undefined,
+      // The card's own printings share its stats, which are on screen above;
+      // another version gets its stats, then rarity and price (stats.js).
+      description: (i === res.index
+        ? clip([p.no ? "#" + p.no : null, p.var, px].filter(Boolean).join(" · "), 100)
+        : statsLineFor(c, [p.r, fin, { k: "set", t: set.n }, px])) || undefined,
       value: k,
     });
   };
@@ -389,136 +449,13 @@ export function notFoundMessage(R, res, query, ids) {
     embed.description += "\n\nDid you mean one of these?";
     components.push({ type: 1, components: [{
       type: 3, custom_id: pickId("chart", DEFAULT_RANGE), placeholder: "Pick a card",
-      options: sug.map((s) => ({ label: clip(s.label, 100), value: s.value })),
+      // A card's stats go on the option's sub-line; its label says which printing.
+      options: sug.map((s) => s.kind === "card"
+        ? { label: clip(s.plain || s.label, 100), value: s.value, description: statsLineFor(R.cards[s.i]) || undefined }
+        : { label: clip(s.label, 100), value: s.value }),
     }] });
   }
   return { embeds: [embed], components };
-}
-
-// ── several cards at once (the "Price check" message command) ──────────
-export function compactCardEmbed(ctx) {
-  const { R, res, price } = ctx;
-  const c = res.card, p = res.printing, f = p.f[res.fi] || p.f[0];
-  const set = R.sets[p.s] || {};
-  const fin = R.finishLabel(p, res.fi);
-  const mkt = price ? price.market : f && f[5], low = price ? price.low : f && f[4];
-  const d = price ? (price.market != null ? price.mktDelta : price.lowDelta) : null;
-  const lines = [
-    [set.n, p.no ? "#" + p.no : null, p.r, p.var, fin && fin !== p.var ? fin : null].filter(Boolean).join(" · "),
-    [mkt != null ? `**${money(mkt)}** NM Market` : null, low != null ? `${money(low)} Low` : null].filter(Boolean).join(" · ") || "No TCGplayer price yet.",
-    d ? [["1w", "1W"], ["1m", "1M"]].map(([k, l]) => (d[k] != null ? `${l} ${pct(d[k])}` : null)).filter(Boolean).join(" · ") : "",
-  ].filter(Boolean);
-  const img = cardImage(p, ctx.origin);
-  return {
-    title: clip(c.n, 256), url: buyUrl(c.n, f && !f[6] ? f[1] : null, (f && f[2]) || FIN_PRINTING[f && f[0]] || "Normal"),
-    color: hex(c.i && c.i[0] && ctx.inkColors ? ctx.inkColors[c.i[0]] : null),
-    description: lines.join("\n"),
-    ...(img ? { thumbnail: { url: img } } : {}),
-  };
-}
-
-// "Price check" on a message: up to three compact embeds and a menu to open
-// one properly. Each title is an affiliate link, so the disclosure goes under
-// them, once (a sealed embed already carries it in its own footer).
-export function priceCheckMessage({ embeds, options, range = DEFAULT_RANGE }) {
-  const last = embeds[embeds.length - 1];
-  if (last && !(last.footer && last.footer.text)) last.footer = { text: AFFILIATE_NOTE };
-  return {
-    embeds,
-    components: options && options.length
-      ? [{ type: 1, components: [{ type: 3, custom_id: pickId("chart", range), placeholder: "Open one with its price chart", options }] }]
-      : [],
-  };
-}
-
-// ── movers ───────────────────────────────────────────────────────────────
-// The board is browsed, not re-typed: every control below redraws THIS
-// message. The state rides in each control's custom_id —
-//   m|<control>|<window>|<up|down>|<group>|<market|low>|<min>
-// ⚠ The <control> letter is what keeps custom_ids unique: the highlighted
-// window button, the highlighted direction and the highlighted basis all
-// describe the CURRENT board, and Discord refuses a message in which two
-// components share a custom_id.
-const MOVER_BUTTON_WINDOWS = ["1d", "1w", "1m", "3m", "1y"];
-export const moversId = (ctl, s) => `m|${ctl}|${s.win}|${s.dir}|${s.group}|${s.basis}|${s.min}`;
-export function parseMoversId(id) {
-  const m = /^m\|([wdbg])\|([a-z0-9]+)\|(up|down)\|([a-z]+)\|(market|low)\|(\d{1,5}(?:\.\d{1,2})?)$/.exec(String(id || ""));
-  if (!m || !MOVER_WINDOWS[m[2]] || !MOVER_GROUPS[m[4]]) return null;
-  return { win: m[2], dir: m[3], group: m[4], basis: m[5], min: Number(m[6]) };
-}
-const SEALED_SINGULAR = {
-  "Booster Boxes": "Booster Box", "Illumineer's Troves": "Trove", "Gift Sets": "Gift Set",
-  "Collector's Edition": "Collector's Edition", "Bundles": "Bundle", "Quests": "Quest",
-};
-const FIN_CODE = { "Normal": "N", "Cold Foil": "C", "Holofoil": "H", "Foil": "F" };
-
-export function moversMessage({ result, win, dir, group, basis, min, R }) {
-  const w = MOVER_WINDOWS[win] || MOVER_WINDOWS["1d"];
-  const g = MOVER_GROUPS[group] || MOVER_GROUPS.all;
-  const state = { win, dir, group, basis, min };
-  const rows = result.rows || [];
-  const title = `${dir === "down" ? "Biggest drops" : "Biggest gains"} · ${w.label} · ${g.sealed ? "Sealed product" : g.label}`;
-  const picks = [];
-  let topImg = null;
-  const lines = rows.map((r, i) => {
-    let name, url, what, was, now, change, key, img;
-    if (result.sealed) {
-      const s = r.s;
-      name = s.n; url = tcgUrl(s.pid, "Normal");
-      what = [SEALED_SINGULAR[s.ty] || s.ty, s.sn].filter(Boolean).join(" · ");
-      was = money(r.prior); now = money(r.now); change = r.pct;
-      key = R.sealedKey(s); img = s.img;
-    } else {
-      name = r.version ? `${r.name} - ${r.version}` : r.name;
-      url = buyUrl(name, r.tcgplayer_product_id, r.printing);
-      const fin = finishWord(R, r);
-      what = r.rarity + (fin ? " · " + fin : "");
-      was = money(r[result.priorCol]); now = money(r[result.todayCol]); change = Number(r[result.col]);
-      key = R.byCardId.has(r.card_id) ? `c|${r.card_id}|${FIN_CODE[r.printing] || "N"}` : null;
-      img = r.tcgplayer_product_id ? `https://tcgplayer-cdn.tcgplayer.com/product/${r.tcgplayer_product_id}_in_1000x1000.jpg` : null;
-    }
-    if (key && !picks.some((p) => p.value === key)) {
-      picks.push({ label: clip(name, 100), value: key, description: clip(`${pct(change)} · ${what} · ${now}`, 100) });
-    }
-    if (i === 0) topImg = img;
-    return `\`${String(i + 1).padStart(2)}\` **${pct(change)}** [${clip(name, 60)}](${url}) · ${what} · ${was} → **${now}**`;
-  });
-  const embed = {
-    title, color: rows.length ? (dir === "down" ? 0xe86868 : 0x5cc480) : BRAND_COLOR,
-    description: rows.length ? fitLines(lines, 4000)
-      : "Nothing cleared the filters. Try a longer window or another group below" + (min > 0 ? `, or a lower price floor than ${money(min)} with \`/movers min_price\`.` : "."),
-    footer: { text: [`TCGplayer ${basis === "low" ? "Low" : g.sealed ? "Market" : "NM Market"}`, `starting price ≥ ${money(min)}`,
-      result.latest ? `prices as of ${shortDate(result.latest)}` : null, rows.length ? AFFILIATE_NOTE : null].filter(Boolean).join(" · ") },
-  };
-  if (topImg) embed.thumbnail = { url: topImg };
-
-  const btn = (label, ctl, s, on) => ({ type: 2, style: on ? 1 : 2, label, custom_id: moversId(ctl, s), disabled: !!on });
-  const wins = MOVER_BUTTON_WINDOWS.includes(win) ? MOVER_BUTTON_WINDOWS : MOVER_BUTTON_WINDOWS.map((k) => (k === "3m" ? win : k));
-  const components = [
-    { type: 1, components: wins.map((k) => btn(MOVER_WINDOWS[k].label, "w", { ...state, win: k }, k === win)) },
-    { type: 1, components: [
-      btn("▲ Gains", "d", { ...state, dir: "up" }, dir === "up"),
-      btn("▼ Drops", "d", { ...state, dir: "down" }, dir === "down"),
-      btn(g.sealed ? "Market" : "NM Market", "b", { ...state, basis: "market" }, basis === "market"),
-      btn("Low", "b", { ...state, basis: "low" }, basis === "low"),
-    ] },
-    { type: 1, components: [{
-      type: 3, custom_id: moversId("g", state), placeholder: "Which cards",
-      options: Object.entries(MOVER_GROUPS).map(([k, v]) => ({ label: clip(v.label, 100), value: k, default: k === group })),
-    }] },
-  ];
-  if (picks.length) components.push({ type: 1, components: [{ type: 3, custom_id: openId("chart"), placeholder: "Look at one of these", options: picks.slice(0, 25) }] });
-  components.push({ type: 1, components: [{ type: 2, style: 5, label: "Open the Screener", url: `${SITE}/screener${g.sealed ? "?m=sealed" : ""}` }] });
-  return { embeds: [embed], components };
-}
-
-// A finish word only when the card really has two printings — the site's
-// printingBadge rule, read from the index the build stamped.
-function finishWord(R, row) {
-  const hit = R.byCardId.get(row.card_id);
-  if (!hit) return null;
-  const f = hit.p.f.find((x) => x[2] === row.printing);
-  return f ? f[3] || (hit.p.f.length > 1 ? (f[0] === "N" ? "Non-foil" : "Foil") : null) : null;
 }
 
 // ── events near a place ──────────────────────────────────────────────────
@@ -549,7 +486,8 @@ export function eventsMessage({ place, byKind, radius, kind = "all", query }) {
     const unix = Math.floor(Date.parse(occ.start_datetime || s.next_start) / 1000);
     const when = Number.isFinite(unix) ? `<t:${unix}:f>` : shortDate(s.next_start);
     const name = clip(s.store_name || s.name, 48);
-    const store = occ.url ? `[${name}](${occ.url})` : name;
+    const page = eventPageUrl(occ.event_id != null ? "ev:" + occ.event_id : null) || occ.url;
+    const store = page ? `[${name}](${page})` : name;
     const bits = [`**${when}**`, store, `${Math.round(s.distance_mi || 0)} mi`];
     const fmt = FORMAT_SHORT[s.gameplay_format] ?? s.gameplay_format;
     if (fmt && s.kind !== "sc") bits.push(fmt);
@@ -593,7 +531,8 @@ export function eventsMessage({ place, byKind, radius, kind = "all", query }) {
       if (!g) { g = { name: s.store_name || s.name, mi: s.distance_mi || 0, url: null, first: s.next_start, slots: new Map() }; stores.set(k, g); }
       g.mi = Math.min(g.mi, s.distance_mi || 0);
       const occ = (s.occurrences || [])[0] || {};
-      if (occ.url && (!g.url || String(s.next_start) < String(g.first))) { g.url = occ.url; g.first = s.next_start; }
+      const page = eventPageUrl(occ.event_id != null ? "ev:" + occ.event_id : null) || occ.url;
+      if (page && (!g.url || String(s.next_start) < String(g.first))) { g.url = page; g.first = s.next_start; }
       // One slot per night and time; a store running Core and Infinity at
       // the same hour is one night with two formats, not two nights.
       const fmt = FORMAT_SHORT[s.gameplay_format] ?? s.gameplay_format ?? "";
@@ -671,7 +610,8 @@ export function calendarMessage({ events, kind = "all", region = "all", regions 
     // is noise, beside the next thing it is the answer.
     const rel = k === 0 && Number.isFinite(t) ? ` (<t:${Math.floor(t / 1000)}:R>)` : "";
     const name = clip(calEventTitle(e), 60);
-    const title = e.url && /^https:\/\//.test(e.url) && e.url.length <= 300 ? `[${name}](${e.url})` : `**${name}**`;
+    const page = eventPageUrl(e.id) || (e.url && /^https:\/\//.test(e.url) && e.url.length <= 300 ? e.url : null);
+    const title = page ? `[${name}](${page})` : `**${name}**`;
     const where = (e.kind === "dlc" || e.kind === "ccq") && e.location ? " · " + shortPlace(e.location) : "";
     months.get(key).push(`${CAL_MARK[e.kind] || "•"} ${title}${e.estimated ? " *(estimated)*" : ""}${where} — ${when}${rel}`);
   });
@@ -721,14 +661,14 @@ export const cmdMention = (ids, name) => {
 };
 export const helpTryId = (what) => `h|${what}`;
 export function parseHelpTryId(id) {
-  const m = /^h\|(card|trade|open|set|movers)$/.exec(String(id || ""));
+  const m = /^h\|(card|open|set)$/.exec(String(id || ""));
   return m ? m[1] : null;
 }
 export function helpMessage(ids) {
   const c = (n) => cmdMention(ids, n);
   return {
     embeds: [{
-      title: "packs.ink — Lorcana prices, trades and events", color: BRAND_COLOR, url: SITE,
+      title: "packs.ink — Lorcana cards, prices and events", color: BRAND_COLOR, url: SITE,
       description: "Type names the way you'd say them: `mowgli`, `enchanted elsa`, `elsa psa 10`, `stich`, `azurite box`. " +
         "No subtitle? You get the version people actually play — switch versions from the menu under any card.",
       fields: [
@@ -738,27 +678,20 @@ export function helpMessage(ids) {
           `${c("set")} \`azurite\` — box price vs box EV, chase cards`,
           `${c("new")} — the newest cards, as they're revealed`,
         ].join("\n") },
-        { name: "Trading", value: [
-          `${c("trade")} — is a trade fair? Both sides priced, cash too`,
-          `${c("deck")} — paste a decklist, see what it costs to build`,
-          "Right-click a message → **Apps → Price check** — prices a trade post (H: / W:), a decklist, or any cards it mentions",
-        ].join("\n") },
-        { name: "Market", value: `${c("movers")} — biggest gains and drops, cards or sealed; flip windows with the buttons` },
         { name: "Play", value: [
           `${c("events")} \`60614\` — Set Championships, prereleases and weekly play near you`,
-          `${c("meta")} — the most-played cards and the latest tournament winners`,
+          `${c("meta")} — which ink pairs win, the most-played cards, the latest big events`,
           `${c("calendar")} — set releases, Challenges and qualifiers coming up`,
         ].join("\n") },
         { name: "For fun", value: `${c("open")} — open a booster pack (or a box) at real prices` },
-        { name: "Server managers", value: `${c("reports daily")} — the day's movers posted in a channel` },
+        { name: "Server managers", value: `${c("reports daily")} — the day's movers posted in a channel · ${c("reports send")} — post one now` },
       ],
       footer: { text: "Add private: True to a command to see the reply alone · prices from TCGplayer, sales from eBay · packs.ink" },
     }],
     components: [{ type: 1, components: [
       { type: 2, style: 1, label: "Try a card", custom_id: helpTryId("card") },
-      { type: 2, style: 2, label: "Try a trade", custom_id: helpTryId("trade") },
       { type: 2, style: 2, label: "Open a pack", custom_id: helpTryId("open") },
-      { type: 2, style: 2, label: "Today's movers", custom_id: helpTryId("movers") },
+      { type: 2, style: 2, label: "A set at a glance", custom_id: helpTryId("set") },
       { type: 2, style: 5, label: "packs.ink", url: SITE },
     ] }],
   };
@@ -777,9 +710,35 @@ export function deckPageUrl(r) {
   if (r.deck_visibility !== "public" && r.deck_share_token) u.searchParams.set("token", r.deck_share_token);
   return u.toString();
 }
-export function metaMessage({ R, index, results }) {
+// Ten cells in a code span, so the column lines up in any font. Scaled to the
+// LEADING pair, not to 100%: the top pair holds a quarter of the top 8s, so an
+// absolute bar is two or three cells for everyone and two pairs showing the
+// same "25%" came out a cell apart on rounding. Any pair at all gets a cell.
+const metaBar = (n, lead) => {
+  const k = lead > 0 ? Math.max(n > 0 ? 1 : 0, Math.min(10, Math.round((n / lead) * 10))) : 0;
+  return "█".repeat(k) + "░".repeat(10 - k);
+};
+export function metaMessage({ R, index, meta }) {
+  const m = meta || { breakdown: [], recent: [], events: 0, decks: 0 };
+  const since = m.sinceSet ? `since ${m.sinceSet} (${shortDate(m.from)})` : `in the last ${META_FALLBACK_DAYS} days`;
+  const lead = (m.breakdown && m.breakdown[0] && m.breakdown[0].n) || 0;
+  const pairLines = (m.breakdown || []).slice(0, 8).map((p) => {
+    const share = m.decks ? p.n / m.decks : 0;
+    const pct = String(Math.round(share * 100)).padStart(2) + "%";
+    const bits = [`${p.n} deck${p.n === 1 ? "" : "s"}`];
+    if (p.t4) bits.push(`${p.t4} top 4`);
+    if (p.wins) bits.push(`${p.wins} win${p.wins === 1 ? "" : "s"}`);
+    return `${inkMarks(p.inks)} \`${metaBar(p.n, lead)} ${pct}\` **${p.inks.join("/")}** · ${bits.join(" · ")}`;
+  });
+  const decksEmbed = {
+    title: "What's winning: ink pairs in top 8s", color: BRAND_COLOR, url: `${SITE}/decks?s=tournaments`,
+    description: m.decks
+      ? `${m.decks} top-8 decks from ${m.events} Core event${m.events === 1 ? "" : "s"} ${since}.\n\n` + fitLines(pairLines, 1600)
+      : `No Core top 8s on record ${since}.`,
+  };
+
   const ranked = R.cards.map((c, i) => ({ c, i })).filter((x) => x.c.pl > 0)
-    .sort((a, b) => b.c.pl - a.c.pl || a.i - b.i).slice(0, 12);
+    .sort((a, b) => b.c.pl - a.c.pl || a.i - b.i).slice(0, 10);
   const total = index.playDecks || 0;
   const picks = [];
   const lines = ranked.map((x, k) => {
@@ -788,122 +747,33 @@ export function metaMessage({ R, index, results }) {
     const listed = !f[6];
     const px = listed ? (f[5] ?? f[4]) : null;
     const share = total > 0 ? ` · in ${Math.round((x.c.pl / total) * 100)}% of decks` : "";
-    picks.push({ label: clip(x.c.n, 100), value: R.cardKey(printing, fi), description: clip(`#${k + 1} most played${px != null ? " · " + money(px) : ""}`, 100) });
+    picks.push({ label: clip(x.c.n, 100), value: R.cardKey(printing, fi), description: statsLineFor(x.c, [`#${k + 1} most played`, px != null ? money(px) : null]) });
     return `\`${String(k + 1).padStart(2)}\` ${inkMarks(x.c.i)} [${clip(x.c.n, 44)}](${buyUrl(x.c.n, listed ? f[1] : null, f[2] || FIN_PRINTING[f[0]])})${share}${px != null ? ` · ${money(px)}` : ""}`;
   });
   const played = {
-    title: "Most played in recent tournaments", color: BRAND_COLOR, url: `${SITE}/decks?s=tournaments`,
-    description: fitLines(lines, 4000) || "No tournament decks on record yet.",
+    title: "Most played cards", color: BRAND_COLOR, url: `${SITE}/decks?s=tournaments`,
+    description: fitLines(lines, 2400) || "No tournament decks on record yet.",
   };
+
   const fields = [];
-  for (const t of results || []) {
-    if (!t.top || !t.top.length) continue;
-    const rows = t.top.map((r) => {
+  for (const t of m.recent || []) {
+    const rows = t.top.slice(0, 4).map((r) => {
       const inks = (r.deck_inks || []).filter(Boolean);
       const deck = clip(r.deck_name || inks.join("/") || "Deck", 40);
       const link = r.deck_id ? `[${escMd(deck)}](${deckPageUrl(r)})` : escMd(deck);
       return `${PLACE_MARK[r.place_rank] || "▫️"} ${escMd(clip(r.player_name || "?", 28))} — ${inkMarks(inks)} ${link}${PLACE_MARK[r.place_rank] ? "" : ` *(${escMd(r.place || "top " + r.place_rank)})*`}`;
     });
-    const meta = [shortDate(t.event_date), t.num_players ? `${t.num_players} players` : null].filter(Boolean).join(" · ");
-    fields.push({ name: clip(`${t.name}${meta ? " — " + meta : ""}`, 256), value: fitLines(rows, 1024) });
+    const bits = [shortDate(t.date), t.players ? `${t.players} players` : null, t.format && t.format !== "core" ? t.format[0].toUpperCase() + t.format.slice(1) : null];
+    const meta_ = bits.filter(Boolean).join(" · ");
+    fields.push({ name: clip(`${t.name}${meta_ ? " — " + meta_ : ""}`, 256), value: fitLines(rows, 1024) });
   }
-  const results_ = {
-    title: "Latest results", color: BRAND_COLOR, url: `${SITE}/decks?s=tournaments`,
+  const results = {
+    title: "Latest big events", color: BRAND_COLOR, url: `${SITE}/decks?s=tournaments`,
     ...(fields.length ? { fields } : { description: "No recent results on record." }),
-    footer: { text: `Play share is recency-weighted across recent top-cut decks · TCGplayer NM Market as of ${shortDate(index.priceDate)} · ${AFFILIATE_NOTE}` },
+    footer: { text: `Top 8s from events packs.ink tracks · play share is recency-weighted across recent top cuts · TCGplayer NM Market as of ${shortDate(index.priceDate)} · ${AFFILIATE_NOTE}` },
   };
   const components = [];
   if (picks.length) components.push({ type: 1, components: [{ type: 3, custom_id: openId("card"), placeholder: "Look at a card", options: picks.slice(0, 25) }] });
   components.push({ type: 1, components: [{ type: 2, style: 5, label: "All tournament results", url: `${SITE}/decks?s=tournaments` }] });
-  return { embeds: [played, results_], components };
-}
-
-// ── a whole decklist ─────────────────────────────────────────────────────
-export function deckMessage({ result, priceDate, tcgNames }) {
-  const r = result;
-  const lines = [
-    `**${money(r.totalMarket) || "$0.00"}** at NM Market · ${money(r.totalLow) || "$0.00"} at Low`,
-    `*${r.count} cards, each at its cheapest printing.*`,
-  ];
-  if (r.count !== 60) lines.push(`Note: that's ${r.count} cards — a Lorcana deck is 60.`);
-  lines.push("");
-  const tail = [];
-  if (r.unmatched.length) {
-    tail.push("", "Couldn't find: " + r.unmatched.slice(0, 8).map((e) => `“${clip(e.name, 40)}”`).join(", ") +
-      (r.unmatched.length > 8 ? ` and ${r.unmatched.length - 8} more` : "") + " — not counted.");
-  }
-  if (r.unpricedMarket) tail.push(`${r.unpricedMarket} card${r.unpricedMarket === 1 ? " has" : "s have"} no NM Market price and count as $0.`);
-  // Most valuable first, as many WHOLE lines as fit beside the header and the
-  // notes (each is an affiliate link of ~200 characters; clipping one mid-way
-  // would show a broken link), and the rest summed in one line.
-  const rowLine = (x) => {
-    // The link buys the printing the price came from — the cheapest one.
-    const f = x.mktAt ? x.mktAt.f : null;
-    const url = buyUrl(x.card.n, f && !f[6] ? f[1] : null, f ? f[2] || FIN_PRINTING[f[0]] : "Normal");
-    const each = x.mkt != null ? money(x.mkt) : "no price";
-    const tot = x.mkt != null ? ` · **${money(x.mkt * x.qty)}**` : "";
-    return `\`${String(x.qty).padStart(2)}×\` [${clip(x.card.n, 48)}](${url}) — ${each} ea${tot}${x.guessed ? " *(closest match)*" : ""}`;
-  };
-  let budget = 3900 - lines.join("\n").length - tail.join("\n").length - 120;
-  let shown = 0;
-  for (const x of r.rows.slice(0, 15)) {
-    const l = rowLine(x);
-    if (l.length + 1 > budget) break;
-    lines.push(l);
-    budget -= l.length + 1;
-    shown++;
-  }
-  if (r.rows.length > shown) {
-    const rest = r.rows.slice(shown);
-    const restTotal = rest.reduce((s, x) => s + (x.mkt != null ? x.mkt * x.qty : 0), 0);
-    const restCount = rest.reduce((s, x) => s + x.qty, 0);
-    lines.push(`…and ${restCount} more card${restCount === 1 ? "" : "s"} (${rest.length} line${rest.length === 1 ? "" : "s"}) worth ${money(restTotal) || "$0.00"} together.`);
-  }
-  lines.push(...tail);
-  const embeds = [{
-    title: "Deck price", color: BRAND_COLOR, description: lines.join("\n"),
-    footer: { text: `TCGplayer prices as of ${shortDate(priceDate)} · cheapest printing of each card · ${AFFILIATE_NOTE}` },
-  }];
-  // The whole list as ONE TCGplayer cart (mass entry), each card spelled the
-  // way TCGplayer spells it — the site's own builder. A 60-card list is always
-  // one cart. Its own embed: the cart URL runs to a couple of thousand
-  // characters, and the list above already uses most of its 4,096.
-  const cart = deckCartUrl(r, tcgNames);
-  if (cart) {
-    embeds.push({ color: BRAND_COLOR,
-      description: `🛒 [**Buy the whole deck on TCGplayer** — one cart, ${r.rows.reduce((s, x) => s + x.qty, 0)} cards](${cart})\n*Each card by name at its base printing; pick foils in the cart.*` });
-  }
-  return { embeds, components: [] };
-}
-
-const MASS_NAMES = new WeakMap();
-export function tcgNameMap(obj) {
-  if (!obj) return null;
-  let m = MASS_NAMES.get(obj);
-  if (!m) { m = new Map(Object.entries(obj).map(([k, v]) => [Number(k), v])); MASS_NAMES.set(obj, m); }
-  return m;
-}
-export function deckCartUrl(r, tcgNames) {
-  const byName = new Map();
-  for (const x of r.rows || []) {
-    const f = x.mktAt ? x.mktAt.f : null;
-    const name = tcgMassName(tcgNames, f && !f[6] ? f[1] : null, x.card.n);
-    if (name) byName.set(name, (byName.get(name) || 0) + x.qty);
-  }
-  if (!byName.size) return null;
-  const parts = tcgMassEntryParts([...byName].map(([name, qty]) => `${qty} ${name}`));
-  const url = parts[0] && parts[0].url;
-  return url && url.length <= 3800 ? url : null;
-}
-
-export const DECK_MODAL_ID = (priv) => `deck|${priv ? "p" : "-"}`;
-export function deckModal(priv) {
-  return {
-    custom_id: DECK_MODAL_ID(priv), title: "Price a decklist",
-    components: [{ type: 1, components: [{
-      type: 4, custom_id: "list", style: 2, label: "Paste the decklist", required: true,
-      min_length: 3, max_length: 4000,
-      placeholder: "4 Mowgli - Man Cub\n4 Elsa - Spirit of Winter\n2 Be Prepared\n…",
-    }] }],
-  };
+  return { embeds: [decksEmbed, played, results], components };
 }

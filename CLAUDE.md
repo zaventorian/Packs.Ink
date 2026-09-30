@@ -4871,8 +4871,8 @@ Zaven's ask: call a card in Discord and get its picture and price history, plus
 trend reports, with **plain-English, typo-tolerant lookup as the main
 requirement** — "people will say mowgli and not know the subtitle, but there is
 one main one that is played, or spell mowgli slightly wrong". `/card`, `/price`,
-`/trade`, `/deck`, `/set`, `/open`, `/new`, `/movers`, `/meta`, `/events`, `/calendar`,
-`/help`, `/reports` and a **Price check** message menu (v2 additions below).
+`/set`, `/open`, `/new`, `/meta`, `/events`, `/calendar`, `/help` and `/reports`
+(v2 additions below; what changed on 2026-09-29 is in its own section).
 Setup (the steps only Zaven can do) is `discord/README.md`.
 Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
 `python scripts/test_discord_reports.py`.
@@ -4970,9 +4970,16 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
     Every plain edit carries `attachments: []`, or switching to the chart would
     leave the tile hanging loose under the embed. A refused upload (any
     status) is re-sent once with the link, then the plain-text fallback as
-    before; a file the asset store can't produce stays a link. Charts stay
-    links (drawn on request, never the problem), and so do the instant
-    `/set` / `/open` replies, which are not deferred edits.
+    before; a file the asset store can't produce stays a link.
+  - **⚠ Charts are uploaded too** (same day, Zaven: *"now when I click over to
+    price graph, that wont load unless I click through all the options"*).
+    `withUploads` draws them in-process with `chartResponse` — the very route
+    Discord would have fetched, so the picture is identical — and a chart whose
+    database read fails keeps its link. A live tail showed Discord downloads a
+    linked chart THREE times (~2 s after the edit, three different IPs, GET
+    with a Discordbot UA, never HEAD), each a fresh Supabase read and redraw
+    at 27–35 ms of CPU, not the ~5 ms the render alone costs. TCGplayer
+    thumbnails and the instant `/set` / `/open` replies stay links.
   - History is fetched per product for 45 days, then a year for the few whose
     1M reference (or latest price) sits further back (`needsLonger`), so the
     numbers match the site's card page. The art is cached between runs in
@@ -4985,15 +4992,10 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
     late-running 21:45 schedule.
 - **Every TCGplayer link is the affiliate link** (`buyUrl()`: `tcgUrl` for a
   listed printing, `tcgSetSearchUrl` — a TCGplayer search for the name — for one
-  that isn't). Card titles, the Buy/Find button, /movers, /deck and Price check
-  all go through it, and every message carrying one ends its footer with
+  that isn't). Card titles, the Buy/Find button and /meta's card list all go
+  through it, and every message carrying one ends its footer with
   "Links may earn packs.ink a commission". The guard fails a reply with a
   non-affiliate TCGplayer link or without that line.
-- **`/movers` defaults to NM Market and drops stale rows.** Low produced a $7 →
-  $0.50 "crash" on the first live test. And `price_movers` repeats a SKU's last
-  change after its listing disappears, so a mover only counts when
-  `prices_daily` holds the same price for it on the newest date (`fetchMovers`).
-  The window floor is on the STARTING price, the home banners' rule.
 - **On a promo TCGplayer cannot price, eBay leads** — the site's raw-sales
   rule (see "Raw eBay sales"): Last sold + Avg of last N come first, TCGplayer
   Low / Mkt second, and the chart draws each eBay sale as a DOT over the Market
@@ -5001,25 +5003,13 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
   alone (`/chart/r/...`) for a card with no TCGplayer product. The split bucket
   goes through `gradedSlotBucket` / `rawSaleMatch`, copied from the site, so a
   Challenge card's Top Prize and Prize Wall sales never share a chart.
-- **`/deck` opens a text box** (a modal, type 9) because a slash-command option
-  cannot hold line breaks, and **Price check on a message that is mostly
-  `N Name` lines totals it as a deck** (`looksLikeDeck`: ≥5 card lines and ≥60%
-  of the lines). Each card is priced at its CHEAPEST printing, NM Market and Low.
-  Three matching tiers, cheapest first: the exact normalized name; a full name
-  within 1–2 letters of exactly ONE card (`Be Prepard`, `Tinker Bel - Giant
-  Fairy`; close to two cards means neither); then the resolver, only when it is
-  unambiguous and sure (score ≥ 0.9, or a corrected typo ≥ 0.75). A guessed row
-  says `(closest match)`; an unknown line is listed as not counted, never
-  guessed. **⚠ The resolver runs at most `MAX_GUESSES` (8) times a list** — it is
-  ~1 ms a call, a real exported list needs none, and the Worker has a small CPU
-  budget. The name index is built at startup (`prepareDeckIndex`), not per request.
 - **`/reports`** stores (server, channel, cadence) in
   `discord_report_subscriptions` (**migration 173, APPLIED 2026-09-28**) through the service
   key; `scripts/discord_reports.py` posts the report through the bot token,
   daily and on Mondays for weekly. The movers data, the standing maths and the
   freshness rules come from `discord_digest.py`; the LAYOUT is the report's
-  own (see "The channel report's layout" below). It adds the same stale-row
-  filter the Worker uses. A 403/404 is written to `last_error`, which
+  own (see "The channel report's layout" below). It drops a mover whose
+  "today" is not today (`drop_stale`). A 403/404 is written to `last_error`, which
   `/reports status` shows.
   - **⚠ It runs when an ETL run FINISHES** (`workflow_run` on "ETL", which
     cron-job.org dispatches on time), with the 21:20 / 23:20 UTC schedule kept
@@ -5049,8 +5039,9 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
 ### v2 (2026-09-28): /trade, /set, /open, /meta, boards you browse
 
 - **The free plan's 10 ms of CPU is the binding constraint, and v1 was over it
-  on two paths**: a cold first lookup (~11 ms) and Price check on a long chat
-  message (~15–17 ms) — over the limit the reply simply never arrives. The
+  on two paths**: a cold first lookup (~11 ms) and Price check (since retired)
+  on a long chat message (~15–17 ms) — over the limit the reply simply never
+  arrives. The
   resolver now precomputes the popularity priors and each character's versions,
   skips an edit distance when the two tokens' LETTER SETS differ by more than
   2 per allowed edit (exact: one edit changes the set by at most two symbols —
@@ -5066,32 +5057,12 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
 - **⚠ Every component in a message needs a DIFFERENT custom_id** — Discord
   refuses the message otherwise. The boards highlight the current state on
   several controls at once, so each control carries a letter:
-  `m|<w|d|b|g>|…` (movers), `e|<k|r>|…` (events), `cl|<k|r>|…` (calendar),
+  `e|<k|r>|…` (events), `cl|<k|r>|…` (calendar),
   and a second card menu is `o|card|1` beside the first's `o|card`.
   `checkMessage` in the guard asserts uniqueness on every reply.
-- **`/trade` prices each card at the VERSION the words name** — "enchanted
-  elsa" is the Enchanted — never at its cheapest printing (that is /deck's
-  question, not a trade's). Prices come from the index (rebuilt daily after
-  the ETL), so the reply needs no database read. Commas split items EXCEPT
-  between the word pairs real card names hold ("Fix-It Felix, Jr.", "Wake Up,
-  Alice!" — built from the index); "and", "&" and "for" never split (55 names
-  hold "and"/"&", 20 hold "for"). A whole line that is an exact card name wins
-  over reading its first number as a count ("99 Puppies"). Capped at 15 items
-  a side and 24 resolver calls a trade.
-- **The trade hands off to the site's Trade Compare through its ORIGINAL inline
-  form, `?trade=<base64url JSON>`** — still decoded by `decodeTrade` — rather
-  than `create_trade`: no database write, and that RPC's per-IP rate limit
-  would see every bot user as one Worker. Keys are the site's `tradeGroupKey`,
-  so a Challenge Promo (C1) card carries its printing (`sets[].sp` in the index).
-- **Price check reads a trade post as a trade** (`H:`/`Have:`/`W:`/`Want:`/`LF`/
-  `FT`/`ISO` markers, one-line or multi-line, markdown-bold or bulleted), then
-  a decklist as a deck, then free text card by card (only that last path is
-  capped at 1,200 characters).
-- **Box EV, sealed movers and play shares are computed in the daily index
-  build** with the site's own code: `processData` + `calcEV` (the EV tool's
-  defaults — nothing excluded, Low and NM Market), `computeSealedDeltas` as of
-  the index's price date (so a delisted product reports no move), and
-  `playDecks` (the recency-weighted count of top-cut decks, so a card's `pl`
+- **Box EV and play shares are computed in the daily index build** with the
+  site's own code: `processData` + `calcEV` (the EV tool's defaults — nothing
+  excluded, Low and NM Market), and `playDecks` (the recency-weighted count of top-cut decks, so a card's `pl`
   reads as "in 38% of decks"). An unreleased set shows no box EV — its prices
   are pre-sale.
 - **`/open` is the site's `simPack` with `getPull`** (copied by
@@ -5133,9 +5104,7 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
   first (they share a weekend); weekly play is one line per store.
 - **`/set`'s chase list is its own embed's description, not a field**: every
   name is a ~220-character affiliate link and a field's 1,024 clipped the list
-  mid-link. Same reason `/deck`'s one-cart TCGplayer link (the site's
-  `tcgMassEntryParts` + `tcgMassName`, with `tcgplayer_names` carried in the
-  index) is a second embed.
+  mid-link.
 - **Commands are registered BEFORE the deploy** (`register_commands.mjs --ids
   src/command-ids.json`) so their ids are bundled and /help shows them as
   clickable `</name:id>` mentions; the interactions endpoint is set AFTER
@@ -5146,6 +5115,80 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
 - **The channel report has its own layout** (see the next section); the
   digest's embed (`build_embed`, shared with the site's never-configured
   webhook) is untouched.
+
+### 2026-09-29: four commands retired, /meta by ink pair, send now, card text
+
+Zaven: *"lets kill trade, deck, price check, movers"*. `/trade`, `/deck`,
+`/movers` and the **Price check** message menu are gone, with `trade.js`,
+`deck.js`, the movers board, the deck modal and `tcgplayer_names` in the index.
+Registration is a bulk PUT, so the next deploy removes them from Discord; a
+client still showing one gets "Unknown command." (guarded). The resolver's
+`findInText` stays: it is tested, and cheap.
+
+- **`/meta` leads with the ink pairs of every top-8 deck** (Zaven: *"what decks
+  are meta"*). One read of `tournament_results_v` (`place_rank <= 8`) since the
+  newest booster set already ON SHELVES (`metaSet`: `main` and `date <= today`,
+  so an announced set's empty window is never used), Core only, grouped by ink
+  pair in ink order. `deck_name` is empty on most tournament decks, so the pair
+  is the only exact archetype. Under three events since the set it widens to
+  the last 45 days and says so. Each line: the marks, a ten-cell bar **scaled
+  to the leading pair** (an absolute bar gave every pair two or three cells, and
+  two pairs both at "25%" came out a cell apart on rounding), the share, decks,
+  top 4s and wins. Measured on the day: 224 decks from 31 Core events since
+  Attack of the Vine!, Amber/Emerald 25% and 11 wins.
+- **"Latest big events" is chosen, not just the newest three** (*"decide recent
+  tournaments better"*): the three with the most players in the last three
+  weeks that recorded at least four decks, shown newest first; under three, it
+  reaches back 45 days. A winner-only record (a single row) is a stub and
+  skipped. Infinity events can appear and say so. The breakdown, the most
+  played cards and the events come to ~4,300 of the 6,000 characters.
+- **`/reports send`** (server managers) posts the latest daily or weekly report
+  in the channel, now. `discord_reports.py` keeps both every day it runs with
+  `--post`, **whether or not any channel subscribes** (`store_latest`), in
+  `discord_report_latest` (**migration 175, STAGED**), built once a day per
+  cadence. Its pictures go to the public `discord-reports` bucket under
+  `<cadence>/<price date>/`, because Discord caches an image by URL; yesterday's
+  are deleted once today's are kept. If a picture fails to store, the kept
+  report is the plain one rather than a broken image. The Worker reads the row
+  and `withUploads` uploads those pictures with the reply (`REPORT_PICTURE`),
+  like every other picture. **A refusal (not a manager, not switched on) is
+  answered privately and at once**, before any read; only the report itself,
+  or "no report yet", is public. Storing can never cost a subscriber their
+  post: it is wrapped, and it runs before the subscriber loop.
+- **`/card` shows the card's rules text and stats** (*"the text of the card
+  under the name above the image"*). The index carries `x` (the NEWEST booster
+  printing's wording), `st` (strength / willpower / lore / move) and `ik`
+  (inkable). `rulesText`: one quoted line per ability, the printed ALL-CAPS
+  ability name bold (three capitals at least, so "A character…" stays plain), a
+  keyword the card has bold with its number and the ink it's paid in ("Shift 6
+  ink"), reminder text italic, `{I}` / `{E}` / `{L}`… as words (Discord has no
+  glyph for them), markdown escaped. Checked over all 3,195 catalog texts: no
+  odd output, the longest 428 characters. An uninkable card says so.
+- **Card pickers show the card's stats** (Zaven: *"a small sub line under each
+  option saying the stats … amethyst 6c inkable 5/6 2lore and any keywords"*).
+  `src/stats.js` builds them once for every surface: ink, cost, inkable, S/W
+  (a Location's move + willpower, an action's type), lore, keywords with their
+  numbers read off the card's own line ("Shift 6", "Resist +1").
+  - **⚠ Discord's `/card` suggestions have NO sub-line** — one line of ≤100
+    characters is all an autocomplete choice can show — so the stats go ON
+    that line: `Demona - Scourge of the Wyvern Clan — 🟪 6c · inkable · 5/6 ·
+    2 lore | Legendary · Non-foil · $39.14`. Too long, the set name goes
+    first, then "inkable", the last keywords, "uninkable", the word
+    "Location", then "willpower" → "wp", and last the stats trim behind a
+    "…" (`fitParts`'s `trim` group) so **the finish and price are never cut**.
+    Measured over all 6,252 printings: none over 100, none lose the price, 20
+    trim with "…". The guard checks every fixture printing.
+  - **Select menus DO have a sub-line** (`description`), so every card menu
+    carries the stats in words there, before what it already said (rank,
+    rarity, price): "Did you mean", `/meta`'s card list, `/set`'s chase list,
+    `/new`, `/open`. In the versions menu only ANOTHER version gets them — the
+    card's own printings share the stats already shown above.
+- **Every event links to its page on packs.ink** (`eventPageUrl` →
+  `/calendar?ce=<id>`), which links on to the organiser: `/events` uses
+  `ev:<rph event id>` (the calendar fetches one the reader doesn't follow),
+  `/calendar` the entry's own id (a curated uuid, `set:…`, `product:…`).
+  Before, an RPH row linked straight to RPH and a curated one to its
+  registration page or nowhere.
 
 ### The channel report's layout (2026-09-28)
 
@@ -8105,6 +8148,11 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
+- **`supabase/175_discord_report_latest.sql`** — **STAGED 2026-09-29, needs a paste.** The
+  latest daily and weekly Discord report, kept for `/reports send`, plus the public
+  `discord-reports` storage bucket for its pictures. Additive only. Safe in either order:
+  before it lands the report job prints that `/reports send` stays off and posts to
+  subscribers as before, and the command answers "isn't switched on yet".
 - ~~`supabase/174_calendar_chattanooga_london_youth.sql`~~ — **APPLIED 2026-09-25 by Zaven; verified
   via REST** (both rows read back: Chattanooga CCQ confirmed Nov 7-8, DLC London carries the Youth
   Division notes; re-checked 2026-09-28). From two Ravensburger OP graphics. ⚠ It was applied under

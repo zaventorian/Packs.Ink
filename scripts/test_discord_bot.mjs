@@ -24,8 +24,8 @@
 //   8. Every picture is one Discord shows (no AVIF, no data: URI, no relative
 //      path — the last two get the whole reply rejected), and every TCGplayer
 //      link is the affiliate link, with the disclosure beside it.
-//   9. A picture that is one of the Worker's own files (the tile, baked art)
-//      is UPLOADED with the reply — Discord dropped it from the first edit of
+//   9. A picture the Worker makes itself (the tile, baked art, a chart) is
+//      UPLOADED with the reply — Discord dropped it from the first edit of
 //      a deferred reply when it was only linked — and a refused upload falls
 //      back to the link.
 import { readFileSync } from "node:fs";
@@ -181,11 +181,16 @@ function checkMessage(m, label) {
       total += f.name.length + f.value.length;
     }
     total += (e.title || "").length + (e.description || "").length + ((e.footer && e.footer.text) || "").length;
-    for (const u of [e.url, e.image && e.image.url, e.thumbnail && e.thumbnail.url]) if (u) ok(/^https?:\/\//.test(u), `${label}: absolute URL ${u}`);
+    // An uploaded picture is "attachment://<name>", and the name must be one
+    // the message declares, or Discord shows nothing (section 9).
+    const declared = new Set((m.attachments || []).map((a) => a.filename));
+    const isAtt = (u) => /^attachment:\/\//.test(String(u));
+    for (const u of [e.url, e.image && e.image.url, e.thumbnail && e.thumbnail.url]) if (u && !isAtt(u)) ok(/^https?:\/\//.test(u), `${label}: absolute URL ${u}`);
     // Discord shows no AVIF, and a data: URI or a relative path gets the whole
     // reply rejected — so a picture is an https JPEG / PNG / WebP / GIF or nothing.
     for (const u of [e.image && e.image.url, e.thumbnail && e.thumbnail.url]) {
-      if (u) ok(DISCORD_IMG.test(u), `${label}: picture is in a format Discord shows (${String(u).slice(0, 90)})`);
+      if (u && isAtt(u)) ok(/^attachment:\/\/[A-Za-z0-9_.-]+\.(?:png|webp|jpe?g|gif)$/.test(u) && declared.has(u.slice(13)), `${label}: uploaded picture ${u} is declared in attachments`);
+      else if (u) ok(DISCORD_IMG.test(u), `${label}: picture is in a format Discord shows (${String(u).slice(0, 90)})`);
     }
   }
   ok(total <= 6000, `${label}: embeds total ≤6000 chars (${total})`);
@@ -246,23 +251,8 @@ function checkMessage(m, label) {
     }
   }
 }
-// A modal Discord would refuse never opens — the command just fails.
-function checkModal(m, label) {
-  ok(m.custom_id && m.custom_id.length <= 100, `${label}: modal custom_id ≤100`);
-  ok(m.title && m.title.length <= 45, `${label}: modal title ≤45`);
-  ok(m.components.length >= 1 && m.components.length <= 5, `${label}: 1..5 modal rows`);
-  for (const row of m.components) {
-    const c = row.components ? row.components[0] : row.component;
-    ok(c && c.type === 4 && c.custom_id && c.label && c.label.length <= 45, `${label}: text input with a label ≤45`);
-    ok(!c.placeholder || c.placeholder.length <= 100, `${label}: placeholder ≤100`);
-    ok(!c.value || c.value.length <= (c.max_length || 4000), `${label}: prefilled value within max_length`);
-    ok(!c.max_length || c.max_length <= 4000, `${label}: max_length ≤4000`);
-  }
-}
 const D = await mod("discord/src/data.js");
 {
-  checkModal(E.deckModal(true), "deck box");
-  checkModal((await mod("discord/src/trade.js")).tradeModal(false, "x".repeat(3000), "2x mowgli"), "trade box");
   const DAY = 86400000;
   const hist = Array.from({ length: 400 }, (_, i) => ({ date: new Date(Date.UTC(2025, 7, 1) + i * DAY).toISOString().slice(0, 10), low_price: 4 + i / 200, market_price: 5 + i / 150 }));
   const price = D.priceSummary(hist);
@@ -313,9 +303,12 @@ const D = await mod("discord/src/data.js");
   {
     const h = JSON.stringify(E.helpMessage({ card: "1234567890123", reports: "3234567890123" }));
     ok(h.includes("</card:1234567890123>") && h.includes("</reports daily:3234567890123>"), "help: a registered command is a clickable mention (a subcommand too)");
-    ok(h.includes("**/trade**"), "help: a command with no id is plain bold text, never a broken mention");
+    ok(h.includes("**/meta**"), "help: a command with no id is plain bold text, never a broken mention");
+    ok(!/\/(?:trade|deck|movers)\b/.test(h) && !/Price check/.test(h), "help: no retired command is mentioned");
+    ok(h.includes("reports send"), "help: tells server managers about /reports send");
     eq(E.cmdMention({ card: "not-an-id" }, "card"), "**/card**", "cmdMention refuses an id that isn't a snowflake");
-    for (const w of ["card", "trade", "open", "set", "movers"]) eq(E.parseHelpTryId(E.helpTryId(w)), w, `help "try" id round-trips: ${w}`);
+    for (const w of ["card", "open", "set"]) eq(E.parseHelpTryId(E.helpTryId(w)), w, `help "try" id round-trips: ${w}`);
+    eq(E.parseHelpTryId("h|trade"), null, "a retired help example id is refused");
   }
   const calEvents = [
     { id: "x", kind: "dlc", title: "DLC Test", subtitle: "Disney Lorcana Challenge", starts_on: "2026-11-20", location: "Somewhere", country: "US", url: "https://example.com/dlc" },
@@ -344,33 +337,6 @@ const D = await mod("discord/src/data.js");
     ok(eu.some((e) => e.kind === "set") && eu.some((e) => e.kind === "ccq") && !eu.some((e) => e.kind === "dlc"),
       `calendar region filter keeps releases, keeps Europe's qualifier, drops the US Challenge (${eu.map((e) => e.kind)})`);
     eq(D.upcomingFiltered(far, { kind: "release", n: 12 }).map((e) => e.kind).join(), "set", "calendar Releases keeps only releases");
-  }
-  const movers = { latest: "2026-09-27", col: "mkt_pct_7d", todayCol: "market_today", priorCol: "market_7d",
-    rows: index.cards.slice(0, 10).map((c) => ({ card_id: c.p[0].id, name: c.c, version: c.v, rarity: c.p[0].r, printing: "Normal", tcgplayer_product_id: c.p[0].f[0][1], market_today: 12, market_7d: 10, mkt_pct_7d: 20 })) };
-  for (const win of ["1d", "1w", "6m", "1y"]) for (const dir of ["up", "down"]) {
-    checkMessage(E.moversMessage({ result: movers, win, dir, group: "all", basis: "market", min: 5, R }), `movers ${win} ${dir}`);
-  }
-  checkMessage(E.moversMessage({ result: { latest: "2026-09-27", rows: [] }, win: "1d", dir: "up", group: "chase", basis: "low", min: 5, R }), "movers, nothing cleared");
-  {
-    const empty = E.moversMessage({ result: { latest: "2026-09-27", rows: [] }, win: "1d", dir: "up", group: "chase", basis: "low", min: 5, R });
-    ok(empty.components.length >= 3, "movers: an empty board still has its controls — the way out of an empty board is on it");
-    const st = { win: "3m", dir: "down", group: "rareleg", basis: "low", min: 12.5 };
-    for (const ctl of ["w", "d", "b", "g"]) {
-      const back = E.parseMoversId(E.moversId(ctl, st));
-      ok(back && back.win === "3m" && back.dir === "down" && back.group === "rareleg" && back.basis === "low" && back.min === 12.5, `movers id round-trips (${ctl})`);
-    }
-    eq(E.parseMoversId("m|w|9y|up|all|market|5"), null, "movers id refuses an unknown window");
-    // Sealed movers come from the index (the build ran computeSealedDeltas).
-    const sm = D.sealedMovers(index, { win: "1y", dir: "up", basis: "market", min: 5, limit: 10 });
-    ok(sm.rows.length > 0, `sealed movers: the fixture's sealed products carry moves (${sm.rows.length})`);
-    ok(sm.rows.every((r, k) => k === 0 || sm.rows[k - 1].pct >= r.pct), "sealed movers: biggest gain first");
-    ok(sm.rows.every((r) => r.pct > 0 && r.prior >= 5), "sealed movers: gains only, each started the window at ≥ $5");
-    const smd = D.sealedMovers(index, { win: "1y", dir: "down", basis: "low", min: 0, limit: 10 });
-    ok(smd.rows.every((r, k) => r.pct < 0 && (k === 0 || smd.rows[k - 1].pct <= r.pct)), "sealed movers: drops, biggest drop first");
-    ok(D.sealedMovers(index, { win: "1y", dir: "up", min: 1e9 }).rows.length === 0, "sealed movers: the price floor applies");
-    checkMessage(E.moversMessage({ result: sm, win: "1y", dir: "up", group: "sealed", basis: "market", min: 5, R }), "movers, sealed");
-    const sealedMsg = JSON.stringify(E.moversMessage({ result: sm, win: "1y", dir: "up", group: "sealed", basis: "market", min: 5, R }));
-    ok(sealedMsg.includes("screener?m=sealed"), "movers, sealed: the Screener link opens its Sealed mode");
   }
   const byKind = {
     sc: [{ next_start: "2026-11-04T17:00:00Z", store_name: "SC Shop", name: "Set Championship", kind: "sc", distance_mi: 12, dow: 6, local_time: "12:00", occurrence_count: 1, gameplay_format: "Core Constructed",
@@ -402,12 +368,6 @@ const D = await mod("discord/src/data.js");
     ok(back && back.lat === 41.878 && back.lng === -87.63 && back.radius === 25 && back.kind === "sc" && back.label === "Chicago, IL", `events id round-trips (${JSON.stringify(back)})`);
     ok(E.eventsId("k", { ...st, label: "x".repeat(200) }).length <= 100, "events id stays within 100 characters, whatever the place is called");
   }
-  // price check: three compact embeds + a select
-  const three = R.findInText("mowgli and enchanted elsa and stitch", 3);
-  const pc = E.priceCheckMessage({ embeds: three.map((res) => E.compactCardEmbed({ R, res, price, inkColors: index.inkColors, origin: "https://bot.example" })),
-    options: three.map((res) => ({ label: res.card.n.slice(0, 100), value: R.cardKey(res.printing, res.fi) })) });
-  checkMessage(pc, "price check");
-  eq(pc.embeds.filter((e) => e.footer).length, 1, "price check: the disclosure is said once, under the last card");
 }
 
 // ── 8. card art Discord can show, and links that earn ────────────────────
@@ -504,141 +464,6 @@ const D = await mod("discord/src/data.js");
     const chart = E.cardMessage({ ...base, view: "chart" });
     ok(!/\/tile\//.test(JSON.stringify(chart.embeds[0])), "the chart view keeps the plain thumbnail");
   }
-}
-
-// ── decklists ────────────────────────────────────────────────────────────
-{
-  const { parseDeckList, looksLikeDeck, priceDeck } = await mod("discord/src/deck.js");
-  const list = [
-    "Characters (12)", "4 Mowgli - Man Cub", "4x Elsa - Spirit of Winter (1-42)", "2 × Stitch - Rock Star",
-    "# a comment", "", "2 Be Prepared", "1 Mowgli - Man Cub", "3 Totally Not A Card",
-  ].join("\n");
-  const e = parseDeckList(list);
-  eq(e.length, 6, "parseDeckList keeps card lines, drops headers, comments and blanks");
-  ok(e.some((x) => x.name === "Elsa - Spirit of Winter" && x.qty === 4), "a (set-number) hint and 'x' are stripped");
-  ok(looksLikeDeck(list), "a posted decklist is recognised as one");
-  ok(!looksLikeDeck("anyone got a mowgli\n4 of them would be nice"), "a chat message is not a decklist");
-  const r = priceDeck(R, e);
-  const mow = r.rows.find((x) => x.card.c === "Mowgli");
-  ok(mow && mow.qty === 5, "the same card on two lines is counted once, 4 + 1");
-  eq(r.unmatched.length, 1, "an unknown card is reported, not guessed");
-  eq(r.count, 16, "the card count includes what couldn't be priced");
-  const want = r.rows.reduce((s2, x) => s2 + (x.mkt != null ? x.mkt * x.qty : 0), 0);
-  ok(Math.abs(r.totalMarket - want) < 1e-9 && r.totalMarket > 0, "the total is the sum of qty × cheapest market price");
-  for (const x of r.rows) {
-    const all = x.card.p.flatMap((p) => p.f.filter((f) => !f[6]).map((f) => f[5])).filter((v) => v != null);
-    if (all.length) ok(x.mkt === Math.min(...all), `${x.card.n}: priced at its cheapest printing`);
-  }
-  checkMessage(E.deckMessage({ result: r, priceDate: "2026-09-27" }), "deck price");
-
-  // Misspelled lines: a full name one letter off, and a bare typo'd name.
-  const typo = priceDeck(R, parseDeckList(`2 Be Prepard
-4 Mowgli - Man Cub
-4x mogli`));
-  const bp = typo.rows.find((x) => x.card.n === "Be Prepared");
-  ok(bp && bp.guessed && bp.qty === 2, "a full name with a typo in it is priced, marked as a guess");
-  const mw = typo.rows.find((x) => x.card.c === "Mowgli");
-  ok(mw && mw.qty === 8 && mw.guessed, "a typo'd line merges into the card it means, and the merged row says it holds a guess");
-  eq(typo.unmatched.length, 0, "no typo'd line is dropped");
-
-  // Near-miss tier: close to TWO cards means neither; the resolver is capped.
-  const { MAX_GUESSES } = await mod("discord/src/deck.js");
-  let calls = 0;
-  const fakeR = {
-    cards: [{ n: "Aaaaa Bbbbb - Cccccc", p: [] }, { n: "Aaaaa Bbbbb - Ccccce", p: [] }],
-    resolve: () => { calls++; return { kind: "none" }; },
-  };
-  const tie = priceDeck(fakeR, parseDeckList("1 Aaaaa Bbbbb - Cccccd"));
-  eq(tie.rows.length, 0, "a name one letter from two different cards is not guessed at");
-  calls = 0;
-  priceDeck(fakeR, parseDeckList(Array.from({ length: 30 }, (_, i) => `1 Nothing ${i}`).join(`
-`)));
-  eq(calls, MAX_GUESSES, `the slow resolver runs exactly ${MAX_GUESSES} times on a list of 30 unknown lines`);
-
-  // More lines than the embed lists: the tail is summed, never described by a wrong bound.
-  const many = { rows: Array.from({ length: 20 }, (_, i) => ({ qty: i % 3 + 1, mkt: 20 - i, low: 19 - i, card: { n: "Card " + i, p: [{ id: "c" + i }] }, mktAt: { p: { id: "c" + i } } })),
-    unmatched: [], count: 60, totalMarket: 1, totalLow: 1, unpricedMarket: 0 };
-  const mm = E.deckMessage({ result: many, priceDate: "2026-09-27" }).embeds[0].description;
-  const restWant = many.rows.slice(15).reduce((s2, x) => s2 + x.mkt * x.qty, 0);
-  ok(mm.includes(`worth $${restWant.toFixed(2)} together`), "the rows past the first 15 are summed in one line");
-}
-
-// ── 9. trades ────────────────────────────────────────────────────────────
-{
-  const T = await mod("discord/src/trade.js");
-  // Reading a trade post: the markers people actually type.
-  const p1 = T.parseTradePost("H: enchanted elsa, 2x tipo W: mickey blt, stitch rock star");
-  ok(p1 && /enchanted elsa/.test(p1.has) && /tipo/.test(p1.has) && /mickey blt/.test(p1.wants) && !/mickey/.test(p1.has),
-    `a one-line "H: … W: …" post splits into its two sides (${JSON.stringify(p1)})`);
-  const p2 = T.parseTradePost("**Have:**\n- mowgli\n- be prepared\n**Want:**\n- enchanted stitch");
-  ok(p2 && /mowgli/.test(p2.has) && /stitch/.test(p2.wants), "a multi-line, markdown-bold post is read");
-  const p3 = T.parseTradePost("LF enchanted stitch\nFT 4 mowgli, $15");
-  ok(p3 && /stitch/.test(p3.wants) && /mowgli/.test(p3.has), "bare LF / FT at the start of a line open a side");
-  for (const t of ["I have 2 elsa and want a mowgli", "what do you guys want: mowgli or elsa?", "looking for a game tonight", "", "H: only one side here"]) {
-    eq(T.parseTradePost(t), null, `not a trade post: ${JSON.stringify(t)}`);
-  }
-  // Items: commas split, EXCEPT inside a card name that holds one.
-  const R0 = { cards: [{ n: "Fix-It Felix, Jr. - Niceland Steward", p: [] }, { n: "Wake Up, Alice!", p: [] }] };
-  const items = T.splitItems(R0, "Fix-It Felix, Jr. - Niceland Steward, 2x Wake Up, Alice!, mowgli + $20; be prepared");
-  eq(JSON.stringify(items), JSON.stringify(["Fix-It Felix, Jr. - Niceland Steward", "2x Wake Up, Alice!", "mowgli", "$20", "be prepared"]),
-    "splitItems keeps a card name's own comma");
-  const pi = (s) => JSON.stringify(T.parseItem(s));
-  eq(pi("2x mowgli"), JSON.stringify({ qty: 2, name: "mowgli", whole: "2x mowgli" }), 'parseItem "2x mowgli"');
-  eq(T.parseItem("mowgli x3").qty, 3, 'parseItem "mowgli x3"');
-  eq(T.parseItem("elsa (2)").qty, 2, 'parseItem "elsa (2)"');
-  for (const [s, v] of [["$20", 20], ["20$", 20], ["$12.50 cash", 12.5], ["+ $5", 5], ["30 paypal", 30]]) eq(T.parseItem(s).cash, v, `parseItem cash "${s}"`);
-  eq(T.parseItem("20").cash, undefined, "a bare number is not cash");
-  ok(T.parseItem("99 puppies").qty > 1, "parseItem alone reads a leading number as a count (capped at 20)…");
-  // …which is why pricing checks the whole line as a card name first.
-  const pup = index.cards.find((c) => c.n === "99 Puppies");
-  if (pup) {
-    const t = T.priceTrade(R, "99 Puppies", "mowgli");
-    ok(t.give.lines[0] && t.give.lines[0].name === "99 Puppies" && t.give.lines[0].qty === 1, '"99 Puppies" is one card, not 99 of "Puppies"');
-  }
-  // Pricing: each card at the version the words name.
-  const t = T.priceTrade(R, "enchanted elsa, 2x mowgli, $20", "stitch rock star foil, azurite sea box, asdfqwer");
-  const ench = t.give.lines.find((l) => /Elsa/.test(l.name));
-  ok(ench && ench.printing.r === "Enchanted", "a trade prices enchanted elsa AS the Enchanted");
-  const mow = t.give.lines.find((l) => /Mowgli/.test(l.name));
-  ok(mow && mow.qty === 2, "a quantity is kept");
-  ok(t.give.cash === 20, "cash is added to its side");
-  ok(t.get.lines.some((l) => l.kind === "sealed" && /Azurite Sea Booster Box/.test(l.name)), "sealed product is priced in a trade");
-  ok(t.get.lines.some((l) => /Stitch/.test(l.name) && l.printing.f[l.fi][0] !== "N"), '"… foil" prices the foil');
-  eq(t.get.unmatched.length, 1, "a line matching nothing is reported, not guessed");
-  const want = (s) => s.lines.reduce((a, l) => a + (l.mkt != null ? l.mkt * l.qty : 0), 0) + s.cash;
-  ok(Math.abs(t.give.totalMkt - want(t.give)) < 1e-9 && Math.abs(t.get.totalMkt - want(t.get)) < 1e-9, "each side's total is qty × price + cash");
-  ok(Math.abs(t.diff - (t.get.totalMkt - t.give.totalMkt)) < 1e-9, "the difference is get − give");
-  eq(T.verdict(100, 104).even, true, "within 5% is even");
-  eq(T.verdict(100, 110).even, false, "10% apart is not");
-  // The resolver is capped per trade: a fifty-card post costs a bounded amount.
-  let calls = 0;
-  const countR = { ...R, resolve: (q) => { calls++; return R.resolve(q); } };
-  T.priceTrade(countR, Array.from({ length: 40 }, (_, i) => `nonsense${i}`).join(", "), Array.from({ length: 40 }, (_, i) => `garbage${i}`).join(", "));
-  ok(calls <= T.TRADE_MAX_LOOKUPS, `a huge trade runs the resolver at most ${T.TRADE_MAX_LOOKUPS} times (${calls})`);
-  // The site's Trade Compare opens it: its own inline ?trade= format.
-  const url = T.tradeSiteUrl(R, t, ["You give", "You get"]);
-  ok(url && url.startsWith("https://packs.ink/?trade="), "a trade links to the site's Trade Compare");
-  const payload = JSON.parse(Buffer.from(url.split("=")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
-  ok(payload.a.some((e) => e[0] === ench.printing.id && e[2] === 1) && payload.a.some((e) => e[0] === mow.printing.id && e[1] === 2),
-    `the Trade Compare link carries each card id with its non-foil / foil counts (${JSON.stringify(payload.a)})`);
-  ok(!JSON.stringify(payload).includes("Azurite"), "sealed product is left out of the site link (Trade Compare holds cards)");
-  // A Challenge Promo (C1) card's key names its printing, the site's tradeGroupKey.
-  const c1 = R.sets.findIndex((s) => s.sp);
-  const c1card = c1 >= 0 && index.cards.find((c) => c.p.some((p) => p.s === c1));
-  if (c1card) {
-    const p = c1card.p.find((x) => x.s === c1);
-    const fi = p.f.findIndex((f) => f[0] !== "N");
-    const u2 = T.tradeSiteUrl(R, { give: { lines: [{ kind: "card", printing: p, fi: Math.max(0, fi), qty: 1 }] }, get: { lines: [] } }, ["a", "b"]);
-    const pl2 = JSON.parse(Buffer.from(u2.split("=")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
-    ok(pl2.a[0][0].startsWith(p.id + "::"), `a C1 card's key carries its printing (${pl2.a[0][0]})`);
-  }
-  for (const mode of ["you", "post"]) checkMessage(T.tradeMessage(t, { mode, priceDate: "2026-09-27", siteUrl: url }), `trade (${mode})`);
-  const big = T.priceTrade(R, index.cards.slice(0, 30).map((c) => c.n).join("\n"), index.cards.slice(30, 60).map((c) => "2x " + c.n).join("\n"));
-  checkMessage(T.tradeMessage(big, { mode: "you", priceDate: "2026-09-27", siteUrl: T.tradeSiteUrl(R, big, ["a", "b"]) }), "trade, 60 cards");
-  const modal = T.tradeModal(true, "2x mowgli", "");
-  ok(modal.custom_id === T.TRADE_MODAL_ID(true) && modal.components.length === 2 && modal.components[0].components[0].value === "2x mowgli",
-    "the trade box keeps what was typed");
-  ok(modal.components.every((r) => r.components[0].label.length <= 45), "trade box labels fit Discord's 45 characters");
 }
 
 // ── 10. sets and packs ───────────────────────────────────────────────────
@@ -879,17 +704,58 @@ const D = await mod("discord/src/data.js");
   function revealLabel(cs) { return G.revealSetLabel(cs); }
 }
 
-// ── 10b. the meta, a card's play line, a deck's one cart ─────────────────
+// ── 10b. the meta, a card's play line, a card's rules text ──────────────
 {
-  const results = [{ id: "t1", name: "Big Event", event_date: "2026-09-12", num_players: 200, top: [
-    { place: "1st", place_rank: 1, player_name: "[OSA] Moluk_x", deck_id: "d1", deck_name: null, deck_inks: ["Amber", "Emerald"], deck_visibility: "public", deck_share_token: "tok" },
-    { place: "Top 4", place_rank: 4, player_name: "Some*one", deck_id: "d2", deck_name: "Rush", deck_inks: ["Ruby"], deck_visibility: "unlisted", deck_share_token: "abc" }] }];
-  const mm = E.metaMessage({ R, index, results });
+  const today = "2026-09-29";
+  const sets = [{ n: "Old Set", main: 12, date: "2026-05-08" }, { n: "Newest Out", main: 13, date: "2026-07-17" }, { n: "Not Out Yet", main: 14, date: "2026-10-16" }];
+  eq(D.metaSet(sets, today).n, "Newest Out", "meta: the window opens at the newest set already on shelves, not an announced one");
+  eq(D.metaSince(sets, today), "2026-07-17", "meta: one read reaches back to the set's release");
+  eq(D.metaSince([{ n: "Fresh", main: 14, date: "2026-09-25" }], today), "2026-08-15", "meta: a set out for days still reads the last 45 days");
+  let n = 0;
+  const row = (t, date, rank, inks, extra = {}) => ({ tournament_id: t, tournament_name: "Event " + t, event_date: date, tournament_format: "core",
+    num_players: 64, place: rank === 1 ? "1st" : "Top " + (rank <= 4 ? 4 : 8), place_rank: rank, player_name: "P" + (++n), deck_id: "d" + n,
+    deck_name: null, deck_inks: inks, deck_visibility: "public", deck_share_token: null, ...extra });
+  const rows = [];
+  const event = (t, date, pairs, extra = {}) => pairs.forEach((inks, k) => rows.push(row(t, date, k + 1, inks, extra)));
+  const AE = ["Emerald", "Amber"], AA = ["Amber", "Amethyst"], ES = ["Emerald", "Steel"];
+  event("e1", "2026-09-26", [AE, AA, ES, AE, AA, AE, ES, AA], { num_players: 128 });
+  event("e2", "2026-09-20", [AA, AE, AE, ES], { num_players: 300 });
+  event("e3", "2026-09-12", [AE, ES, AA, AA, AE, AE, AE, ES], { num_players: 64 });
+  event("e4", "2026-09-10", [ES], { num_players: 900 });                                   // winner only: a stub
+  event("e5", "2026-09-05", [AA, AA, AE, ES], { num_players: 500, tournament_format: "infinity" });
+  event("e6", "2026-06-01", [ES, ES, ES, ES], { num_players: 1000 });                       // before the set
+  event("e7", "2026-09-15", [AA, AA, AA, AA], { num_players: 32, tournament_format: "infinity" }); // recent, but the smallest
+  const m = D.buildMeta(rows, { sets, today });
+  eq(m.sinceSet, "Newest Out", "meta: counted since the set");
+  eq(m.events, 4, "meta: Core events since the set only (Infinity and older events are left out)");
+  eq(m.decks, 21, "meta: every top-8 deck of those events");
+  eq(m.breakdown[0].key, "Amber/Emerald", "meta: an ink pair is named in ink order, whatever order the deck listed it");
+  eq(m.breakdown[0].n, 9, "meta: the most-played pair leads");
+  ok(m.breakdown.every((p, k) => k === 0 || m.breakdown[k - 1].n >= p.n), "meta: pairs by top-8 count, most first");
+  eq(m.breakdown.find((p) => p.key === "Amber/Amethyst").wins, 1, "meta: a win counts once");
+  eq(m.breakdown.find((p) => p.key === "Emerald/Steel").t4, 4, "meta: top 4s counted (a winner-only event's winner too)");
+  eq(m.recent.map((e) => e.id).join(), "e1,e2,e3", "meta: the three biggest events of the last three weeks with a real top cut, newest first (the smallest and a winner-only stub are skipped)");
+  eq(D.buildMeta(rows.filter((r) => r.tournament_id !== "e1" && r.tournament_id !== "e2"), { sets, today }).recent.map((e) => e.id).join(), "e7,e3,e5",
+    "meta: under three in three weeks, it reaches back further for the biggest");
+  const thin = D.buildMeta(rows.filter((r) => r.tournament_id === "e1" || r.tournament_id === "e6"), { sets, today });
+  ok(!thin.sinceSet && thin.from === "2026-08-15", "meta: under three events since the set, it widens to the last 45 days and says so");
+
+  const mm = E.metaMessage({ R, index, meta: m });
   checkMessage(mm, "meta");
-  const mt = JSON.stringify(mm);
+  const d0 = mm.embeds[0].description;
+  ok(/21 top-8 decks from 4 Core events since Newest Out/.test(d0), `meta: the breakdown says what it counted (${d0.split("\n")[0]})`);
+  ok(/🟨🟩 `█{10} 43%` \*\*Amber\/Emerald\*\* · 9 decks/.test(d0), `meta: a pair's line carries its marks, a bar and its share (${d0.split("\n")[2]})`);
+  ok(/🟨🟪 `█{7}░{3} 29%` \*\*Amber\/Amethyst\*\*/.test(d0), `meta: bars are scaled to the leading pair (${d0.split("\n")[3]})`);
+  eq(mm.embeds.map((e) => e.title).join(" | "), "What's winning: ink pairs in top 8s | Most played cards | Latest big events", "meta: breakdown first, then the cards, then the events");
+  const withNames = { ...m, recent: [{ id: "t1", name: "Big Event", date: "2026-09-12", players: 200, format: "infinity", top: [
+    { place: "1st", place_rank: 1, player_name: "[OSA] Moluk_x", deck_id: "d1", deck_name: null, deck_inks: ["Amber", "Emerald"], deck_visibility: "public", deck_share_token: "tok" },
+    { place: "Top 4", place_rank: 4, player_name: "Some*one", deck_id: "d2", deck_name: "Rush", deck_inks: ["Ruby"], deck_visibility: "unlisted", deck_share_token: "abc" }] }] };
+  const mt = JSON.stringify(E.metaMessage({ R, index, meta: withNames }));
   ok(mt.includes("\\\\[OSA\\\\] Moluk\\\\_x") && mt.includes("Some\\\\*one"), "meta: player names are escaped, not read as markdown");
   ok(mt.includes("decks?deck=d1)") && mt.includes("deck=d2&token=abc"), "meta: a public deck links without its token, an unlisted one with it");
-  checkMessage(E.metaMessage({ R, index, results: [] }), "meta, no results");
+  ok(mt.includes("200 players · Infinity"), "meta: an Infinity event says so");
+  checkMessage(E.metaMessage({ R, index, meta: D.buildMeta([], { sets, today }) }), "meta, nothing on record");
+  checkMessage(E.metaMessage({ R, index, meta: null }), "meta, read failed");
   const played = index.cards.map((c, i) => ({ c, i })).filter((x) => x.c.pl > 0).sort((a, b) => b.c.pl - a.c.pl)[0];
   if (played) {
     eq(E.playRankOf(R, played.i), 1, "the most-played card ranks #1");
@@ -899,23 +765,80 @@ const D = await mod("discord/src/data.js");
   if (cold >= 0) eq(E.playLine(R, cold, index.playDecks || 0), null, "a card with no recent top-cut play gets no play line");
   const g = E.gameplayLine({ i: ["Amber", "Steel"], cost: 3, t: "Character", k: ["Storyborn", "Hero"] });
   ok(g.includes("🟨⬜ Amber/Steel") && g.includes("3 cost") && g.includes("Character — Storyborn, Hero"), `gameplay line (${g})`);
-  // A deck's one-cart link: TCGplayer's own spelling where it differs.
-  const { parseDeckList, priceDeck } = await mod("discord/src/deck.js");
-  const dr = priceDeck(R, parseDeckList("4 Mowgli - Man Cub\n2 Be Prepared"));
-  const pid = dr.rows.find((x) => x.card.c === "Mowgli").mktAt.f[1];
-  const cart = E.deckCartUrl(dr, new Map([[Number(pid), "Mowgli - Man Cub (TCG spelling)"]]));
-  const dest = decodeURIComponent(cart.slice(TCG_AFFILIATE.length));
-  ok(cart.startsWith(TCG_AFFILIATE) && dest.startsWith("https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c="), "deck: the cart is a TCGplayer mass entry, through the affiliate program");
-  ok(decodeURIComponent(dest.split("&c=")[1]).includes("4 Mowgli - Man Cub (TCG spelling)||2 Be Prepared"), `deck: the cart spells cards TCGplayer's way (${dest.slice(0, 160)})`);
-  // A long list of long names: every row is an affiliate link, and the list
-  // must stop at a whole line rather than clip one.
-  const longNames = index.cards.map((c) => c.n).sort((a, b) => b.length - a.length).slice(0, 22);
-  const longDeck = priceDeck(R, parseDeckList(longNames.map((n) => `3 ${n}`).join("\n")));
-  checkMessage(E.deckMessage({ result: longDeck, priceDate: "2026-09-27", tcgNames: null }), "deck of long names");
-  ok(/more card/.test(E.deckMessage({ result: longDeck, priceDate: "2026-09-27", tcgNames: null }).embeds[0].description), "deck of long names: the rows that don't fit are summed");
-  const dm = E.deckMessage({ result: dr, priceDate: "2026-09-27", tcgNames: null });
-  ok(dm.embeds.length === 2 && /Buy the whole deck/.test(dm.embeds[1].description), "deck: the reply carries the one-cart link");
-  checkMessage(dm, "deck with cart");
+
+  // A card's rules text, as printed: ability names bold, keywords bold,
+  // reminder text italic, the symbols in words.
+  const rt = E.rulesText({ x: "Shift 5 {I} (You may pay 5 {I} to play this on top of one of your characters named Elsa.)\nEvasive\nDEEP FREEZE When you play this character, exert chosen opposing character.", w: ["Shift", "Evasive"] });
+  ok(rt.startsWith("> **Shift 5 ink**"), `rules: a keyword and its cost are bold (${rt.split("\n")[0]})`);
+  ok(/\*\(You may pay 5 ink to play this/.test(rt), "rules: reminder text is italic, its symbols spelled out");
+  ok(/> \*\*Evasive\*\*/.test(rt) && /> \*\*DEEP FREEZE\*\* When you play/.test(rt), `rules: a bare keyword and an ability name are bold (${rt})`);
+  ok(rt.split("\n").every((l) => l.startsWith("> ")), "rules: every line is quoted, so the text reads as the card's");
+  eq(E.rulesText({ x: "" }), "", "rules: a card with no text gets no rules block");
+  eq(E.rulesText({ x: "Deal 2 damage to chosen character_with *stars*." }), "> Deal 2 damage to chosen character\\_with \\*stars\\*.", "rules: markdown in card text is escaped");
+  const sl = E.statsLine({ st: [3, 5, 2, null] });
+  ok(/\*\*3\*\* strength/.test(sl) && /\*\*5\*\* willpower/.test(sl) && /\*\*2\*\* lore/.test(sl) && !/move/.test(sl), `stats line (${sl})`);
+  eq(E.statsLine({ st: [null, null, null, null] }), "", "an action has no stats line");
+  ok(/uninkable/.test(E.gameplayLine({ i: ["Amber"], cost: 2, t: "Action", ik: 0 })), "an uninkable card says so");
+  // The fixture's cards carry their text, and a /card reply shows it.
+  const withText = index.cards.find((c) => c.x && c.w && c.w.length);
+  ok(withText, "the fixture carries card text");
+  if (withText) {
+    const res = R.resolve(withText.n);
+    const cm = E.cardMessage({ R, res, price: D.priceSummary([]), graded: [], raw: null, view: "card", range: "3m", origin: "https://bot.example", inkColors: index.inkColors });
+    ok(/\n> /.test(cm.embeds[0].description), `a /card reply shows the rules text (${withText.n})`);
+    checkMessage(cm, "card with rules text");
+  }
+  // Every card's text fits: the longest one still leaves the reply inside Discord's limits.
+  const longest = index.cards.filter((c) => c.x).sort((a, b) => b.x.length - a.x.length)[0];
+  if (longest) {
+    const cm = E.cardMessage({ R, res: R.resolve(longest.n), price: D.priceSummary([]), graded: [], raw: null, view: "card", range: "3m", origin: "https://bot.example", inkColors: index.inkColors });
+    checkMessage(cm, `card with the longest text (${longest.n})`);
+  }
+  // The stats a picker shows (Zaven: "amethyst 6c inkable 5/6 2lore and any
+  // keywords"): words on a menu's sub-line, the same on a suggestion's line.
+  {
+    const S = await mod("discord/src/stats.js");
+    const demona = { n: "Demona - Scourge of the Wyvern Clan", i: ["Amethyst"], cost: 6, t: "Character", w: [], st: [5, 6, 2, null], ik: 1, x: "AD SAXUM COMMUTATE When you play…" };
+    eq(S.statsLineFor(demona), "Amethyst · 6c · inkable · 5/6 · 2 lore", "stats: a character in words");
+    const elsa = { i: ["Amethyst"], cost: 8, t: "Character", w: ["Shift", "Evasive"], st: [4, 6, 3, null], ik: 0,
+      x: "Evasive (Only characters with Evasive can challenge this character.)\nShift 6 {I} (You may pay 6 {I} to play this…)" };
+    eq(S.keywordTags(elsa).join(", "), "Evasive, Shift 6", "stats: keywords in printed order, with their numbers");
+    eq(S.statsLineFor(elsa), "Amethyst · 8c · uninkable · 4/6 · 3 lore · Evasive · Shift 6", "stats: uninkable and keywords");
+    eq(S.statsLineFor({ i: ["Ruby"], cost: 3, t: "Location", st: [null, 5, 2, 1], ik: 1 }), "Ruby · 3c · inkable · Location · move 1 · 5 willpower · 2 lore", "stats: a location's move and willpower");
+    eq(S.statsLineFor({ i: ["Ruby"], cost: 7, t: "Action - Song", st: [null, null, null, null], ik: 0 }), "Ruby · 7c · uninkable · Song", "stats: a song says so");
+    eq(S.keywordTags({ w: ["Resist", "Singer"], x: "Resist +1 (Damage dealt…)\nSinger 5 (This character counts as cost 5 to sing songs.)" }).join(", "), "Resist +1, Singer 5", "stats: Resist +1, Singer 5");
+    eq(S.keywordTags({ w: ["Shift"], x: "Universal Shift 4" }).join(), "Shift", "stats: a keyword's number is read only from its own line");
+    const long = S.statsLineFor(elsa, ["Legendary", "#1 most played", "$123,456.00", "x".repeat(40)]);
+    ok(long.length <= 100 && long.startsWith("Amethyst · 8c"), `stats: a sub-line never passes 100 characters, and keeps the stats first (${long})`);
+    // Every suggestion line over the fixture: ≤100, the stats in it, and the
+    // price never cut off (a too-long line trims the stats with "…" instead).
+    let seen = 0, priced = 0;
+    R.cards.forEach((c) => c.p.forEach((p) => p.f.forEach((f, fi) => {
+      const l = R.suggestLabel(c, p, fi);
+      seen++;
+      ok(l.length <= 100, `suggestion ≤100 characters (${l})`);
+      ok(l.startsWith(c.n + " — "), `suggestion starts with the card's name (${l})`);
+      const px = f[5] ?? f[4];
+      if (px != null) { priced++; ok(!l.endsWith("…") && /\$[\d,.]+$/.test(l), `suggestion keeps its price at the end (${l})`); }
+      if (c.cost != null && !/…/.test(l)) ok(l.includes(`${c.cost}c`), `suggestion shows the cost (${l})`);
+    })));
+    ok(seen > 200 && priced > 100, `every fixture printing checked (${seen}, ${priced} priced)`);
+    const sug = R.suggest("elsa spirit", 5).find((s) => s.kind === "card");
+    ok(sug && /🟪 \dc/.test(sug.label) && / \| /.test(sug.label), `a /card suggestion carries the stats on its line (${sug && sug.label})`);
+    const nf = E.notFoundMessage(R, { kind: "none", query: "elsa?", suggestions: R.suggest("elsa", 5) }, "elsa?");
+    const opts = (nf.components[0] || { components: [{ options: [] }] }).components[0].options;
+    ok(opts.length && opts.every((o) => !/ \| /.test(o.label)) && opts.filter((o) => o.description).every((o) => /\d+c/.test(o.description)),
+      `"did you mean": the label names the printing, the sub-line gives the stats (${opts[0] && opts[0].description})`);
+    const st = R.resolve("stitch");
+    const vo = E.versionOptions(R, st);
+    const own = vo.filter((o) => o.label.includes(" · ")), alt = vo.filter((o) => /^Stitch - /.test(o.label));
+    ok(alt.length && alt.every((o) => /^\w+(?:\/\w+)? · \d+c · /.test(o.description || "")), `versions menu: another version's sub-line leads with its stats (${alt[0] && alt[0].description})`);
+    ok(own.every((o) => !/\dc · /.test(o.description || "")), "versions menu: the card's own printings don't repeat the stats shown above");
+    ok(vo.every((o) => !o.description || o.description.length <= 100), "versions menu: every sub-line within 100");
+  }
+  // An event links to ITS page on packs.ink, which links on to the organiser.
+  eq(E.eventPageUrl("ev:123"), "https://packs.ink/calendar?ce=ev%3A123", "an RPH event links to its page on the calendar");
+  eq(E.eventPageUrl(null), null, "no id, no page");
 }
 
 // ── 11. the resolver's shortcut is exact ─────────────────────────────────
@@ -1005,22 +928,22 @@ const D = await mod("discord/src/data.js");
   const { handleInteraction } = await mod("discord/src/interactions.js");
   const patches = [];
   const pending = [];
+  const dbCalls = [];
+  // A reply that uploads a picture is multipart; its JSON is payload_json.
+  const bodyOf = (init) => (init.body instanceof FormData ? JSON.parse(init.body.get("payload_json")) : JSON.parse(init.body));
   const fakeDb = {
     hasService: false,
     async get(table, params) {
       if (table === "card_prices_latest") return [{ price_date: "2026-09-27" }];
       if (table === "graded_sales_rollup") return [];
       if (table === "raw_sales_rollup") return [];
-      if (table === "price_movers") return [
-        { card_id: "a", name: "Fresh", version: "One", rarity: "Rare", printing: "Normal", tcgplayer_product_id: 1, market_today: 20, market_7d: 10, mkt_pct_7d: 100 },
-        { card_id: "b", name: "Stale", version: "Two", rarity: "Rare", printing: "Normal", tcgplayer_product_id: 2, market_today: 30, market_7d: 10, mkt_pct_7d: 200 },
-      ];
       return [];
     },
     async all(table, params) {
-      if (table === "prices_daily" && params.date === "eq.2026-09-27") return [
-        { tcgplayer_product_id: 1, printing: "Normal", low_price: 18, market_price: 20 },
-        { tcgplayer_product_id: 2, printing: "Normal", low_price: 12, market_price: 14 },   // "today" in the matview is not today
+      dbCalls.push({ table, params });
+      if (table === "tournament_results_v") return [
+        { tournament_id: "t1", tournament_name: "Live Event", event_date: "2026-09-26", tournament_format: "core", num_players: 64, place: "1st", place_rank: 1, player_name: "A", deck_id: "d1", deck_inks: ["Amber", "Emerald"], deck_visibility: "public" },
+        { tournament_id: "t1", tournament_name: "Live Event", event_date: "2026-09-26", tournament_format: "core", num_players: 64, place: "2nd", place_rank: 2, player_name: "B", deck_id: "d2", deck_inks: ["Amber", "Amethyst"], deck_visibility: "public" },
       ];
       if (table === "prices_daily") return Array.from({ length: 60 }, (_, i) => ({ date: new Date(Date.UTC(2026, 6, 1) + i * 86400000).toISOString().slice(0, 10), low_price: 2, market_price: 3 + i / 100 }));
       return [];
@@ -1029,7 +952,7 @@ const D = await mod("discord/src/data.js");
   };
   const deps = {
     R, index, db: fakeDb, origin: "https://bot.example", appId: "123",
-    fetch: async (url, init) => { patches.push({ url, body: JSON.parse(init.body) }); return new Response("{}"); },
+    fetch: async (url, init) => { patches.push({ url, body: bodyOf(init), multipart: init.body instanceof FormData }); return new Response("{}"); },
     waitUntil: (p) => pending.push(p), log: () => {},
   };
   eq((await handleInteraction({ type: 1 }, deps)).type, 1, "PING -> PONG");
@@ -1044,70 +967,24 @@ const D = await mod("discord/src/data.js");
   ok(body && body.allowed_mentions && Array.isArray(body.allowed_mentions.parse) && !body.allowed_mentions.parse.length, "replies never ping anyone");
   checkMessage(body, "live /price");
 
-  // movers: the stale row is dropped
-  patches.length = 0;
-  await handleInteraction({ type: 2, token: "t2", application_id: "123", data: { type: 1, name: "movers", options: [{ type: 3, name: "window", value: "1w" }] } }, deps);
-  await Promise.all(pending.splice(0));
-  const mv = patches[0] && patches[0].body.embeds[0].description;
-  ok(mv && mv.includes("Fresh") && !mv.includes("Stale"), `/movers drops a row whose "today" is not today (${mv && mv.split("\n").length} rows)`);
-
   // a range button edits the same message with the new range
   patches.length = 0;
+  dbCalls.length = 0;
   const key = R.cardKey(R.resolve("mowgli").printing, 0);
   const b = await handleInteraction({ type: 3, token: "t3", application_id: "123", data: { custom_id: E.rangeId("1y", "chart", key), component_type: 2 } }, deps);
   eq(b.type, 6, "a button defers an UPDATE, not a new message");
   await Promise.all(pending.splice(0));
-  ok(patches[0] && /\/1y\.png/.test(patches[0].body.embeds[0].image.url), "the 1Y button redraws the chart at 1Y");
+  // The chart is drawn here and uploaded, so the range shows up as the window
+  // of the history read that drew it, not in a URL.
+  const yearAgo = Date.now() - 365 * 86400000;
+  ok(patches[0] && patches[0].multipart && /^attachment:\/\/.+\.png$/.test(patches[0].body.embeds[0].image.url), "the 1Y button uploads the redrawn chart");
+  ok(dbCalls.some((c) => c.table === "prices_daily" && /^gte\./.test(String(c.params.date)) && Math.abs(Date.parse(c.params.date.slice(4) + "T00:00:00Z") - yearAgo) < 2 * 86400000),
+    "the 1Y button redraws the chart over one year of history");
 
-  // /deck opens a text box; submitting it prices the list at once
-  const md = await handleInteraction({ type: 2, token: "t5", application_id: "123", data: { type: 1, name: "deck", options: [] } }, deps);
-  ok(md.type === 9 && md.data.custom_id.length <= 100 && md.data.components[0].components[0].type === 4, "/deck answers with a text box");
-  const sub = await handleInteraction({ type: 5, token: "t6", application_id: "123",
-    data: { custom_id: md.data.custom_id, components: [{ type: 1, components: [{ type: 4, custom_id: "list", value: "4 Mowgli - Man Cub\n2 Be Prepared" }] }] } }, deps);
-  ok(sub.type === 4 && /at NM Market/.test(sub.data.embeds[0].description), "submitting the box prices the deck");
-  ok(sub.data.allowed_mentions && !sub.data.allowed_mentions.parse.length, "the deck reply pings nobody");
-  const junk = await handleInteraction({ type: 5, token: "t7", application_id: "123",
-    data: { custom_id: md.data.custom_id, components: [{ type: 1, components: [{ type: 4, custom_id: "list", value: "hello there" }] }] } }, deps);
-  ok(junk.type === 4 && junk.data.flags === 64 && /doesn't look like a decklist/.test(junk.data.content), "a box without a decklist gets a private hint");
-
-  // Price check on a posted decklist totals the deck instead of listing three cards
-  patches.length = 0;
-  const deckText = ["4 Mowgli - Man Cub", "4 Elsa - Spirit of Winter", "4 Stitch - Rock Star", "4 Be Prepared", "2 Mowgli - Man Cub"].join(`
-`);
-  const pc = await handleInteraction({ type: 2, token: "t8", application_id: "123",
-    data: { type: 3, name: "Price check", target_id: "m1", resolved: { messages: { m1: { id: "m1", content: deckText } } } } }, deps);
-  eq(pc.type, 5, "Price check defers");
-  await Promise.all(pending.splice(0));
-  ok(patches[0] && patches[0].body.embeds && patches[0].body.embeds[0].title === "Deck price", "Price check on a decklist prices the deck");
-
-  // /trade: both sides inline answer at once; one side missing opens the box
-  const tr = await handleInteraction({ type: 2, token: "t9", application_id: "123", data: { type: 1, name: "trade", options: [
-    { type: 3, name: "give", value: "2x mowgli, $20" }, { type: 3, name: "get", value: "enchanted elsa" }] } }, deps);
-  ok(tr.type === 4 && tr.data.embeds[0].fields.length === 2 && tr.data.allowed_mentions, "/trade with both sides answers at once, pinging nobody");
-  checkMessage(tr.data, "live /trade");
-  const trm = await handleInteraction({ type: 2, token: "t10", application_id: "123", data: { type: 1, name: "trade", options: [{ type: 3, name: "give", value: "2x mowgli" }] } }, deps);
-  ok(trm.type === 9 && trm.data.custom_id.startsWith("trade|"), "/trade with a side missing opens the box");
-  const trs = await handleInteraction({ type: 5, token: "t11", application_id: "123", data: { custom_id: trm.data.custom_id,
-    components: [{ type: 1, components: [{ type: 4, custom_id: "give", value: "2x mowgli" }] }, { type: 1, components: [{ type: 4, custom_id: "get", value: "be prepared" }] }] } }, deps);
-  ok(trs.type === 4 && /Mowgli/.test(JSON.stringify(trs.data.embeds[0].fields)), "submitting the trade box prices both sides");
-  // Price check on a trade post compares the sides
-  patches.length = 0;
-  await handleInteraction({ type: 2, token: "t12", application_id: "123",
-    data: { type: 3, name: "Price check", target_id: "m2", resolved: { messages: { m2: { id: "m2", content: "H: 2x mowgli, enchanted elsa\nW: stitch rock star, $10" } } } } }, deps);
-  await Promise.all(pending.splice(0));
-  ok(patches[0] && patches[0].body.embeds[0].title === "Trade check" && /Has/.test(patches[0].body.embeds[0].fields[0].name),
-    "Price check on a trade post prices it as a trade (has / wants)");
   // "Look at a card" opens a NEW private reply, leaving the list where it is
   const look = await handleInteraction({ type: 3, token: "t13", application_id: "123", data: { custom_id: E.openId("card"), component_type: 3, values: [key] } }, deps);
   ok(look.type === 5 && look.data && look.data.flags === 64, "a card picked from a list opens as a new private reply");
   await Promise.all(pending.splice(0));
-  // movers buttons redraw the board in place
-  patches.length = 0;
-  const mb = await handleInteraction({ type: 3, token: "t14", application_id: "123",
-    data: { custom_id: E.moversId("g", { win: "1w", dir: "up", group: "all", basis: "market", min: 5 }), component_type: 3, values: ["sealed"] } }, deps);
-  eq(mb.type, 6, "a movers control updates the board in place");
-  await Promise.all(pending.splice(0));
-  ok(patches[0] && /Sealed product/.test(patches[0].body.embeds[0].title), "picking Sealed product redraws the board as sealed movers");
   // /set, /open and the pack buttons answer from the index, at once
   const sr = await handleInteraction({ type: 2, token: "t15", application_id: "123", data: { type: 1, name: "set", options: [{ type: 3, name: "set", value: "azurite" }] } }, deps);
   ok(sr.type === 4 && /Azurite Sea/.test(sr.data.embeds[0].title), "/set azurite answers at once");
@@ -1132,15 +1009,70 @@ const D = await mod("discord/src/data.js");
   const ac2 = await handleInteraction({ type: 4, data: { name: "set", options: [{ type: 3, name: "set", value: "azur", focused: true }] } }, deps);
   ok(ac2.type === 8 && ac2.data.choices[0] && ac2.data.choices[0].value === "Azurite Sea", "a set option autocompletes set names");
   // /help's examples are private
-  const ht = await handleInteraction({ type: 3, token: "t18", application_id: "123", data: { custom_id: E.helpTryId("trade"), component_type: 2 } }, deps);
-  ok(ht.type === 4 && ht.data.flags === 64 && /Example/.test(ht.data.content), "help's Try a trade answers privately, saying it's an example");
+  const ht = await handleInteraction({ type: 3, token: "t18", application_id: "123", data: { custom_id: E.helpTryId("set"), component_type: 2 } }, deps);
+  ok(ht.type === 4 && ht.data.flags === 64 && /Example/.test(ht.data.content), "help's A set at a glance answers privately, saying it's an example");
   // Discord refusing a reply's shape (400) gets the same thing as plain text
   {
     const sent = [];
-    const d400 = { ...deps, fetch: async (url, init) => { sent.push(JSON.parse(init.body)); return new Response("{}", { status: sent.length === 1 ? 400 : 200 }); } };
+    // Discord refuses every shape that carries embeds (the upload, then the
+    // same reply with the chart as a link); the plain text still arrives.
+    const d400 = { ...deps, fetch: async (url, init) => { const bd = bodyOf(init); sent.push(bd); return new Response("{}", { status: bd.embeds && bd.embeds.length ? 400 : 200 }); } };
     await handleInteraction({ type: 2, token: "t19", application_id: "123", data: { type: 1, name: "price", options: [{ type: 3, name: "name", value: "mowgli" }] } }, d400);
     await Promise.all(pending.splice(0));
-    ok(sent.length === 2 && sent[1].content && !sent[1].embeds.length && /Mowgli/.test(sent[1].content), "a reply Discord refuses is re-sent as plain text");
+    const last = sent[sent.length - 1];
+    ok(sent.length === 3 && last.content && !last.embeds.length && /Mowgli/.test(last.content), "a reply Discord refuses is re-sent as plain text");
+  }
+
+  // /meta reads the top cuts once and leads with the ink pairs
+  patches.length = 0;
+  dbCalls.length = 0;
+  const mr = await handleInteraction({ type: 2, token: "t22", application_id: "123", data: { type: 1, name: "meta", options: [] } }, deps);
+  eq(mr.type, 5, "/meta defers");
+  await Promise.all(pending.splice(0));
+  const mread = dbCalls.find((c) => c.table === "tournament_results_v");
+  ok(mread && mread.params.place_rank === "lte.8" && /^gte\.\d{4}-\d\d-\d\d$/.test(mread.params.event_date), "/meta reads every top-8 deck in its window, in one read");
+  ok(patches[0] && patches[0].body.embeds && /ink pairs/.test(patches[0].body.embeds[0].title), "/meta leads with the ink-pair breakdown");
+  checkMessage(patches[0].body, "live /meta");
+
+  // /reports send: the stored report, posted where it was asked for
+  {
+    const stored = { cadence: "weekly", price_date: "2026-09-28", embeds: [
+      { title: "Weekly movers", description: "x", image: { url: "https://umwqowkiatjjltologrd.supabase.co/storage/v1/object/public/discord-reports/weekly/2026-09-28/market.png" } },
+      { author: { name: "CHASE" }, description: "y", thumbnail: { url: "https://tcgplayer-cdn.tcgplayer.com/product/1_in_1000x1000.jpg" }, footer: { text: "packs.ink · " + E.AFFILIATE_NOTE } }] };
+    const asked = [];
+    const svcDb = { ...fakeDb, hasService: true, async getService(table, params) { asked.push({ table, params }); return table === "discord_report_latest" && params.cadence === "eq.weekly" ? [stored] : []; } };
+    const sendDeps = { ...deps, db: svcDb, fetch: async (url, init) => {
+      if (/supabase\.co\/storage/.test(String(url))) return new Response(new Uint8Array([137, 80, 78, 71]), { status: 200 });
+      patches.push({ url, body: bodyOf(init), multipart: init.body instanceof FormData, form: init.body instanceof FormData ? init.body : null });
+      return new Response("{}");
+    } };
+    const manager = { guild_id: "1", channel_id: "2", member: { permissions: String(1 << 5), user: { id: "9" } } };
+    patches.length = 0;
+    const sr1 = await handleInteraction({ type: 2, token: "t23", application_id: "123", ...manager,
+      data: { type: 1, name: "reports", options: [{ type: 1, name: "send", options: [{ type: 3, name: "report", value: "weekly" }] }] } }, sendDeps);
+    ok(sr1.type === 5 && !(sr1.data && sr1.data.flags), "/reports send defers a PUBLIC reply — the report is the post");
+    await Promise.all(pending.splice(0));
+    ok(asked[0] && asked[0].table === "discord_report_latest" && asked[0].params.cadence === "eq.weekly", "/reports send reads the stored weekly report");
+    const sp = patches[0];
+    ok(sp && sp.multipart && sp.body.embeds[0].image.url === "attachment://packs-ink-0.png", "/reports send uploads the stored picture with the reply");
+    ok(sp && sp.body.embeds[1].thumbnail.url.startsWith("https://tcgplayer-cdn"), "a TCGplayer thumbnail stays a link");
+    checkMessage(sp.body, "live /reports send");
+    patches.length = 0;
+    await handleInteraction({ type: 2, token: "t24", application_id: "123", ...manager,
+      data: { type: 1, name: "reports", options: [{ type: 1, name: "send", options: [] }] } }, sendDeps);
+    await Promise.all(pending.splice(0));
+    ok(patches[0] && /no daily report yet/.test(patches[0].body.content), "/reports send with nothing stored says when one will be");
+    const missing = { ...sendDeps, db: { ...svcDb, async getService() { const e = new Error("gone"); e.status = 404; e.code = "PGRST205"; throw e; } } };
+    patches.length = 0;
+    await handleInteraction({ type: 2, token: "t25", application_id: "123", ...manager,
+      data: { type: 1, name: "reports", options: [{ type: 1, name: "send", options: [] }] } }, missing);
+    await Promise.all(pending.splice(0));
+    ok(patches[0] && /isn't switched on/.test(patches[0].body.content), "/reports send before migration 175 says it isn't switched on");
+    const nope = await handleInteraction({ type: 2, token: "t26", application_id: "123", guild_id: "1", channel_id: "2", member: { permissions: "0", user: { id: "9" } },
+      data: { type: 1, name: "reports", options: [{ type: 1, name: "send", options: [] }] } }, sendDeps);
+    ok(nope.type === 4 && nope.data.flags === 64 && /manage this server/.test(nope.data.content), "/reports send refuses a non-manager privately, at once");
+    const retired = await handleInteraction({ type: 2, token: "t27", application_id: "123", data: { type: 1, name: "trade", options: [] } }, deps);
+    ok(retired.type === 4 && /Unknown command/.test(retired.data.content), "a retired command answers, rather than hanging");
   }
 
   // reports refuses someone who can't manage the server
@@ -1171,6 +1103,9 @@ const D = await mod("discord/src/data.js");
   eq(I.ownFilePath("https://evil.example/tile/x.webp", O), null, "another host's /tile/ is not ours");
   eq(I.ownFilePath(O + "/tile/../x.webp", O), null, "a dot-segment is refused");
   eq(I.ownFilePath(O + "/tile/a/b.webp", O), null, "a nested path is refused");
+  eq(String(I.ownChartUrl(O + "/chart/p/1/N/3m.png?d=2026-09-29&r=x", O)), O + "/chart/p/1/N/3m.png?d=2026-09-29&r=x", "a chart URL is ours to draw, query and all");
+  eq(I.ownChartUrl(O + "/tile/crd_abc-n.webp", O), null, "a tile is not a chart");
+  eq(I.ownChartUrl("https://evil.example/chart/p/1/N/3m.png", O), null, "another host's /chart/ is not ours");
 
   const withTile = index.cards.flatMap((c) => c.p.filter((p) => p.tl && !p.raw).map((p) => ({ c, p })));
   const pick = withTile.find(({ p }) => p.f.some((f) => f[0] === p.tl[0] && f[1] && !f[6]));
@@ -1217,12 +1152,28 @@ const D = await mod("discord/src/data.js");
     ok(s0.body && s0.body.allowed_mentions && !s0.body.allowed_mentions.parse.length, "an upload still never pings anyone");
     ok(s0.body && Array.isArray(s0.body.components) && s0.body.components.length > 0, "an upload keeps the reply's buttons");
 
-    // Switching to the chart is a plain edit that DROPS the old upload.
+    // Switching to the chart uploads the CHART, drawn here by the chart route,
+    // and its attachments list names only it, so the tile is dropped.
     const b = await run({ type: 3, token: "tk2", application_id: "123", data: { custom_id: E.rangeId("3m", "chart", key), component_type: 2 } });
     const s1 = b.sent[0] || {};
-    ok(b.sent.length === 1 && !s1.multipart, "the chart view is a plain JSON edit");
-    eq(JSON.stringify(s1.body && s1.body.attachments), "[]", "the chart edit clears the uploaded tile (or it would hang loose under the embed)");
-    ok(/\/chart\//.test((s1.body && s1.body.embeds[0].image && s1.body.embeds[0].image.url) || ""), "the chart stays a link");
+    ok(b.sent.length === 1 && s1.multipart, "the chart view is one multipart edit");
+    eq(s1.body && s1.body.embeds[0].image && s1.body.embeds[0].image.url, "attachment://packs-ink-0.png", "the chart is uploaded, not linked");
+    ok(s1.files && s1.files.length === 1 && s1.files[0].type === "image/png" && s1.files[0].size > 1000, "the uploaded chart is a real PNG");
+    eq(JSON.stringify(s1.body && s1.body.attachments), JSON.stringify([{ id: 0, filename: "packs-ink-0.png" }]), "the chart edit's attachments name only the chart, which drops the tile");
+    ok(!b.asked.length, "the chart is drawn, not read from the asset store");
+
+    // The chart's database read fails: the chart keeps its link, the reply still goes.
+    const failDb = { hasService: false, async get() { return []; }, async all() { throw new Error("57014 statement timeout"); }, async rpc() { return []; } };
+    const cf = await (async () => {
+      const sent = [], pending = [];
+      const deps = { R, index, db: failDb, origin: O, appId: "123", assets: null,
+        fetch: async (url, init) => { sent.push(await decode(init)); return new Response("{}"); },
+        waitUntil: (p) => pending.push(p), log: () => {} };
+      await I.handleInteraction({ type: 3, token: "tk4", application_id: "123", data: { custom_id: E.rangeId("3m", "chart", key), component_type: 2 } }, deps);
+      await Promise.all(pending.splice(0));
+      return sent;
+    })();
+    ok(cf.length === 1 && !cf[0].multipart && /\/chart\/p\//.test(cf[0].body.embeds[0].image.url), "a chart that can't be drawn here keeps its link, and the reply still goes");
 
     // Back to the card image: uploaded again.
     const c = await run({ type: 3, token: "tk3", application_id: "123", data: { custom_id: E.rangeId("3m", "card", key), component_type: 2 } });
@@ -1260,7 +1211,10 @@ const D = await mod("discord/src/data.js");
   eq(up && up.files.length, 10, "at most ten files ride along (Discord's limit)");
   ok(up && up.body.embeds[10].image.url.startsWith(O + "/art/"), "a picture past the tenth stays a link");
   const mixed = await I.withUploads({ embeds: [{ thumbnail: { url: O + "/art/a.webp?v=1" }, image: { url: O + "/chart/p/1/N/3m.png?d=x" } }] }, { assets, origin: O });
-  ok(mixed && mixed.body.embeds[0].thumbnail.url === "attachment://packs-ink-0.webp" && /\/chart\//.test(mixed.body.embeds[0].image.url), "a baked-art thumbnail is uploaded; the chart beside it stays a link");
+  ok(mixed && mixed.body.embeds[0].thumbnail.url === "attachment://packs-ink-0.webp" && /\/chart\//.test(mixed.body.embeds[0].image.url), "without a database, a chart beside an uploaded thumbnail stays a link");
+  const rowsDb = { async all() { return Array.from({ length: 30 }, (_, i) => ({ date: new Date(Date.UTC(2026, 7, 1) + i * 864e5).toISOString().slice(0, 10), low_price: 1, market_price: 2 + i / 50 })); }, async get() { return []; } };
+  const both = await I.withUploads({ embeds: [{ thumbnail: { url: O + "/art/a.webp?v=1" }, image: { url: O + "/chart/p/1/N/3m.png?d=x" } }] }, { assets, db: rowsDb, origin: O });
+  ok(both && both.files.length === 2 && both.body.embeds[0].image.url === "attachment://packs-ink-0.png" && both.files[0].type === "image/png" && both.body.embeds[0].thumbnail.url === "attachment://packs-ink-1.webp", "with a database, the chart is drawn and uploaded beside the thumbnail");
   eq(await I.withUploads({ embeds: [{ image: { url: "https://tcgplayer-cdn.tcgplayer.com/product/1_in_1000x1000.jpg" } }] }, { assets, origin: O }), null, "nothing of ours in the reply → no upload");
   eq(await I.withUploads({ content: "hi" }, { assets, origin: O }), null, "a reply with no embeds uploads nothing");
   ok(many.embeds[0].image.url.startsWith(O), "withUploads never mutates the payload it was handed");

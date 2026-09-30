@@ -28,39 +28,6 @@ export const COMMANDS = [
     options: [nameOpt, { type: 3, name: "range", description: "Chart range (default 3 months)", choices: rangeChoices }, privOpt],
   },
   {
-    name: "trade", type: 1, ...EVERYWHERE,
-    description: "Is this trade fair? Both sides priced and compared",
-    options: [
-      { type: 3, name: "give", max_length: 1000, description: "What you give — 2x mowgli, enchanted elsa, $20 (or leave empty for a box)" },
-      { type: 3, name: "get", max_length: 1000, description: "What you get — stitch rock star foil, azurite sea box" },
-      privOpt,
-    ],
-  },
-  {
-    name: "deck", type: 1, ...EVERYWHERE,
-    description: "Price a decklist — paste it into the box that opens",
-    options: [privOpt],
-  },
-  {
-    name: "movers", type: 1, ...EVERYWHERE,
-    description: "Biggest price gains or drops",
-    options: [
-      { type: 3, name: "window", description: "Over how long (default 1 day)", choices: [
-        { name: "1 day", value: "1d" }, { name: "1 week", value: "1w" }, { name: "1 month", value: "1m" },
-        { name: "3 months", value: "3m" }, { name: "6 months", value: "6m" }, { name: "1 year", value: "1y" }] },
-      { type: 3, name: "direction", description: "Gains or drops (default gains)", choices: [
-        { name: "Gains", value: "up" }, { name: "Drops", value: "down" }] },
-      { type: 3, name: "rarity", description: "Which cards (default all)", choices: [
-        { name: "Chase (Enchanted / Epic / Iconic)", value: "chase" }, { name: "Rare to Legendary", value: "rareleg" },
-        { name: "Promos", value: "promo" }, { name: "All", value: "all" },
-        { name: "Sealed product (boxes, troves, gift sets)", value: "sealed" }] },
-      { type: 3, name: "basis", description: "Which price (default NM Market)", choices: [
-        { name: "NM Market", value: "market" }, { name: "Low", value: "low" }] },
-      { type: 10, name: "min_price", description: "Only cards that started at or above this price (default $5)", min_value: 0, max_value: 10000 },
-      privOpt,
-    ],
-  },
-  {
     name: "events", type: 1, ...EVERYWHERE,
     description: "Upcoming Lorcana events near a postal code or town",
     options: [
@@ -75,7 +42,7 @@ export const COMMANDS = [
   },
   {
     name: "meta", type: 1, ...EVERYWHERE,
-    description: "What's being played: the most-played cards and the latest tournament winners",
+    description: "What's winning: ink pairs in recent top cuts, the most-played cards, the latest big events",
     options: [privOpt],
   },
   {
@@ -112,11 +79,13 @@ export const COMMANDS = [
     options: [
       { type: 1, name: "daily", description: "Post the movers every day", options: reportOpts() },
       { type: 1, name: "weekly", description: "Post the week's movers every Monday", options: reportOpts() },
+      { type: 1, name: "send", description: "Post the latest report here, now", options: [
+        { type: 3, name: "report", description: "Which report (default: daily)", choices: [
+          { name: "Daily movers", value: "daily" }, { name: "This week's movers", value: "weekly" }] }] },
       { type: 1, name: "off", description: "Stop the reports in a channel", options: [channelOpt()] },
       { type: 1, name: "status", description: "Which channels get reports" },
     ],
   },
-  { name: "Price check", type: 3, ...EVERYWHERE },
 ];
 
 function channelOpt() {
