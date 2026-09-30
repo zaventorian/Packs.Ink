@@ -376,14 +376,14 @@ section("9. Raw-mode pop columns");
   // The wiring. Each of these fails silently: columns appearing for everyone
   // with saved prefs, a Screener that crashes into the error boundary, or pop
   // fields written onto the shared price_movers rows.
-  ok(SRC.includes("colDefs.map(c=>c.key).filter(k=>!RAW_POP_COL_KEYS.includes(k))"),
+  ok(SRC.includes("colDefs.map(c=>c.key).filter(k=>!RAW_POP_COL_KEYS.includes(k)"),
      "legacy Raw prefs get `known` reconstructed WITHOUT the pop columns, so they stay hidden");
   ok(/setModePref\(\{hidden:\[\.\.\.h\], known:/.test(SRC), "toggling a column records `known`");
   const prefsAt = SRC.indexOf("const [colPrefs, setColPrefs] = useState(");
   const wantAt = SRC.indexOf("const rawPopWanted = ");
   ok(prefsAt > 0 && wantAt > prefsAt,
      "the Raw pop fetch sits BELOW colPrefs (its deps read it; above is a TDZ crash)");
-  ok(SRC.includes("out = out.map(r => {") && SRC.includes("const o = {...r, _pop: st,"),
+  ok(SRC.includes("out = out.map(r => {") && SRC.includes("const o = {...r};") && SRC.includes("o._pop = st;"),
      "raw pop fields land on COPIES of the rows, not on the shared price_movers objects");
   ok(SRC.includes("const rawPopCols = (showGraded || showSealed) ? [] : ["),
      "the pop columns are Raw-only in that branch — never on the Sealed table");

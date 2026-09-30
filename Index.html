@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=503">
+<link rel="stylesheet" href="styles.css?v=504">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -820,6 +820,66 @@ const rawPopPick = (rows, printing, cardId) => {
   }
   return list.length === 1 ? list[0] : list.slice().sort(byTotal)[0];
 };
+// The Screener's RAW-mode graded PRICE columns (asked for from the Screener,
+// 2026-09-28: "add columns for PSA 10 last sold price and last 5 avg price … and
+// for other graders/grades too … don't add like 5000 columns but maybe a custom
+// ability w/ drop down"). So it is ONE pair of columns, and the gear's grade
+// picker decides which grader + grade they show — PSA 10 by default. The key is
+// the row field too, so the sort comparator needs no mapping. Both start hidden.
+const RAW_GRADED_COL_KEYS = ["gr_last", "gr_avg5"];
+const RAW_GRADED_TIER_DEFAULT = "PSA|10";
+// "PSA|10" -> {grader:"PSA", grade:"10", label:"PSA 10"}. The rollup stores the
+// grader uppercase and the grade as text ("9.5"), which is what this keeps.
+const parseGradedTier = (s) => {
+  const [g, gr] = String(s || "").split("|");
+  const grader = (g || "").trim().toUpperCase(), grade = (gr || "").trim();
+  return grader && grade ? {grader, grade, label: grader + " " + grade}
+    : {grader: "PSA", grade: "10", label: "PSA 10"};
+};
+// The stored / linked form, canonical so a hand-typed "cgc|10" and the picker's
+// "CGC|10" are one value rather than two options.
+const normGradedTier = (s) => { const t = parseGradedTier(s); return t.grader + "|" + t.grade; };
+// The picker's options, from the rollup that is loaded: every grader, its
+// grades high to low, keeping a tier only if enough cards carry it for a column
+// of it to be more than a wall of dashes. PSA leads — it is the market. The
+// current pick is always offered, so a saved choice can't silently vanish.
+const GRADED_TIER_MIN_CARDS = 20;
+// Before the rollup has loaded (no graded column switched on yet) the picker
+// still has to offer something to pick, so it starts from the common tiers.
+const GRADED_TIER_SEED = ["PSA|10", "PSA|9", "PSA|8", "CGC|10", "CGC|9.5", "CGC|9",
+  "BGS|10", "BGS|9.5", "BGS|9", "SGC|10", "SGC|9.5", "TAG|10", "TAG|9"];
+const gradedTierOptions = (rollup, current) => {
+  const ORDER = ["PSA", "CGC", "BGS", "SGC", "TAG"];
+  const cards = new Map();                  // "PSA|10" -> Set(card_id)
+  for(const r of (rollup || [])){
+    if(!r.grader || r.grade == null) continue;
+    const k = r.grader.toUpperCase() + "|" + r.grade;
+    let s = cards.get(k); if(!s){ s = new Set(); cards.set(k, s); }
+    s.add(r.card_id);
+  }
+  const keep = new Set([RAW_GRADED_TIER_DEFAULT, normGradedTier(current),
+    ...(rollup ? [] : GRADED_TIER_SEED)]);
+  for(const [k, s] of cards) if(s.size >= GRADED_TIER_MIN_CARDS) keep.add(k);
+  const byGrader = new Map();
+  for(const k of keep){
+    const t = parseGradedTier(k);
+    if(!byGrader.has(t.grader)) byGrader.set(t.grader, []);
+    byGrader.get(t.grader).push(t);
+  }
+  const rank = (g) => { const i = ORDER.indexOf(g); return i < 0 ? ORDER.length : i; };
+  return [...byGrader.entries()]
+    .sort((a, b) => rank(a[0]) - rank(b[0]) || a[0].localeCompare(b[0]))
+    .map(([grader, tiers]) => ({grader,
+      tiers: tiers.sort((a, b) => (parseFloat(b.grade) || 0) - (parseFloat(a.grade) || 0))
+        .map(t => ({value: t.grader + "|" + t.grade, label: t.label}))}));
+};
+// The Screener's one read of the per-sale rollup, shared by Graded mode and
+// Raw mode's graded price columns (both fill the same state, so whichever asks
+// first loads it for the other).
+const fetchScreenerGradedRollup = () => sbFetchAll("graded_sales_rollup", {
+  select: "card_id,grader,grade,printing,sale_count,last_sold_date,last_sold_price,avg_last_5,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,pct_1095d,pct_rel",
+  order: "card_id.asc,grader.asc,grade.asc,printing.asc",
+});
 // Is this column switched on in a mode's saved prefs? Mirrors the Screener's
 // colHidden rule (below): a column the prefs have never KNOWN takes its default,
 // which for every raw pop column is hidden. Used to decide whether Raw mode
@@ -5691,6 +5751,67 @@ const gradedPriceNote = (hit) =>
   hit && hit.row && hit.split && !hit.exact
     ? `Blended across printings — ${hit.row.sale_count || 0} sale${hit.row.sale_count === 1 ? "" : "s"} for this card were never labelled with a printing, so this is both markets together.`
     : null;
+
+// The rollup, indexed the way makeGradedPrintingLookup reads it:
+// `${id}|${printing}|${grader}|${grade}` → a row shaped like the old feed's, so
+// every consumer reads Avg-of-5 without knowing where it came from. `ebay_avg_*`
+// are internal field names here, NOT legacy columns — see gradedRowValue.
+// keyOf(rollupRow, catalogRow) names the id: the Graded collection keys on the
+// card's TCGplayer pid (owned slots are stored against it), the Screener's raw
+// columns on card_id (a raw row IS a card_id + printing). Returning null skips
+// the row. The rollup's grader is UPPERCASE; the keys are lowercased to match
+// graded_collection_items.
+//   Pass 1 writes the non-specific rows ("" = one market, "Unknown" = split but
+//   unclassified) under EVERY printing key; pass 2 lets a labelled row override
+//   the keys that printing means. rollup_printing is the row's PROVENANCE, not
+//   a lookup key: makeGradedPrintingLookup reads it to tell a printing's own
+//   tier from the blended Unknown one.
+function buildGradedPriceIndex(rollup, cardById, keyOf){
+  const m = new Map();
+  const PRINTINGS = ["Normal", "Holofoil", "Cold Foil", "Foil", "Non-Foil"];
+  const SYN = {"Foil": ["Foil", "Holofoil", "Cold Foil"], "Non-Foil": ["Non-Foil", "Normal"], "Cold Foil": ["Cold Foil"]};
+  const val = (r) => r.avg_last_5 != null ? Number(r.avg_last_5)
+                   : r.last_sold_price != null ? Number(r.last_sold_price) : null;
+  const rowOf = (r, meta, v) => ({ebay_avg_1d: v, ebay_avg_30d: v, ebay_avg_7d: v,
+    last_sold_price: r.last_sold_price, avg_last_5: r.avg_last_5,
+    last_sold_date: r.last_sold_date, sale_count: r.sale_count, rollup_printing: r.printing || "",
+    grader: (r.grader||"").toLowerCase(), grade: r.grade,
+    tcgplayer_product_id: meta ? meta.tcgplayer_product_id : null});
+  for(const pass of [1, 2]){
+    for(const r of (rollup||[])){
+      const specific = !!r.printing && r.printing !== "Unknown";
+      if(specific !== (pass === 2)) continue;
+      const meta = cardById ? cardById.get(r.card_id) : null;
+      const id = keyOf(r, meta); const v = val(r);
+      if(id == null || v == null) continue;
+      const grader = (r.grader||"").toLowerCase();
+      for(const pr of (pass === 1 ? PRINTINGS : (SYN[r.printing] || [r.printing])))
+        m.set(id + "|" + pr + "|" + grader + "|" + r.grade, rowOf(r, meta, v));
+    }
+  }
+  return m;
+}
+
+// What one RAW Screener row shows for a graded tier. `hit` is
+// makeGradedPrintingLookup's answer for (card, printing, grader, grade);
+// `catalogBuckets` is the card's set of catalog printing buckets. Null when
+// nothing may price this printing — on a split card the other side's sales
+// never stand in, so a Cold Foil row with no foil PSA 10 sale reads "—".
+// `note` says why a number isn't this printing's own: a split card's
+// unclassified tier (gradedPriceNote), or a card the catalog sells in both
+// finishes whose graded sales were never split by finish at all. The cell
+// marks it ≈ rather than passing a blend off as this printing's price.
+const rawGradedFields = (hit, catalogBuckets) => {
+  const row = hit && hit.row;
+  if(!row) return null;
+  const num = (v) => (v == null || v === "" || !isFinite(Number(v))) ? null : Number(v);
+  const note = gradedPriceNote(hit)
+    || (!hit.split && catalogBuckets && catalogBuckets.size >= 2
+      ? "Both finishes blended — this card's graded sales aren't split by foil and non-foil, so this is the two markets together."
+      : null);
+  return {last: num(row.last_sold_price), avg5: num(row.avg_last_5),
+    n: row.sale_count ?? null, date: row.last_sold_date || null, note};
+};
 
 // Fold slabs the per-sale window MISSED back into a {date,value} portfolio
 // series, as a flat line at their range-independent price.
@@ -13863,7 +13984,7 @@ const COACH_TOURS = {
     {sel:".price-db-modebar", title:"Raw · Graded · Sealed", body:"One database, three markets — flip between raw singles, graded slabs and sealed product."},
     {sel:".price-db-presets", title:"Presets", body:"Movers, Gainers, Buyouts, Crashing, Discount and more — each chip is a ready-made screen."},
     {sel:"input.price-db-search", title:"Search & filters", body:"The full Cards smart-search works here too — plus BUY / CRSH / DISC / PREM signal chips, and owned/missing filters when signed in."},
-    {sel:".price-db-tablewrap", title:"Sort like a terminal", body:"Click any column header to sort. Click a row for full card detail — or tick checkboxes to graph several together."},
+    {sel:".price-db-tablebox", title:"Sort like a terminal", body:"Click any column header to sort. Click a row for full card detail — or tick checkboxes to graph several together."},
   ]},
   history: { title: "Price Graphing", steps: [
     {sel:".history-toolbar .seg-toggle", title:"Four chart modes", body:"Chart a card, a sealed product, a graded slab, or a whole set's value over time."},
@@ -29261,51 +29382,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   // Index latest prices by (pid, printing, grader, grade). Printing was
   // added in migration 49 so split-printing rows no longer collapse.
   // Legacy callers that don't know printing can look up under "Normal".
-  const priceByKey = useMemo(() => {
-    const m = new Map();
-    {
-      // Synthesize rows shaped like the old feed's from the per-sale rollup so
-      // every existing consumer (header totals, slot pills, add modal, poster)
-      // reads Avg-of-5 without touching each call site. `ebay_avg_*` here is an
-      // internal field name, NOT a legacy column — see gradedRowValue. The
-      // rollup's grader is UPPERCASE, so lowercase it to match the convention in
-      // graded_collection_items, and emit the value under every plausible
-      // printing key for the card's pid.
-      const PRINTINGS = ["Normal", "Holofoil", "Cold Foil", "Foil", "Non-Foil"];
-      // Which owned-item printing keys a split-card rollup row should price. The
-      // rollup's printing is "" (non-split → price every printing the same),
-      // "Unknown" (split but unclassified → fallback for any), or a real variant.
-      const SYN = {"Foil": ["Foil", "Holofoil", "Cold Foil"], "Non-Foil": ["Non-Foil", "Normal"], "Cold Foil": ["Cold Foil"]};
-      // rollup_printing is the row's PROVENANCE, not a lookup key: a row written
-      // under "Cold Foil" may have come from the card's Unknown (unclassified)
-      // tier, and on a split card that is a blend of two markets rather than
-      // this printing's price. gradedPrintingLookup reads it to tell the two
-      // apart; every other consumer ignores it.
-      const rowOf = (r, meta, v) => ({ebay_avg_1d: v, ebay_avg_30d: v, ebay_avg_7d: v,
-        last_sold_price: r.last_sold_price, avg_last_5: r.avg_last_5,
-        last_sold_date: r.last_sold_date, sale_count: r.sale_count, rollup_printing: r.printing || "",
-        grader: (r.grader||"").toLowerCase(), grade: r.grade, tcgplayer_product_id: meta.tcgplayer_product_id});
-      const val = (r) => r.avg_last_5 != null ? Number(r.avg_last_5)
-                       : r.last_sold_price != null ? Number(r.last_sold_price) : null;
-      // Pass 1: non-specific rows (non-split "" or split-but-Unknown) under ALL keys.
-      for(const r of (rollup||[])){
-        if(r.printing && r.printing !== "Unknown") continue;
-        const meta = cardById.get(r.card_id); const v = val(r);
-        if(!meta || !meta.tcgplayer_product_id || v == null) continue;
-        const grader = (r.grader||"").toLowerCase();
-        for(const pr of PRINTINGS) m.set(meta.tcgplayer_product_id + "|" + pr + "|" + grader + "|" + r.grade, rowOf(r, meta, v));
-      }
-      // Pass 2: specific-printing rows OVERRIDE their matching owned-item keys.
-      for(const r of (rollup||[])){
-        if(!r.printing || r.printing === "Unknown") continue;
-        const meta = cardById.get(r.card_id); const v = val(r);
-        if(!meta || !meta.tcgplayer_product_id || v == null) continue;
-        const grader = (r.grader||"").toLowerCase();
-        for(const pr of (SYN[r.printing] || [r.printing])) m.set(meta.tcgplayer_product_id + "|" + pr + "|" + grader + "|" + r.grade, rowOf(r, meta, v));
-      }
-      return m;
-    }
-  }, [rollup, cardById]);
+  const priceByKey = useMemo(
+    () => buildGradedPriceIndex(rollup, cardById, (r, meta) => meta && meta.tcgplayer_product_id ? meta.tcgplayer_product_id : null),
+    [rollup, cardById]);
   // THE ladder for every displayed graded price in this view — set-goal tiles,
   // owned-slot pills, the header total. Never crosses a split.
   const gradedHit = useMemo(() => makeGradedPrintingLookup(priceByKey, gradedSplitTiersSet),
@@ -36447,6 +36526,9 @@ const SCREENER_STATE_FIELDS = [
   ["filterGraders","gdr","arr",[]],
   ["filterGrades","gde","arr",[]],
   ["soldFilter","sf","sold",null],
+  // Raw mode's graded-price tier ("PSA|10"). Present only on a view that sorts
+  // by a graded price column, where it decides which rows lead.
+  ["gradedTier","gt","nstr",null],
 ];
 // Escape ONLY this codec's own delimiters (and the escape character itself).
 // searchParams handles the rest of URL encoding; double-encoding here would
@@ -36870,10 +36952,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   useEffect(() => {
     if(!showGraded || !gradedPremium || gradedRollup != null || gradedRollupErr) return;
     let cancelled = false;
-    sbFetchAll("graded_sales_rollup", {
-      select: "card_id,grader,grade,printing,sale_count,last_sold_date,last_sold_price,avg_last_5,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,pct_1095d,pct_rel",
-      order: "card_id.asc,grader.asc,grade.asc,printing.asc",
-    }).then(rows => { if(!cancelled) setGradedRollup(rows || []); })
+    fetchScreenerGradedRollup().then(rows => { if(!cancelled) setGradedRollup(rows || []); })
       .catch(e => { if(!cancelled){ console.warn("graded rollup fetch:", e?.message || e); setGradedRollupErr(true); } });
     return () => { cancelled = true; };
   }, [showGraded, gradedPremium, gradedRollup, gradedRollupErr]);
@@ -36882,6 +36961,15 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // costs nothing. Resolves empty (never throws) before migration 165 lands, in
   // which case every pop column simply reads "—".
   const [gradedPop, setGradedPop] = useState(null);
+  // Which grader + grade Raw mode's graded price columns show ("PSA|10"). A
+  // column setting like visibility, so it persists per browser; it rides a
+  // saved view or a ?v= link only when that view SORTS by one of the columns
+  // (see screenerPayload), because then it decides which rows lead.
+  const [rawGradedTier, setRawGradedTier] = useState(() => {
+    try { return normGradedTier(localStorage.getItem("packsink:screener:gradedTier") || RAW_GRADED_TIER_DEFAULT); }
+    catch { return RAW_GRADED_TIER_DEFAULT; }
+  });
+  useEffect(() => { try { localStorage.setItem("packsink:screener:gradedTier", rawGradedTier); } catch {} }, [rawGradedTier]);
   useEffect(() => {
     if(!showGraded || !gradedPremium || gradedPop != null) return;
     let cancelled = false;
@@ -37203,6 +37291,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     setFilterSealedTypes(new Set(v.filterSealedTypes || []));
     setFilterGraders(new Set(v.filterGraders || []));
     setFilterGrades(new Set(v.filterGrades || []));
+    // Only a view that sorts by a graded price column carries a tier; any other
+    // leaves the viewer's own pick alone, like column visibility.
+    if(v.gradedTier) setRawGradedTier(normGradedTier(v.gradedTier));
   };
   // Consume the App-pushed view payload from a banner-title click on Home.
   // Apply once, then notify parent so we don't re-fire on prop re-renders.
@@ -37354,12 +37445,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     filterSealedTypes: Array.from(filterSealedTypes),
     filterGraders: Array.from(filterGraders),
     filterGrades: Array.from(filterGrades),
+    gradedTier: [sortKey, sortKey2].some(k => RAW_GRADED_COL_KEYS.includes(k)) ? rawGradedTier : null,
   }), [preset, moverWin, priceMode, filterSet, search, filterRarities, filterInks,
     collFilter, sigFilter, minPrice, maxPrice, floorAtStart, minPct, maxPct, pctWin, showAllWins,
     density, showGraded, showSealed, sortKey, sortDesc, sortKey2, sortDesc2, soldFilter,
     showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers,
     filterLores, filterInkable, filterLegality, filterDualInk, filterKeywords,
-    filterClassifications, filterIllustrators, filterSealedTypes, filterGraders, filterGrades]);
+    filterClassifications, filterIllustrators, filterSealedTypes, filterGraders, filterGrades, rawGradedTier]);
 
   // Mirror the whole screen into ?v=. replaceState, never push — a filter is
   // not a page, and pushing would make Back walk backwards through every chip
@@ -37583,6 +37675,20 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     }
     return m;
   }, [raw]);
+
+  // Raw mode's graded price columns: THE printing ladder (makeGradedPrintingLookup),
+  // over the rollup keyed by card_id — a raw row IS a card_id + printing, so no
+  // pid join is needed and a promo with a null pid still prices. Returns null
+  // until the rollup is loaded, which is what keeps the columns at "—" and the
+  // enrichment pass off entirely. See rawGradedFields for what a row gets.
+  const rawGradedHit = useMemo(() => {
+    if(showGraded || showSealed || !gradedPremium || !gradedRollup) return null;
+    const buckets = gradedCatalogBuckets(raw);
+    const hitFor = makeGradedPrintingLookup(
+      buildGradedPriceIndex(gradedRollup, null, r => r.card_id),
+      gradedSplitTiers(gradedRollup, buckets));
+    return (cardId, printing, tier) => rawGradedFields(hitFor(cardId, cardId, tier.grader.toLowerCase(), tier.grade, printing), buckets.get(cardId));
+  }, [showGraded, showSealed, gradedPremium, gradedRollup, raw]);
 
   // Raw-row index for graded mode — we splice metadata from the original
   // price_movers row (name/set/rarity/ink/image) onto each synthesized
@@ -38088,27 +38194,40 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     // rows are the shared price_movers objects, and writing pop fields onto them
     // would leak into every other consumer of those rows. After the filter so
     // only shown rows pay; before the sort so the pop columns order.
-    if(!showGraded && !showSealed && gradedPop){
+    // The graded price columns ride the same copy: gr_last / gr_avg5 are the
+    // column keys AND the fields, so the comparator's r[k] fall-through sorts
+    // them. A row with no sale at the chosen tier gets nulls, which sink.
+    if(!showGraded && !showSealed && (gradedPop || rawGradedHit)){
       const popCache = new Map();
+      const tier = parseGradedTier(rawGradedTier);
       out = out.map(r => {
-        const ck = r.card_id + "|" + (r.printing || "");
-        let st = popCache.get(ck);
-        if(st === undefined){
-          const cat = catalogByCardId.get(r.card_id);
-          const prows = cat ? (gradedPop.byCard.get(
-            popCardKey(cat.Set, cat["Product Name"], cat.Number)) || []) : [];
-          const picked = rawPopPick(prows, r.printing, r.card_id);
-          st = picked ? gradedPopStats(picked) : null;
-          popCache.set(ck, st);
+        const o = {...r};
+        if(gradedPop){
+          const ck = r.card_id + "|" + (r.printing || "");
+          let st = popCache.get(ck);
+          if(st === undefined){
+            const cat = catalogByCardId.get(r.card_id);
+            const prows = cat ? (gradedPop.byCard.get(
+              popCardKey(cat.Set, cat["Product Name"], cat.Number)) || []) : [];
+            const picked = rawPopPick(prows, r.printing, r.card_id);
+            st = picked ? gradedPopStats(picked) : null;
+            popCache.set(ck, st);
+          }
+          o._pop = st;
+          o.pop_total = st ? st.total : null;
+          o.pop_ten   = st ? st.ten : null;
+          o.pop_gem   = (st && st.total > 0) ? st.ten / st.total : null;
+          o.pop_qual  = st ? st.qualified : null;
+          for(const gk of ["10","9.5","9","8","7"]){
+            const hit = st && st.breakdown.find(b => b.key === gk);
+            o["pop_g" + gk.replace(".", "_")] = st ? (hit ? hit.n : 0) : null;
+          }
         }
-        const o = {...r, _pop: st,
-          pop_total: st ? st.total : null,
-          pop_ten:   st ? st.ten : null,
-          pop_gem:   (st && st.total > 0) ? st.ten / st.total : null,
-          pop_qual:  st ? st.qualified : null};
-        for(const gk of ["10","9.5","9","8","7"]){
-          const hit = st && st.breakdown.find(b => b.key === gk);
-          o["pop_g" + gk.replace(".", "_")] = st ? (hit ? hit.n : 0) : null;
+        if(rawGradedHit){
+          const g = rawGradedHit(r.card_id, r.printing, tier);
+          o.gr_last = g ? g.last : null;
+          o.gr_avg5 = g ? g.avg5 : null;
+          o._gr = g;
         }
         return o;
       });
@@ -38174,7 +38293,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     });
     return out;
   }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, floorAtStart, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes, gradedPop,
-    watchOnly, watchedKeys, watchedCardIds]);
+    rawGradedHit, rawGradedTier, watchOnly, watchedKeys, watchedCardIds]);
 
   // Plain click sets the primary sort; shift-click sets the tiebreaker applied
   // within equal primary values. A column can't be both, so promoting the
@@ -38418,11 +38537,29 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     fetchGradedPop().then(p => { if(!cancelled) setGradedPop(p); });
     return () => { cancelled = true; };
   }, [rawPopWanted, gradedPop]);
+  // Raw mode's graded price columns read the same rollup Graded mode does, and
+  // fetch it on the same terms as the pop columns: only when one is shown or
+  // sorted by. Graded prices sit behind the graded-data terms everywhere else,
+  // so they do here too — asking for the column raises the terms prompt, and
+  // until it is accepted the cells read "—" under a notice saying why.
+  const rawGradedWanted = !showGraded && !showSealed && (
+    RAW_GRADED_COL_KEYS.includes(sortKey) || RAW_GRADED_COL_KEYS.includes(sortKey2)
+    || RAW_GRADED_COL_KEYS.some(k => screenerColOn(colPrefs.raw, k)));
+  useEffect(() => {
+    if(!rawGradedWanted) return;
+    if(!gradedPremium){ signalGradedSurface(); return; }
+    if(gradedRollup != null || gradedRollupErr) return;
+    let cancelled = false;
+    fetchScreenerGradedRollup()
+      .then(rows => { if(!cancelled) setGradedRollup(rows || []); })
+      .catch(e => { if(!cancelled){ console.warn("graded rollup fetch:", e?.message || e); setGradedRollupErr(true); } });
+    return () => { cancelled = true; };
+  }, [rawGradedWanted, gradedPremium, gradedRollup, gradedRollupErr]);
 
   // ── Draggable column widths (hooks — must be before the early returns) ──
   // Persisted alongside order/hidden in colPrefs, so ⚙ Columns → Reset clears
-  // them too. Widths apply through a <colgroup>; the grips live in a sticky,
-  // zero-height bar pinned over the header rather than inside each <th>,
+  // them too. Widths apply through per-column rules; the grips live in a
+  // zero-height bar laid over the pinned header rather than inside each <th>,
   // because the <th>s come from the colDefs factories. Header-only grips also
   // mean no invisible dead strip down every row at each column boundary.
   //
@@ -38460,30 +38597,42 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   }, []);
   const gripKeysRef = useRef([]);
   const dragRef = useRef(null);
-  const [gripGeom, setGripGeom] = useState({headH: 0, edges: []});
+  // The body table's own header is the SIZER (see headRow): its cells take
+  // their widths from the header text and the rows beneath, exactly as the one
+  // table always did, and the pinned header is laid out FIXED to those widths.
+  // Measured fractionally, or the two tables drift apart by a pixel a column.
+  const sizeHeadRef = useRef(null);
+  const [gripGeom, setGripGeom] = useState({headH: 0, edges: [], widths: [], tableW: 0});
   useLayoutEffect(()=>{
-    const thead = theadRef.current; if(!thead) return;
+    const sizer = sizeHeadRef.current; if(!sizer) return;
     const measure = ()=>{
-      const ths = [...thead.querySelectorAll("th")];
+      const ths = [...sizer.querySelectorAll("th")];
       const keys = gripKeysRef.current;
-      const headH = thead.getBoundingClientRect().height;
+      const round = (v) => Math.round(v * 100) / 100;
+      const widths = ths.map(th => round(th.getBoundingClientRect().width));
+      const tableW = round(sizer.parentElement.getBoundingClientRect().width);
+      const head = theadRef.current;
+      const headH = head ? head.getBoundingClientRect().height : 0;
       const edges = [];
-      for(let i = 0; i < ths.length - 1; i++){
-        const w = ths[i].offsetWidth;
-        if(w === 0) continue;                   // display:none at this breakpoint
-        edges.push({key: keys[i] || ("c"+i), x: ths[i].offsetLeft + w});
+      let x = 0;
+      for(let i = 0; i < widths.length - 1; i++){
+        x += widths[i];
+        if(widths[i] === 0) continue;           // display:none at this breakpoint
+        edges.push({key: keys[i] || ("c"+i), x: round(x)});
       }
-      setGripGeom(prev => (prev.headH === headH
+      setGripGeom(prev => (prev.headH === headH && prev.tableW === tableW
+        && prev.widths.length === widths.length && prev.widths.every((w,i)=> w === widths[i])
         && prev.edges.length === edges.length
         && prev.edges.every((e,i)=> e.x === edges[i].x && e.key === edges[i].key))
-        ? prev : {headH, edges});
+        ? prev : {headH, edges, widths, tableW});
     };
     measure();
     const ro = new ResizeObserver(measure);
-    ro.observe(thead);
+    ro.observe(sizer.parentElement);
     // Observe each th too: column redistribution can move boundaries without
-    // changing the thead's own box (table width capped by the wrap).
-    for(const th of thead.querySelectorAll("th")) ro.observe(th);
+    // changing the table's own box (table width capped by the wrap).
+    for(const th of sizer.querySelectorAll("th")) ro.observe(th);
+    if(theadRef.current) ro.observe(theadRef.current);
     return ()=> ro.disconnect();
   }, [filtered, density, showAllWins, moverWin, preset, priceMode,
       sortKey, sortDesc, sortKey2, sortDesc2,
@@ -38491,7 +38640,60 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       // The star column appears/disappears with sign-in, and the vs-Market
       // column appears when its (async) fetch lands. Both change how many <th>s
       // there are and therefore where every grip belongs.
-      user, watchlistsUnavailable, benchmarkReady, showGraded]);
+      user, watchlistsUnavailable, benchmarkReady, showGraded, rawGradedTier]);
+  // The table scrolls with the PAGE (Zaven, 2026-09-28: "I dont like how the
+  // screener is stuck in a smaller box in the page … a weird sub scroll"). It
+  // used to be its own max-height scroll box, because a sticky thead only pins
+  // inside its nearest scroll container and the table needs one for sideways
+  // scrolling. So the header lives OUTSIDE that container now, as its own sticky
+  // strip pinned under the top nav, and three things scroll sideways together:
+  // the body (.price-db-tablewrap), the header strip, and a scrollbar pinned to
+  // the bottom of the window (.price-db-hscroll) — the body's own sits under the
+  // last row, a page away from anyone with a mouse. Only the sideways position
+  // is synced from here; the pinning itself is plain CSS sticky, so it never
+  // lags a frame behind the page the way a scroll-driven transform does.
+  const [tableBoxEl, setTableBoxEl] = useState(null);
+  useEffect(() => {
+    const box = tableBoxEl; if(!box) return;
+    const wrap = box.querySelector(".price-db-tablewrap");
+    const head = box.querySelector(".price-db-stickyhead");
+    const bar = box.querySelector(".price-db-hscroll");
+    if(!wrap || !head || !bar) return;
+    const barIn = bar.firstElementChild;
+    const nav = document.querySelector(".top-nav");
+    const fine = window.matchMedia ? window.matchMedia("(hover:hover) and (pointer:fine)") : null;
+    const scrollers = [wrap, head, bar];
+    // A scrollLeft we set comes back as a scroll event of its own; answering it
+    // would fight a momentum scroll on the element the user is actually moving.
+    const echo = new Map();
+    const sync = (src) => {
+      const x = src.scrollLeft;
+      const e = echo.get(src);
+      if(e){ echo.delete(src); if(Math.abs(e.x - x) < 1 && performance.now() - e.t < 250) return; }
+      for(const el of scrollers){
+        if(el === src || Math.abs(el.scrollLeft - x) < 1) continue;
+        el.scrollLeft = x;
+        echo.set(el, {x: el.scrollLeft, t: performance.now()});
+      }
+    };
+    const offs = scrollers.map(el => { const h = () => sync(el); el.addEventListener("scroll", h, {passive: true}); return () => el.removeEventListener("scroll", h); });
+    // The nav is sticky on phones and in flow on a desktop, so the header pins
+    // under it only where it pins at all. Measured, not assumed: a zoomed or
+    // wrapped nav is taller than any number written down here.
+    const layout = () => {
+      let top = 0;
+      if(nav){ const cs = getComputedStyle(nav); if(cs.position === "sticky" || cs.position === "fixed") top = Math.round(nav.getBoundingClientRect().height); }
+      box.style.setProperty("--pdb-top", top + "px");
+      if(barIn) barIn.style.width = wrap.scrollWidth + "px";
+      box.classList.toggle("has-hscroll", wrap.scrollWidth > wrap.clientWidth + 1 && !!(fine && fine.matches));
+    };
+    layout();
+    const ro = new ResizeObserver(layout);
+    ro.observe(wrap);
+    const tbl = wrap.querySelector("table"); if(tbl) ro.observe(tbl);
+    if(nav) ro.observe(nav);
+    return () => { offs.forEach(off => off()); ro.disconnect(); };
+  }, [tableBoxEl]);
   const onGripMove = useCallback((e)=>{
     const d = dragRef.current; if(!d) return;
     // 44px floor keeps a column from collapsing into an untouchable sliver.
@@ -38553,13 +38755,11 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // much cheaper than card tiles (no images past the thumbnail), so the slab is
   // bigger.
   //
-  // root stays the viewport rather than .price-db-tablewrap. The sentinel sits
-  // INSIDE that scroller, so a viewport-rooted observer already has its rect
-  // clipped by the container and fires exactly when the sentinel is scrolled
-  // into view — correct in both layouts. Rooting on the wrap itself would break
-  // the ≤600px-tall case, where max-height is lifted and the wrap no longer
-  // scrolls: the sentinel would then be permanently "inside" the root and the
-  // observer would page in the entire result set on mount.
+  // root is the viewport: the table scrolls with the page, so the sentinel
+  // under the last row intersects exactly when the page reaches it. Rooting on
+  // .price-db-tablewrap would be wrong — it only scrolls sideways, so the
+  // sentinel would be permanently "inside" it and the observer would page in
+  // the entire result set on mount.
   const ROWS_WINDOW = 250;
   const [visibleRows, setVisibleRows] = useState(ROWS_WINDOW);
   const rowSentinelRef = useRef(null);
@@ -38652,12 +38852,16 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     // NM Market view exported numbers that matched nothing it had shown.
     const WINS = ["1D", "1W", "1M", "3M", "6M", "1Y"];
     const PCT_KEYS = ["pct_1d", "pct_7d", "pct_30d", "pct_90d", "pct_180d", "pct_365d"];
+    // Raw mode's graded price columns ride along when they're on screen.
+    const grCsv = !showGraded && !showSealed && orderedCols.some(c => RAW_GRADED_COL_KEYS.includes(c.key));
+    const grCsvTier = parseGradedTier(rawGradedTier).label;
     const headers = ["Name", "Set", "Rarity", "Ink", "Printing", "Collector #",
       ...(premiumGraded ? ["Grader", "Grade", "Last Sold Date", "Sales"] : []),
       premiumGraded ? "Last Sold" : "Low",
       premiumGraded ? "Avg Last 5" : "NM Market",
       ...(premiumGraded ? WINS.map(w => w + " Δ%")
         : [...WINS.map(w => w + " Δ% (Low)"), ...WINS.map(w => w + " Δ% (NM Market)")]),
+      ...(grCsv ? [grCsvTier + " Last Sold", grCsvTier + " Avg Last 5"] : []),
       "TCGPlayer URL"];
     const esc = (v) => {
       const s = v == null ? "" : String(v);
@@ -38675,6 +38879,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         r.low_today, r.market_today,
         ...PCT_KEYS.map(k => r[k]),
         ...(premiumGraded ? [] : PCT_KEYS.map(k => r["mkt_" + k])),
+        ...(grCsv ? [r.gr_last, r.gr_avg5] : []),
         tcgUrl(r.tcgplayer_product_id, r.printing) || "",
       ].map(esc).join(","));
     }
@@ -38853,6 +39058,34 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       td:(r)=>{ const sd = lowStaleDays(r);
         return html`<td key="low" class="td-num">${fmtMoney(r.low_today)}${sd != null ? html`<span class="td-low-stale"
           title=${"Low unchanged for "+sd+" days — not fresh signal"}>${uiIcon("clock", 11)}</span>` : null}</td>`; }};
+    // Raw mode's graded PRICE columns (RAW_GRADED_COL_KEYS): one pair, whose
+    // grader + grade the gear picks, PSA 10 by default. Both headers name the
+    // tier, so a CGC 9.5 column can never be read as PSA 10's. The tooltip says
+    // why a cell is empty — no sale at that tier, the terms not accepted yet,
+    // still loading — because a bare dash reads the same in all four cases.
+    const grTier = parseGradedTier(rawGradedTier);
+    const grStatus = !gradedPremium ? "tos" : gradedRollupErr ? "err" : !rawGradedHit ? "loading" : "ok";
+    const grCell = (key, what) => (r) => {
+      const g = r._gr, v = r[key];
+      const tip = grStatus === "tos" ? "Accept the graded-data terms to see graded prices"
+        : grStatus === "err" ? "Couldn't load graded sales"
+        : grStatus === "loading" ? "Loading graded sales…"
+        : !g || v == null ? `No ${grTier.label} sale recorded for this printing`
+        : [`${grTier.label} ${what}`, g.date ? "most recent sale " + g.date : null,
+           g.n != null ? g.n + " sale" + (g.n === 1 ? "" : "s") + " recorded" : null, g.note].filter(Boolean).join(" · ");
+      return html`<td key=${key} class=${"td-num"+(g && g.note ? " td-gr-blend" : "")} title=${tip}>${v == null ? "—"
+        : html`${g && g.note ? html`<span class="td-gr-approx" aria-hidden="true">≈</span>` : null}${fmtMoney(v)}`}</td>`;
+    };
+    const grCol = (key, head, gearLbl, what, tip) => ({key, label: grTier.label + " " + gearLbl, defaultHidden: true,
+      th:()=>html`<th key=${key} class="sortable th-num" title=${tip + " Pick another grader or grade in the Columns menu."}
+        onClick=${(e)=>onSort(key, e)}>${grTier.label} ${head}${arrow(key)}</th>`,
+      td: grCell(key, what)});
+    const rawGradedCols = (showGraded || showSealed) ? [] : [
+      grCol("gr_last", "Last", "Last Sold", "last sold",
+        `Most recent recorded eBay sale of a ${grTier.label} copy of this printing.`),
+      grCol("gr_avg5", "Avg 5", "Avg Last 5", "average of the last 5 sales",
+        `Average of the last 5 recorded eBay sales of a ${grTier.label} copy of this printing.`),
+    ];
     // Raw mode's PSA columns: the population of THIS printing (rawPopPick), all
     // hidden until the gear turns them on. Every one says PSA, for the reason
     // the graded headers do — graded_pop holds no CGC, BGS, SGC or TAG counts.
@@ -38872,7 +39105,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     return [setCol, rarityCol,
       lowCol,
       money("market","NM Market","market","market_today","TCGplayer NM Market — smoothed average of recent Near Mint sales"),
-      ...winCols, ...(benchmarkReady && !showSealed ? [vsMktCol] : []), ...rawPopCols, signalsCol];
+      ...winCols, ...(benchmarkReady && !showSealed ? [vsMktCol] : []), ...rawGradedCols, ...rawPopCols, signalsCol];
   })();
   // Full ordered column list (incl. hidden) for the popover; visible subset for the table.
   const allColsOrdered = (()=>{
@@ -38891,12 +39124,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // column added since was, by omission, "shown" — and the eight Raw PSA columns
   // would all have landed at once. A column the prefs have not seen takes its own
   // default instead. Prefs saved before `known` existed get it reconstructed for
-  // Raw (every column today except the pop ones, which is what the Raw columns
-  // were); other modes keep the old rule, having gained no new columns.
+  // Raw (every column today except the pop and graded-price ones, which is what
+  // the Raw columns were); other modes keep the old rule, having gained no new
+  // columns.
   const _modePref = colPrefs[colModeKey] || {};
   const _savedHidden = _modePref.hidden;
   const _known = Array.isArray(_modePref.known) ? new Set(_modePref.known)
-    : colModeKey === "raw" ? new Set(colDefs.map(c=>c.key).filter(k=>!RAW_POP_COL_KEYS.includes(k)))
+    : colModeKey === "raw" ? new Set(colDefs.map(c=>c.key).filter(k=>!RAW_POP_COL_KEYS.includes(k) && !RAW_GRADED_COL_KEYS.includes(k)))
     : null;
   const colHidden = new Set(_savedHidden !== undefined
     ? [..._savedHidden, ...(_known ? colDefs.filter(c=>c.defaultHidden && !_known.has(c.key)).map(c=>c.key) : [])]
@@ -38925,6 +39159,19 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // every grip past it resizes the column to its left.
   const gripKeys = ["check", ...(user && !watchlistsUnavailable && !showGraded ? ["watch"] : []), "img", "name", ...orderedCols.map(c=>c.key)];
   gripKeysRef.current = gripKeys;
+  // The header row is rendered TWICE: once in the pinned header above the
+  // table (the one you see and click), and once inside the body table as an
+  // invisible, zero-height SIZER, so the body's columns still size to their
+  // header text. The pinned copy then takes the sizer's measured widths
+  // (gripGeom.widths), which is what keeps the two tables' columns in line.
+  const tableCls = "price-db-table" + (hasCustomWidths ? " pdb-resized" : "");
+  const headRow = () => html`<tr>
+    <th class="th-check"></th>
+    ${user && !watchlistsUnavailable && !showGraded && html`<th class="th-watch" title="Add to the active watchlist"></th>`}
+    <th></th>
+    <th class="sortable th-name" title="Click to sort by name — shift-click any column to set a tiebreaker" onClick=${(e) => onSort("name", e)}>Name${arrow("name")}</th>
+    ${orderedCols.map(c => c.th())}
+  </tr>`;
   const onGripDown = (e, key)=>{
     const thead = theadRef.current; if(!thead) return;
     const th = [...thead.querySelectorAll("th")][gripKeys.indexOf(key)];
@@ -39104,6 +39351,15 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             <span>Columns</span>
             <button class="price-db-colsmenu-reset" onClick=${resetCols}>Reset</button>
           </div>
+          ${colModeKey === "raw" && html`<label class="price-db-colsmenu-tier"
+            title="Which grader and grade the Last Sold and Avg 5 columns show">
+            <span>Graded price columns</span>
+            <select value=${rawGradedTier} onChange=${(e)=>setRawGradedTier(e.target.value)}>
+              ${gradedTierOptions(gradedRollup, rawGradedTier).map(g => html`<optgroup key=${g.grader} label=${g.grader}>
+                ${g.tiers.map(t => html`<option key=${t.value} value=${t.value}>${t.label}</option>`)}
+              </optgroup>`)}
+            </select>
+          </label>`}
           ${allColsOrdered.map((c,i)=>html`<div key=${c.key} class="price-db-colsmenu-row">
             <label class="price-db-colsmenu-lbl">
               <input type="checkbox" checked=${!colHidden.has(c.key)} onChange=${()=>toggleCol(c.key)}/>
@@ -39535,8 +39791,12 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         </div>
       </div>`}
     </div>`}
-    <div class="price-db-tablewrap">
-      <div class="price-db-tableinner">
+    ${rawGradedWanted && !gradedPremium && html`<${GradedTosGate} compact=${true}/>`}
+    ${rawGradedWanted && gradedPremium && gradedRollupErr && html`<div class="price-db-grnote muted">
+      Couldn't load graded prices.${" "}<button class="price-db-advbtn" onClick=${() => setGradedRollupErr(false)}>Try again</button></div>`}
+    <div class="price-db-tablebox" ref=${setTableBoxEl}>
+      <div class="price-db-stickyhead">
+      <div class="price-db-tableinner" style=${gripGeom.tableW ? {width: gripGeom.tableW + "px"} : null}>
       <div class="price-db-gripbar" aria-hidden="true">
         ${gripGeom.edges.map(g => html`<button key=${g.key} class="price-db-colgrip"
           tabIndex=${-1}
@@ -39547,17 +39807,20 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           onPointerUp=${onGripUp}
           onPointerCancel=${onGripUp}></button>`)}
       </div>
+      <table class=${tableCls + " price-db-table--head"}
+        style=${gripGeom.tableW ? {width: gripGeom.tableW + "px"} : null}>
+        ${gripGeom.widths.length > 0 && html`<colgroup>${gripGeom.widths.map((w, i) =>
+          html`<col key=${i} style=${{width: w + "px"}}/>`)}</colgroup>`}
+        <thead ref=${theadRef} onKeyDown=${onTheadKey}>${headRow()}</thead>
+      </table>
+      </div>
+      </div>
+    <div class="price-db-tablewrap">
       ${hasCustomWidths && html`<style>${gripKeys.map((k,i)=> colWidths[k]
         ? `.price-db-table.pdb-resized th:nth-child(${i+1}),.price-db-table.pdb-resized td:nth-child(${i+1}){width:${colWidths[k]}px;min-width:${colWidths[k]}px;max-width:${colWidths[k]}px;}`
         : "").join("")}</style>`}
-      <table class=${"price-db-table"+(hasCustomWidths?" pdb-resized":"")}>
-        <thead ref=${theadRef} onKeyDown=${onTheadKey}><tr>
-          <th class="th-check"></th>
-          ${user && !watchlistsUnavailable && !showGraded && html`<th class="th-watch" title="Add to the active watchlist"></th>`}
-          <th></th>
-          <th class="sortable th-name" title="Click to sort by name — shift-click any column to set a tiebreaker" onClick=${(e) => onSort("name", e)}>Name${arrow("name")}</th>
-          ${orderedCols.map(c => c.th())}
-        </tr></thead>
+      <table class=${tableCls}>
+        <thead ref=${sizeHeadRef} class="price-db-sizehead" aria-hidden="true">${headRow()}</thead>
         <tbody>
           ${filtered.slice(0, visibleRows).map((r) => {
             const img = r.image_small || r.image_normal;
@@ -39616,12 +39879,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           })}
         </tbody>
       </table>
-      </div>
       ${filtered.length > visibleRows && html`<div ref=${rowSentinelRef} class="price-db-more muted">
         Showing ${visibleRows.toLocaleString()} of ${filtered.length.toLocaleString()} — keep scrolling to load more.
         <button class="price-db-advbtn" onClick=${()=>setVisibleRows(filtered.length)}>Show all</button>
         <button class="price-db-advbtn" onClick=${exportCsv}>⇩ CSV (all ${filtered.length.toLocaleString()})</button>
       </div>`}
+    </div>
+      <div class="price-db-hscroll" aria-hidden="true"><div class="price-db-hscroll-in"></div></div>
     </div>
     <//>`}
     ${batchToast && html`<div class="price-db-toast">${batchToast}</div>`}
