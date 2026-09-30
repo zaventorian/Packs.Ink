@@ -575,7 +575,7 @@ const deckVersionsUnavailable = (err) => {
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v60";  // v60: Coconut rebalance — Snow White (Beta 1.1) + The Madrigal Family (Beta 2.1) ability text and re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording for 24h. (v59: Coconut leader Pete - Bad Guy (cn 26) is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v58: rows carry `added_at` (cards.inserted_at) for the new-card reveal reel — a replayed v57 record has no such field, so every card reads as "not new" and the reel stays dark for 24h on exactly the sessions a reveal wave is meant to reach. (v57: promo-set rework — SUPPRESSED_CARD_IDS, one placeholder row per unpriced P4/PD1 card, the P3 #63 "Japanese Exclusive" label, and the cards-count freshness probe (a v56 record has no cardCount). (v56: Coconut Beta 2 — The Vine - Towering Stalk is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v55: Elsa - Exploring the Unknown 59/P3 (JA) moved to JAPAN_ONLY_NONFOIL, so its img_* now point at the JP scan — the English frame is baked into cached rows and a replay would keep showing it for 24h. v54: Coconut Beta 1.1 — Stitch/Mufasa/Donald Duck/Robin Hood ability text + their re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording searchable for 24h. v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. v52: Coconut leader merge/suppress.)
+const CACHE_KEY = "packsink:catalog:v61";  // v61: two ink drop counter rows (Extras & Oddities, Hyperia City) are NEW synthetic rows baked in by transformSupabaseData, and Minnie Mouse 17/P4 gains its "Japanese Exclusive" label and moves to the Normal printing there, so a cache replay would show neither for 24h. (v60: Coconut rebalance — Snow White (Beta 1.1) + The Madrigal Family (Beta 2.1) ability text and re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording for 24h. (v59: Coconut leader Pete - Bad Guy (cn 26) is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v58: rows carry `added_at` (cards.inserted_at) for the new-card reveal reel — a replayed v57 record has no such field, so every card reads as "not new" and the reel stays dark for 24h on exactly the sessions a reveal wave is meant to reach. (v57: promo-set rework — SUPPRESSED_CARD_IDS, one placeholder row per unpriced P4/PD1 card, the P3 #63 "Japanese Exclusive" label, and the cards-count freshness probe (a v56 record has no cardCount). (v56: Coconut Beta 2 — The Vine - Towering Stalk is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v55: Elsa - Exploring the Unknown 59/P3 (JA) moved to JAPAN_ONLY_NONFOIL, so its img_* now point at the JP scan — the English frame is baked into cached rows and a replay would keep showing it for 24h. v54: Coconut Beta 1.1 — Stitch/Mufasa/Donald Duck/Robin Hood ability text + their re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording searchable for 24h. v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. v52: Coconut leader merge/suppress.))
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -2408,6 +2408,10 @@ const REGIONAL_EXCLUSIVE_LABEL = {
   // until a JP scan lands in JAPAN_ONLY_NONFOIL.
   "Maleficent - Monstrous Dragon|61":    "Japanese Exclusive",
   "Maleficent - Monstrous Dragon|62":    "Japanese Exclusive",
+  // 17/P4 · JA · 14: the promo packed in Japan's Hyperia City booster box
+  // (Takara Tomy's box bonus). The English buy-a-box printing is 4/RPH. The
+  // row's own image is already the JP card, so it needs only the label.
+  "Minnie Mouse - Urban Visionary|17":   "Japanese Exclusive",
   "Elsa - Snow Queen|38":                "Chinese Exclusive",
   "Snow White - Unexpected Houseguest|42": "Chinese Exclusive",
   "Stitch - Little Rocket|43":           "Chinese Exclusive",
@@ -4050,9 +4054,45 @@ const CUSTOM_VARIANTS = [
 // Image strategy: provide EITHER `image` (full URL or `Logos/cards/...`)
 // OR `tcgplayer_product_id` (auto-derives the TCGPlayer CDN URL).
 // `printing` defaults to "Normal".
+//
+// `id` (optional) pins a short, stable card_id. Give one to anything a person
+// can mark as owned: the derived id is long and changes with the entry's name.
+// `originSet` files an Extras & Oddities entry under its set's heading, the
+// same field EXTRAS_MAP rows carry.
 const CUSTOM_CARDS = [
   // Golden Mickey (pid 554628) is now a real cards row, injected via
   // scripts/patch_pid_overrides.py. No client-side stub needed.
+
+  // The two ink drop counter cards packed one per box in Japan's Hyperia City
+  // booster box (Takara Tomy's box bonus, beside Minnie Mouse 17/P4). Printed
+  // `JA · 14` with no collector number, and they are counters, not cards, so
+  // they live here rather than in the set. The box-bonus graphic says the backs
+  // show Baymax and Merlin; only the fronts are pictured so far.
+  // ⚠ "Japanese Box Bonus" is as far as the evidence goes (2026-09-30). English
+  // packs carry the same two designs in the marketing slot, and Ravensburger
+  // said there are no foil ink drops yet. Takara Tomy's renders show a sparkle
+  // texture the English ones lack, and Zaven heard these are Japan-only foils,
+  // but no official page says foil. Don't write "foil" on the tile until one does.
+  {
+    id: "extras:ink-drop-ja-baymax",
+    Set: EXTRAS_SET_NAME, originSet: "Hyperia City",
+    name: "Ink Drop Counter - Baymax Back",
+    Rarity: "Japanese Box Bonus",
+    card_type: "Counter",
+    illustrators: ["Matthew Eng"],
+    text: "You may remove this counter to pay 1 {I}. (This counter doesn't count as a card.)",
+    image: `${SUPABASE_URL}/storage/v1/object/public/card-art/extras/ink-drop-ja-baymax.jpg`,
+  },
+  {
+    id: "extras:ink-drop-ja-merlin",
+    Set: EXTRAS_SET_NAME, originSet: "Hyperia City",
+    name: "Ink Drop Counter - Merlin Back",
+    Rarity: "Japanese Box Bonus",
+    card_type: "Counter",
+    illustrators: ["Matthew Eng"],
+    text: "You may remove this counter to pay 1 {I}. (This counter doesn't count as a card.)",
+    image: `${SUPABASE_URL}/storage/v1/object/public/card-art/extras/ink-drop-ja-merlin.jpg`,
+  },
 ];
 
 const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
@@ -4519,7 +4559,7 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
     const nameSlug = String(cc.name   || "card").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0,50);
     const printSlug = printing.toLowerCase().replace(/\s+/g, "-");
     const variantSlug = cc.variantLabel ? "-" + cc.variantLabel.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") : "";
-    const card_id = `custom::${(cc.Set||"unknown").toLowerCase().replace(/\s+/g,"-")}::${numSlug}::${nameSlug}::${printSlug}${variantSlug}`;
+    const card_id = cc.id || `custom::${(cc.Set||"unknown").toLowerCase().replace(/\s+/g,"-")}::${numSlug}::${nameSlug}::${printSlug}${variantSlug}`;
     const img = cc.image
       || (cc.tcgplayer_product_id != null
             ? `https://tcgplayer-cdn.tcgplayer.com/product/${cc.tcgplayer_product_id}_400w.jpg`
@@ -4552,7 +4592,9 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
       "classifications":  cc.classifications || null,
       "keywords":         cc.keywords || null,
       "illustrators":     cc.illustrators || null,
+      "text":             cc.text || null,
       "variant_label":    cc.variantLabel || null,
+      "originSet":        cc.originSet || null,
       "isCustomCard":     true,
     });
   }
@@ -29257,6 +29299,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     const seenPerBucket = new Map();
     for(const r of (raw||[])){
       if(r.Set !== EXTRAS_SET_NAME) continue;
+      // A CUSTOM_CARDS entry here is a counter or similar, not a card anyone
+      // grades, so it must not mint a graded tracking bucket of its own.
+      if(r.isCustomCard) continue;
       const bucket = r.Rarity || r.variant_label || null;
       if(!bucket || !r.card_id) continue;
       const seen = seenPerBucket.get(bucket) || new Set();

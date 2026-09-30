@@ -271,7 +271,9 @@ for (const r of rows) {
       // willpower / lore (move cost on a Location) and whether it is inkable.
       x: r.text || null,
       st: [r.strength ?? null, r.willpower ?? null, r.lore ?? null, r.move_cost ?? null],
-      ik: r.inkable === false ? 0 : 1,
+      // A CUSTOM_CARDS row with no inkable value is a counter, not a card:
+      // it is neither, so it says neither.
+      ik: r.inkable === false ? 0 : (r.inkable == null && r.isCustomCard ? null : 1),
       pl: 0, gs: 0,
       p: new Map(),
       spellMain: site.MAINLINE_SETS.includes(r.Set),
