@@ -54,16 +54,39 @@ RARITY = {"common": "Common", "uncommon": "Uncommon", "rare": "Rare", "super": "
           "epic": "Epic", "iconic": "Iconic", "promo": "Promo"}
 
 
-def clean_text(raw):
+def clean_text(raw, rules=False):
+    """Gallery markup -> the plain text the rest of the catalog (Lorcast) uses.
+
+    rules=True is for rules text only. The gallery writes an ability name as
+    \\\\Title Case\\\\ and separates abilities with a blank line; the card prints
+    the name in CAPS and Lorcast stores `NAME rule\\nNAME rule`. Left as the
+    gallery has it, a stand-in reads "To the Rescue When you play..." beside
+    Lorcast's "TO THE RESCUE When you play..." (seen on Hyperia City,
+    2026-09-30), and nothing downstream can tell where the name ends.
+    """
     if not raw:
         return None
-    t = re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), raw)  # \x3C -> <
+    t = raw
+    if rules:
+        t = re.sub(r"\\\\(.+?)\\\\", lambda m: m.group(1).upper(), t)      # \\Name\\ -> NAME
+    t = re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), t)  # \x3C -> <
     t = t.replace("\\n", "\n").replace("\\", "")  # newlines, then drop bold/keyword backslash markup
     t = t.replace("<", "").replace(">", "")        # strip keyword tag brackets -> plain keyword name
+    t = t.replace("#%", "%")                       # the gallery escapes a literal percent sign
+    if rules:
+        t = re.sub(r"\n\s*\n", "\n", t).replace("’", "'")
     return re.sub(r"[ \t]+\n", "\n", t).strip() or None
 
 
-def parse_card(html, cn, setnum):
+def card_window(html, cn, setnum):
+    """The text of ONE card's object, from its card_identifier to the
+    card_type that closes it, or None when the gallery has no such card.
+
+    It used to be a flat 2,800 characters, which runs on into the next card or
+    two. Every field read with a first-match-anywhere test then belongs to
+    whichever card happens to say it first: an action (no strength, no lore)
+    takes the next character's, and `inkable` came back True for any uninkable
+    card followed by an inkable one."""
     i = html.find(f'card_identifier:"{cn}/207 EN {setnum}"')
     # tolerate a non-204/207 total on future sets
     if i < 0:
@@ -71,7 +94,14 @@ def parse_card(html, cn, setnum):
         i = m.start() if m else -1
     if i < 0:
         return None
-    w = html[i:i + 2800]
+    end = re.compile(r'card_type:"[^"]*"').search(html, i)
+    return html[i:end.end()] if end and end.end() - i < 6000 else html[i:i + 2800]
+
+
+def parse_card(html, cn, setnum):
+    w = card_window(html, cn, setnum)
+    if w is None:
+        return None
     a = w[w.find("magic_ink_colors"):]
 
     def q(pat, src=w):
@@ -96,12 +126,20 @@ def parse_card(html, cn, setnum):
     flav = re.search(r'flavor_text:"(.*?)",(?:ink_convertible|rarity|searchable_keywords|set_rotation_state)', w, re.S)
     img = re.search(r'detail_image_url:"([^"]+)"', w)
     rar = q(r'rarity:"([^"]*)"')
+    # !0 / !1 are minified true / false. Unstated stays None rather than False.
+    ink_flag = q(r"ink_convertible:!([01])")
+    # "Song" is the card TYPE here ("Action - Song"), as Lorcast files it; left
+    # in, every song would also carry a classification no other song has.
+    if subt:
+        subt = [s for s in subt if s != "Song"] or None
     return dict(
         name=q(r'name:"([^"]*)"', a), version=q(r'subtitle:"([^"]*)"'),
         rarity=RARITY.get((rar or "").lower(), rar), ink=(inks[0] if inks else None), inks=inks,
-        cost=num("ink_cost"), inkable=("ink_convertible:!0" in w), card_type=ctype, classifications=subt,
+        cost=num("ink_cost"), inkable=(None if ink_flag is None else ink_flag == "0"),
+        card_type=ctype, classifications=subt,
         strength=num("strength"), willpower=num("willpower"), lore=num("quest_value"), move_cost=num("move_cost"),
-        text=clean_text(rules.group(1) if rules else None), flavor_text=clean_text(flav.group(1) if flav else None),
+        text=clean_text(rules.group(1) if rules else None, rules=True),
+        flavor_text=clean_text(flav.group(1) if flav else None),
         illustrators=ills, img=(img.group(1) + "card") if img else None,
     )
 
