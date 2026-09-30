@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=502">
+<link rel="stylesheet" href="styles.css?v=503">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -8091,6 +8091,38 @@ const isLandscapeCard = (row) =>
 // browse wall you are picking a card out, not reading it.
 const landscapeArt = (img) => html`<span class="lscape-wrap">${img}</span>`;
 
+// A deck laid out as a grid of cards (the deck poster, the deck editor's image
+// grid and stacked pile) draws a Location at the SAME size as the cards around
+// it: a rotated card does not shrink, so its long edge is 1.4 columns wide,
+// and one column would draw it at 71%. Adjacent landscape cards form a RUN
+// that shares one grid cell, placed by span with no explicit start, so it sits
+// in the current row when there is room and wraps when there is not. See the
+// deck poster's render for the history (a 2-column span per card left ~100px
+// between two Locations; a forced full-width row could never share a row).
+const groupLandscapeRuns = (items) => {
+  const out = [];
+  for(const c of items){
+    const landscape = isLandscapeCard(c.meta);
+    const prev = out[out.length-1];
+    if(landscape && prev && prev.landscape) prev.items.push(c);
+    else out.push({landscape, items:[c]});
+  }
+  return out;
+};
+// Enough columns for n cards at 1.4 columns each plus their gaps (ceil(1.4n)
+// always exceeds n, so the gaps fit too), never more than the grid has.
+const landscapeRunSpan = (n, cols) => Math.min(cols, Math.max(2, Math.ceil(n * 1.4)));
+// A cell spanning S tracks is S*W + (S-1)*gap wide, so this is exactly 1.4W,
+// a portrait card's long edge, whatever S is. Capped at the cell so a
+// one-column grid shrinks the card rather than overflowing it.
+const landscapeRunCardWidth = (span, gapPx) =>
+  `min(100%, calc((100% - ${(span-1)*gapPx}px) / ${span} * 1.4))`;
+// The deck poster's quantity badge is 25px tall and sits 6px down, like the
+// badges on the portrait cards beside it; a Location's goes ABOVE the card, so
+// this is its 6 + 25 + a 4px gap. A portrait row is 1.4W tall and a Location
+// W, so the room comes out of space the row already has at 5-8 columns.
+const POSTER_LSCAPE_BADGE_ROOM = 35;
+
 // Copy the current page's link. Uses the clipboard synchronously inside the
 // click (Safari drops a write that happens after an await), and falls back to
 // the share sheet on touch, where a system share is what people actually want
@@ -11243,17 +11275,9 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   // forced full-width row fixed that but could never share a row with
   // anything, even a row with plenty of room left). Grouping is by adjacency
   // rather than by "is a Location", so a landscape card that somehow isn't
-  // last still renders correctly — it just gets its own span.
-  const posterGroups = useMemo(() => {
-    const out = [];
-    for(const c of cards){
-      const landscape = isLandscapeCard(c.meta);
-      const prev = out[out.length-1];
-      if(landscape && prev && prev.landscape) prev.items.push(c);
-      else out.push({landscape, items:[c]});
-    }
-    return out;
-  }, [cards]);
+  // last still renders correctly — it just gets its own span. The deck
+  // editor's image grid and stacked pile use the same runs.
+  const posterGroups = useMemo(() => groupLandscapeRuns(cards), [cards]);
 
   // A card the catalog has not loaded yet is dropped by the `if(!meta) continue`
   // above, silently. On a cold visit the decks arrive BEFORE the catalog does
@@ -12148,16 +12172,20 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
                 : {width:"100%",aspectRatio:"5/7",objectFit:"cover",borderRadius:8,
                    boxShadow:"0 3px 8px rgba(0,0,0,0.3)",background:"rgba(255,255,255,0.05)"}}/>`;
             /* Coconut is near-singleton, so a "1x" on 55 of 56 tiles is noise —
-               only the multiples are worth calling out. The badge lives INSIDE
-               the card's own box on a landscape card, or it would pin to the
-               far corner of the row rather than to the card it counts. On a
-               landscape card the quarter turn puts the COST in the top-right
-               corner, so the badge steps left of it rather than covering it. */
-            const qty = (!posterCoconut || c.quantity > 1) && html`<span style=${{position:"absolute",top:6,right:landscape ? "calc(14% + 6px)" : 6,background:"rgba(0,0,0,0.82)",color:"#fff",
+               only the multiples are worth calling out. A landscape card's
+               quarter turn puts its COST in the top-right corner, so its badge
+               sits ABOVE the card, right-aligned over the cost hexagon, in the
+               room POSTER_LSCAPE_BADGE_ROOM reserves (Zaven, 2026-09-30: "line
+               up above the ink cost"). It used to sit inside the box, stepped
+               left of the cost — but the box was being stretched to the row's
+               height, so it landed above the card AND left of the cost. */
+            const qty = (!posterCoconut || c.quantity > 1) && html`<span style=${{position:"absolute",top:6,right:landscape ? 0 : 6,background:"rgba(0,0,0,0.82)",color:"#fff",
               fontSize:14,fontWeight:800,padding:"3px 8px",borderRadius:6,
               fontVariantNumeric:"tabular-nums",letterSpacing:"-0.3px",
               boxShadow:"0 2px 5px rgba(0,0,0,0.35)"}}>${c.quantity}x</span>`;
-            return html`<${React.Fragment}>${art}${qty}</>`;
+            return landscape
+              ? html`<${React.Fragment}><div style=${{position:"relative",aspectRatio:"7/5"}}>${art}</div>${qty}</>`
+              : html`<${React.Fragment}>${art}${qty}</>`;
           };
           if(!g.landscape){
             const c = g.items[0];
@@ -12166,12 +12194,17 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
           // Enough columns to hold n cards at 1.4W plus their internal gaps,
           // provably (see the comment above `posterGroups.map`). No explicit
           // start — plain auto-placement shares the current row when the span
-          // fits, wraps to a new one when it doesn't.
-          const spanCols = Math.min(cols, Math.max(2, Math.ceil(g.items.length * 1.4)));
+          // fits, wraps to a new one when it doesn't. `alignItems:"flex-start"`
+          // is load-bearing: stretched to the row's height, each card's box
+          // grew past its 7/5 and anything pinned to its top floated above
+          // the card. The badge's room is reserved in EVERY row, including a
+          // row of nothing but Locations, where there is no taller card to
+          // lend it space and it would otherwise ride up over the row above.
+          const spanCols = landscapeRunSpan(g.items.length, cols);
           return html`<div key=${"lrow:" + g.items[0].card_id}
-            style=${{gridColumn:`span ${spanCols}`,display:"flex",flexWrap:"wrap",gap:10}}>
+            style=${{gridColumn:`span ${spanCols}`,display:"flex",flexWrap:"wrap",alignItems:"flex-start",gap:10}}>
             ${g.items.map(c => html`<div key=${c.card_id} style=${{position:"relative",
-              width:`calc((100% - ${(spanCols-1)*10}px) / ${spanCols} * 1.4)`,aspectRatio:"7/5"}}>
+              width:landscapeRunCardWidth(spanCols, 10),paddingTop:POSTER_LSCAPE_BADGE_ROOM}}>
               ${cell(c, true)}
             </div>`)}
           </div>`;
@@ -57939,6 +57972,47 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard, defaultInk
   </div>`;
 };
 
+// The deck editor's image grid and stacked pile: an auto-fill grid in which a
+// run of Locations shares one cell at 1.4 columns per card, the deck poster's
+// rule (groupLandscapeRuns). One column drew them at 71% of the cards beside
+// them (Zaven, 2026-09-30: "locations look too small here, not full card
+// size?"). The poster knows its column count; an auto-fill grid does not, so
+// it is measured, from the same `min` and `gap` the grid is built from, never
+// read back off the grid, whose track list grows implicit columns the moment a
+// span is too wide for it. renderItem(item, width) sizes a landscape tile.
+const DeckTileGrid = ({className, items, renderItem, min, gap}) => {
+  const ref = useRef(null);
+  const runs = useMemo(() => groupLandscapeRuns(items), [items]);
+  const hasRun = runs.some(r => r.landscape);
+  const [cols, setCols] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if(!hasRun || !el) return;
+    const measure = () => {
+      const n = Math.max(1, Math.floor((el.clientWidth + gap) / (min + gap)));
+      setCols(c => c === n ? c : n);
+    };
+    measure();
+    if(typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [hasRun, min, gap]);
+  return html`<div ref=${ref} class=${className}
+    style=${{gridTemplateColumns:`repeat(auto-fill,minmax(${min}px,1fr))`,gap}}>
+    ${runs.map(r => {
+      if(!r.landscape) return renderItem(r.items[0]);
+      const span = landscapeRunSpan(r.items.length, cols || 2);
+      const width = landscapeRunCardWidth(span, gap);
+      const first = r.items[0];
+      return html`<div key=${"lrun:" + first.card_id + ":" + first.printing} class="deck-lscape-run"
+        style=${{gridColumn:`span ${span}`,gap}}>
+        ${r.items.map(it => renderItem(it, width))}
+      </div>`;
+    })}
+  </div>`;
+};
+
 const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, raw, theme, pending,
                      user, onSignIn,
                      onBack, onRename, onDelete, onDuplicate,
@@ -59088,8 +59162,13 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         </button>`;
       };
 
-      const renderItem = (item) => {
+      // `lscapeW` is set only by DeckTileGrid, for a Location in a run: the
+      // width that makes it the size of the cards around it. (The list view
+      // maps renderItem directly, so its second argument is an index there.)
+      const renderItem = (item, lscapeW) => {
         const meta = item.meta || {};
+        const lscape = isLandscapeCard(meta);
+        const lscapeStyle = typeof lscapeW === "string" ? {width:lscapeW} : undefined;
         const price = cheapestCardPrice(cardById[item.card_id] || []);
         const aff = tcgUrl(meta.tcgplayer_product_id, item.printing);
         const k = item.card_id+":"+item.printing;
@@ -59118,14 +59197,15 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         // unnecessary here but kept available for the hover preview below.
         const tileImg = meta.img_normal || meta.img_small;
         if(viewLayout === "grid"){
-          return html`<div key=${k} class=${"deck-grid-tile"+dimClass+(gridOverLimit?" coconut-over":"")}>
+          return html`<div key=${k} class=${"deck-grid-tile"+(lscape?" deck-grid-tile--lscape":"")+dimClass+(gridOverLimit?" coconut-over":"")}
+            style=${lscapeStyle}>
             ${tileImg
-              ? (isLandscapeCard(meta)
+              ? (lscape
                   ? landscapeArt(html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy" role="button" tabIndex="0"
                       onClick=${()=>openCardModal(item.card_id)} onKeyDown=${keyActivate(()=>openCardModal(item.card_id))}/>`)
                   : html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy" role="button" tabIndex="0"
                       onClick=${()=>openCardModal(item.card_id)} onKeyDown=${keyActivate(()=>openCardModal(item.card_id))}/>`)
-              : html`<div style=${{aspectRatio:"5/7",background:"var(--bg-surface)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"var(--text-muted)",padding:6,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
+              : html`<div style=${{aspectRatio:lscape?"7/5":"5/7",background:"var(--bg-surface)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"var(--text-muted)",padding:6,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
             ${(!coconutCard || item.quantity > 1 || gridOverLimit) && html`
               <span class=${"deck-grid-tile-qty"+(gridOverLimit?" over":"")}
                 title=${gridOverLimit ? `${item.quantity} copies — ${COCONUT_SET_NAME} allows ${gridCocoLimit === Infinity ? "any number" : gridCocoLimit}` : null}>
@@ -59139,22 +59219,26 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         }
         if(viewLayout === "stacked"){
           const peeks = Math.max(0, item.quantity - 1);
-          return html`<div key=${k} class=${"deck-stack-tile"+(highlightOn && short > 0?" missing-fade":"")}
-            onClick=${()=>openCardModal(item.card_id)}>
+          // A Location's peeks are turned too, so each strip shows the top edge
+          // of the card as it lies: art, with the cost at the right.
+          return html`<div key=${k} class=${"deck-stack-tile"+(lscape?" deck-stack-tile--lscape":"")+(highlightOn && short > 0?" missing-fade":"")}
+            style=${lscapeStyle} onClick=${()=>openCardModal(item.card_id)}>
             ${Array.from({length: peeks}).map((_, i) => html`<div key=${i} class="deck-stack-peek">
-              ${meta.img_small ? html`<img src=${meta.img_small} alt=""/>` : null}
+              ${meta.img_small
+                ? (lscape ? landscapeArt(html`<img src=${meta.img_small} alt=""/>`) : html`<img src=${meta.img_small} alt=""/>`)
+                : null}
             </div>`)}
             <div class="deck-stack-top">
               <span class="deck-stack-qty">${item.quantity}×</span>
               ${buildVariantChevron(item, meta, "deck-variant-btn--tile")}
               ${ownedFracBadge}
               ${tileImg
-                ? (isLandscapeCard(meta)
+                ? (lscape
                     ? landscapeArt(html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy"
                         role="button" tabIndex="0" onKeyDown=${keyActivate(()=>openCardModal(item.card_id))}/>`)
                     : html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy"
                         role="button" tabIndex="0" onKeyDown=${keyActivate(()=>openCardModal(item.card_id))}/>`)
-                : html`<div style=${{aspectRatio:"5/7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"var(--text-muted)",padding:8,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
+                : html`<div style=${{aspectRatio:lscape?"7/5":"5/7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"var(--text-muted)",padding:8,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
               ${price!=null && aff && html`<a class="deck-stack-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>${fmtUSD(price)}</a>`}
               ${makeCounter(item, cardMax, "deck-stack-counter")}
             </div>
@@ -59289,9 +59373,11 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         : sectioned.map(section => html`<div key=${section.key} class="deck-section">
             <div class="deck-section-title">${section.label} <span class="muted">${section.items.reduce((s,i)=>s+i.quantity,0)}</span></div>
             ${viewLayout === "grid"
-              ? html`<div class="deck-section-grid">${section.items.map(renderItem)}</div>`
+              ? html`<${DeckTileGrid} className="deck-section-grid" items=${section.items}
+                  renderItem=${renderItem} min=${110} gap=${8}/>`
               : viewLayout === "stacked"
-                ? html`<div class="deck-section-stack">${section.items.map(renderItem)}</div>`
+                ? html`<${DeckTileGrid} className="deck-section-stack" items=${section.items}
+                    renderItem=${renderItem} min=${160} gap=${22}/>`
                 : html`<div class="deck-section-list">${section.items.map(renderItem)}</div>`}
           </div>`)}
       ${variantPicker && (() => {
