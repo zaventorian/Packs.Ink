@@ -624,7 +624,7 @@ rather than a studio one and is worth re-cutting from a better source, which is 
 rather than a code edit — it sits at `pins/45.png` like every other entry. **TCGplayer's bundle
 photo is NOT that source** (checked 2026-09-27): the pin sits behind the blister at ~80px there,
 no sharper than the cut we have. `EXPECTED_PINS` in `upload_collectible_photos.py` tracks
-the highest valid `n`, so it moves with the list (45 today, counters 25).
+the highest valid `n`, so it moves with the list (45 today, counters 26).
 
 **⚠ Do NOT credit a photo source anywhere user-facing.** The Help credits paragraph and
 `privacy.html`'s takedown line both named one until 2026-09-13, when Zaven asked for it gone
@@ -700,7 +700,7 @@ the source is a fan site with gaps.
 - Adding an entry still means uploading its photo in the same commit, or flagging it `noArt`.
 - **⚠ `EXPECTED_PINS` / `EXPECTED_COUNTERS` in `upload_collectible_photos.py` are the highest
   valid `n`, not a photo count**, and they bound the "unexpected number" warning — so they track
-  the list length (**45 / 25** as of 2026-09-20), even where an entry has no photo to upload.
+  the list length (**45 / 26** as of 2026-09-30), even where an entry has no photo to upload.
 - **`scripts/cut_collectible_bg.py`** removes the white studio background. Two things make it
   work: the background is found by **flood fill from the border**, not by "white → transparent"
   (which punches straight through Baymax, every logo pin and every ink symbol's highlight); and
