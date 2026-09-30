@@ -48,8 +48,12 @@ def pull_catalog() -> list[dict]:
             continue
         # art_key = filename without the ?ts cache-buster (a data: URI has no
         # filename, so it is keyed on its own content instead)
+        # A stand-in's art is card-art/<folder>/<n>.jpg and the BARE filename repeats across folders
+        # (set14/5.jpg, rph/5.jpg, dis/5.jpg), so three unrelated cards shared the key "5.jpg" - and the
+        # scanner treats art_key as a card's identity within a session. Keep the folder. Lorcast's own
+        # filenames are unique hashes and are unchanged. Index.html scannerExtraRows uses the same rule.
         art_key = ("data-" + hashlib.sha1(url.encode()).hexdigest()[:16]) if url.startswith("data:") \
-            else url.split("/")[-1].split("?")[0]
+            else (url.split("/card-art/")[-1] if "/card-art/" in url else url.split("/")[-1]).split("?")[0]
         out.append({
             "id": r["id"],
             "name": r.get("name"),
