@@ -4,6 +4,8 @@
 import { tcgUrl, tcgSetSearchUrl, amazonForSealed, calEventTitle, calEventSubtitle, scLocalTime12 } from "./site.generated.js";
 import { FIN_PRINTING, RANGES, DEFAULT_RANGE, CAL_FILTERS, META_FALLBACK_DAYS } from "./data.js";
 import { tileUrl } from "./tile.js";
+import { INK_MARK, inkMarks, statsLineFor } from "./stats.js";
+export { INK_MARK, inkMarks };
 
 export const SITE = "https://packs.ink";
 // One event on the site's calendar (its detail view: when, where, the map,
@@ -256,8 +258,6 @@ export function cardMessage(ctx) {
 // ── a card's identity and play ───────────────────────────────────────────
 // The six inks as Discord's coloured squares: the nearest colour Discord can
 // draw inline, and they read at a glance in a list.
-export const INK_MARK = { Amber: "🟨", Amethyst: "🟪", Emerald: "🟩", Ruby: "🟥", Sapphire: "🟦", Steel: "⬜" };
-export const inkMarks = (inks) => (inks || []).map((k) => INK_MARK[k] || "").join("");
 
 export function gameplayLine(c) {
   const bits = [];
@@ -362,8 +362,11 @@ export function versionOptions(R, res) {
     const px = money(f[5] ?? f[4]);
     out.push({
       label: clip(i === res.index ? [set.n, p.r, fin].filter(Boolean).join(" · ") : c.n, 100),
-      description: clip([i === res.index ? (p.no ? "#" + p.no : null) : set.n, i === res.index ? null : p.r,
-        i === res.index ? p.var : fin, px].filter(Boolean).join(" · "), 100) || undefined,
+      // The card's own printings share its stats, which are on screen above;
+      // another version gets its stats, then rarity and price (stats.js).
+      description: (i === res.index
+        ? clip([p.no ? "#" + p.no : null, p.var, px].filter(Boolean).join(" · "), 100)
+        : statsLineFor(c, [p.r, fin, { k: "set", t: set.n }, px])) || undefined,
       value: k,
     });
   };
@@ -446,7 +449,10 @@ export function notFoundMessage(R, res, query, ids) {
     embed.description += "\n\nDid you mean one of these?";
     components.push({ type: 1, components: [{
       type: 3, custom_id: pickId("chart", DEFAULT_RANGE), placeholder: "Pick a card",
-      options: sug.map((s) => ({ label: clip(s.label, 100), value: s.value })),
+      // A card's stats go on the option's sub-line; its label says which printing.
+      options: sug.map((s) => s.kind === "card"
+        ? { label: clip(s.plain || s.label, 100), value: s.value, description: statsLineFor(R.cards[s.i]) || undefined }
+        : { label: clip(s.label, 100), value: s.value }),
     }] });
   }
   return { embeds: [embed], components };
@@ -741,7 +747,7 @@ export function metaMessage({ R, index, meta }) {
     const listed = !f[6];
     const px = listed ? (f[5] ?? f[4]) : null;
     const share = total > 0 ? ` · in ${Math.round((x.c.pl / total) * 100)}% of decks` : "";
-    picks.push({ label: clip(x.c.n, 100), value: R.cardKey(printing, fi), description: clip(`#${k + 1} most played${px != null ? " · " + money(px) : ""}`, 100) });
+    picks.push({ label: clip(x.c.n, 100), value: R.cardKey(printing, fi), description: statsLineFor(x.c, [`#${k + 1} most played`, px != null ? money(px) : null]) });
     return `\`${String(k + 1).padStart(2)}\` ${inkMarks(x.c.i)} [${clip(x.c.n, 44)}](${buyUrl(x.c.n, listed ? f[1] : null, f[2] || FIN_PRINTING[f[0]])})${share}${px != null ? ` · ${money(px)}` : ""}`;
   });
   const played = {

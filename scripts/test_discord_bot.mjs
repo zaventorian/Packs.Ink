@@ -794,6 +794,48 @@ const D = await mod("discord/src/data.js");
     const cm = E.cardMessage({ R, res: R.resolve(longest.n), price: D.priceSummary([]), graded: [], raw: null, view: "card", range: "3m", origin: "https://bot.example", inkColors: index.inkColors });
     checkMessage(cm, `card with the longest text (${longest.n})`);
   }
+  // The stats a picker shows (Zaven: "amethyst 6c inkable 5/6 2lore and any
+  // keywords"): words on a menu's sub-line, the same on a suggestion's line.
+  {
+    const S = await mod("discord/src/stats.js");
+    const demona = { n: "Demona - Scourge of the Wyvern Clan", i: ["Amethyst"], cost: 6, t: "Character", w: [], st: [5, 6, 2, null], ik: 1, x: "AD SAXUM COMMUTATE When you play…" };
+    eq(S.statsLineFor(demona), "Amethyst · 6c · inkable · 5/6 · 2 lore", "stats: a character in words");
+    const elsa = { i: ["Amethyst"], cost: 8, t: "Character", w: ["Shift", "Evasive"], st: [4, 6, 3, null], ik: 0,
+      x: "Evasive (Only characters with Evasive can challenge this character.)\nShift 6 {I} (You may pay 6 {I} to play this…)" };
+    eq(S.keywordTags(elsa).join(", "), "Evasive, Shift 6", "stats: keywords in printed order, with their numbers");
+    eq(S.statsLineFor(elsa), "Amethyst · 8c · uninkable · 4/6 · 3 lore · Evasive · Shift 6", "stats: uninkable and keywords");
+    eq(S.statsLineFor({ i: ["Ruby"], cost: 3, t: "Location", st: [null, 5, 2, 1], ik: 1 }), "Ruby · 3c · inkable · Location · move 1 · 5 willpower · 2 lore", "stats: a location's move and willpower");
+    eq(S.statsLineFor({ i: ["Ruby"], cost: 7, t: "Action - Song", st: [null, null, null, null], ik: 0 }), "Ruby · 7c · uninkable · Song", "stats: a song says so");
+    eq(S.keywordTags({ w: ["Resist", "Singer"], x: "Resist +1 (Damage dealt…)\nSinger 5 (This character counts as cost 5 to sing songs.)" }).join(", "), "Resist +1, Singer 5", "stats: Resist +1, Singer 5");
+    eq(S.keywordTags({ w: ["Shift"], x: "Universal Shift 4" }).join(), "Shift", "stats: a keyword's number is read only from its own line");
+    const long = S.statsLineFor(elsa, ["Legendary", "#1 most played", "$123,456.00", "x".repeat(40)]);
+    ok(long.length <= 100 && long.startsWith("Amethyst · 8c"), `stats: a sub-line never passes 100 characters, and keeps the stats first (${long})`);
+    // Every suggestion line over the fixture: ≤100, the stats in it, and the
+    // price never cut off (a too-long line trims the stats with "…" instead).
+    let seen = 0, priced = 0;
+    R.cards.forEach((c) => c.p.forEach((p) => p.f.forEach((f, fi) => {
+      const l = R.suggestLabel(c, p, fi);
+      seen++;
+      ok(l.length <= 100, `suggestion ≤100 characters (${l})`);
+      ok(l.startsWith(c.n + " — "), `suggestion starts with the card's name (${l})`);
+      const px = f[5] ?? f[4];
+      if (px != null) { priced++; ok(!l.endsWith("…") && /\$[\d,.]+$/.test(l), `suggestion keeps its price at the end (${l})`); }
+      if (c.cost != null && !/…/.test(l)) ok(l.includes(`${c.cost}c`), `suggestion shows the cost (${l})`);
+    })));
+    ok(seen > 200 && priced > 100, `every fixture printing checked (${seen}, ${priced} priced)`);
+    const sug = R.suggest("elsa spirit", 5).find((s) => s.kind === "card");
+    ok(sug && /🟪 \dc/.test(sug.label) && / \| /.test(sug.label), `a /card suggestion carries the stats on its line (${sug && sug.label})`);
+    const nf = E.notFoundMessage(R, { kind: "none", query: "elsa?", suggestions: R.suggest("elsa", 5) }, "elsa?");
+    const opts = (nf.components[0] || { components: [{ options: [] }] }).components[0].options;
+    ok(opts.length && opts.every((o) => !/ \| /.test(o.label)) && opts.filter((o) => o.description).every((o) => /\d+c/.test(o.description)),
+      `"did you mean": the label names the printing, the sub-line gives the stats (${opts[0] && opts[0].description})`);
+    const st = R.resolve("stitch");
+    const vo = E.versionOptions(R, st);
+    const own = vo.filter((o) => o.label.includes(" · ")), alt = vo.filter((o) => /^Stitch - /.test(o.label));
+    ok(alt.length && alt.every((o) => /^\w+(?:\/\w+)? · \d+c · /.test(o.description || "")), `versions menu: another version's sub-line leads with its stats (${alt[0] && alt[0].description})`);
+    ok(own.every((o) => !/\dc · /.test(o.description || "")), "versions menu: the card's own printings don't repeat the stats shown above");
+    ok(vo.every((o) => !o.description || o.description.length <= 100), "versions menu: every sub-line within 100");
+  }
   // An event links to ITS page on packs.ink, which links on to the organiser.
   eq(E.eventPageUrl("ev:123"), "https://packs.ink/calendar?ce=ev%3A123", "an RPH event links to its page on the calendar");
   eq(E.eventPageUrl(null), null, "no id, no page");

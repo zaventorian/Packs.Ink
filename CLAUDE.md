@@ -5164,6 +5164,25 @@ client still showing one gets "Unknown command." (guarded). The resolver's
   ink"), reminder text italic, `{I}` / `{E}` / `{L}`… as words (Discord has no
   glyph for them), markdown escaped. Checked over all 3,195 catalog texts: no
   odd output, the longest 428 characters. An uninkable card says so.
+- **Card pickers show the card's stats** (Zaven: *"a small sub line under each
+  option saying the stats … amethyst 6c inkable 5/6 2lore and any keywords"*).
+  `src/stats.js` builds them once for every surface: ink, cost, inkable, S/W
+  (a Location's move + willpower, an action's type), lore, keywords with their
+  numbers read off the card's own line ("Shift 6", "Resist +1").
+  - **⚠ Discord's `/card` suggestions have NO sub-line** — one line of ≤100
+    characters is all an autocomplete choice can show — so the stats go ON
+    that line: `Demona - Scourge of the Wyvern Clan — 🟪 6c · inkable · 5/6 ·
+    2 lore | Legendary · Non-foil · $39.14`. Too long, the set name goes
+    first, then "inkable", the last keywords, "uninkable", the word
+    "Location", then "willpower" → "wp", and last the stats trim behind a
+    "…" (`fitParts`'s `trim` group) so **the finish and price are never cut**.
+    Measured over all 6,252 printings: none over 100, none lose the price, 20
+    trim with "…". The guard checks every fixture printing.
+  - **Select menus DO have a sub-line** (`description`), so every card menu
+    carries the stats in words there, before what it already said (rank,
+    rarity, price): "Did you mean", `/meta`'s card list, `/set`'s chase list,
+    `/new`, `/open`. In the versions menu only ANOTHER version gets them — the
+    card's own printings share the stats already shown above.
 - **Every event links to its page on packs.ink** (`eventPageUrl` →
   `/calendar?ce=<id>`), which links on to the organiser: `/events` uses
   `ev:<rph event id>` (the calendar fetches one the reader doesn't follow),

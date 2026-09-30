@@ -14,6 +14,7 @@ import {
 } from "./site.generated.js";
 import { money, shortDate, BRAND_COLOR, cardImage, buyUrl, AFFILIATE_NOTE, openId, inkMarks } from "./embeds.js";
 import { FIN_PRINTING } from "./data.js";
+import { statsLineFor } from "./stats.js";
 
 const DAY = 86400000;
 const clip = (s, n) => { s = String(s || ""); return s.length <= n ? s : s.slice(0, n - 1) + "…"; };
@@ -154,7 +155,7 @@ export function setMessage(o, { origin } = {}) {
   if (o.chase.length) {
     components.push({ type: 1, components: [{ type: 3, custom_id: openId("card"), placeholder: "Look at a chase card",
       options: o.chase.map((x) => ({ label: clip(R.cards[x.i].n, 100), value: R.cardKey(x.p, x.fi),
-        description: clip(`${x.p.r} · ${money(x.v)}`, 100) })) }] });
+        description: statsLineFor(R.cards[x.i], [x.p.r, money(x.v)]) })) }] });
   }
   const row = [];
   if (set.main && !o.upcoming) {
@@ -401,7 +402,7 @@ export function newCardsMessage(R, index, cards, { origin, now = Date.now() } = 
     const key = R.cardKey(c.p, 0);
     if (seen.has(key) || options.length >= 50) continue;
     seen.add(key);
-    options.push({ label: clip(R.cards[c.i].n, 100), value: key, description: clip([c.p.r, (R.sets[c.p.s] || {}).n].filter(Boolean).join(" · "), 100) });
+    options.push({ label: clip(R.cards[c.i].n, 100), value: key, description: statsLineFor(R.cards[c.i], [c.p.r, { k: "set", t: (R.sets[c.p.s] || {}).n }]) });
   }
   const menus = [options.slice(0, 25), options.slice(25, 50)].filter((o) => o.length).map((o, k) => ({ type: 1, components: [{
     type: 3, custom_id: openId("card", k), placeholder: k ? "More new cards" : "Look at a new card", options: o }] }));
@@ -533,7 +534,7 @@ export function packMessage(R, index, si, result, { origin, who } = {}) {
     const key = R.cardKey(e.p, e.fi);
     if (seenKey.has(key) || options.length >= 25) continue;
     seenKey.add(key);
-    options.push({ label: clip(R.cards[e.i].n, 100), value: key, description: clip(`${e.p.r} · ${e.price != null ? money(e.price) : "no price"}`, 100) });
+    options.push({ label: clip(R.cards[e.i].n, 100), value: key, description: statsLineFor(R.cards[e.i], [e.p.r, e.price != null ? money(e.price) : "no price"]) });
   }
   return {
     embeds,
