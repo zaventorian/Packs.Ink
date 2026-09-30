@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=505">
+<link rel="stylesheet" href="styles.css?v=506">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -46938,6 +46938,35 @@ const CalendarDayModal = ({day, events, onOpen, onClose, art}) => {
   </div>`;
 };
 
+// Set Championship structure, from Ravensburger's own kit instructions
+// (files.disneylorcana.com/Hyperia_SetChamps_EN.pdf, read 2026-09-30). The
+// round counts and cut are the same table for every kit; prizes are per set.
+// A kit's "Available Dates" are the only place a store SC can be tied to a set
+// when RPH's listing names none, so the Hyperia City window is a date range.
+const SC_SWISS_BANDS = [
+  {min: 8,  max: 8,    rounds: 3, cut: "No cut"},
+  {min: 9,  max: 16,   rounds: 4, cut: "Top 4"},
+  {min: 17, max: 32,   rounds: 5, cut: "Top 8"},
+  {min: 33, max: 64,   rounds: 6, cut: "Top 8"},
+  {min: 65, max: null, rounds: 7, cut: "Top 8"},
+];
+const SC_KITS = [
+  {set: "Hyperia City", from: "2027-01-02", to: "2027-01-24",
+   prizes: [
+     ["Champion", "Honey Lemon - Testing the Limits Champion playmat + foil promo"],
+     ["2nd-8th place", "Honey Lemon - Testing the Limits foil promo"],
+     ["Every participant", "Honey Lemon - Testing the Limits non-foil promo, while supplies last"],
+   ]},
+];
+const scKitFor = (ev) => {
+  const d = ev && ev.starts_on ? String(ev.starts_on).slice(0, 10) : "";
+  return SC_KITS.find(k => d && d >= k.from && d <= k.to) || null;
+};
+// What a set's Organized Play kit tells stores to hand out, per release phase.
+const SET_OP_NOTES = {
+  "Hyperia City": {lgs: "Buy-a-box promo: stores give a free Minnie Mouse - Urban Visionary (4/RPH) with a full booster display box picked up in store, while supplies last. Not before Friday, October 16."},
+};
+
 const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art, backLabel}) => {
   // Same rule as ScoutEventModal: the scouting panel's player-history dialog —
   // and the ✚ menu — open on top of this one, and Esc belongs to whichever is
@@ -47021,6 +47050,15 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art, backLabel}) 
         ${ev.rph_kind === "sc" && html`<div><dt>Type</dt><dd>Set Championship</dd></div>`}
         ${end && html`<div><dt>Runs</dt><dd>${calDayDiff(ev.starts_on, end) + 1} days</dd></div>`}
       </dl>
+      ${ev.rph_kind === "sc" && html`<div class="cal-sc-struct">
+        <div class="cal-sc-struct-head">Set Championship format</div>
+        <table><thead><tr><th>Players</th><th>Swiss rounds</th><th>Cut</th></tr></thead><tbody>
+          ${SC_SWISS_BANDS.map(b => html`<tr key=${b.min}><td>${b.max == null ? b.min + "+" : b.min === b.max ? b.min : b.min + "-" + b.max}</td><td>${b.rounds}</td><td>${b.cut}</td></tr>`)}
+        </tbody></table>
+        <p>Core Constructed, Swiss rounds of 60 minutes, best of 3. At least 8 players are needed or the event is cancelled.</p>
+        ${scKitFor(ev) && html`<ul class="cal-sc-prizes">${scKitFor(ev).prizes.map(([who, what]) => html`<li key=${who}><b>${who}</b> ${what}</li>`)}</ul>`}
+      </div>`}
+      ${isSet && /lgs/i.test(ev.subtitle || "") && SET_OP_NOTES[ev.set_name || ev.title] && html`<p class="cal-modal-notes">${SET_OP_NOTES[ev.set_name || ev.title].lgs}</p>`}
       ${ev.notes && html`<p class="cal-modal-notes">${ev.notes}</p>`}
       ${/* A store's own words about its event. Only store rows have one — a set
             release or a Challenge is ours to describe, and `notes` above is where
