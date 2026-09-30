@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=500">
+<link rel="stylesheet" href="styles.css?v=501">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -42957,10 +42957,9 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   </aside>`;
 };
 
-// Compact EV strip on Home: last 4 mainline sets, EV/box & EV/pack at
-// current pricing, plus the TCGPlayer Booster Box price (linked through
-// the affiliate wrapper when available). Tiny inline toggles let the
-// user adjust the EV semantics without leaving the page.
+// Home "Recent set EV": the last 4 mainline sets, EV per box at today's Low
+// prices against the cheapest TCGplayer Booster Box (affiliate-linked), with
+// two toggles that change what the EV counts without leaving the page.
 // A set not released yet sits at the top of every EV list the moment it has
 // a price, and its number is not comparable with the rest: pre-sale singles
 // run far above where they settle, and a rarity with no listings yet counts
@@ -42973,25 +42972,6 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav
     // sets is already MAINLINE_SETS oldest→newest; reverse + take 4.
     return (sets || []).slice().reverse().slice(0, 4);
   }, [sets]);
-  const boxBySet = useMemo(() => {
-    if(!sealedPrices) return {};
-    const out = {};
-    for(const row of sealedPrices){
-      if(row.product_type !== "Booster Box") continue;
-      const nm = (row.name || "").toLowerCase();
-      if(nm.includes("case")) continue;
-      const price = row.low_price != null ? parseFloat(row.low_price) : null;
-      if(price == null) continue;
-      const prev = out[row.set_id];
-      if(!prev || prev.price > price){
-        out[row.set_id] = {
-          price, name: row.name,
-          url: tcgUrl(row.tcgplayer_product_id),
-        };
-      }
-    }
-    return out;
-  }, [sealedPrices]);
   // setsMeta is the authoritative set_id↔name map. Prefer set_id-based
   // matching so we don't depend on TCGplayer's product naming staying
   // exactly in sync with our display names.
@@ -43024,59 +43004,91 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav
   };
   const excludeSet = useMemo(() => excludeBoth ? new Set(["Enchanted","Iconic"]) : new Set(), [excludeBoth]);
   if(!lastFour.length) return null;
+  const title = homePanelTitle({cls:"home-feed-title home-feed-title--chase home-ev-title",
+      label:"Recent set EV", panelKey:"setEv", panelNav})
+    || (onTitleClick
+      ? html`<button class="home-feed-title home-feed-title--chase home-ev-title home-title-link"
+          onClick=${onTitleClick} title="Open Analytics → Expected Value">Recent set EV</button>`
+      : html`<div class="home-feed-title home-feed-title--chase home-ev-title">Recent set EV</div>`);
+  // One card per set (2026-09-30, Zaven: "its ugly"), read top to bottom as
+  // the question it answers — is the box worth cracking: the verdict in the
+  // corner, a meter drawing EV against the box, then where to buy one. The
+  // meter's scale is whichever is bigger, so a +EV set fills it green and a
+  // tick marks where the box price sits inside it.
+  const anyLogo = lastFour.some(n => lorcanaSetArt(n));
   return html`<div class="home-ev-strip">
-    <div class="home-ev-strip-head">
-      ${homePanelTitle({cls:"home-ev-strip-title", label:"Recent set EV", panelKey:"setEv", panelNav})
-        || (onTitleClick
-        ? html`<button class="home-ev-strip-title home-title-link" onClick=${onTitleClick}
-            title="Open Analytics → Expected Value">Recent set EV</button>`
-        : html`<div class="home-ev-strip-title">Recent set EV</div>`)}
-      <${Tip} text="EV (Expected Value) = the average total price of the cards you'd pull from one booster box at today's market prices. Compare it to the box price to see whether a set is 'worth cracking'."><span class="tip-info-glyph" aria-label="What is EV?">ⓘ</span><//>
-      <div class="home-ev-strip-toggles">
-        <label title="Treat cards under $1 as $0 — filters bulk pennies out of the average.">
-          <input type="checkbox" checked=${nc} onChange=${e=>setNc(e.target.checked)}/>${" <$1→$0"}
-        </label>
-        <label title="Drop Enchanted + Iconic from EV. Excludes ultra-rare chase pulls.">
-          <input type="checkbox" checked=${excludeBoth} onChange=${e=>setExcludeBoth(e.target.checked)}/> No chase
-        </label>
+    <div class="home-ev-head">
+      <div class="home-ev-titlewrap">
+        ${title}
+        <${Tip} text="EV (Expected Value) = the average total price of the cards you'd pull from one booster box at today's market prices. Compare it to the box price to see whether a set is 'worth cracking'."><span class="tip-info-glyph" aria-label="What is EV?">ⓘ</span><//>
+      </div>
+      <div class="home-ev-opts" role="group" aria-label="EV options">
+        <button type="button" class=${"home-ev-opt" + (nc ? " on" : "")} aria-pressed=${nc}
+          onClick=${() => setNc(v => !v)}
+          title="Count every card under $1 as $0 — takes bulk pennies out of the EV.">No bulk</button>
+        <button type="button" class=${"home-ev-opt" + (excludeBoth ? " on" : "")} aria-pressed=${excludeBoth}
+          onClick=${() => setExcludeBoth(v => !v)}
+          title="Leave Enchanted and Iconic pulls out of the EV — what a box is worth without the chase.">No chase</button>
       </div>
     </div>
-    <div class="home-ev-strip-table">
-      <div class="home-ev-strip-row home-ev-strip-head-row">
-        <div>Set</div>
-        <div class="num">EV / box</div>
-        <div class="num" title="Booster box price on TCGplayer — the price links there">Box · TCGplayer</div>
-        <div class="num" title="EV per box against the box price: positive means the cards inside are worth more than the sealed box.">vs box</div>
-        <div class="home-ev-strip-amzn-cell"></div>
-      </div>
+    <ul class="home-ev-list">
       ${lastFour.map(setName => {
         const ev = calcEV(avgs, setName, nc, excludeSet, "low");
+        const logo = lorcanaSetArt(setName);
         const box = boxForSet(setName);
-        // ⚠ One line per set (2026-09-24, Zaven: "too spread out"). EV/pack is
-        // EV/box ÷ 24, so it moved to the tooltip and its column went to the
-        // one number the strip exists to answer — is the box worth cracking.
         const diff = ev != null && box && box.price > 0 ? (ev / box.price - 1) * 100 : null;
         const az = box && box.row ? amazonForSealed(box.row, setName) : null;
-        return html`<div key=${setName} class="home-ev-strip-row">
-          <div class="home-ev-strip-set" title=${PRERELEASE_SETS.has(setName) ? setName + " — " + EV_PRESALE_TIP : setName}>${setName}${PRERELEASE_SETS.has(setName) && html` <span class="ev-presale-tag">Pre-sale</span>`}</div>
-          <div class="num" title=${ev ? `${fmt(ev/24)} per pack` : ""}>${fmt(ev)}</div>
-          <div class="num home-ev-strip-box">
-            ${box
-              ? (box.url
-                  ? html`<a href=${box.url} target="_blank" rel="noopener nofollow sponsored" class="home-ev-strip-box-link" title="Booster box on TCGplayer (affiliate link)">${fmt(box.price)}<span class="home-ev-strip-box-ext" aria-hidden="true">${extIcon()}</span></a>`
-                  : fmt(box.price))
-              : html`<span class="muted">—</span>`}
+        const presale = PRERELEASE_SETS.has(setName);
+        const scale = diff != null ? Math.max(ev, box.price) : null;
+        const fillPct = scale ? Math.max(2, ev / scale * 100) : 0;
+        const tickPct = scale && ev > box.price ? box.price / scale * 100 : null;
+        const tone = diff == null ? "muted" : diff >= 0 ? "green" : "red";
+        const pctTxt = diff == null ? "—" : `${diff >= 0 ? "+" : "−"}${Math.abs(diff).toFixed(0)}%`;
+        const verdictTip = diff == null
+          ? "No booster box price to compare against yet."
+          : diff >= 0
+            ? `The cards inside are worth ${Math.abs(diff).toFixed(0)}% more than the sealed box.`
+            : `The cards inside are worth ${Math.abs(diff).toFixed(0)}% less than the sealed box.`;
+        return html`<li key=${setName} class=${"home-ev-row home-ev-row--" + tone}>
+          <div class="home-ev-top">
+            <span class="home-ev-name" title=${presale ? setName + " — " + EV_PRESALE_TIP : setName}>
+              ${/* The set's wordmark in a fixed-width slot, so the names line
+                   up down the list; a set with no logo yet keeps the empty
+                   slot while any other row has one. */""}
+              ${anyLogo && html`<span class="home-ev-logo-slot">${logo && html`<${SetLogo} set=${setName} klass="home-ev-logo"/>`}</span>`}
+              <span class="home-ev-name-txt">${setName}</span>
+              ${presale && html`<span class="ev-presale-tag">Pre-sale</span>`}
+            </span>
+            <span class=${"home-ev-verdict " + tone} title=${verdictTip}>
+              <span class="home-ev-verdict-lbl">vs box</span>${pctTxt}
+            </span>
           </div>
-          <div class=${"num home-ev-strip-diff " + (diff == null ? "muted" : diff >= 0 ? "green" : "red")}>
-            ${diff == null ? "—" : `${diff >= 0 ? "+" : "−"}${Math.abs(diff).toFixed(0)}%`}
+          <div class="home-ev-meter" role="img"
+            aria-label=${diff == null ? "No box price to compare" : `EV ${fmt(ev)} against a ${fmt(box.price)} box`}>
+            ${diff != null && html`<span class="home-ev-fill" style=${{width: fillPct.toFixed(1) + "%"}}></span>`}
+            ${tickPct != null && html`<span class="home-ev-tick" style=${{left: tickPct.toFixed(1) + "%"}}></span>`}
           </div>
-          ${/* ⚠ Its OWN column, after "vs box" — not beside the price. Sat
-               beside the number it read as a caption on it, i.e. as if the $
-               were Amazon's price, which is exactly what it must not say. */""}
-          <div class="home-ev-strip-amzn-cell">${amazonPill(az, {cls: "home-ev-strip-amzn"})}</div>
-        </div>`;
+          <div class="home-ev-foot">
+            <span class="home-ev-ev" title=${ev ? `${fmt(ev/24)} per pack` : ""}>
+              <span class="home-ev-lbl">EV</span>${fmt(ev)}
+            </span>
+            <span class="home-ev-buy">
+              ${box
+                ? (box.url
+                    ? html`<a href=${box.url} target="_blank" rel="noopener nofollow sponsored" class="home-ev-tcg"
+                        title="Booster box on TCGplayer — opens TCGplayer (affiliate link)">
+                        <span class="home-ev-tcg-px">${fmt(box.price)}</span><span class="home-ev-tcg-src">TCGplayer</span><span class="home-ev-tcg-ext" aria-hidden="true">${extIcon()}</span></a>`
+                    : html`<span class="home-ev-tcg is-static"><span class="home-ev-tcg-px">${fmt(box.price)}</span><span class="home-ev-tcg-src">TCGplayer</span></span>`)
+                : html`<span class="home-ev-nobox muted">No box price yet</span>`}
+              ${/* ⚠ The Amazon button carries NO price and sits in its own
+                   pill, beside TCGplayer's — the price lives INSIDE the
+                   TCGplayer button, so it cannot read as Amazon's. */""}
+              ${amazonPill(az, {cls: "home-ev-amzn"})}
+            </span>
+          </div>
+        </li>`;
       })}
-    </div>
+    </ul>
   </div>`;
 };
 
