@@ -1495,7 +1495,7 @@ This is where catalog correctness lives. Structural cleanups:
 2. **`EXTRAS_MAP`** — `tcgplayer_product_id` → `{originSet, variantLabel, [excludeFromBaseSet], [standalone]}`. Three active buckets: "Starter Deck Exclusive Foil" (12 cards across Wilds Unknown/Fabled/Whispers), "Deep Trouble" (5 cards), "Palace Heist" (4 cards). `excludeFromBaseSet:true` suppresses from origin set. `standalone:{...}` includes cards Lorcast doesn't index (rows come from `patch_pid_overrides.py`).
 3. **`CONNECTING_FOILS`** — `base_product_id` → `foil_product_id` for cards whose foil is a separate TCGPlayer SKU. 24 entries (Winterspell, Wilds Unknown, Reign of Jafar). Foil row emitted under base card's `card_id`; companion suppressed.
 4. **`CUSTOM_VARIANTS`** — for cards Lorcast doesn't index that live INSIDE a mainline set (Genie - On the Job Two Swords, Peter Pan - Pirate's Bane Text Error). Clones base row with distinct `card_id` (`<base>::variant::<slug>`), null prices.
-5. **`CUSTOM_CARDS`** — placeholder; currently empty. Kept as infra.
+5. **`CUSTOM_CARDS`** — client-only rows for things with no `cards` row and no TCGplayer product. Holds the two Japanese ink drop counter cards (Extras & Oddities, under Hyperia City). An entry takes an optional short `id` and an `originSet`; rows carry `isCustomCard`, which keeps them out of the graded tracking buckets.
 6. **`SET_DISPLAY_NAMES`** — `{"Challenge Promo": "Lorcana Challenge Promo (C1)", "Lorcana Challenge Year 3": "Lorcana Challenge Promo (C2)", "EPCOT Festival of the Arts": "Magical Places Promos"}`. **All in-code set comparisons use the DISPLAY name.** The last entry (2026-09-18, Zaven): Lorcast names this set after its first three cards (the EPCOT drop), but `N/DIS` is Ravensburger's whole promo LINE — Mickey/Elsa/Buzz Lightyear's promos share the set and aren't EPCOT cards. EPCOT is a sub-label inside the set, like a grading sub-designation, not a set of its own.
 7. **`COLLECTOR_NUMBER_OVERRIDES`** — keyed by `<set_id>|<lorcast_cn>`. Currently renumbers Challenge Promo's Lorcast #25/41/42/43 → community #1/2/3/4.
 8. **`UNIFIED_TILE_SETS`** — collapses Normal/Foil/Enchanted to one row in Collection grid: Promo Set 1/2/3/4, PD1, D23 Collection, Magical Places Promos, Curator's Collection. **C1 and C2 are NOT here** — both have real Non-Foil/Foil splits.
@@ -2714,8 +2714,15 @@ so #7 there is five different cards.
   `17/P4 · JA · 14`, packed in Takara Tomy's booster box. The English buy-a-box printing is a
   different number, `4/RPH` (set "Ravensburger Play Hub Promos"). The row is the prestage
   `crd_prestage_p4_17` with the JP card as its own art, labelled through `REGIONAL_EXCLUSIVE_LABEL`.
-  The ink drop counter cards in the same box are NOT tracked: they carry no collector number, say
-  on their face that they are not cards, and come in English booster packs too.
+- **The ink drop counter cards in that box are Extras & Oddities entries under Hyperia City**
+  (`CUSTOM_CARDS`, ids `extras:ink-drop-ja-baymax` / `-merlin`, bucket "Japanese Box Bonus"). One
+  of the two comes per Japanese box; they are printed `JA · 14` with no collector number and say
+  on their face that they are not cards, which is why they are not in the set. Art is the FRONT
+  only, from Takara Tomy's box-bonus graphic (`card-art/extras/`); the Baymax and Merlin backs are
+  still wanted. **⚠ Nothing official says they are foil** (checked 2026-09-30): English packs carry
+  the same two designs in the marketing slot and Ravensburger said there are no foil ink drops yet;
+  Takara Tomy's renders show a sparkle texture the English ones lack, and Zaven heard they are
+  Japan-only foils. Keep "foil" off the tile until a source says it.
 - **A single-printing promo gets exactly ONE row** — one add box — whatever emitted it.
   `collapsePromoPrintings` runs last in `transformSupabaseData` over every `UNIFIED_TILE_SETS` set and
   keeps the priced row, then foil over Normal. Reported 2026-09-18: unpriced PD1 cards rendered a
