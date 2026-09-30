@@ -193,53 +193,96 @@ ok(pdfNum(178.58267716535434) === "178.583", "long floats are trimmed, not expon
 ok(pdfNum(0) === "0" && pdfNum(-0) === "0", "negative zero is normalised");
 ok(!/e/i.test(pdfNum(0.0000001)), "tiny values never render in exponent form");
 
-// ── Text-only face: rules-text voices ──────────────────────────────────────
-// parseProxyRules decides what prints bold (keywords, ABILITY NAMES), italic
-// (reminder text) and as a symbol. Its heuristics are the fiddly part of the
-// text face, and a wrong call is silent: a whole card's rules in bold, or a
-// sentence opening "A character…" rendered as an ability name.
-console.log("\ntext-only rules parsing");
-const { parseProxyRules } = new Function(
-  grab("const PROXY_KEYWORD_LINE_RE =", ";\n") + grab("const parseProxyRules = (text) => {", "\n};")
-    + "\nreturn {parseProxyRules};",
-)();
-// Flatten one parsed line to a readable string: **bold**, _italic_, [G]lyph.
-const show = (pieces) => pieces.map(p => p.g ? "[" + p.g + "]"
-  : p.b ? "**" + p.t + "**" : p.i ? "_" + p.t + "_" : p.t).join("");
-const genie = parseProxyRules(
-  "Shift 6 (You may pay 6 {I} to play this on top of one of your characters named Genie.)\n"
-  + "Evasive (Only characters with Evasive can challenge this character.)\n"
-  + "PHENOMENAL COSMIC POWER! Whenever this character quests, you may play an action with cost 5 or less for free.");
-ok(genie.length === 3, "one paragraph per line of card text");
-ok(show(genie[0]) === "**Shift 6** _(You may pay 6 _[I]_ to play this on top of one of your characters named Genie.)_",
-   "a keyword is bold up to its reminder, which is italic with the symbol inline");
-ok(show(genie[2]).startsWith("**PHENOMENAL COSMIC POWER!** Whenever"), "an all-caps ability name is bold");
-ok(show(parseProxyRules("(A character with cost 2 or more can {E} to sing this song for free.)\nLook at the top 4 cards.")[0])
-   === "_(A character with cost 2 or more can _[E]_ to sing this song for free.)_",
-   "a song's reminder line is all italic — '(A' is not an ability name");
-ok(show(parseProxyRules("A character with Bodyguard may enter play exerted.")[0]).indexOf("**") < 0,
-   "a sentence opening with 'A' stays plain");
-ok(show(parseProxyRules("SEARCH THE SANDS {E} 2 {I} – Return an Illusion character card.")[0])
-   === "**SEARCH THE SANDS** [E] 2 [I] – Return an Illusion character card.",
-   "an ability name stops at the cost symbols that follow it");
-ok(show(parseProxyRules("10,000 MEDICAL PROCEDURES {E} - Choose one:")[0])
-   === "**10,000 MEDICAL PROCEDURES** [E] - Choose one:",
-   "an ability name may open on a number (a real card's)");
-ok(show(parseProxyRules("2 damage is dealt to each character.")[0]).indexOf("**") < 0,
-   "a sentence opening on a number stays plain");
-ok(show(parseProxyRules("OHANA - FAMILY Draw a card.")[0]) === "**OHANA - FAMILY** Draw a card.",
-   "a letterless token rides along inside an ability name");
-ok(show(parseProxyRules("Shift 4 I'LL COUNT YOU IN Whenever this character quests, draw a card.")[0])
-   === "**Shift 4 I'LL COUNT YOU IN** Whenever this character quests, draw a card.",
-   "a keyword with no reminder bolds itself and the ability name after it — not the whole line (catalog data)");
-ok(show(parseProxyRules("Shift: Discard a song card (You may discard a song card to play this.)")[0])
-   === "**Shift: Discard a song card **_(You may discard a song card to play this.)_",
-   "a Shift's alternate cost is bold up to its reminder");
-ok(show(parseProxyRules("Boost 2 {I} (Once during your turn, you may pay 2 {I}.)")[0])
-   === "**Boost 2 **[I] _(Once during your turn, you may pay 2 _[I]_.)_",
-   "a keyword's ink value stays with it");
-ok(show(parseProxyRules("Evasive, Ward")[0]) === "**Evasive, Ward**", "a bare keyword list is all bold");
-ok(parseProxyRules(null).length === 0 && parseProxyRules("").length === 0, "a vanilla card has no paragraphs");
+// ── No-art face: the blank-art template ────────────────────────────────────
+// The "No art" face paints proxy-blank.png over the real card. Everything that
+// can go wrong with it is silent: a tile order that drifts from the bake
+// script blanks a character with a location's window, and a template that
+// reaches the cost hex or the name bar erases the very text a proxy is for.
+// So the sprite itself is decoded and probed at the places that must survive.
+console.log("\nno-art template");
+import { inflateSync } from "node:zlib";
+const blankCode = [
+  grab("const PROXY_BLANK_SRC =", ";\n"),
+  grab("const PROXY_BLANK_TILES =", ";\n"),
+  grab("const PROXY_BLANK_TW =", ";\n"),
+  grab("const proxyBlankTileOf = (card) => {", "\n};"),
+  grab("const drawProxyBlankTile = (", "\n};"),
+].join("\n");
+const { PROXY_BLANK_SRC, PROXY_BLANK_TILES, PROXY_BLANK_TW, PROXY_BLANK_TH, proxyBlankTileOf, drawProxyBlankTile } =
+  new Function(blankCode + "\nreturn {PROXY_BLANK_SRC, PROXY_BLANK_TILES, PROXY_BLANK_TW, PROXY_BLANK_TH, proxyBlankTileOf, drawProxyBlankTile};")();
+
+const bake = readFileSync(new URL("./bake_proxy_blank_mask.py", import.meta.url), "utf8");
+const pyTiles = JSON.parse(bake.match(/^TILES = (\[.*\])$/m)[1].replace(/'/g, '"'));
+ok(JSON.stringify(pyTiles) === JSON.stringify(PROXY_BLANK_TILES),
+   "the client's tile order is the bake script's tile order");
+ok(bake.includes(`W, H = ${PROXY_BLANK_TW}, ${PROXY_BLANK_TH}`), "tile size matches the bake script");
+
+const tileName = (card) => PROXY_BLANK_TILES[proxyBlankTileOf(card)];
+ok(tileName({cardType: "Character", inkable: true}) === "char_ink", "an inkable character takes char_ink");
+ok(tileName({cardType: "Character", inkable: false}) === "char_unk", "an uninkable character takes char_unk");
+ok(tileName({cardType: "Action - Song", inkable: true}) === "other_ink", "a song is an 'other' layout");
+ok(tileName({cardType: "Item", inkable: null}) === "other_ink", "unknown inkability falls back to the inkable tile");
+ok(tileName({cardType: "Location", inkable: false}) === "loc_unk", "an uninkable location takes loc_unk");
+
+// The tile must land where drawImageCover put the card: same crop, as fractions.
+const calls = [];
+const fakeCtx = {drawImage: (...a) => calls.push(a)};
+drawProxyBlankTile(fakeCtx, {naturalWidth: 674, naturalHeight: 940}, "S", 2, 744, 1039);
+const [, sx, sy, sw, sh, dx, dy, dw, dh] = calls[0];
+ok(sx >= 2 * PROXY_BLANK_TW && sx + sw <= 3 * PROXY_BLANK_TW + 1e-6 && sy >= 0 && sy + sh <= PROXY_BLANK_TH + 1e-6,
+   "the source rect stays inside its own tile");
+ok(Math.abs(sw / sh - 744 / 1039) < 1e-6 && dx === 0 && dy === 0 && dw === 744 && dh === 1039,
+   "the tile is cover-cropped to the card's aspect and fills the canvas");
+
+// Decode the sprite (8-bit RGBA PNG) without a dependency.
+const pngPath = new URL("../" + PROXY_BLANK_SRC.replace(/^\//, "").replace(/\?.*$/, ""), import.meta.url);
+const png = readFileSync(pngPath);
+let pos = 8, pw = 0, ph = 0, ctype = 0;
+const idat = [];
+while (pos < png.length) {
+  const len = png.readUInt32BE(pos), type = png.toString("latin1", pos + 4, pos + 8);
+  const body = png.subarray(pos + 8, pos + 8 + len);
+  if (type === "IHDR") { pw = body.readUInt32BE(0); ph = body.readUInt32BE(4); ctype = body[9]; ok(body[8] === 8, "the sprite is 8 bits per channel"); }
+  if (type === "IDAT") idat.push(body);
+  pos += 12 + len;
+}
+ok(ctype === 6, "the sprite is RGBA");
+ok(pw === PROXY_BLANK_TW * PROXY_BLANK_TILES.length && ph === PROXY_BLANK_TH,
+   `the sprite is ${PROXY_BLANK_TILES.length} tiles of ${PROXY_BLANK_TW}x${PROXY_BLANK_TH}`);
+const raw = inflateSync(Buffer.concat(idat));
+const px = Buffer.alloc(pw * ph * 4);
+const stride = pw * 4;
+for (let y = 0; y < ph; y++) {
+  const f = raw[y * (stride + 1)], line = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
+  for (let i = 0; i < stride; i++) {
+    const left = i >= 4 ? px[y * stride + i - 4] : 0, up = y ? px[(y - 1) * stride + i] : 0;
+    const ul = y && i >= 4 ? px[(y - 1) * stride + i - 4] : 0;
+    const pa = Math.abs(up - ul), pb = Math.abs(left - ul), pc = Math.abs(left + up - 2 * ul);
+    const pred = f === 1 ? left : f === 2 ? up : f === 3 ? (left + up) >> 1
+      : f === 4 ? (pa <= pb && pa <= pc ? left : pb <= pc ? up : ul) : 0;
+    px[y * stride + i] = (line[i] + pred) & 255;
+  }
+}
+const at = (t, x, y) => { const o = (y * pw + t * PROXY_BLANK_TW + x) * 4; return [px[o], px[o + 1], px[o + 2], px[o + 3]]; };
+PROXY_BLANK_TILES.forEach((name, t) => {
+  const loc = name.startsWith("loc");
+  const win = loc ? [170, 470] : [337, 250];
+  const w = at(t, ...win);
+  ok(w[3] === 255 && w[0] === 255 && w[1] === 255 && w[2] === 255, `${name}: the middle of the art window is painted white`);
+  ok(at(t, 66, 72)[3] === 0, `${name}: the cost hex is left alone`);
+  ok(at(t, 0, 0)[3] === 0 && at(t, 673, 939)[3] === 0, `${name}: the card's outer corners are left alone`);
+  const keep = loc ? [[380, 470], [520, 470], [380, 60]] : [[120, 540], [337, 750], [560, 540]];
+  ok(keep.every(([x, y]) => at(t, x, y)[3] === 0),
+     `${name}: the name bar, stats and rules text are left alone`);
+  let band = 0;
+  for (let y = 0; y < PROXY_BLANK_TH; y += 3) for (let x = 0; x < PROXY_BLANK_TW; x += 3) {
+    const c = at(t, x, y);
+    if (c[3] === 255 && c[0] + c[1] + c[2] < 180) band++;
+  }
+  ok(band > 500, `${name}: carries a frame-coloured border band for the standard-frame check`);
+});
+ok(!/(?<!saved.)face === "text"|drawProxyTextFace|parseProxyRules/.test(src),
+   "the hand-drawn text face is gone (a stored \"text\" pref maps to no-art)");
 
 console.log(failures ? `\n${failures} FAILED\n` : "\nall passed\n");
 process.exit(failures ? 1 : 0);

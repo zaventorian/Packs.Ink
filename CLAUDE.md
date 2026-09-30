@@ -3412,13 +3412,20 @@ Highest wins, tiebreak by iteration order.
 tournament upload) have to agree, and every way they disagree is silent. Guarded by
 `node scripts/test_deck_text.mjs`, which replays the real functions.
 
-- **A Coconut deck's leader is exported as `# Coconut leader: <Name - Version>`** and read back
+- **⚠ The export is a PLAIN list — no `# Section` headers, no blank lines** (2026-09-29).
+  It used to head each type group with `# Characters` and a gap, and Discord, where most lists
+  get pasted, renders a line starting `# ` as a heading: a 16-card list became a screenful of
+  big type (reported from a Discord share). Cards stay grouped by type and sorted by cost; the
+  headers are gone. A plain `N Name` list is also the one format every other Lorcana importer
+  reads. **Comments use `//`, never `#`** — Discord leaves `//` alone. The parser still skips
+  `#` lines, so a list copied before this still imports (pinned).
+- **A Coconut deck's leader is exported as `// Coconut leader: <Name - Version>`** and read back
   (and applied via `onUpdateMeta`). The leader sits OUTSIDE the 60, so it is not in
   `deck.cards`, and the export used to drop the one card that defines the deck. A comment, so a
   tool that doesn't know Coconut skips it.
 - **One line per CARD, not per printing** — a base + its Enchanted exported as two lines with
   the same name, which a tool that doesn't sum duplicate lines reads as half the copies. A card
-  missing from the catalog is a `# N × <card_id>` comment, never `N crd_…`.
+  missing from the catalog is a `// N × <card_id> (not in the catalog)` comment, never `N crd_…`.
 - **Import folds accents** (a third key, `foldCardName`, after the normalized and squashed ones),
   so "Te Ka" finds "Te Kā".
 - **A `(set-cn)` wins over the name only when it names a printing OF that card** (its job:
@@ -3458,7 +3465,7 @@ spelling in each direction.
 
 ## Print proxies (deck → print-and-cut PDF)
 
-`ProxyPrintModal` (Index.html, just after `DeckPosterModal`). DeckEditor toolbar → **🖨 Print Proxies**. Renders each card to a canvas, encodes JPEG, and writes a PDF: 9 cards per page at true card size (63×88mm), card art or text-only (see below), colour or B&W, PROXY watermark, crop marks, Save / Open-and-print.
+`ProxyPrintModal` (Index.html, just after `DeckPosterModal`). DeckEditor toolbar → **🖨 Print Proxies**. Renders each card to a canvas, encodes JPEG, and writes a PDF: 9 cards per page at true card size (63×88mm), card art or no art (see below), colour or B&W, PROXY watermark, crop marks, Save / Open-and-print.
 
 **The PDF writer is hand-rolled — deliberately.** `buildProxyPdfBlob` emits raw PDF syntax and embeds each JPEG as a `/DCTDecode` image XObject, which means the JPEG bytes pass through verbatim and the whole writer is ~100 lines. The alternative was vendoring jsPDF (~350KB) into `/vendor/` and lazy-loading it, which buys nothing here: the only PDF feature used is "place image at rect". Same reasoning as the canvas card posters — it ships inside Index.html (network-first) so a stale service worker can't break it.
 
@@ -3475,17 +3482,22 @@ spelling in each direction.
 
 **htm fragments are `` html`<${React.Fragment}>…</>` ``, never `` html`<>…</>` ``.** htm compiles a bare `<>` to `h("", …)` and `React.createElement("")` throws. Cost a debugging cycle here; the rest of the file already uses the `React.Fragment` form.
 
-### Text-only face (2026-09-29)
+### No-art face — the real card, art window left blank (2026-09-29)
 
-**Card face → Text only** prints cost hex, inkable, ink, name/version, type line, strength / willpower / lore / move and rules text around an EMPTY art box, black on white — a user request ("like Jorcana… easier on my printer"). `drawProxyTextFace` is just another way to paint the same 744px canvas, so the JPEG → PDF writer, sheet geometry and baked-in watermark are shared, untouched. A 60-card deck: **1.1 MB vs 2.2 MB** with art, and a fraction of the toner.
+**Card face → No art** prints the ACTUAL card — black frame, cost hex, name bar, stat shields, rules text, artist line — with its art window painted white. It replaced a hand-drawn "Text only" layout the same day (Zaven: *"less custom and more: the actual card but the art box is just blank"*); a stored `face: "text"` pref maps to it.
 
-- **Rules text is parsed, not just wrapped** (`parseProxyRules`): keyword + value bold (`Shift 6`, `Boost 2 {I}`), a Shift's alternate cost bold up to its reminder, a bare keyword list all bold, then the following run of ALL-CAPS words bold (ability names); parenthesised reminder text italic; `{I} {L} {S} {W} {E}` inline symbols. A caps run needs 3+ capitals (so "A character…" stays plain) and may open on a number ("10,000 MEDICAL PROCEDURES" is a real one). ⚠ **Never "bold up to the first paren"** — the catalog carries `Shift 4 I'LL COUNT YOU IN Whenever…` on one line with no reminder, and that rule set the whole ability bold. Checked against all 2,825 unique catalog lines: no whole-line bold, no bold run over 40 chars.
-- **The art box is the flex.** Short text gets a tall blank box (≤36% of the card); long text takes the space back (≥15%) before the font shrinks (30px → 17px floor). The longest card in the catalog (Fairy Godmother, 414 chars) still lands at a readable size.
-- **A type line that can't fit beside the stats at ≥21px gets its own row** instead of shrinking — classifications are rules text ("your Sorcerer characters"), not decoration.
-- **Glyphs are `Path2D`s parsed from the SVGs in `Logos/lorcana/card/`** (`loadProxyGlyphs`), not `drawImage`: an SVG image can taint the canvas in some engines and has no natural size in others. One Path2D per element, each filled separately — that's SVG semantics. A glyph that fails to load prints as its word ("pay 6 ink", "can exert to sing"). The cost hex and inline `{I}` are drawn, because the inkable/uninkable SVGs are solid silhouettes — exactly the toner this face exists to save. Inkable = the hex inside a ring, plus an INKABLE / UNINKABLE label.
-- **Colour** tints the cost hex by ink (dual-ink cards split it down the middle); **B&W** is pure black. The Lighten checkbox and every "no art" warning are art-only — `noArt` must stay `false` for the text face, or the post-build banner claims every card's art failed.
-- The list's `type` is a SORT key (Robin Hood's bow sorts as "Leader"), so the face reads **`faceType`** from `proxyFaceOf(meta)`. Coconut leaders print their ability with a "–" cost and no inkable label.
-- Parser cases live in `scripts/test_proxy_pdf.mjs` under "text-only rules parsing".
+**Which pixels are art is MEASURED, not drawn.** `scripts/bake_proxy_blank_mask.py` stacks ~90 real Lorcast renders per layout: pixels most cards agree on are frame, pixels they disagree on are art. The frame is pixel-identical across every set since The First Chapter (the classification band ends at y=626 of 940 on all of them), which is what makes this possible at all. Output is **`Logos/proxy-blank.png`**: six 674x940 RGBA tiles, one per layout, in `PROXY_BLANK_TILES` order (`char_ink char_unk other_ink other_unk loc_ink loc_unk`) — white over the art window, frame colour over a ~30px band of border around it, transparent everywhere else. Drawn over the card with the same cover crop as the card (`drawProxyBlankTile`).
+
+- **Six tiles, because the frame differs in exactly three places**: the inkwell ring vs the tighter black blob behind an uninkable cost, the stat shields that poke above a character's name bar, and a Location's sideways layout (art left of a vertical plate at x≈325).
+- **The window stops at the name plate** (y≈491–497, measured per column off the opaque action/item plates). A character's plate is TRANSLUCENT, so a little tinted art still shows through it under the name — that's the plate as printed, and blanking it would take the name with it.
+- **The band paints frame colour over art that breaks out of the frame** (Buzz - Jungle Ranger's leaves over the left border, Snow White's hair over the top). Without it a blank window keeps colourful slivers around its edge.
+- **The same band decides whether a card is on the standard frame at all** (`proxyFrameScore`: share of band pixels that are dark on this card). Every base-rarity card measured ≥ 0.91 (464 cards); `PROXY_FRAME_MIN` is 0.85. A card below it prints WITH its art and the dialog says so ("isn't on the standard card frame") — blanking a "window" on a full-art card prints half a painting.
+- **Enchanted / Iconic / Epic / promo printings are swapped for a booster printing of the same Product Name** (`framedSrcOf`, base rarities in `MAINLINE_SETS`) before any of that runs — the Common is the same card with a window to blank. A card with no such printing keeps its own image and goes through the frame check. Coconut leaders (beta renders) always fail it and print with art.
+- ⚠ **The sprite lives in `Logos/`, NOT `Logos/lorcana/`** — that directory is `bake_brand_assets.py`'s manifest output and `test_brand_art.mjs` fails on anything in it the brand code doesn't reference.
+- ⚠ **Bump `?v=` on `PROXY_BLANK_SRC` whenever the sprite is re-baked.** It loads as an image, so the service worker's `packsink-img-v1` cache — which survives deploys — would keep serving the old template forever.
+- **Re-bake only if Ravensburger changes the card frame**: `python scripts/bake_proxy_blank_mask.py --contact sheet.png` (needs `.env` and a Pillow that reads AVIF), then LOOK at the sheet — a template a few pixels off fails as a coloured sliver or a nick in the border, never as an error. It also prints the standard-frame scores for base and full-art cards, which is where `PROXY_FRAME_MIN` came from.
+- The Lighten checkbox and the "no image" warnings apply to both faces now — both are the card image.
+- Guarded by `scripts/test_proxy_pdf.mjs` ("no-art template"), which DECODES the sprite and asserts, per tile, that the art window is white and the cost hex, name bar, stats and rules text are untouched, and that the client's tile order matches the bake script's.
 
 ## Artist Alley poster
 
