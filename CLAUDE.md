@@ -3560,7 +3560,8 @@ down the right edge and two native checkboxes (`<$1→$0`). `HomeEvStrip` now dr
 card per set: name and verdict (`vs box −47%`) on top, then EV and the two buy buttons,
 with a meter along the card's bottom edge (EV against the box; green past a tick when a
 set is +EV). The title takes the Toolbox's Cinzel gold, and the toggles are chips
-(**No bulk** / **No chase**, same semantics as before).
+(**No bulk** / **No chase**, same semantics as before) set in Cinzel capitals to match
+it. Each set's official wordmark sits left of its name (Zaven, same day).
 
 - **⚠ The box price lives INSIDE TCGplayer's own button** (`$190.00 TCGplayer ↗`), with
   the number-less Amazon pill beside it — see the Amazon section for why that satisfies
@@ -3576,6 +3577,11 @@ set is +EV). The title takes the Toolbox's Cinzel gold, and the toggles are chip
   panel's own padding does not change with width.
 - It is ~50% taller than the table on a phone (320px against ~202px for four sets). That
   was the price of buttons that look like buttons; the meter costs no height.
+- **⚠ The set logo sits in a FIXED slot** (`.home-ev-logo-slot`, 56x28, 44x24 in the
+  narrow layout), not sized by height: the wordmarks run from 1.25:1 (Whispers in the
+  Well) to 2.67:1 (Winterspell), so a shared height starts every name at a different x.
+  A set with no logo yet (the weeks after a release, before the next brand-bundle drop)
+  keeps an EMPTY slot while any other row has one, so the names still line up.
 
 ### Configurable layout (2026-08-04)
 

@@ -43015,6 +43015,7 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav
   // corner, a meter drawing EV against the box, then where to buy one. The
   // meter's scale is whichever is bigger, so a +EV set fills it green and a
   // tick marks where the box price sits inside it.
+  const anyLogo = lastFour.some(n => lorcanaSetArt(n));
   return html`<div class="home-ev-strip">
     <div class="home-ev-head">
       <div class="home-ev-titlewrap">
@@ -43033,6 +43034,7 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav
     <ul class="home-ev-list">
       ${lastFour.map(setName => {
         const ev = calcEV(avgs, setName, nc, excludeSet, "low");
+        const logo = lorcanaSetArt(setName);
         const box = boxForSet(setName);
         const diff = ev != null && box && box.price > 0 ? (ev / box.price - 1) * 100 : null;
         const az = box && box.row ? amazonForSealed(box.row, setName) : null;
@@ -43050,6 +43052,10 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav
         return html`<li key=${setName} class=${"home-ev-row home-ev-row--" + tone}>
           <div class="home-ev-top">
             <span class="home-ev-name" title=${presale ? setName + " — " + EV_PRESALE_TIP : setName}>
+              ${/* The set's wordmark in a fixed-width slot, so the names line
+                   up down the list; a set with no logo yet keeps the empty
+                   slot while any other row has one. */""}
+              ${anyLogo && html`<span class="home-ev-logo-slot">${logo && html`<${SetLogo} set=${setName} klass="home-ev-logo"/>`}</span>`}
               <span class="home-ev-name-txt">${setName}</span>
               ${presale && html`<span class="ev-presale-tag">Pre-sale</span>`}
             </span>
