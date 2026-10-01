@@ -31,11 +31,11 @@ DISPLAY = {"Challenge Promo": "Lorcana Challenge Promo (C1)",
            "EPCOT Festival of the Arts": "Magical Places Promos"}
 C1_RENUMBER = {"25": "1", "41": "2", "42": "3", "43": "4"}
 # Ruled on: (our set, name, number) -> why it has no PSA row. Add with a reason.
+# Empty on purpose: Index.html's popRowsFor fallback (lead name + number, PSA's "A"
+# suffix) joins everything that used to live here. A new entry is a real gap.
 KNOWN = {
-    ("Promo Set 2", "Hiro Hamada - Armor Designer", "24"):
-        "PSA splits it 24A / 24B; ours is one #24",
-    ("Promo Set 2", "Jafar - High Sultan of Lorcana", "33"):
-        "PSA numbers the Set Championship (#32) and Prize (#33 'Jafar') differently",
+    ("Ursula's Return", "Piglet - Pooh Pirate Captain", "223"):
+        "the Deep Trouble quest card; on the site it joins PSA's ITI #223 through popRowsFor's quest fallback",
 }
 MIN_SALES = 5   # below this a name collision or one stray sale is more likely than a real gap
 
@@ -84,9 +84,12 @@ def fetch(url, key, table, select, order, extra=""):
 
 def main():
     url, key = env()
-    pop = {f"{fold(pset(r['set_label']))}|{fold(r['subject_name'])}|{num(r['card_number'])}"
-           for r in fetch(url, key, "graded_pop", "set_label,subject_name,card_number", "spec_id.asc")
-           if pset(r["set_label"])}
+    pop = set()
+    for r in fetch(url, key, "graded_pop", "set_label,subject_name,card_number", "spec_id.asc"):
+        if pset(r["set_label"]):
+            st, no = fold(pset(r["set_label"])), num(r["card_number"])
+            pop.add(f"{st}|{fold(r['subject_name'])}|{no}")
+            pop.add(f"~{st}|{fold(r['subject_name'].split(' - ')[0])}|{no}")  # popLooseKey
     sets = {s["id"]: s["name"] for s in fetch(url, key, "sets", "id,name", "id.asc")}
     cards = {c["id"]: c for c in fetch(url, key, "cards", "id,name,version,collector_number,set_id", "id.asc")}
     sales = defaultdict(int)
@@ -107,7 +110,10 @@ def main():
         if raw == "Challenge Promo":
             cn = C1_RENUMBER.get(cn, cn)
         name = c["name"] + (f" - {c['version']}" if c["version"] else "")
-        if f"{fold(sname)}|{fold(name)}|{num(cn)}" in pop:
+        st, lead = fold(sname), fold(name.split(" - ")[0])
+        # mirrors Index.html's popRowsFor: exact, then number + PSA's "A", then lead name + number
+        if (f"{st}|{fold(name)}|{num(cn)}" in pop or f"{st}|{fold(name)}|{num(cn)}A" in pop
+                or f"~{st}|{lead}|{num(cn)}" in pop):
             continue
         item = (sname, name, num(cn), n)
         (known if (sname, name, num(cn)) in KNOWN else missing).append(item)
