@@ -5747,6 +5747,57 @@ the same table `prune_excluded()` deletes them from.
   those 15); the next hourly store-stats refresh then scrapes every roster they are missing.
 - Guarded by section 5 of `python scripts/elo/test_excluded_stores.py`.
 
+### Results integrity — the refresh checks what it holds, not just what it adds (2026-09-28)
+
+Asked to confirm the Elo results were current, a pass over **all 444 rph events** against
+RPH found the refresh green and the data wrong in four ways, none of which any run reported:
+
+| Found | Cause |
+|---|---|
+| **HoneyBee 9/13 (919790)**: two semifinals stored as 0-0 draws; RPH has 2-1 wins | ingest stored a match from a round still being played (no result yet), and the `(round, table)` dedupe guard then kept the real result out forever. The draw rule read 0-0 as an agreed draw, so four ratings never moved. |
+| **Critical Games 6/28 (707597)**: our final had xiong c winning; RPH, SunnyDay | the TO re-scored the final after we pulled it. RPH's own standings already said SunnyDay 1st at 6-0. |
+| **Game 'n Grub 9/20 (843303)**: zero matches, two rounds played | the TO never closed it, so it sat in RPH's **`inProgress`** bucket, which discovery's past + upcoming search never returns. |
+| **Every Attack of the Vine! SC**: no official standings | `backfill_official_standings.py` was manual-only, last run in July — event pages ranked by raw points: byes dropped, no OMW%, a points tie decided "champion" alphabetically. Plus **162 older rows** keyed on merged-away players, invisible because the view joins on the canonical id. |
+
+What the refresh now does (all guarded by `python scripts/elo/test_results_integrity.py`):
+
+- **`ingest.match_is_complete`** — a non-bye match whose own RPH `status` isn't COMPLETE is
+  never stored; it fills in on the next pull. **`ingest.sync_match_result`** — on a re-pull, a
+  stored result that differs from RPH's COMPLETE one takes RPH's winner + games. Only the
+  result moves, never the players, never a `source != 'api'` row, and only when the RPH names
+  still resolve to the stored pair (a name resolving to someone else = a re-paired table; left
+  alone). Byes are guarded by COUNT, because a renamed bye-holder resolves to a new player_id
+  and each re-pull used to add a second bye for the same seat (675962).
+- **Discovery pulls `inProgress` too** (`PULL_STATUSES`), and **`requeue_unfinished` re-pulls
+  every unfinished event already in the DB by id** — played ones at any age, unplayed ones for
+  60 days so a cancelled SC ages out — passing the event's own stored store/location/date/
+  season. ⚠ Never re-pull with those left None: ingest fills the store from RPH's CURRENT
+  name, which drifts (store 3813 is "Gemini Games, LLC" here and "Pegasus Games" on RPH), and
+  the store report keys on the name.
+- **`verify_results.py --days 30 --repair`** (soft, after the rename/alias passes, before the
+  draw flags + `elo.py`). Same `sync_match_result` rule; never inserts or deletes; clears a
+  repaired event's standings so they re-fetch. **⚠ It skips any event a person has touched —
+  `events.notes`, a locked official standing, or any `source != 'api'` / negative-round_id
+  row — and that is the ONLY thing protecting a hand correction.** A hand edit to a match must
+  leave one of those marks or the next Monday puts RPH's version back. (631941, the MOHZAK
+  fabricated-results event, is protected by its notes; e276338's bogus final by its lock.)
+  ⚠ **Never force a wholesale re-pull of a FINISHED event** to "fix" it — the dedupe guard
+  cannot know that a row was deleted on purpose, so 631941's fabricated matches would come
+  straight back.
+- **`backfill_official_standings.py`** (soft, after `elo.py`): only EVENT_FINISHED events with
+  matches, fetched once (`--force` re-fetches, locked always skipped). Names resolve ONLY
+  against players who played that event — no global lookup, because a renamed account's new
+  name can already be a separate row from another event ("[IF] BrentsToys" is our Brents31) —
+  then **`pair_by_record`**: a leftover row that played pairs with the one unplaced participant
+  holding the identical W-L-D, when that record is unique on both sides. On 2026-09-28 it placed
+  15 renamed accounts, all verified by name ("March 8th" = UglyCapybara39, "Piggly Wiggly" =
+  Nimble_Nurgle, boomsplosion = Matthew). `recanonicalize_standings` re-keys rows onto a
+  merged player's canonical id every run.
+- **Checking it by hand**: `python scripts/elo/verify_results.py --all` against a downloaded copy
+  (`elo_db_storage.py download --to <scratch>` then `--db <scratch>`) is read-only without
+  `--repair` and takes ~5 min. Expected residue: the hand corrections above (160509 / 171547
+  hand-entered finals, 276338, 631941) plus whatever is still being played.
+
 ## Intentional draws — flat, not skipped (2026-09-08)
 
 An ID is a scheduling decision, not evidence about who is better, and because IDs happen at the

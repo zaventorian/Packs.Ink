@@ -133,9 +133,9 @@ finally:
     d.http_json = orig
 check("the setless SC and the Store Championship, nothing else", sorted(got), [894902, 916500])
 check("both store-filter spellings are asked", {s for s, _, _ in asked} == {5171, 10}
-      and len(asked) == 8, True)
-check("the past feed never reaches back before the season began",
-      {a for _, s, a in asked if s == "past"}, {"2026-07-17"})
+      and len(asked) == 2 * 2 * len(m.PULL_STATUSES), True)
+check("the past + inProgress feeds never reach back before the season began",
+      {a for _, s, a in asked if s != "upcoming"}, {"2026-07-17"})
 check("no window, no pull", m.pull_store_scs({5171}, AOTV, None, SETS, ALIASES), {})
 
 print()
