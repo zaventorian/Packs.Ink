@@ -108,8 +108,14 @@ field is unreadable, **leave it out** (null) rather than guess.
   | bronze-orange triangle | Rare |
   | silver fan-in-a-diamond | Super Rare |
   | gold fan-in-a-pentagon | Legendary |
-  | multicolour gem (full-art foil) | Enchanted |
-  Epic/Iconic/Promo: compare against `Logos/rarity/*.svg` (open one in the browser pane to see it).
+  | rainbow SHELL / fan shape (full-art foil) | Enchanted |
+  | rainbow HEXAGON with an open diamond centre (full-art foil) | Epic |
+  Iconic/Promo: compare against `Logos/rarity/*.svg` (open one in the browser pane to see it).
+  ⚠ **Enchanted and Epic are both multicolour full-art cards and are told apart ONLY by this icon.**
+  On 2026-10-01 eleven Hyperia City Epics (#223-240) went in as Enchanted because this table said
+  "multicolour gem"; Zaven spotted them in the Epic filter. Numbers above 204 mix Enchanted, Epic and
+  Iconic, so never infer rarity from the number or the art — read the icon, and when a batch has
+  several, crop the bottom-centre of each and look at them side by side.
 - **card_type** — `Character`, `Action`, `Action - Song`, `Item`, `Location` (exact strings the
   catalog already uses). Items/actions have no strength/willpower/lore/classifications. A song is
   the TYPE `Action - Song` and never a `Song` classification; the importer refuses that shape
