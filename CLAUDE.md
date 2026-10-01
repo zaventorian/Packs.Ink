@@ -1167,6 +1167,16 @@ Zaven: *"im fine with claude having access to do everything."* Migrations, data 
 - **`admin_exec_sql` must stay service-role only.** EXECUTE is granted to `service_role` alone and the body checks `auth.role()` again; the publishable key answers 42501 (verified). Granting it wider hands DDL to every visitor.
 - Before a drop, look at what is being dropped and say so in the ledger entry. A drop that deletes user data (the poll tables, say) still wants a sentence to Zaven first.
 
+### Routines: the scheduled Claude tasks on Zaven's desktop (2026-09-30)
+
+`docs/automation.md` is the map of which workflow is automatic, which is prepared for a "push", and which still starts with a chat. Three scheduled tasks (each is a `SKILL.md` under `~/.claude/scheduled-tasks/<id>/`; they run while the desktop app is open):
+
+- **`graded-scrape`**, daily ~12:11: graded and raw eBay sales.
+- **`psa-pop-weekly`**, Wednesdays ~3:10 PM: `pop_run.ps1`, dry run, sanity check, then `-Commit`. It never signs in and stops at a wall; the `pop_stale` finding is still the backstop.
+- **`packs-ink-intake`**, daily ~8:36 AM: works the overnight catalog / source / calendar findings in its own worktree, applies only the guarded steps `docs/automation.md` lists, leaves everything else as commits on a local `intake/<date>` branch, and writes a news draft to `drafts/news/`. **It never pushes, merges or deploys, and never confirms a calendar row.**
+
+A change to what a routine may do on its own is a change to its SKILL.md AND to `docs/automation.md`, in the same sitting.
+
 ### Auth / grants
 
 - **Required GitHub Actions secrets**: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPABASE_ANON_KEY` (used as read fallback in `matview_self_heal.py` when service_role gets 403). `TCGPRICELOOKUP_API_KEY` is **no longer used** (graded feed retired 2026-06-30) and can be deleted from the repo secrets.
