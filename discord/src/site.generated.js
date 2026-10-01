@@ -49,6 +49,7 @@ const SET_ORDER = [
   // set (like a grading sub), not a set of its own.
   "Curator's Collection: Heroines", // 2026-07-17 — premium 6-card promo set (CC1)
   "Promo Set 4",                    // 2026-07-17 — P4, Lorcast-indexed
+  "Ravensburger Play Hub Promos",   // 2026-09-30: RPH, Play Hub / buy-a-box promos (4/RPH Minnie, 6-7 Honey Lemon)
   "PD1",                            // 2026-07-28 — Lorcast's rolling product-promo set (5/PD1, 16/PD1 …)
   "Curator's Collection: Beauty and the Beast", // 2026-10-01 — premium 6-card promo set (CC2)
   ...MAINLINE_SETS,
@@ -69,6 +70,7 @@ const PROMO_RARITY_SETS = new Set([
   "Curator's Collection: Beauty and the Beast",
   "Promo Set 4",
   "PD1",
+  "Ravensburger Play Hub Promos",
 ]);
 // ---- site ----
 const SET_DISPLAY_NAMES = {
