@@ -2859,6 +2859,32 @@ remedy is the damage.
   cards are already in that review's scope, so "do promo printings get a tile" and "which set id
   do they hang off" get settled in one sitting rather than two.
 
+### Source watch: the sites we research from (2026-09-30)
+
+`scripts/watch_sources.py`, the `sources` job in `catalog-watch.yml`. Written 2026-09-14 on a
+branch that never merged; landed 2026-09-30 with its baseline refreshed. It reads the public
+pages we otherwise check by hand and diffs each against `scripts/source_watch.json`:
+
+| source | what a change means |
+|---|---|
+| `lp-pins` / `lp-counters` | lorcanaplayer's product sitemaps, compared against `LORCANA_PINS` / `LORCANA_LORE_COUNTERS`: a pin or counter we do not hold |
+| `lp-products` / `lp-sets` | a product or set slug that site has never listed before |
+| `ja-products` | Takara Tomy's card search: a Japanese product's card count moved (`ja_core_numbers.py --check` says what) |
+| `official-gallery` | cards.disneylorcana.com's per-set counts: a new `EN n` bucket is spoiler season starting (`import_official_set.py`) |
+| `duels-renders` | duels.ink's count of clean reveal renders and of placeholders: better art exists for a stand-in (`import_duels_art.py`) |
+
+- **A source that reads ZERO items is an error, not "nothing new"** (`source_empty`, `shrank`): a
+  redesign, a moved URL and a bot wall all produce an empty list, and an empty list diffs clean.
+- It never writes to the site's data. Act on a finding, `--ack KEY --why "..."` it, or
+  `--baseline` to accept what the sources read now (then commit the JSON).
+- **Not yet proven from a GitHub runner.** It was verified from a residential IP; lorcanaplayer is
+  Cloudflare-fronted and may refuse a datacenter address, which would show as `source_error` on
+  every run. If that happens, move the job to the desktop's daily scheduled task rather than
+  ack it.
+- The Japan Core half of that branch (new `JAPAN_CORE_*` consts in Index.html) was NOT merged;
+  `ja_core_numbers.py` came across as a script only.
+- Guarded by `python scripts/test_watch_sources.py` (stubbed fetches).
+
 **It is its own workflow, not an ETL job, deliberately.** ETL red = prices are broken, act now. Catalog watch red = something new exists, decide what to do with it. Sharing one light teaches you to ignore both. It also stopped firing 3–4x a day (once per prices dispatch) to answer a question that changes daily at most.
 
 **Red means something NEW.** Everything already ruled on lives in `scripts/catalog_watch.json`:

@@ -192,3 +192,27 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/watch_calendar_sources.py
+
+  # The third thing nothing else can see: the sites we RESEARCH from. TCGCSV
+  # covers what TCGplayer sells and discovery covers events, but nobody sells a
+  # pin and no feed publishes a spoiler. Those lived on a 90-day reminder saying
+  # "go look at this site", which cannot tell you whether anything changed. This
+  # reads those sites (lorcanaplayer's sitemaps, Takara Tomy's card search, the
+  # official gallery, duels.ink's card API) and diffs each against the committed
+  # baseline in scripts/source_watch.json.
+  #
+  # Needs NO secrets: every source is a public page, and the comparison is
+  # against Index.html's own lists.
+  sources:
+    name: Source watch
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Test the watcher
+        run: python scripts/test_watch_sources.py
+      - name: Watch the sites we research from
+        run: python scripts/watch_sources.py

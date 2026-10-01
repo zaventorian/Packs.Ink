@@ -276,6 +276,7 @@ const TCG_PID_OVERRIDES = {
   "Simba - Pride Protector|4": 695330,                // Lorcana Challenge Y3 (C2) — Holofoil promo, Lorcast left pid null
   "Dragon Fire|9": 693401,                            // Lorcana Challenge Y3 (C2) — Lorcast left pid null
   "Stitch - Carefree Snowboarder|207": 675380,        // Winterspell Epic — Lorcast left pid null
+  "Héctor Rivera - Gone to Pieces|13": 711361,              // D23 Collection (2026 drop); Lorcast left pid null. TCGplayer spells it "Hector", so the name link never matched
 };
 // ---- site ----
 const PULL = {

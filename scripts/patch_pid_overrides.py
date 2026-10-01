@@ -94,6 +94,11 @@ OVERRIDES = {
     "Simba - Pride Protector|4": 695330,
     "Dragon Fire|9": 693401,                          # Lorcana Challenge Y3 (C2) — Lorcast pid null
     "Stitch - Carefree Snowboarder|207": 675380,      # Winterspell Epic — Lorcast pid null
+    # D23 Collection #13 (the 2026 drop). TCGplayer lists it as "Hector" with no
+    # accent (D23 Promos #13), so link_preorder_pids never matched the name and the
+    # card sat priceless while the catalog watch reported it twice: once as a card
+    # with no pid and once as a missing single.
+    "Héctor Rivera - Gone to Pieces|13": 711361,
 }
 
 
