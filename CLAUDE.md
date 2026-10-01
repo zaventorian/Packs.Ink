@@ -263,7 +263,7 @@ report: a set's league promos "aren't an option whenever you click the pencil".
   report.
 - **⚠ The family key is CASE-FOLDED** (`scanVariantFamilyKey`), because Lorcast's own
   spelling is not stable across sets: "HeiHei" vs "Heihei", "Down In New Orleans" vs "Down
-  in New Orleans". Nine families and **19 printings** hang on that one `toLowerCase()`,
+  in New Orleans". Nine families and **20 printings** hang on that one `toLowerCase()`,
   four of them base/promo pairs — exactly the promos this exists to offer.
 - **⚠ Tapping the version already selected is a NO-OP**, matching the foil segment. It
   would otherwise stamp `reviewed: true` on a row nobody judged, and unreviewed shown-✓
