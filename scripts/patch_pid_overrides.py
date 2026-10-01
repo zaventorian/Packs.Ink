@@ -331,6 +331,7 @@ def main() -> None:
     # fabricated #9 instead of her real 4/DIS. #5 is still unaccounted for.
     DIS_SET = "set_cc126d2d050b406aa0bbbc18268fb119"
     C2_SET = "set_dacbe79496a14ffa99567e4ae8577e49"  # Lorcana Challenge Year 3
+    C3_SET = "set_challenge_c3"  # our own row (migration 178); Lorcast has no C3 yet
     REPRINT_PROMOS = [
         # C2 #11 / #12 / #14: the FOIL printings of C2 #15 / #16 / #18, which
         # Lorcast does not index. Printed 11/C2, 12/C2 and 14/C2 (read off
@@ -338,10 +339,15 @@ def main() -> None:
         # Stand Out = Fabled #94, Down in New Orleans = Reign of Jafar #177,
         # Tinker Bell - Insistent Fairy = Reign of Jafar #136.
         # NOT #13: the "Mother Knows Best (Foil) #13" listed beside them is
-        # printed 13/C3, a set we do not hold yet.
+        # printed 13/C3 - see the C3 rows below.
         (647675, C2_SET, "11", "crd_c2_11_stand_out_foil",                  714566),
         (631845, C2_SET, "12", "crd_c2_12_down_in_new_orleans_foil",        715979),
         (631842, C2_SET, "14", "crd_c2_14_tinker_bell_insistent_fairy_foil", 715981),
+        # C3: Mother Knows Best, the 2026-27 season's CCQ prize. Printed 1/C3
+        # (non-foil) and 13/C3 (foil), read off TCGplayer's photos 2026-09-30.
+        # Base is the Fabled printing (#99).
+        (650037, C3_SET, "1",  "crd_c3_1_mother_knows_best",       711519),
+        (650037, C3_SET, "13", "crd_c3_13_mother_knows_best_foil", 711520),
         (702677, DIS_SET, "4",  "crd_avp_9_maleficent_exultant",      705086),  # Magical Places promo, 4/DIS (was mis-filed AVP #9 — id kept so owned collection refs don't orphan)
         (659628, DIS_SET, "6",  "crd_dis_6_mickey_mouse_amber_champion",  712042),  # Magical Places promo, 6/DIS
         (555245, DIS_SET, "7",  "crd_dis_7_elsa_the_fifth_spirit",        712044),  # Magical Places promo, 7/DIS

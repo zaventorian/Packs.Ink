@@ -2730,9 +2730,12 @@ so #7 there is five different cards.
   #12 Down in New Orleans and #14 Tinker Bell - Insistent Fairy are `REPRINT_PROMOS` clones
   (`crd_c2_1N_*_foil`), declared foil in `YEAR3_PRINTING_BY_NUMBER`. **#13 is not known**: the
   "Mother Knows Best (Foil) #13" TCGplayer lists beside them is printed `13/C3`.
-- **C3 is a set we do not hold yet.** Mother Knows Best `1/C3` (711519) and `13/C3` foil (711520) are
-  acked until 2026-10-21; they need a set row, the client wiring a promo set takes (`SET_ORDER`,
-  `PROMO_RARITY_SETS`, `SET_DISPLAY_NAMES`) and two `REPRINT_PROMOS` rows off Fabled #99.
+- **C3 (the 2026-27 Challenge season) is OUR OWN set row**, `set_challenge_c3` (migration 178), named
+  "Lorcana Challenge Promo (C3)" directly, with code NULL so `load_lorcast` still takes the real set the
+  day Lorcast indexes it — at which point its cards arrive under Lorcast's id and the two have to be
+  converged (the CC1 situation). It holds Mother Knows Best `1/C3` (711519, non-foil) and `13/C3`
+  (711520, foil), `REPRINT_PROMOS` clones of Fabled #99. `CHALLENGE_PRINTING_BY_NUMBER` is the ghost-row
+  table for both C2 and C3; C3 is wired wherever C2 is, except `SET_DISPLAY_NAMES` (no rename needed).
 - **Promo Set 4 (P4)** — Lorcast indexed it 2026-09-18 with null pids; `TCG_PID_OVERRIDES` (both
   copies) links #9-16. #1-6 aren't indexed yet.
 - **PD1** — product/prerelease promos: #1-8 printed `/PD1` (checked 2026-09-18), #15 Pegasus
@@ -8455,6 +8458,8 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger.** Claude applies migrations itself, drops included (Zaven, 2026-09-30: *"im fine with claude having access to do everything"*) — see "Running SQL" under Ops for the two routes. A file is STAGED only when something outside the database has to happen first.
+- ~~`supabase/178_challenge_c3_set.sql`~~ — **APPLIED 2026-09-30** via `scripts/sql.py`. The C3 set row; its two
+  cards are inserted by `patch_pid_overrides.py` on the next daily metadata run from `main`.
 - ~~`supabase/177_admin_exec_sql.sql`~~ — **APPLIED 2026-09-30** through the connector. The service-role-only
   `admin_exec_sql()` behind `scripts/sql.py`; see "Running SQL".
 - ~~`supabase/176_into_the_inkdark_set.sql`~~ — **APPLIED 2026-09-30** through the connector. A set row
