@@ -2681,7 +2681,7 @@ body:has(.deck-quickadd):has(.offline-pill) .packsink-flash-toast{
    the grid steps down gracefully as the viewport narrows. Mobile is forced
    to 2 columns (was a single awkward column). */
 .sealed-coll .gc-set-grid{grid-template-columns:repeat(auto-fill, minmax(250px, 1fr));
-  align-items:start;}
+  align-items:stretch;grid-auto-rows:1fr;}
 /* Compact (image-off) tiles are pure text, so pack them tighter horizontally
    too — narrower min means more columns and far less wasted width. */
 .sealed-coll .gc-set-grid.gc-compact{grid-template-columns:repeat(auto-fill, minmax(190px, 1fr));}
@@ -2726,10 +2726,12 @@ body:has(.deck-quickadd):has(.offline-pill) .packsink-flash-toast{
   width:calc(100% - 8px);height:calc(100% - 8px);object-fit:contain;}
 .sealed-coll .sealed-card-photo .prod-photo-wrap:not(.on-white) .prod-photo{
   inset:2px;width:calc(100% - 4px);height:calc(100% - 4px);}
-/* Content packs to the top and the tile sizes to its content (the grid no
-   longer stretches rows — see align-items:start above). Previously a 1fr
-   middle row + 64px min-height force-aligned price/counter across a row,
-   which left big empty gaps on short tiles and ballooned the compact view. */
+/* Every tile in a section is the SAME size (2026-09-30, Zaven: "all these boxes
+   equal size"): the grid above gives each row the height of the tallest tile
+   (grid-auto-rows:1fr) and the tile stretches to it, with the footer pinned to
+   the bottom by margin-top:auto. Content still packs to the top. This replaced
+   align-items:start, which sized each tile to its content and left a bundle with
+   a wrapped name and a second link row taller than the one beside it. */
 .sealed-coll .gc-card-body{display:flex;flex-direction:column;
   gap:3px;min-width:0;flex:1;}
 .sealed-coll .gc-card-name{white-space:normal;font-size:12px;line-height:1.25;
@@ -5951,7 +5953,30 @@ html[data-mode="dark"] .cd-reprint--original{--cdr:#6fce96;}
 .set-progress-pct{color:var(--text-muted);font-weight:500;margin-left:4px;}
 .set-progress-row .progress-bar{grid-column:2;height:6px;}
 .progress-fill.foil{background:linear-gradient(90deg,rgba(85,55,140,0.9),rgba(140,90,200,0.9));}
-.set-progress-card{cursor:pointer;transition:border-color 0.12s,transform 0.08s;}
+.set-progress-card{cursor:pointer;transition:border-color 0.12s,transform 0.08s;container-type:inline-size;}
+/* A set NAME takes two lines before it is clipped (2026-09-30, Zaven: "names cut
+   off ... might need two lines"). "Curator's Collection: Beauty and the Beast" and
+   "Ravensburger Play Hub Promos" are the long ones. A set with a logo hides its
+   text and is untouched. min-width:0 so the flex item can shrink below its text. */
+.set-progress-card .set-heading:not(.has-logo) .set-heading-text{min-width:0;white-space:normal;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  line-height:1.2;overflow-wrap:anywhere;}
+/* The promo-only tiles (Promos / Extras / the split Non-Foil+Foil row) are flat:
+   heading, then ONE block. The block sits at the bottom so the bars line up
+   across a row whether a neighbour's name took one line or two. */
+.set-progress-card--flat{display:flex;flex-direction:column;}
+.set-progress-card--flat > .set-progress-row,
+.set-progress-card--flat > .set-progress-split{margin-top:auto;}
+/* Non-Foil left, Foil right, in the room of one Promos row. */
+.set-progress-split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:12px;}
+.set-progress-half{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:6px;row-gap:3px;
+  align-items:baseline;min-width:0;}
+.set-progress-half .set-progress-row-label{grid-row:auto;}
+.set-progress-half .set-progress-row-counts{white-space:nowrap;font-size:12px;}
+.set-progress-half .progress-bar{grid-column:1 / -1;height:6px;}
+/* The percent is the first thing to go when the half gets narrow; the count and
+   the bar still say it. */
+@container (max-width:299px){.set-progress-half .set-progress-pct{display:none;}}
 .set-progress-card:hover{border-color:var(--border-accent);}
 .set-progress-card:active{transform:translateY(1px);}
 .set-chase-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);}
@@ -5994,6 +6019,11 @@ html[data-mode="dark"] .cd-reprint--original{--cdr:#6fce96;}
   .set-progress-row-label{grid-row:auto;font-size:9px;letter-spacing:0.2px;}
   .set-progress-row-counts{font-size:11px;white-space:nowrap;}
   .set-progress-row .progress-bar{grid-column:1 / -1;height:5px;}
+  .set-progress-split{column-gap:8px;}
+  .set-progress-half{column-gap:4px;}
+  .set-progress-half .set-progress-row-label{font-size:9px;letter-spacing:0.2px;}
+  .set-progress-half .set-progress-row-counts{font-size:11px;}
+  .set-progress-half .progress-bar{height:5px;}
   .set-chase-row{gap:4px;margin-top:6px;padding-top:6px;}
   .chase-pill{padding:1px 5px;gap:3px;font-size:9px;}
   .chase-pill-full{display:none;}
@@ -8409,6 +8439,28 @@ html[data-theme="black"] .price-standing--high{color:#fbbf24;border-color:rgba(2
 .sealed-detail-owncounter button:hover:not(:disabled){border-color:var(--accent);}
 .sealed-detail-owncounter button:disabled{opacity:0.4;cursor:not-allowed;}
 .sealed-detail-owned-value{margin-left:auto;font-size:11px;}
+/* "About this product": where a sealed product was sold and what was in the box.
+   Facts only, each from a named source; a field nobody could verify is not drawn. */
+.sealed-about{margin:16px 0 0;padding:12px 14px;border:1px solid var(--border);border-radius:10px;
+  background:var(--bg-card);font-size:12.5px;line-height:1.5;}
+.sealed-about-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;}
+.sealed-about-title{font-family:'Cinzel',serif;font-size:12px;font-weight:700;letter-spacing:0.04em;
+  color:var(--accent);text-transform:uppercase;}
+.sealed-about-badge{font-size:10px;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;
+  padding:2px 8px;border-radius:999px;border:1px solid var(--border);color:var(--text-dim);}
+.sealed-about-badge--exclusive{border-color:var(--accent);color:var(--accent);}
+.sealed-about-badge--limited{border-color:var(--accent);color:var(--text);}
+.sealed-about-note{margin:0 0 8px;color:var(--text);font-weight:600;}
+.sealed-about-facts{margin:0;display:grid;gap:5px;}
+.sealed-about-fact{display:grid;grid-template-columns:92px minmax(0,1fr);gap:10px;align-items:baseline;}
+.sealed-about-fact dt{font-size:10px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--text-muted);}
+.sealed-about-fact dd{margin:0;color:var(--text);min-width:0;overflow-wrap:anywhere;}
+.sealed-about-more{margin:8px 0 0;color:var(--text-dim);}
+.sealed-about-src{margin-top:8px;font-size:10.5px;color:var(--text-muted);overflow-wrap:anywhere;}
+.sealed-about-src a{color:inherit;text-decoration:underline;text-decoration-color:var(--border);text-underline-offset:2px;}
+.sealed-about-src a:hover{color:var(--accent);}
+@media (max-width:640px){.sealed-about-fact{grid-template-columns:1fr;gap:1px;}}
+.gc-card-excl{color:var(--accent);font-weight:700;}
 .sealed-detail-deltas{margin:20px 0 8px;background:var(--bg-card);
   border:1px solid var(--border);border-radius:6px;padding:8px 10px;}
 .sealed-detail-deltas-lblrow,
