@@ -105,7 +105,7 @@ def decide(row, by_cn, inv):
     if reason:
         return {"excluded": True, "exclude_reason": reason}, "reason:" + reason
 
-    card, conf, cn_conflict = match_one(title, by_cn, inv)
+    card, conf, cn_conflict = match_one(title, by_cn, inv, row.get("sold_date"))
     if card is None:
         if cn_conflict:
             return ({"excluded": True, "exclude_reason": "cn-conflict",

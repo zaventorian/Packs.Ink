@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=511">
+<link rel="stylesheet" href="styles.css?v=512">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -729,6 +729,38 @@ const popNumKey = (cn) => String(cn == null ? "" : cn).trim().replace(/^0+(?=\d)
 const popCardKey = (setName, productName, cn) =>
   popNameKey(setName) + "|" + popNameKey(productName) + "|" + popNumKey(cn);
 
+// ⚠ PSA and the catalog disagree on a few names and numbers, and an exact-key join
+// reads each as "no population" -- which the weekly coverage check calls a bug when
+// the card has graded sales. Three known shapes, tried only AFTER the exact key
+// misses so a clean join is never overridden:
+//   * the number carries PSA's printing letter ("24A" for our "24");
+//   * PSA files a character by the bare lead name ("Ursula" for "Ursula - Mad Sea
+//     Witch", "Jafar" for "Jafar - ...");
+//   * the two spell the subtitle differently ("Fearsome" / "Formidable Queen").
+// Set + number identify a card, so a lead-name match on top is enough.
+const popLeadKey = (name) => popNameKey(String(name == null ? "" : name).split(" - ")[0]);
+const popLooseKey = (setName, productName, cn) =>
+  "~" + popNameKey(setName) + "|" + popLeadKey(productName) + "|" + popNumKey(cn);
+const popRowsFor = (byCard, setName, productName, cn) => {
+  if(!byCard) return [];
+  const exact = byCard.get(popCardKey(setName, productName, cn));
+  if(exact && exact.length) return exact;
+  const n = popNumKey(cn);
+  if(/^\d+$/.test(n)){
+    const a = byCard.get(popCardKey(setName, productName, n + "A"));
+    if(a && a.length) return a;
+  }
+  const loose = byCard.get(popLooseKey(setName, productName, cn));
+  if(loose && loose.length) return loose;
+  // Deep Trouble / Palace Heist cards are filed by PSA under the BOOSTER set the
+  // quest card borrows its art from (Piglet is Into the Inklands #223), while the
+  // catalog files them under the quest's own set -- no set name can join them.
+  // Their variety is the one stable thing, so they are indexed set-free.
+  if(/illumineer|deep trouble|palace heist/i.test(String(setName || "")))
+    return byCard.get("~iq|" + popLeadKey(productName) + "|" + popNumKey(cn)) || [];
+  return [];
+};
+
 async function fetchGradedPop(){
   if(_gradedPop) return _gradedPop;
   if(_gradedPopPromise) return _gradedPopPromise;
@@ -743,6 +775,14 @@ async function fetchGradedPop(){
       const k = popCardKey(set, r.subject_name, r.card_number);
       if(!byCard.has(k)) byCard.set(k, []);
       byCard.get(k).push(r);
+      const lk = popLooseKey(set, r.subject_name, r.card_number);
+      if(!byCard.has(lk)) byCard.set(lk, []);
+      byCard.get(lk).push(r);
+      if(/illumineer'?s quest/i.test(r.variety || "")){
+        const ik = "~iq|" + popLeadKey(r.subject_name) + "|" + popNumKey(r.card_number);
+        if(!byCard.has(ik)) byCard.set(ik, []);
+        byCard.get(ik).push(r);
+      }
       // Running totals so a card's gem rate can be read against its own set's,
       // which is the only thing that makes the number mean anything: 63% is
       // unremarkable in The First Chapter and excellent in a set averaging 40%.
@@ -9739,7 +9779,7 @@ const GradedPopPanel = ({group}) => {
     // because an optional source is not deployed.
     fetchGradedPop().then(p => {
       if(!live) return;
-      const rows = p.byCard.get(popCardKey(setName, name, num)) || [];
+      const rows = popRowsFor(p.byCard, setName, name, num);
       setPop({rows, setGem: p.setGem.get(setName) == null ? null : p.setGem.get(setName)});
     });
     return () => { live = false; };
@@ -10853,6 +10893,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
               // Passing the KEY rather than the rows keeps the modal from
               // fetching something only the export uses.
               popKey: popCardKey(group.Set, group["Product Name"], group.Number),
+              popName: group["Product Name"], popNum: group.Number,
               popPrinting: gradedPrintingFilter || null,
               popSet: group.Set || "",
             }}
@@ -38485,8 +38526,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           let st = popCache.get(ck);
           if(st === undefined){
             const cat = catalogByCardId.get(row.card_id);
-            const prows = cat ? (gradedPop.byCard.get(
-              popCardKey(cat.Set, cat["Product Name"], cat.Number)) || []) : [];
+            const prows = cat ? popRowsFor(gradedPop.byCard, cat.Set, cat["Product Name"], cat.Number) : [];
             const picked = gradedPopPick(prows, row._variant);
             st = picked.row ? gradedPopStats(picked.row) : null;
             popCache.set(ck, st);
@@ -38687,8 +38727,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           let st = popCache.get(ck);
           if(st === undefined){
             const cat = catalogByCardId.get(r.card_id);
-            const prows = cat ? (gradedPop.byCard.get(
-              popCardKey(cat.Set, cat["Product Name"], cat.Number)) || []) : [];
+            const prows = cat ? popRowsFor(gradedPop.byCard, cat.Set, cat["Product Name"], cat.Number) : [];
             const picked = rawPopPick(prows, r.printing, r.card_id);
             st = picked ? gradedPopStats(picked) : null;
             popCache.set(ck, st);
@@ -42358,7 +42397,7 @@ const drawPosterScatter = (ctx, series, lines, showTrend, x, y, w, h, P) => {
 
 async function buildGradedPosterBlob(opts){
   const { artSrc, name, sub, combos, featured, series, rawLines, showTrend, dateStr, rawLatest,
-          popKey, popPrinting, popSet } = opts;
+          popKey, popPrinting, popSet, popName, popNum } = opts;
   const P = posterPalette();
   try { if(document.fonts && document.fonts.ready) await document.fonts.ready; } catch {}
   const [artImg, logoImg] = await Promise.all([
@@ -42378,7 +42417,7 @@ async function buildGradedPosterBlob(opts){
   let popRow = null, popSetGem = null, popLabel = null;
   try {
     const pop = await fetchGradedPop();
-    const prows = (popKey && pop.byCard.get(popKey)) || [];
+    const prows = (popKey && (pop.byCard.get(popKey) || popRowsFor(pop.byCard, popSet, popName, popNum))) || [];
     const picked = gradedPopPick(prows, popPrinting);
     popRow = picked.row; popLabel = picked.label;
     popSetGem = popSet ? (pop.setGem.get(popSet) == null ? null : pop.setGem.get(popSet)) : null;

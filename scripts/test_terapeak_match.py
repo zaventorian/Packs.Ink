@@ -108,6 +108,13 @@ def main():
         h = tm.set_hint(f"2026 DISNEY LORCANA EN {n}-SOMETHING PSA 10")
         if h != expect:
             fails.append(f"  set_hint('EN {n}') want={expect} got={h}")
+    # PSA's label style names no year for the 2024 D23 set; 2022 is the Collector's Set.
+    for t, expect in (("2024 DISNEY LORCANA EN D23-D23 EXPO PROMO BRUNO", "D23 Collection"),
+                      ("Bruno Madrigal Undetected Uncle 4 D23 Promos Holo", "D23 Collection"),
+                      ("2022 D23 Expo Collector's Set Mickey Mouse", "Promo Set 1")):
+        h = tm.set_hint(t)
+        if h != expect:
+            fails.append(f"  set_hint({t!r}) want={expect} got={h}")
     if len(tm.MAINLINE) < 13:
         fails.append(f"  MAINLINE has {len(tm.MAINLINE)} sets; the index IS the EN number, so a new set must be appended")
 
