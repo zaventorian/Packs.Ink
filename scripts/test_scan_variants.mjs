@@ -207,7 +207,7 @@ let gained = 0;
 for (const rows of fams.values()) {
   for (const r of rows) if (exactSize.get(r["Product Name"]) < rows.length) { gained++; }
 }
-check("folding recovers versions Lorcast's casing had hidden", gained, 19);
+check("folding recovers versions Lorcast's casing had hidden", gained, 20);
 let multi = 0, chipped = 0, dupLabel = 0, overCap = 0, misordered = 0;
 for (const rows of fams.values()) {
   if (rows.length < 2) continue;
