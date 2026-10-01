@@ -673,7 +673,10 @@ const EMPTY_POP = {byCard: new Map(), setGem: new Map()};
 // ("TE KA" for Te Kā), punctuation ("Loud Mouthed" for Loud-Mouthed) and
 // stray double spaces ("Jafar  - Keeper of Secrets"). Folding all four takes
 // The First Chapter from 142/146 to 146/146, so nothing here is decorative.
-const popNameKey = (s) => searchNorm(String(s || "").toLowerCase())
+// ⚠ PSA doubles a name now and then ("Maleficent/Maleficent - Monstrous Dragon",
+// P3 #4), which is the same card, so a doubled lead is folded back to one.
+const popNameKey = (s) => searchNorm(String(s || "").toLowerCase()
+  .replace(/^([^/]+)\/\1(?= - )/, "$1"))
   .replace(/[^a-z0-9]+/g, " ").trim();
 
 // PSA names a set its own way: "Disney Lorcana EN 5-Shimmering Skies". The
@@ -719,8 +722,12 @@ const popSetName = (label) => {
 // and a collector number with the set they reprint — measured on the real data,
 // Fabled alone collides with Into the Inklands on 8 cards — so a key of
 // (name, number) alone silently attributes one set's pops to another.
+// ⚠ PSA zero-pads the D23 Expo numbers ("01".."07"); the catalog does not. Left as
+// text, all seven of the ~2,000-pop D23 cards (Mickey, Cinderella, Ursula, Bruno,
+// Vanellope, Oswald, Playful Sorcerer) joined nothing. "24A" and "0" are untouched.
+const popNumKey = (cn) => String(cn == null ? "" : cn).trim().replace(/^0+(?=\d)/, "");
 const popCardKey = (setName, productName, cn) =>
-  popNameKey(setName) + "|" + popNameKey(productName) + "|" + String(cn == null ? "" : cn).trim();
+  popNameKey(setName) + "|" + popNameKey(productName) + "|" + popNumKey(cn);
 
 async function fetchGradedPop(){
   if(_gradedPop) return _gradedPop;
@@ -763,11 +770,17 @@ async function fetchGradedPop(){
 // League Promo, Disney Cruise). Only the finish half maps onto our printings, so
 // only that half is mapped; everything else returns null and is shown under
 // PSA's own word rather than being forced into a bucket it does not belong in.
-const POP_FOIL_VARIETY = new Set(["foil", "foil-errata", "foil-oversized", "top prize"]);
-const POP_NONFOIL_VARIETY = new Set(["", "errata", "prize wall exclusive"]);
+// ⚠ The Challenge (C1) cards split into two markets and PSA names them by PRIZE:
+// Top Prize / Top N / Serialized Top Prize are the foil, Prize Wall Exclusive and
+// Side Event the non-foil (the same reading terapeak_load.printing_of makes of a
+// sale title). Without "side event" and "top N", Baymax - Armored Companion's
+// 539 non-foil copies read as no population at all. "World Championship" is left
+// unmapped on purpose: the graded notes find it on the cheap side AND mislabelled.
+const POP_FOIL_VARIETY = new Set(["foil", "foil-errata", "foil-oversized", "top prize", "serialized top prize"]);
+const POP_NONFOIL_VARIETY = new Set(["", "errata", "prize wall exclusive", "side event", "infinity weekend"]);
 const gradedPopBucket = (variety) => {
   const v = String(variety || "").toLowerCase().trim();
-  if(POP_FOIL_VARIETY.has(v)) return "Foil";
+  if(POP_FOIL_VARIETY.has(v) || /^top \d+$/.test(v)) return "Foil";
   if(POP_NONFOIL_VARIETY.has(v)) return "Non-Foil";
   return null;
 };
