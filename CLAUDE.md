@@ -5459,6 +5459,13 @@ Epics and promos "(foil)". Mocked up, then built. Guarded by
   embeds may hold 6,000 in total, so `fit_embeds` trims lines from the LAST
   sections (foils first) until it fits. The header is never trimmed and the
   disclosure footer moves to whatever embed ends up last.
+- **Two short sections close the report** (2026-09-30): **New cards** (daily: names first added in the
+  last day; weekly: the last seven; a new printing of an existing name is not a reveal) and, weekly
+  only, **This week on the calendar** (confirmed `calendar_events` rows starting in the next seven
+  days, plus the set and product dates parsed out of Index.html's `SET_RELEASE_DATES` /
+  `PRODUCT_RELEASE_DATES`, which a curated row replaces). Both are `_keep`, so trimming for length
+  takes price lines first, and every read is wrapped: a failure leaves the section out, never the
+  report. Calendar links go to `packs.ink/calendar?ce=<id>`, the one non-affiliate link allowed.
 - **Links go to TCGplayer through the affiliate link** (`tcg_url`, the site's
   `tcgUrl` exactly), never to packs.ink card pages (Zaven, 2026-09-28).
 - `python scripts/discord_reports.py --preview <dir>` builds both reports from

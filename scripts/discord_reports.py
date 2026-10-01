@@ -66,6 +66,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sys
 import time
 from urllib.parse import quote
@@ -550,7 +551,139 @@ def key_of(row):
     return (row.get("tcgplayer_product_id"), row.get("printing") or "Normal")
 
 
-def build_report(sb, price_date, window, session=requests):
+# ── what's new, and what's on this week ──────────────────────────────────────
+# Two short embeds after the price sections. Neither may ever cost the report:
+# every read is wrapped, and a failure simply leaves the embed out.
+REVEAL_COLOR = 0x8E7CC3
+CALENDAR_COLOR = 0x4FA3D1
+REVEAL_DAYS = {"1d": 1, "7d": 7}
+REVEAL_SETS = 4            # sets named in the embed
+REVEAL_NAMES = 6           # card names listed per set
+CALENDAR_DAYS = 7
+CALENDAR_LINES = 8
+KIND_LABEL = {"dlc": "Challenge", "ccq": "Qualifier", "set": "Set", "product": "Product"}
+INDEX_HTML = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Index.html")
+PHASE_LABEL = {"lgs": "LGS release", "retail": "Retail release"}
+
+
+def card_label(row):
+    v = row.get("version")
+    return row.get("name") or "" if v in (None, "", "None") else f"{row.get('name')} - {v}"
+
+
+def new_reveals(sb, now, days, sets):
+    """[(set name, [card label, ...])] for cards first added in the last `days`
+    days, newest set first. A name that already existed before the cutoff is a
+    new PRINTING, not a reveal, and is left out."""
+    cutoff = (now - dt.timedelta(days=days)).isoformat()
+    rows = sb.select("cards", columns="id,name,version,set_id,inserted_at", order="id.asc")
+    old = {card_label(r) for r in rows if str(r.get("inserted_at") or "") < cutoff}
+    by_set, seen = {}, set()
+    for r in sorted(rows, key=lambda r: str(r.get("inserted_at") or ""), reverse=True):
+        label = card_label(r)
+        if str(r.get("inserted_at") or "") < cutoff or not label or label in old or label in seen:
+            continue
+        seen.add(label)
+        by_set.setdefault(set_display(sets.get(r.get("set_id"), "")) or "Other", []).append(label)
+    return list(by_set.items())
+
+
+def reveals_embed(groups, weekly):
+    if not groups:
+        return None
+    lines = []
+    for name, cards in groups[:REVEAL_SETS]:
+        shown = ", ".join(cards[:REVEAL_NAMES])
+        more = len(cards) - REVEAL_NAMES
+        lines.append(f"**{name}** · {len(cards)} new: {shown}" + (f" and {more} more" if more > 0 else ""))
+    total = sum(len(c) for _, c in groups)
+    label = f"🆕 NEW CARDS · {total} added " + ("this week" if weekly else "since yesterday")
+    return {"author": {"name": label, "url": f"{digest.SITE}/cards"}, "color": REVEAL_COLOR,
+            "description": "\n".join(lines), "_lines": lines, "_keep": True}
+
+
+def derived_releases(path=None):
+    """Set and product release dates out of Index.html's own consts, the same
+    ones the site's calendar derives its rows from. [] if the file or the
+    consts cannot be read."""
+    try:
+        src = open(path or INDEX_HTML, encoding="utf8").read()
+    except OSError:
+        return []
+    out = []
+    m = re.search(r"const SET_RELEASE_DATES = \{(.*?)\n\};", src, re.S)
+    for name, lgs, retail in re.findall(r'"([^"]+)":\s*\{lgs:"(\d{4}-\d\d-\d\d)",\s*retail:"(\d{4}-\d\d-\d\d)"', m.group(1) if m else ""):
+        out.append({"id": f"set:{name}:lgs", "kind": "set", "title": name, "subtitle": PHASE_LABEL["lgs"], "starts_on": lgs})
+        out.append({"id": f"set:{name}:retail", "kind": "set", "title": name, "subtitle": PHASE_LABEL["retail"], "starts_on": retail})
+    m = re.search(r"const PRODUCT_RELEASE_DATES = \[(.*?)\n\];", src, re.S)
+    for title, sub, on in re.findall(r'\{title:\s*"([^"]+)"(?:,\s*subtitle:\s*"([^"]+)")?,\s*on:\s*"(\d{4}-\d\d-\d\d)"', m.group(1) if m else ""):
+        out.append({"id": f"product:{title}", "kind": "product", "title": title, "subtitle": sub or None, "starts_on": on})
+    return out
+
+
+def week_ahead(sb, day, derived=None):
+    """Confirmed calendar rows starting in the next CALENDAR_DAYS days, plus the
+    derived releases a curated row does not already cover."""
+    end = day + dt.timedelta(days=CALENDAR_DAYS)
+    rows = sb.select("calendar_events", columns="id,kind,title,subtitle,starts_on,ends_on,location",
+                     filters={"confirmed": "is.true", "starts_on": f"gte.{day.isoformat()}",
+                              "and": f"(starts_on.lte.{end.isoformat()})"}, order="starts_on.asc")
+    have = {(r.get("kind"), r.get("title"), r.get("subtitle") if r.get("kind") == "set" else None) for r in rows}
+    for d in (derived_releases() if derived is None else derived):
+        key = (d["kind"], d["title"], d["subtitle"] if d["kind"] == "set" else None)
+        if key not in have and day.isoformat() <= d["starts_on"] <= end.isoformat():
+            rows.append(dict(d))
+    return sorted(rows, key=lambda r: (str(r.get("starts_on")), str(r.get("title"))))
+
+
+def calendar_embed(rows):
+    if not rows:
+        return None
+    lines = []
+    for r in rows[:CALENDAR_LINES]:
+        d0 = dt.date.fromisoformat(str(r["starts_on"])[:10])
+        when = f"{d0:%a}, {d0:%b} {d0.day}"
+        if r.get("ends_on") and str(r["ends_on"])[:10] != str(r["starts_on"])[:10]:
+            d1 = dt.date.fromisoformat(str(r["ends_on"])[:10])
+            when += f"–{d1.day}" if d1.month == d0.month else f" – {d1:%b} {d1.day}"
+        title = r.get("title") or ""
+        if r.get("kind") == "set" and r.get("subtitle"):
+            title += " " + r["subtitle"]
+        elif r.get("kind") == "product" and r.get("subtitle"):
+            title += ": " + r["subtitle"]
+        url = f"{digest.SITE}/calendar" + (f"?ce={quote(str(r['id']), safe='')}" if r.get("id") else "")
+        place = (r.get("location") or "").split(" · ")[-1].strip()
+        lines.append(f"**{when}** · [{title}]({url}) · {KIND_LABEL.get(r.get('kind'), 'Event')}"
+                     + (f" · {place}" if place else ""))
+    more = len(rows) - CALENDAR_LINES
+    if more > 0:
+        lines.append(f"*and {more} more on the calendar*")
+    return {"author": {"name": "📅 THIS WEEK ON THE CALENDAR", "url": f"{digest.SITE}/calendar"},
+            "color": CALENDAR_COLOR, "description": "\n".join(lines), "_lines": lines, "_keep": True}
+
+
+def extra_embeds(sb, price_date, window, sets, now=None):
+    """The reveals embed (daily and weekly) and the calendar embed (weekly)."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    weekly = window != "1d"
+    out = []
+    try:
+        e = reveals_embed(new_reveals(sb, now, REVEAL_DAYS.get(window, 1), sets), weekly)
+        if e:
+            out.append(e)
+    except Exception as ex:   # never the report's problem
+        print(f"  (no reveals section: {type(ex).__name__})")
+    if weekly:
+        try:
+            e = calendar_embed(week_ahead(sb, price_date))
+            if e:
+                out.append(e)
+        except Exception as ex:
+            print(f"  (no calendar section: {type(ex).__name__})")
+    return out
+
+
+def build_report(sb, price_date, window, session=requests, now=None):
     """{"embeds", "files", "plain"} for one window, or None when nothing
     cleared the floors. "plain" is the same report with no attachments — what
     goes out if Discord refuses the pictures."""
@@ -653,6 +786,7 @@ def build_report(sb, price_date, window, session=requests):
             embeds.append(w)
     if len(embeds) == 1:
         return None
+    embeds.extend(extra_embeds(sb, price_date, window, sets, now=now))
     embeds[-1]["footer"] = {"text": FOOTER + " · posted by the packs.ink bot — /reports"}
 
     fitted = fit_embeds(embeds)
