@@ -99,6 +99,14 @@ OVERRIDES = {
     # card sat priceless while the catalog watch reported it twice: once as a card
     # with no pid and once as a missing single.
     "Héctor Rivera - Gone to Pieces|13": 711361,
+    # Lorcana Challenge Year 3 (C2) #15-#18. Lorcast indexes them with a null
+    # pid; TCGplayer listed all four on 2026-09-01 in "Disney Lorcana Promo
+    # Cards" under the same numbers, and the printed lines (15/C2 .. 18/C2)
+    # were read off its photos. Note Lorcast's capital "In".
+    "Stand Out|15": 712024,
+    "Down In New Orleans|16": 712025,
+    "The Headless Horseman - Cursed Rider|17": 712026,
+    "Tinker Bell - Insistent Fairy|18": 712027,
 }
 
 
@@ -322,7 +330,18 @@ def main() -> None:
     # Rock Star #3 — Maleficent (#294 below) had been mis-filed into AVP_SET as a
     # fabricated #9 instead of her real 4/DIS. #5 is still unaccounted for.
     DIS_SET = "set_cc126d2d050b406aa0bbbc18268fb119"
+    C2_SET = "set_dacbe79496a14ffa99567e4ae8577e49"  # Lorcana Challenge Year 3
     REPRINT_PROMOS = [
+        # C2 #11 / #12 / #14: the FOIL printings of C2 #15 / #16 / #18, which
+        # Lorcast does not index. Printed 11/C2, 12/C2 and 14/C2 (read off
+        # TCGplayer's photos 2026-09-30). Bases are the booster printings:
+        # Stand Out = Fabled #94, Down in New Orleans = Reign of Jafar #177,
+        # Tinker Bell - Insistent Fairy = Reign of Jafar #136.
+        # NOT #13: the "Mother Knows Best (Foil) #13" listed beside them is
+        # printed 13/C3, a set we do not hold yet.
+        (647675, C2_SET, "11", "crd_c2_11_stand_out_foil",                  714566),
+        (631845, C2_SET, "12", "crd_c2_12_down_in_new_orleans_foil",        715979),
+        (631842, C2_SET, "14", "crd_c2_14_tinker_bell_insistent_fairy_foil", 715981),
         (702677, DIS_SET, "4",  "crd_avp_9_maleficent_exultant",      705086),  # Magical Places promo, 4/DIS (was mis-filed AVP #9 — id kept so owned collection refs don't orphan)
         (659628, DIS_SET, "6",  "crd_dis_6_mickey_mouse_amber_champion",  712042),  # Magical Places promo, 6/DIS
         (555245, DIS_SET, "7",  "crd_dis_7_elsa_the_fifth_spirit",        712044),  # Magical Places promo, 7/DIS

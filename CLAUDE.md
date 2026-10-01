@@ -2723,6 +2723,16 @@ A promo belongs to the set its card face says: `12/P4` is Promo Set 4 #12, `5/PD
 its "Disney Lorcana Promo Cards" group files every promo under a bare number with no suffix,
 so #7 there is five different cards.
 
+- **Every promo printing gets its own priced tile** (Zaven, 2026-09-30) — the `promo-printing-policy`
+  review is settled. A promo TCGplayer lists and we lack is a `REPRINT_PROMOS` row, not an ack.
+- **Challenge Year 3 (C2) runs #11-#18, and 11-14 are the FOILS of 15-18.** Lorcast indexes only the
+  non-foils (#15-#18, with null pids — linked through `TCG_PID_OVERRIDES` 2026-09-30); #11 Stand Out,
+  #12 Down in New Orleans and #14 Tinker Bell - Insistent Fairy are `REPRINT_PROMOS` clones
+  (`crd_c2_1N_*_foil`), declared foil in `YEAR3_PRINTING_BY_NUMBER`. **#13 is not known**: the
+  "Mother Knows Best (Foil) #13" TCGplayer lists beside them is printed `13/C3`.
+- **C3 is a set we do not hold yet.** Mother Knows Best `1/C3` (711519) and `13/C3` foil (711520) are
+  acked until 2026-10-21; they need a set row, the client wiring a promo set takes (`SET_ORDER`,
+  `PROMO_RARITY_SETS`, `SET_DISPLAY_NAMES`) and two `REPRINT_PROMOS` rows off Fabled #99.
 - **Promo Set 4 (P4)** — Lorcast indexed it 2026-09-18 with null pids; `TCG_PID_OVERRIDES` (both
   copies) links #9-16. #1-6 aren't indexed yet.
 - **PD1** — product/prerelease promos: #1-8 printed `/PD1` (checked 2026-09-18), #15 Pegasus
@@ -2855,7 +2865,8 @@ remedy is the damage.
 - **It still REPORTS, it does not suppress.** This check is how a genuinely new set announces
   itself; silencing on a code match would trade a bad hint for a blind spot. Both directions are
   pinned in `test_catalog_watch.py`, which stubs the network and runs the real `collect_findings`.
-- Curator's CC1 is acked to **2026-09-28**, the `promo-printing-policy` review — all six CC1
+- **Settled 2026-09-30: we keep `set_curators_cc1`** and do not converge onto Lorcast's id (acked
+  with no expiry). History: it was acked to **2026-09-28**, the `promo-printing-policy` review — all six CC1
   cards are already in that review's scope, so "do promo printings get a tile" and "which set id
   do they hang off" get settled in one sitting rather than two.
 
@@ -5333,7 +5344,7 @@ client still showing one gets "Unknown command." (guarded). The resolver's
 - **`/reports send`** (server managers) posts the latest daily or weekly report
   in the channel, now. `discord_reports.py` keeps both every day it runs with
   `--post`, **whether or not any channel subscribes** (`store_latest`), in
-  `discord_report_latest` (**migration 175, STAGED**), built once a day per
+  `discord_report_latest` (**migration 175, APPLIED 2026-09-30**), built once a day per
   cadence. Its pictures go to the public `discord-reports` bucket under
   `<cadence>/<price date>/`, because Discord caches an image by URL; yesterday's
   are deleted once today's are kept. If a picture fails to store, the kept
@@ -5509,6 +5520,16 @@ An audit found several failures that ended a green run. Each now speaks:
 - **A short event pull turns `discover_scs.yml` red at its LAST step** (`partial_pull` output), so the roster and history steps after discovery still run.
 - **The Discord bot skips a rebuild that would change nothing**: after an ETL run, a `gate` job asks the live Worker for its `priceDate` and `built`, and skips when it has today's prices and was built under six hours ago. The daily schedule and a manual run always build; any doubt builds.
 
+### Running SQL: two routes, and Claude runs it (2026-09-30)
+
+Zaven: *"im fine with claude having access to do everything."* Migrations, data fixes and drops are applied by the session that wrote them, then recorded in the ledger. Nothing is staged "for a paste" any more unless something outside the database must happen first.
+
+1. **The Supabase connector** (`apply_migration` for DDL, `execute_sql` for the rest). Its tools are DEFERRED in most sessions: load them with ToolSearch (`supabase apply_migration execute_sql`) before concluding there is no database access. Apply migrations ONE AT A TIME: several in parallel collide on the version timestamp.
+2. **`python scripts/sql.py`** when the connector is missing or refuses a statement: `-c "select ..."` prints rows, a `.sql` path runs the file. It calls the service-role-only `admin_exec_sql()` RPC (migration 177), so it needs only the service key, which `scripts/.env` holds locally (a worktree falls back to the main checkout's copy) and the agent proxy injects in a cloud session. No BEGIN/COMMIT, VACUUM or CREATE INDEX CONCURRENTLY: it runs inside a function.
+
+- **`admin_exec_sql` must stay service-role only.** EXECUTE is granted to `service_role` alone and the body checks `auth.role()` again; the publishable key answers 42501 (verified). Granting it wider hands DDL to every visitor.
+- Before a drop, look at what is being dropped and say so in the ledger entry. A drop that deletes user data (the poll tables, say) still wants a sentence to Zaven first.
+
 ### Auth / grants
 
 - **Required GitHub Actions secrets**: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPABASE_ANON_KEY` (used as read fallback in `matview_self_heal.py` when service_role gets 403). `TCGPRICELOOKUP_API_KEY` is **no longer used** (graded feed retired 2026-06-30) and can be deleted from the repo secrets.
@@ -5536,6 +5557,11 @@ An audit found several failures that ended a green run. Each now speaks:
 
 - **`privacy.html` is THE policy — and it is now "Privacy & Terms".** The Help page's own copy of the policy was a stale duplicate (dated 2026-05-22, no scanner section) and is now a one-paragraph pointer. Anything that changes what is collected changes `privacy.html` and its top "Last updated" line, nowhere else.
 - **The CSP is ENFORCED as of 2026-09-05** (`_headers`: one `Content-Security-Policy` header carrying the full policy incl. `frame-ancestors 'none'`, mirrored on `/swiss` with `'self'`, and detached-and-replaced on **`/scanner-worker.js`** with a minimal worker policy that adds `'unsafe-eval'`: `@techstark/opencv-js` is an Emscripten/embind build whose `createNamedFunction` goes through `new Function` (Sentry JAVASCRIPT-R, every report from that worker), and a dedicated worker is governed by the CSP of its OWN script response, so the relaxation never reaches the page. Any future worker that imports an Emscripten/embind library needs the same block — `vendor/ort` does not, it has no eval.) Report-only had run since 07-14 and every report after the 08-10/08-22 fixes was extension / stale-SW / dev-framing noise, plus one Securly-filtered school network whose filter redirects same-origin card-art requests off-origin (reported as `img-src` on `packs.ink`; not ours to fix). A genuine block now shows up in Sentry as a CSP issue: add the origin to BOTH copies in `_headers`, deploy, purge. Rollback = rename back to `Content-Security-Policy-Report-Only` (keeping frame-ancestors enforced on its own line), deploy, purge.
+- **A card link's preview rewrite runs for link-preview BOTS only** (`PREVIEW_BOT_RE` in
+  `worker/index.js`, 2026-09-30). `/cards?card=<id>` used to cost every visitor two database reads
+  and a full, un-cacheable copy of the shell so that the page's Open Graph tags named the card —
+  tags only Discord, Slack and the like ever read. A person now gets the ordinary shell and its
+  304. A crawler missing from the list gets the site-wide preview, never an error.
 - **`www.packs.ink` is routed to the worker** (`wrangler.toml` route + a 301 to the apex in `worker/index.js`, 2026-09-05). Inert while the www record is grey-clouded at Netlify's 75.2.60.5; **orange-cloud that record in the Cloudflare dashboard** and the worker answers instead of Netlify — then the Netlify site can be deleted. `workers_dev = false` / `preview_urls = false` also retire the workers.dev duplicate origin on the next deploy.
 - **Cloudflare Web Analytics IS on** (the beacon Cloudflare injects at the edge — `static.cloudflareinsights.com`, allow-listed in `_headers`), so the old "no analytics tracking" sentence was false. The policy now discloses it as cookieless page-view analytics. Turning it off in the dashboard means deleting that sentence AND the host from the CSP lists.
 - The policy also names every service the browser talks to (Supabase, Cloudflare, Google incl. Fonts + YouTube via `youtube-nocookie.com`, Sentry with the user id + display name it actually receives, Impact, `api.zippopotam.us` for the ZIP box), the feedback / deck-view / watchlist data, public tournament names, and carries a general Terms-of-use section (as-is, not financial advice, user content, takedown contact).
@@ -8428,8 +8454,13 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
 - ~~**`supabase/125_deck_versions.sql`**~~ — **APPLIED 2026-08-24 by Zaven.**
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
-**Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
-- **`supabase/175_discord_report_latest.sql`** — **STAGED 2026-09-29, needs a paste.** The
+**Migration ledger.** Claude applies migrations itself, drops included (Zaven, 2026-09-30: *"im fine with claude having access to do everything"*) — see "Running SQL" under Ops for the two routes. A file is STAGED only when something outside the database has to happen first.
+- ~~`supabase/177_admin_exec_sql.sql`~~ — **APPLIED 2026-09-30** through the connector. The service-role-only
+  `admin_exec_sql()` behind `scripts/sql.py`; see "Running SQL".
+- ~~`supabase/176_into_the_inkdark_set.sql`~~ — **APPLIED 2026-09-30** through the connector. A set row
+  for Into the Inkdark (set 15, `set_into_the_inkdark`, code NULL like Hyperia City's was) so
+  TCGplayer group 24890 binds and its sealed products stop loading with no set.
+- ~~`supabase/175_discord_report_latest.sql`~~ — **APPLIED 2026-09-30** through the connector. The
   latest daily and weekly Discord report, kept for `/reports send`, plus the public
   `discord-reports` storage bucket for its pictures. Additive only. Safe in either order:
   before it lands the report job prints that `/reports send` stays off and posts to
@@ -8461,7 +8492,7 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
   day: 63 mats (`load_playmats.py`), 21,570 prices from the local archive cache plus the
   2026-09-26 publish (`backfill_playmat_prices.py`). Safe ahead of the client — nothing read it
   until the Playmats tab shipped.
-- **`supabase/168_curators_cc2.sql`** — **STAGED 2026-09-22, needs a paste.** Creates
+- ~~`supabase/168_curators_cc2.sql`~~ — **APPLIED 2026-09-30** through the connector. Creates
   `set_curators_cc2` — "Curator's Collection: Beauty and the Beast" (code **CC2**), the second
   Curator's Collection drop (see 107 for CC1, Heroines). Announced at D23 2026, six premium foil
   reprints at ~$99.99 from a handful of Disney locations starting 2026-10-01; not on TCGplayer at
@@ -8484,13 +8515,13 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
   `refresh_raw_sales_rollup()`. **⚠ Its `statement_timeout` is a function-level `SET` clause,
   not a `set local`** — migration 131 had to fix exactly that on the market-index refresh, which
   died at the role default every time because the GUC is armed before the body runs.
-- **`supabase/159_deck_short_links.sql`** — **STAGED 2026-09-18, needs a paste.** Short deck links:
+- ~~`supabase/159_deck_short_links.sql`~~ — **APPLIED 2026-09-30** through the connector. Short deck links:
   `packs.ink/?d=<12 chars>` instead of the ~100-char `?deck=&token=` link. `deck_short_links` +
   `deck_short_code(deck, token)` (mint, one per deck+token) + `resolve_deck_short_code(code)`. A
   code dies with its token, so the existing rotate-on-less-visible trigger revokes it. Safe to ship
   the client first: the poster falls back to the full link (minus `https://`), and an unresolvable
   `?d=` lands on `/decks`.
-- ~~`supabase/152_calendar_dlc_nanjing.sql`~~ - **STAGED 2026-09-14, needs a paste.**
+- ~~`supabase/152_calendar_dlc_nanjing.sql`~~ - **APPLIED 2026-09-30** through the connector.
   One row: DLC Nanjing, 21-22 Nov 2026, at `confirmed = false` so it is admin-only
   until ruled on in the /calendar editor. Pure ASCII, short header, per the 142
   lesson. **⚠ It was WRITTEN as 150 and renumbered before merge**: a concurrent

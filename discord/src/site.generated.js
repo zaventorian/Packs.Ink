@@ -277,6 +277,12 @@ const TCG_PID_OVERRIDES = {
   "Dragon Fire|9": 693401,                            // Lorcana Challenge Y3 (C2) — Lorcast left pid null
   "Stitch - Carefree Snowboarder|207": 675380,        // Winterspell Epic — Lorcast left pid null
   "Héctor Rivera - Gone to Pieces|13": 711361,              // D23 Collection (2026 drop); Lorcast left pid null. TCGplayer spells it "Hector", so the name link never matched
+  // Lorcana Challenge Year 3 (C2) #15-#18: Lorcast indexes them with a null pid.
+  // TCGplayer listed all four on 2026-09-01; the numbers were read off the cards.
+  "Stand Out|15": 712024,
+  "Down In New Orleans|16": 712025,
+  "The Headless Horseman - Cursed Rider|17": 712026,
+  "Tinker Bell - Insistent Fairy|18": 712027,
 };
 // ---- site ----
 const PULL = {

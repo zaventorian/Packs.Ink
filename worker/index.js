@@ -118,6 +118,10 @@ async function sbGet(path) {
 
 const usd = (n) => n == null ? null : "$" + Number(n).toFixed(2);
 
+// The fetchers that read a page for its Open Graph tags and never run the app.
+// A crawler missing from this list gets the site-wide preview, not an error.
+const PREVIEW_BOT_RE = /discordbot|twitterbot|facebookexternalhit|facebot|slackbot|slack-imgproxy|telegrambot|whatsapp|linkedinbot|redditbot|embedly|pinterest|skypeuripreview|iframely|mastodon|bluesky|cardyb|googlebot|bingbot|applebot|duckduckbot|imessage/i;
+
 async function cardPreview(rawId) {
   // Catalog ids for custom variants carry a "::variant::slug" suffix; the base
   // card is the one with a row.
@@ -282,7 +286,12 @@ export default {
     // service worker would then cache that empty document as the offline
     // shell. Anything else that is not a 200 (a 5xx from the asset layer) is
     // passed through too, rather than dressed up as success.
-    const cardParam = url.pathname === "/cards" ? url.searchParams.get("card") : null;
+    // Only for a link-preview fetcher. The rewrite costs two database reads
+    // and returns the shell with no ETag, so a PERSON on a card link waited on
+    // both and re-downloaded the whole shell every time, for meta tags only a
+    // bot reads. People get the ordinary shell (and its 304) below.
+    const cardParam = url.pathname === "/cards" && PREVIEW_BOT_RE.test(request.headers.get("User-Agent") || "")
+      ? url.searchParams.get("card") : null;
     if (cardParam) {
       // No conditional headers: the rewritten page must be a full 200.
       const plain = await env.ASSETS.fetch(new Request(new URL("/", url.origin)));
