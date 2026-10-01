@@ -52323,6 +52323,10 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
   // "News" tile: the newest set while it's still pre-release (reveal season).
   // Counts distinct cards we have live for that set, updating as more arrive,
   // and deep-links to the Cards tab filtered to the set.
+  // ⚠ DISTINCT CARDS, not distinct card_ids: an Enchanted/Epic/Iconic is its own
+  // card_id but the same card as its base, so counting ids said "210 cards
+  // revealed" in a 204-card set (2026-10-01). Keyed on the name, which every
+  // printing of one card shares.
   // ⚠ NOT NEWEST_SET, and that was a silent bug: NEWEST_SET is the newest set
   // WITH PRICES, which is right for the movers banners (a set with no prices
   // has no movers) and exactly wrong here. A set in reveal season has no
@@ -52341,7 +52345,9 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
   const newsCount = useMemo(() => {
     if(!newsSet) return 0;
     const ids = new Set();
-    for(const r of raw){ if(r.Set === newsSet && r.card_id) ids.add(r.card_id); }
+    for(const r of raw){
+      if(r.Set === newsSet && r.card_id) ids.add(cardFamilyKey(r["Product Name"]) || r.card_id);
+    }
     return ids.size;
   }, [raw, newsSet]);
   // PRERELEASE_SETS is date-gated, so newsSet is null once the set ships and
