@@ -5,11 +5,14 @@ or locally. Steps:
   2. Re-ingest every event in `scripts/elo/season_files/wilds_unknown.xlsx`
      (the smart skip in event_already_ingested() only re-pulls non-finished
      events, so this is cheap on subsequent runs)
+  2a. Store-driven SC discovery, and a re-pull of every unfinished event we hold
   2b. Ingest any --ids one-offs (hand-added events; see one_off_season below)
   3. Detect + auto-apply high-confidence RPH account renames
   4. Run alias auto-merge for any new player handles
   5. Apply any approved aliases (manual review CSV could be committed)
+  5b. Verify the last 30 days of results against RPH and take RPH's where ours differ
   6. Recompute ELO from scratch
+  6b. Backfill official standings for newly finished events
   7. Push to Supabase + clean up orphans
   8. Upload the updated SQLite DB back to Supabase Storage
 
@@ -104,7 +107,10 @@ def main() -> None:
     # sheet missed, for the current set, and ingests them — so a store with a
     # track record can't fall off the board. Best-effort (soft): hitting the
     # live RPH API must never block the weekly recompute; it's idempotent and
-    # also re-queues not-yet-played SCs so they fill in once results post.
+    # also re-queues not-yet-played SCs so they fill in once results post — and
+    # re-pulls, by id, every unfinished event it already holds, so one whose TO
+    # never closes it (RPH's "inProgress", invisible to a past/upcoming search)
+    # can't sit at whatever state it was first seen in.
     run_soft([sys.executable, "discover_store_scs.py", "--ingest"], cwd=ELO_DIR)
 
     # Hand-added one-offs. This HAS to happen inside this run: the canonical
@@ -150,6 +156,17 @@ def main() -> None:
     # other reason (did-not-run, duplicate) is never quietly un-ignored here.
     run([sys.executable, "apply_excluded_stores.py", "--apply"], cwd=ELO_DIR)
 
+    # Results we hold vs RPH's, for the last 30 days. A green refresh has held
+    # wrong results with nothing to say so: two HoneyBee semifinals captured
+    # mid-round sat as 0-0 draws, and a final the TO re-scored after we pulled it
+    # kept its old winner. Repair moves only a result, only on an unedited
+    # source='api' row whose players still match, and never on an event a person
+    # has corrected (notes / locked standings / hand-entered rows). Runs after the
+    # rename + alias passes so RPH's current names resolve, and before the draw
+    # flags and elo.py so what it fixes is classified and rated this run. Soft:
+    # it reads the live API, which must never block the recompute.
+    run_soft([sys.executable, "verify_results.py", "--days", "30", "--repair"], cwd=ELO_DIR)
+
     # MUST run before elo.py, every time — not once by hand. The flags live in
     # the DB and survive the round trip through storage, but a match ingested
     # this week has never been classified, so without this step every new
@@ -160,6 +177,13 @@ def main() -> None:
          "--rule", args.draw_rule], cwd=ELO_DIR)
 
     run([sys.executable, "elo.py"], cwd=ELO_DIR)
+
+    # Official placements (byes counted, OMW% tiebreaks, the bracket winner at #1)
+    # for every newly FINISHED event. It was manual-only until 2026-09-28 and last
+    # run in July, so every Attack of the Vine! SC went up ranked by raw points.
+    # Soft for the same reason as the verify step; the export below carries
+    # whatever it wrote.
+    run_soft([sys.executable, "backfill_official_standings.py"], cwd=ELO_DIR)
 
     run([sys.executable, "scripts/export_elo_to_supabase.py"], cwd=HERE.parent)
 
