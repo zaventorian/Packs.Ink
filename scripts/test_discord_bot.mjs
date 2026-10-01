@@ -1109,6 +1109,37 @@ const D = await mod("discord/src/data.js");
     const last = sent[sent.length - 1];
     ok(sent.length === 3 && last.content && !last.embeds.length && /Mowgli/.test(last.content), "a reply Discord refuses is re-sent as plain text");
   }
+  // A rate limit, an outage or a dropped connection gets ONE more try; without
+  // it the asker is left on "thinking…". Discord's own verdicts are not retried.
+  {
+    const runWith = async (token, fetchImpl) => {
+      const waits = [];
+      const d = { ...deps, fetch: fetchImpl, sleep: async (ms) => { waits.push(ms); } };
+      await handleInteraction({ type: 2, token, application_id: "123", data: { type: 1, name: "set", options: [] } }, d);
+      await handleInteraction({ type: 2, token, application_id: "123", data: { type: 1, name: "meta", options: [] } }, d);
+      await Promise.all(pending.splice(0));
+      return waits;
+    };
+    let n = 0;
+    let waits = await runWith("t30", async () => (++n === 1
+      ? new Response(JSON.stringify({ retry_after: 0.4 }), { status: 429 })
+      : new Response("{}", { status: 200 })));
+    ok(n === 2 && waits.length === 1 && waits[0] === 400, `a 429 is retried once, after Discord's retry_after (${n} sends, waited ${waits})`);
+    n = 0;
+    waits = await runWith("t31", async () => (++n === 1
+      ? new Response(JSON.stringify({ retry_after: 600 }), { status: 429 })
+      : new Response("{}", { status: 200 })));
+    ok(waits[0] <= 2500, `a long retry_after is capped so the Worker is not held open (${waits[0]})`);
+    n = 0;
+    await runWith("t32", async () => { if (++n === 1) throw new Error("socket closed"); return new Response("{}", { status: 200 }); });
+    ok(n === 2, `a thrown fetch is caught and retried, not left unhandled (${n})`);
+    n = 0;
+    waits = await runWith("t33", async () => { n++; return new Response("{}", { status: 403 }); });
+    ok(waits.length === 0, "a 403 is Discord's answer and is not retried");
+    n = 0;
+    await runWith("t34", async () => { n++; return new Response("{}", { status: 503 }); });
+    ok(n <= 4, `an outage that outlasts the retry stops instead of looping (${n} sends)`);
+  }
 
   // /meta reads the top cuts once and leads with the ink pairs
   patches.length = 0;

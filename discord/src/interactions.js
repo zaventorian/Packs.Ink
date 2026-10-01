@@ -103,14 +103,39 @@ function deferredUpdate(it, deps, build) {
 
 const webhookUrl = (it, deps) => `${deps.discordApi || DISCORD_API}/webhooks/${deps.appId || it.application_id}/${it.token}`;
 
+// A rate limit (429), a Discord outage (5xx) or a dropped connection is worth
+// one more try: without it the person who asked is left on "thinking…" for
+// good. Anything else is Discord's verdict on the request and is not retried.
+const RETRY_MAX_WAIT_MS = 2500;
+const retryable = (status) => status === 0 || status === 429 || status >= 500;
+
 async function patchOriginal(it, deps, payload, { update = false } = {}) {
-  const send = (method, url, body, files) => {
-    const json = JSON.stringify({ allowed_mentions: QUIET, ...body });
-    if (!files || !files.length) return deps.fetch(url, { method, headers: { "Content-Type": "application/json" }, body: json });
-    const form = new FormData();
-    form.append("payload_json", json);
-    files.forEach((f, i) => form.append(`files[${i}]`, new Blob([f.data], { type: f.type }), f.name));
-    return deps.fetch(url, { method, body: form });
+  const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
+  const once = async (method, url, body, files) => {
+    try {
+      const json = JSON.stringify({ allowed_mentions: QUIET, ...body });
+      if (!files || !files.length) return await deps.fetch(url, { method, headers: { "Content-Type": "application/json" }, body: json });
+      const form = new FormData();
+      form.append("payload_json", json);
+      files.forEach((f, i) => form.append(`files[${i}]`, new Blob([f.data], { type: f.type }), f.name));
+      return await deps.fetch(url, { method, body: form });
+    } catch (e) {
+      // A thrown fetch used to escape waitUntil unhandled, with nothing sent.
+      deps.log && deps.log("send threw", e && e.message);
+      return { ok: false, status: 0, text: async () => "", json: async () => ({}) };
+    }
+  };
+  const send = async (method, url, body, files) => {
+    const r = await once(method, url, body, files);
+    if (r.ok || !retryable(r.status)) return r;
+    let wait = 600;
+    if (r.status === 429) {
+      const j = await r.clone().json().catch(() => ({}));
+      wait = Math.min(RETRY_MAX_WAIT_MS, Math.max(200, Math.ceil((Number(j && j.retry_after) || 1) * 1000)));
+    }
+    deps.log && deps.log("retrying after", r.status, wait);
+    await sleep(wait);
+    return once(method, url, body, files);
   };
   const orig = webhookUrl(it, deps) + "/messages/@original";
   // `attachments: []` on every plain edit: a card reply that switches from
