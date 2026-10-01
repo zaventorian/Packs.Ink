@@ -29,6 +29,10 @@ Four cards joined the list at Zaven's call ("high value singles, we'd use ebay a
 
 - **`TWIN_REQUIRE` carries them**: a sale counts only when its title has the foil's own printed number (`11/C2`, `13/C3`) or the word foil with no "non" in front of it. "CCQ Promo" with neither is dropped as `twin`: the cheap side of the trade.
 - **`set_hint` reads `C3` and `CCQ` as the C3 set.** Sellers write "CCQ Promo" far more often than "C3". When a C4 season exists, `ccq` alone stops being decisive and has to go.
+- **"Non-foil" in the title is a veto, even beside the foil's own number.** A real listing read "13/C3 NON-Foil" at $99.99 against a $600 median.
+- **`same_set_twin`**: a title with no collector number that says foil ("Mother Knows Best Foil Top 32 CCQ Promo") ties the matcher between the two twins. When it lands on the non-foil and the title passes the foil's proof, it is the foil. Same set only, so a Fabled "Stand Out Foil" is never promoted to the Challenge prize.
+- First pull, 2026-09-30: Mother Knows Best 13/C3 has **19 raw sales, $400 to $1,050, last $478.86, average of the last five $540.77**. Stand Out, Down in New Orleans and Tinker Bell were not pulled: eBay showed a captcha and the run stopped, as it must.
+- `terapeak_topup.py` used to put a FIXED checkout path first on `sys.path`, so a worktree ran the main checkout's watchlist and never asked a search added on a branch. It uses its own folder now.
 - `SET_NETS` gained `"C3"`. The first pull for a new search is deep on its own, because it has no file yet.
 - The one slab sale we already held (PSA 10, $2,225, excluded as `cn-conflict` before the card existed) was attributed by hand the same day.
 

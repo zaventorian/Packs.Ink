@@ -120,6 +120,12 @@ CASES = [
      None, "13/C3 is the foil even when the title never says foil"),
     ("Disney Lorcana Mother Knows Best 1/C3 CCQ Promo Card (Non-foil)",
      "off-watchlist", "1/C3 is the non-foil"),
+    ("Disney Lorcana Mother Knows Best Foil Top 32 CCQ Season 3 Exclusive Promo",
+     None, "no number, says foil: the same-set twin rule makes it the foil"),
+    ("Mother Knows Best - Disney Lorcana CCQ Promo Card (Non-foil)",
+     "twin", "no number, says non-foil: never counted as the foil, whichever twin the tie lands on"),
+    ("Lorcana St. Augustine 2026 CCQ - Mother Knows Best 13/C3 NON-Foil Promo Card",
+     "twin", "a real listing: the foil's number on the $100 non-foil. 'Non-foil' is a veto"),
 
     # ---- pins and merch wear the card's name ----
     ("Disney D23 Expo 2022 Lorcana Mickey Mouse Brave Little Tailor 1/P1 Promo Pin",

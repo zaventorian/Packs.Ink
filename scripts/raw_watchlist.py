@@ -195,7 +195,9 @@ SET_NETS = [
 #   #5 -> Promo Set 3 #5 ($49.40)     : Promo Set 3 is Disney Cruise Line, so the
 #         token "D23" IS decisive here, as is the year.
 def _foil_or(number_re):
-    return number_re + r"|(?<!non-)(?<!non )(?<!non)\bfoil\b"
+    # "Non-foil" anywhere in the title is a veto, even beside the foil's own
+    # number: a seller listed the $100 non-foil as "13/C3 NON-Foil" (2026-09-30).
+    return r"^(?!.*\bnon[\s-]?foil\b).*(?:" + number_re + r"|\bfoil\b)"
 
 
 TWIN_REQUIRE = {

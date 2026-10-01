@@ -294,6 +294,31 @@ def title_reason(title: str):
     return None
 
 
+def same_set_twin(card, title, by_cn, wl_idx):
+    """A watchlist foil whose non-foil twin has the SAME name in the SAME set
+    ties the matcher on a title with no collector number ("Mother Knows Best
+    Foil Top 32 CCQ Promo"), and the tie can land on the non-foil. When the
+    title carries no number at all and satisfies the foil's own proof (its
+    TWIN_REQUIRE), it is the foil. Returns (card, entry) or None.
+
+    Same set only: "Stand Out Foil" with a Fabled hint is the $1 booster foil,
+    and must never be promoted to the Challenge prize."""
+    if tm.strong_collectors(title):
+        return None
+    hits = []
+    for (st, cn), entry in wl_idx.items():
+        if st != card["_set"] or entry["require"] is None:
+            continue
+        if entry["name"] != card.get("name") or (entry["version"] or None) != (card.get("version") or None):
+            continue
+        if not entry["require"].search(title):
+            continue
+        for c in by_cn.get(cn, []):
+            if c["_set"] == st:
+                hits.append((c, entry))
+    return hits[0] if len(hits) == 1 else None
+
+
 def raw_verdict(title, by_cn, inv, wl_idx, *, skip_title_reasons=False):
     """Resolve one raw listing.
 
@@ -332,7 +357,10 @@ def raw_verdict(title, by_cn, inv, wl_idx, *, skip_title_reasons=False):
     # Gate 3 -- TCGplayer is the authority for any card it actually prices.
     entry = wl_idx.get((card["_set"], card["_cn"]))
     if entry is None:
-        return card, conf, cn_conflict, "off-watchlist"
+        twin = same_set_twin(card, t, by_cn, wl_idx)
+        if twin is None:
+            return card, conf, cn_conflict, "off-watchlist"
+        card, entry = twin
 
     # Gate 4 -- a twinned card must prove its era. See TWIN_REQUIRE in
     # raw_watchlist.py for the $202.95-vs-$1,900 measurement behind this.
