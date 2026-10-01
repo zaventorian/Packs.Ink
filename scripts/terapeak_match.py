@@ -147,9 +147,29 @@ def fetch_catalog():
 
 def fetch_sets():
     r = requests.get(f"{SB_URL}/rest/v1/sets", headers=HEAD, timeout=30,
-                     params={"select": "id,name"})
+                     params={"select": "id,name,released_at"})
     r.raise_for_status()
     return {s["id"]: s["name"] for s in r.json()}
+
+
+def fetch_set_release():
+    """set_id -> released_at ('YYYY-MM-DD' or None). Separate from fetch_sets so every
+    caller that only wants names keeps its return shape."""
+    r = requests.get(f"{SB_URL}/rest/v1/sets", headers=HEAD, timeout=30,
+                     params={"select": "id,released_at"})
+    r.raise_for_status()
+    return {s["id"]: s.get("released_at") for s in r.json()}
+
+
+def _d23_is_2024(t):
+    """True when a lowercase D23 title is the 2024 D23 Collection. PSA's own label
+    style names no year ("EN D23-D23 EXPO PROMO", "#04D23", "D23 Promos"); the 2022
+    set is the Collector's Set / 1st Edition."""
+    if "collection" in t or re.search(r"\b202[45]\b", t):
+        return True
+    if re.search(r"collector|1st\s*ed|\b2022\b|\b2023\b", t):
+        return False
+    return bool(re.search(r"d23[-\s]+d23|d23 promos?\b|\b\d{1,2}\s*d23\b", t))
 
 
 def set_hint(title: str):
@@ -161,7 +181,7 @@ def set_hint(title: str):
         return {"1": "Promo Set 1", "2": "Promo Set 2", "3": "Promo Set 3"}[m.group(1)]
     # 2024 D23 Collection vs 2022 D23 Expo (= Promo Set 1, confirmed from catalog)
     if re.search(r"\bd23\b", t):
-        if "collection" in t or re.search(r"\b202[45]\b", t):
+        if _d23_is_2024(t):
             return "D23 Collection"
         return "Promo Set 1"
     if re.search(r"\bp1\b|p1[-\s]promo|gencon|gamescom|disney\s?100|\bd100\b|tokyo\s*toy\s*show", t):
@@ -250,6 +270,7 @@ def build_index():
     Returns (by_cn, inv, n_cards, n_sets)."""
     cat = fetch_catalog()
     sets = fetch_sets()
+    rel = fetch_set_release()
     by_cn = collections.defaultdict(list)
     inv = collections.defaultdict(list)       # name/version token -> [card]
     for c in cat:
@@ -257,6 +278,7 @@ def build_index():
         c["_set"] = sets.get(c.get("set_id"), "")
         c["_cn"] = norm_cn(c.get("collector_number"))
         c["_rarity"] = c.get("rarity") or ""
+        c["_released"] = rel.get(c.get("set_id")) or ""
         by_cn[c["_cn"]].append(c)
         for tk in c["_tok"]:
             inv[tk].append(c)
@@ -286,14 +308,30 @@ def title_rarity(title: str):
     return None
 
 
-def best_match(title, by_cn, inv):
+# A sale cannot predate the set it is from. The cushion covers a prerelease weekend
+# (cards play a week before retail) and a slab graded off a pre-release pull.
+RELEASE_GRACE_DAYS = 14
+
+
+def _not_yet_released(c, sold_date):
+    rel = c.get("_released") or ""
+    if not (rel and sold_date):
+        return False
+    from datetime import date, timedelta
+    try:
+        y, m, d = (int(x) for x in str(rel)[:10].split("-"))
+        return str(sold_date)[:10] < (date(y, m, d) - timedelta(days=RELEASE_GRACE_DAYS)).isoformat()
+    except ValueError:
+        return False
+
+
+def best_match(title, by_cn, inv, sold_date=None):
     ttok = toks(title)
     hint = set_hint(title)
     cns = collectors(title)
     xcns = suffixed_collectors(title)
     tl = title.lower()
-    d23_2022 = bool(re.search(r"\bd23\b", tl)) and not (
-        "collection" in tl or re.search(r"\b202[45]\b", tl))
+    d23_2022 = bool(re.search(r"\bd23\b", tl)) and not _d23_is_2024(tl)
     trar = title_rarity(title)
     cand = {}
     for cn in cns:
@@ -302,6 +340,12 @@ def best_match(title, by_cn, inv):
     for tk in ttok:
         for c in inv.get(tk, []):
             cand[id(c)] = c
+    # Impossible by date: a reprint set that had not come out when this sold cannot be the
+    # card. Only ever NARROWS -- if it would empty the field the dates are not trusted.
+    if sold_date:
+        possible = {k: c for k, c in cand.items() if not _not_yet_released(c, sold_date)}
+        if possible:
+            cand = possible
     # Does any candidate actually OWN the suffixed number the title wrote? If
     # none does, the suffix is noise (a seller's "#10A" for a card catalogued
     # as plain 10) and must not perturb the ordinary match.
@@ -333,6 +377,13 @@ def best_match(title, by_cn, inv):
     scored = []
     for c in cand.values():
         if not c["_tok"]:
+            continue
+        # A card named for its set ("Sail the Azurite Sea" in Azurite Sea) shares words with
+        # EVERY title from that set. When the only words the title shares with it are the
+        # set's own, it is not named at all -- and it won ~15 unrelated sales (Minnie, Wasabi,
+        # Aladdin, Tiana, Simba, Hades...) on the strength of the set hint it was handed.
+        if (_set_toks and not _is_set_name_card(c) and (c["_tok"] - _set_toks)
+                and not ((ttok & c["_tok"]) - _set_toks)):
             continue
         nmatch = len(ttok & c["_tok"])
         ov = nmatch / len(c["_tok"])          # how much of the card's name the title covers
@@ -404,21 +455,35 @@ def best_match(title, by_cn, inv):
         strong = [s for s in strong
                   if _owns_scn(s[0]) or not _is_set_name_card(s[0])]
     if strong:
-        c, ov, cn_hit, set_hit = max(strong, key=lambda s: (s[8], s[7], s[6], s[2], s[3], s[1]))[:4]
+        # Last key: the EARLIER printing. A reprint (Let It Go in Winterspell, #163 in both) ties
+        # the original on every other signal, and the original is the one that actually sells.
+        c, ov, cn_hit, set_hit = max(strong, key=lambda s: (
+            s[8], s[7], s[6], s[2], s[3], s[1], _earlier_first(s[0])))[:4]
         sc = next(s[4] for s in strong if s[0] is c)
     else:
-        c, ov, cn_hit, set_hit, sc = max(scored, key=lambda s: s[4])[:5]
+        c, ov, cn_hit, set_hit, sc = max(scored, key=lambda s: (s[4], _earlier_first(s[0])))[:5]
     return c, sc, ov, cn_hit, set_hit
 
 
-def match_one(title, by_cn, inv):
+def _earlier_first(c):
+    """Sorts an earlier release HIGHER (a max() key). Unknown dates sort last."""
+    rel = str(c.get("_released") or "")[:10]
+    if c.get("rarity") == "Promo":
+        return 0  # a promo's set date says nothing about which printing a title means
+    if not rel:
+        return -1e9
+    y, m, d = (int(x) for x in rel.split("-"))
+    return -(y * 372 + m * 31 + d)
+
+
+def match_one(title, by_cn, inv, sold_date=None):
     """Resolve one title -> (card_or_None, confidence, cn_conflict). Returns no
     match for lots/sets/packs/demos, and for strong collector#-conflicts (a title
     whose explicit #NNN disagrees with the matched card's catalog number — e.g.
     "Top Prize 4/C1" scoring onto mainline #18)."""
     if is_nonsingle(title):
         return None, 0.0, False
-    best, sc, ov, cn_hit, set_hit = best_match(title, by_cn, inv)
+    best, sc, ov, cn_hit, set_hit = best_match(title, by_cn, inv, sold_date)
     matched = best is not None and (
         (cn_hit and set_hit)
         or (ov >= 0.5 and (cn_hit or set_hit))
