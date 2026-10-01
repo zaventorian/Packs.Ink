@@ -54,7 +54,9 @@ STARTER_TAG = "packs-ink-starter"
 NS = uuid.uuid5(uuid.NAMESPACE_URL, "https://packs.ink/coconut-starter")
 
 # Mirrors COCONUT_CARDS (Index.html): slug -> (ink, associated Product Name,
-# extra per-name copy allowances granted by the leader's own text).
+# extra per-name copy allowances granted by the leader's own text). A dual-ink
+# leader carries BOTH inks as a tuple, in print order like its `inks` there,
+# and a deck matches it with EITHER one, the rule checkDeckLegality applies.
 LEADERS = {
     "ariel-spectacular-singer":          ("Amber",    "Ariel - Spectacular Singer", {}),
     "pocahontas-peacekeeper":            ("Amber",    "Pocahontas - Peacekeeper", {}),
@@ -76,6 +78,12 @@ LEADERS = {
     "scar-finally-king":                 ("Steel",    "Scar - Finally King", {}),
     "the-vine-towering-stalk":           ("Steel",    "The Vine - Towering Stalk", {}),
     "tinker-bell-giant-fairy":           ("Steel",    "Tinker Bell - Giant Fairy", {}),
+    "woody-buzz-lightyear-best-buddies": (("Amber", "Emerald"),   "Woody & Buzz Lightyear - Best Buddies", {}),
+    "the-madrigal-family-every-generation": (("Amber", "Sapphire"), "The Madrigal Family - Every Generation", {}),
+    "peter-pan-tinker-bell-fast-friends": (("Amethyst", "Ruby"),  "Peter Pan & Tinker Bell - Fast Friends", {}),
+    "aladdin-genie-mischievous-pals":    (("Amethyst", "Emerald"), "Aladdin & Genie - Mischievous Pals", {}),
+    "belle-beast-certain-as-the-sun":    (("Ruby", "Sapphire"),   "Belle & Beast - Certain as the Sun", {}),
+    "darkwing-duck-launchpad-st-canards-finest": (("Sapphire", "Steel"), "Darkwing Duck & Launchpad - St. Canard's Finest", {}),
 }
 # NOTE: a new Beta wave adds leaders here before anyone has written their list.
 # Nothing breaks; this dict is only consulted for slugs a deck file names, and
@@ -172,6 +180,7 @@ def validate(path, meta, cards, catalog):
     if slug not in LEADERS:
         return [f"unknown leader slug {slug!r}"]
     leader_ink, assoc, extra = LEADERS[slug]
+    leader_inks = leader_ink if isinstance(leader_ink, tuple) else (leader_ink,)
     errs, inks, counts = [], set(), {}
     for qty, name in cards:
         counts[norm_name(name)] = counts.get(norm_name(name), 0) + qty
@@ -189,8 +198,8 @@ def validate(path, meta, cards, catalog):
         errs.append(f"{total} cards (need {MIN_CARDS})")
     if len(inks) > INK_LIMIT:
         errs.append(f"{len(inks)} inks: {sorted(inks)}")
-    if leader_ink not in inks:
-        errs.append(f"no {leader_ink} cards — one ink must match the leader")
+    if not inks & set(leader_inks):
+        errs.append(f"no {'/'.join(leader_inks)} cards — one ink must match the leader")
     declared = {i.strip() for i in meta["INKS"].split(",") if i.strip()}
     if declared != inks:
         errs.append(f"INKS: says {sorted(declared)}, cards say {sorted(inks)}")
@@ -212,8 +221,10 @@ def deck_id(slug):
 def publish(sb, slug, meta, cards, catalog):
     did = deck_id(slug)
     ink_list = [i.strip() for i in meta["INKS"].split(",") if i.strip()]
-    headers = {"apikey": sb.key, "Authorization": f"Bearer {sb.key}",
-               "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"}
+    # auth_headers(), not the raw key: in a cloud session the key is the proxy's
+    # placeholder and the client knows which headers to send for that.
+    headers = {**sb.auth_headers(), "Content-Type": "application/json",
+               "Prefer": "resolution=merge-duplicates"}
     body = {
         "id": did, "user_id": None, "name": meta["NAME"], "description": meta["DESC"],
         "inks": ink_list, "tags": [STARTER_TAG, f"coconut:{slug}"],
