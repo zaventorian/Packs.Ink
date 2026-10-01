@@ -100,6 +100,12 @@ def main() -> None:
     sql = args.command if args.command else Path(path).read_text(encoding="utf8")
     rows = args.rows or (not args.exec_ and bool(args.command) and looks_like_query(sql))
 
+    # A Windows console is cp1252; a title with an emoji in it would crash the print.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     load_env()
     out = run(sql, rows)
     if rows:

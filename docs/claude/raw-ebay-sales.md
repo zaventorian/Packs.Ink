@@ -23,6 +23,15 @@ population, so its market is structurally somewhere other than TCGplayer. Every
 Enchanted and Iconic is **out** — TCGplayer is right about those, and a second
 source could only disagree with a correct number.
 
+### The Challenge foils with a same-set twin (2026-09-30)
+
+Four cards joined the list at Zaven's call ("high value singles, we'd use ebay as the source of truth"): Challenge Year 3 **#11 Stand Out, #12 Down in New Orleans, #14 Tinker Bell - Insistent Fairy**, and C3 **#13 Mother Knows Best**. Each is the FOIL of a non-foil with the same name in the same set (#15 / #16 / #18, and 1/C3) that TCGplayer prices at $70 to $120, against asks of $775 to $6,500 for the foil.
+
+- **`TWIN_REQUIRE` carries them**: a sale counts only when its title has the foil's own printed number (`11/C2`, `13/C3`) or the word foil with no "non" in front of it. "CCQ Promo" with neither is dropped as `twin`: the cheap side of the trade.
+- **`set_hint` reads `C3` and `CCQ` as the C3 set.** Sellers write "CCQ Promo" far more often than "C3". When a C4 season exists, `ccq` alone stops being decisive and has to go.
+- `SET_NETS` gained `"C3"`. The first pull for a new search is deep on its own, because it has no file yet.
+- The one slab sale we already held (PSA 10, $2,225, excluded as `cn-conflict` before the card existed) was attributed by hand the same day.
+
 ### The asymmetry that drives every rule
 
 Publishing a wrong number here is far worse than publishing nothing: these cards

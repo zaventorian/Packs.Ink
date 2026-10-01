@@ -28,7 +28,9 @@ begin
     raise exception 'admin_exec_sql is service-role only' using errcode = '42501';
   end if;
   if p_rows then
-    execute 'select coalesce(jsonb_agg(t), ''[]''::jsonb) from (' || p_sql || ') t' into r;
+    -- The alias is deliberately odd: a query column of the same name would be
+    -- aggregated INSTEAD of the row (a column called t did exactly that).
+    execute 'select coalesce(jsonb_agg(to_jsonb(_admin_exec_row)), ''[]''::jsonb) from (' || p_sql || ') _admin_exec_row' into r;
     return r;
   end if;
   execute p_sql;
