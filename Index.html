@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=508">
+<link rel="stylesheet" href="styles.css?v=510">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -673,7 +673,10 @@ const EMPTY_POP = {byCard: new Map(), setGem: new Map()};
 // ("TE KA" for Te Kā), punctuation ("Loud Mouthed" for Loud-Mouthed) and
 // stray double spaces ("Jafar  - Keeper of Secrets"). Folding all four takes
 // The First Chapter from 142/146 to 146/146, so nothing here is decorative.
-const popNameKey = (s) => searchNorm(String(s || "").toLowerCase())
+// ⚠ PSA doubles a name now and then ("Maleficent/Maleficent - Monstrous Dragon",
+// P3 #4), which is the same card, so a doubled lead is folded back to one.
+const popNameKey = (s) => searchNorm(String(s || "").toLowerCase()
+  .replace(/^([^/]+)\/\1(?= - )/, "$1"))
   .replace(/[^a-z0-9]+/g, " ").trim();
 
 // PSA names a set its own way: "Disney Lorcana EN 5-Shimmering Skies". The
@@ -719,8 +722,12 @@ const popSetName = (label) => {
 // and a collector number with the set they reprint — measured on the real data,
 // Fabled alone collides with Into the Inklands on 8 cards — so a key of
 // (name, number) alone silently attributes one set's pops to another.
+// ⚠ PSA zero-pads the D23 Expo numbers ("01".."07"); the catalog does not. Left as
+// text, all seven of the ~2,000-pop D23 cards (Mickey, Cinderella, Ursula, Bruno,
+// Vanellope, Oswald, Playful Sorcerer) joined nothing. "24A" and "0" are untouched.
+const popNumKey = (cn) => String(cn == null ? "" : cn).trim().replace(/^0+(?=\d)/, "");
 const popCardKey = (setName, productName, cn) =>
-  popNameKey(setName) + "|" + popNameKey(productName) + "|" + String(cn == null ? "" : cn).trim();
+  popNameKey(setName) + "|" + popNameKey(productName) + "|" + popNumKey(cn);
 
 async function fetchGradedPop(){
   if(_gradedPop) return _gradedPop;
@@ -763,11 +770,17 @@ async function fetchGradedPop(){
 // League Promo, Disney Cruise). Only the finish half maps onto our printings, so
 // only that half is mapped; everything else returns null and is shown under
 // PSA's own word rather than being forced into a bucket it does not belong in.
-const POP_FOIL_VARIETY = new Set(["foil", "foil-errata", "foil-oversized", "top prize"]);
-const POP_NONFOIL_VARIETY = new Set(["", "errata", "prize wall exclusive"]);
+// ⚠ The Challenge (C1) cards split into two markets and PSA names them by PRIZE:
+// Top Prize / Top N / Serialized Top Prize are the foil, Prize Wall Exclusive and
+// Side Event the non-foil (the same reading terapeak_load.printing_of makes of a
+// sale title). Without "side event" and "top N", Baymax - Armored Companion's
+// 539 non-foil copies read as no population at all. "World Championship" is left
+// unmapped on purpose: the graded notes find it on the cheap side AND mislabelled.
+const POP_FOIL_VARIETY = new Set(["foil", "foil-errata", "foil-oversized", "top prize", "serialized top prize"]);
+const POP_NONFOIL_VARIETY = new Set(["", "errata", "prize wall exclusive", "side event", "infinity weekend"]);
 const gradedPopBucket = (variety) => {
   const v = String(variety || "").toLowerCase().trim();
-  if(POP_FOIL_VARIETY.has(v)) return "Foil";
+  if(POP_FOIL_VARIETY.has(v) || /^top \d+$/.test(v)) return "Foil";
   if(POP_NONFOIL_VARIETY.has(v)) return "Non-Foil";
   return null;
 };
@@ -1797,6 +1810,7 @@ const SET_ORDER = [
   // set (like a grading sub), not a set of its own.
   "Curator's Collection: Heroines", // 2026-07-17 — premium 6-card promo set (CC1)
   "Promo Set 4",                    // 2026-07-17 — P4, Lorcast-indexed
+  "Ravensburger Play Hub Promos",   // 2026-09-30: RPH, Play Hub / buy-a-box promos (4/RPH Minnie, 6-7 Honey Lemon)
   "PD1",                            // 2026-07-28 — Lorcast's rolling product-promo set (5/PD1, 16/PD1 …)
   "Curator's Collection: Beauty and the Beast", // 2026-10-01 — premium 6-card promo set (CC2)
   ...MAINLINE_SETS,
@@ -2121,6 +2135,7 @@ const UNIFIED_TILE_SETS = new Set([
   "Curator's Collection: Heroines",
   "Curator's Collection: Beauty and the Beast",
   "PD1",
+  "Ravensburger Play Hub Promos",
 ]);
 
 // Sets where every card is a promo regardless of what Lorcast labels its
@@ -2139,6 +2154,7 @@ const PROMO_RARITY_SETS = new Set([
   "Curator's Collection: Beauty and the Beast",
   "Promo Set 4",
   "PD1",
+  "Ravensburger Play Hub Promos",
 ]);
 
 // Lorcana Challenge Promo (C2) publishes foil and non-foil at DIFFERENT collector
@@ -2510,7 +2526,7 @@ const collapsePromoPrintings = (rows) => {
 };
 // Promo sets that print one card per number — no Normal + Cold Foil placeholder
 // pair for an unpriced card, and row-flow layout in the Collection set detail.
-const NUMBERED_PROMO_SETS = new Set(["Promo Set 1", "Promo Set 2", "Promo Set 3", "Promo Set 4", "PD1"]);
+const NUMBERED_PROMO_SETS = new Set(["Promo Set 1", "Promo Set 2", "Promo Set 3", "Promo Set 4", "PD1", "Ravensburger Play Hub Promos"]);
 const LOCALIZED_TCG_LINK = {
   "Snow White - Unexpected Houseguest|41": 626546, // JP-exclusive (Promo Set 1)
 };
@@ -25646,7 +25662,7 @@ function buildImportNameIndex(raw){
 const DREAMBORN_CN_SUFFIX_SETS = {
   p1: "Promo Set 1", p2: "Promo Set 2", p3: "Promo Set 3", p4: "Promo Set 4",
   c1: "Lorcana Challenge Promo (C1)", c2: "Lorcana Challenge Promo (C2)",
-  pd1: "PD1", d23: "D23 Collection",
+  pd1: "PD1", d23: "D23 Collection", rph: "Ravensburger Play Hub Promos",
 };
 
 // Parse a Dreamborn-style CSV and resolve each row to (card_id, printing,
@@ -26030,6 +26046,443 @@ const CostDateInputs = ({currentPaid, currentDate, onCommit}) => {
   </div>`;
 };
 
+// Where a sealed product was sold, and what was in it (2026-09-30, Zaven: "some
+// were costco exclusive, some sams club, some target only at black friday ...").
+// Keyed by TCGplayer product id. Every entry was read off a source that is named
+// in `src` — official announcements, retailer listings, press — never from
+// memory, and a field nobody could verify is simply absent, so the panel says
+// less rather than something wrong. It renders as "About this product" in the
+// detail modal and as a retailer tag on the tile of an exclusive.
+//   ex      "exclusive" (one channel) | "limited" (a few channels, or a window) | "wide"
+//   retail  where it was sold          note   one plain sentence on the channel
+//   date    street date (YYYY-MM-DD or YYYY-MM)      msrp / msrpNote   launch price, USD
+//   box     what is inside             more   anything else a collector wants
+//   src     URLs the facts came from
+const SEALED_PRODUCT_INFO = {
+  // D23 Expo Promo Set - 2022
+  454414: {
+    ex: "exclusive",
+    retail: ["D23 Expo 2022 (Anaheim)"],
+    note: "Sold only at the D23 Expo 2022 Lorcana booth, with limited quantity per day.",
+    date: "2022-09-09",
+    msrp: 49.99,
+    box: "Six foil cards with the 1st-edition stamp: Stitch - Rock Star, Elsa - Snow Queen, Cruella De Vil - Miserable as Usual, Maleficent - Monstrous Dragon, Robin Hood - Unrivaled Archer, Captain Hook - Forceful Duelist.",
+    src: ["https://lorcanaplayer.com/set/d23-expo/", "https://wdwnt.com/2022/09/first-disney-lorcana-trading-cards-will-be-available-at-d23-expo-2022/"],
+  },
+  // Disney Lorcana: The First Chapter Gift Set
+  482407: {
+    ex: "wide",
+    retail: ["Game stores", "Mass retail"],
+    date: "2023-08-18",
+    msrp: 29.99,
+    box: "2 oversized foil cards and 2 playable foil cards (Mulan - Imperial Soldier, Hades - King of Olympus), 34 game tokens, and 4 booster packs.",
+    more: "Game stores first, major retailers about two weeks later.",
+    src: ["https://lorcanaplayer.com/product/the-first-chapter-gift-set/", "https://facetofacegames.com/en-us/products/disney-lorcana-the-first-chapter-gift-set"],
+  },
+  // Disney Lorcana: The First Chapter Illumineer's Trove
+  482411: {
+    date: "2023-08-18",
+    msrp: 49.99,
+    box: "Full-art storage box, two deck boxes, eight booster packs, 15 game tokens and a player's guide.",
+    src: ["https://lorcanaplayer.com/product/the-first-chapter-illumineers-trove/"],
+  },
+  // Disney Lorcana: Rise of the Floodborn Illumineer's Trove
+  516277: {
+    date: "2023-11-17",
+    msrp: 49.99,
+    box: "Full-art storage box, two deck boxes, eight booster packs, 15 game tokens and a player's guide.",
+    src: ["https://lorcanaplayer.com/product/rise-of-the-floodborn-illumineers-trove/"],
+  },
+  // Disney Lorcana: Disney100 Collector's Edition
+  516281: {
+    ex: "wide",
+    retail: ["Game stores", "Mass retail", "Ravensburger online store", "Disney Store"],
+    date: "2023-12-01",
+    msrp: 49.99,
+    box: "Four Rise of the Floodborn booster packs plus six alternate-art foil cards (Disney100 frame, satin holo foil, animator signature) drawn by Walt Disney Animation Studios artists: Mickey Mouse, Elsa, Genie, Experiment 626, Maleficent, Maui.",
+    more: "Launched alongside Rise of the Floodborn's wide release.",
+    src: ["https://comicbook.com/gaming/news/disney-lorcana-disney100-gift-set-where-to-buy/", "https://bleedingcool.com/collectibles/disney-lorcana-gets-special-disney100-collection-set-for-december/", "https://gameslantern.com/article/disney-is-releasing-a-disney100-edition-collectors-edition"],
+  },
+  // Disney Lorcana: Into the Inklands Illumineer's Trove
+  531524: {
+    date: "2024-02-23",
+    msrp: 49.99,
+    box: "Full-art storage box, eight booster packs, six ink-themed card dividers, six damage-counter dice with gold-printed numbers and a spin-dial lore counter.",
+    src: ["https://lorcanaplayer.com/product/into-the-inklands-illumineers-trove/"],
+  },
+  // Disney Lorcana: Into the Inklands Gift Set
+  531528: {
+    ex: "wide",
+    retail: ["Game stores", "Disney Parks", "Mass retail"],
+    date: "2024-02-23",
+    msrp: 29.99,
+    box: "2 oversized foil cards and 2 playable foil cards (Stitch - Covert Agent, Tinker Bell - Very Clever Fairy), 4 Into the Inklands booster packs, damage counters and 2 lore tracker tokens.",
+    more: "Mass retail followed in March 2024.",
+    src: ["https://www.cbr.com/lorcana-inklands-gift-set-illumineers-trove-guide/", "https://lorcanaplayer.com/product/into-the-inklands-gift-set/", "https://lorcanacollectors.com/into-the-inklands-product-guide/"],
+  },
+  // Disney Lorcana: Ursula's Return Illumineer's Trove
+  543861: {
+    date: "2024-05-17",
+    msrp: 49.99,
+    box: "Full-art storage box, eight booster packs, six rarity-themed card dividers, six damage-counter dice and a spin-dial lore counter.",
+    src: ["https://lorcanaplayer.com/product/ursulas-return-illumineers-trove/"],
+  },
+  // Disney Lorcana: Illumineer's Quest: Deep Trouble
+  543862: {
+    ex: "wide",
+    retail: ["Game stores", "Disney Parks", "Mass retail"],
+    date: "2024-05-17",
+    msrp: 59.99,
+    msrpNote: "UK £54.99, Canada $74.99 CAD, EU €59.99",
+    box: "Oversized Ursula card plus 50-card Ursula scenario deck, two 60-card preconstructed player decks (Mulan and Yen Sid), two oversized double-sided battleground cards, playmat, tokens and damage counters, rules sheet.",
+    more: "The first co-op Illumineer's Quest. Mass retail followed on May 31, 2024.",
+    src: ["https://www.disneylorcana.com/en-US/product/deep-trouble", "https://lorcanaplayer.com/product/illumineers-quest-deep-trouble/"],
+  },
+  // Disney Lorcana: Gateway
+  555143: {
+    ex: "wide",
+    retail: ["Target", "Mass retail"],
+    note: "Target had it first (from July 22, 2024); everywhere else from Aug 9, 2024.",
+    date: "2024-07-22",
+    msrp: 24.99,
+    box: "A game board, two 30-card starter decks, four 18-card reward packs, 30 damage counters, two double-sided character movers with bases, a rulebook, a guidebook with QR codes and two deck-tips pamphlets.",
+    more: "Wide release Aug 9, 2024, alongside Shimmering Skies.",
+    src: ["https://icv2.com/articles/news/view/57410/disney-lorcana-gateway-hits-target", "https://bleedingcool.com/collectibles/more-details-revealed-for-ravensburgers-disney-lorcana-gateway-set/"],
+  },
+  // Disney Lorcana: Shimmering Skies Illumineer's Trove
+  555148: {
+    date: "2024-08-09",
+    msrp: 49.99,
+    box: "Full-art storage box, eight booster packs, six ink-themed card dividers, six damage-counter dice and a spin-dial lore counter.",
+    src: ["https://lorcanaplayer.com/product/shimmering-skies-illumineers-trove/"],
+  },
+  // Disney Lorcana: D23 Collection - 2024
+  559531: {
+    ex: "limited",
+    retail: ["D23 Expo 2024 and select Disney Parks and Stores"],
+    note: "Sold at the D23 Expo and select Disney locations, not online.",
+    date: "2024-08-09",
+    msrp: 99.99,
+    box: "Six foil cards with expanded artwork (Mickey Mouse, Cinderella, Ursula, Bruno Madrigal, Vanellope von Schweetz, plus an unreleased Oswald card).",
+    more: "Limit of 2 per customer at the show.",
+    src: ["https://mouseinfo.com/2024/08/d23-2024-disney-lorcana-exclusive-merch-promo-giveaways-and-more/", "https://resellcalendar.com/news/news/2024-d23-lorcana-promo-sets-reseller-price-detail-card-tcg/"],
+  },
+  // Disney Lorcana: Stitch Collector's Gift Set (Azurite Sea)
+  578122: {
+    ex: "wide",
+    retail: ["Game stores", "Disney Parks", "Mass retail"],
+    date: "2024-11-15",
+    msrp: 49.99,
+    msrpNote: "Disney Parks and game stores Nov 15; mass retail Nov 25",
+    box: "Stitch-themed card portfolio (holds 252 cards, every Stitch printed on it), 4 Azurite Sea booster packs, and 1 Stitch - Alien Buccaneer water-foil promo card.",
+    src: ["https://comicbook.com/gaming/news/disney-lorcana-reveals-big-hero-6-stitch-holiday-set-and-more-for-azurite-sea/", "https://screenrant.com/disney-lorcana-stitch-gift-set-release-cards-included/", "https://thetoyinsider.com/products/disney-lorcana-trading-card-game-by-ravensburger-stitch-collectors-gift-set-azurite-sea/"],
+  },
+  // Disney Lorcana: The First Chapter Starter Blister Bundle
+  599719: {
+    ex: "limited",
+    retail: ["Target"],
+    note: "Target exclusive, for a limited Black Friday 2024 window.",
+    date: "2024-11-24",
+    msrp: 57.99,
+    msrpNote: "$39.99 on sale Nov 24-30, 2024",
+    box: "1 The First Chapter Amber/Amethyst starter deck, 1 Sapphire/Steel starter deck (each with a booster), and 4 additional random The First Chapter booster packs.",
+    more: "Packs and decks came from the earlier First Chapter reprint, not a new print run.",
+    src: ["https://lorcanaplayer.com/product/the-first-chapter-starter-blister-bundle/"],
+  },
+  // Disney Lorcana: Archazia's Island Illumineer's Trove
+  607761: {
+    date: "2025-03-07",
+    msrp: 49.99,
+    box: "Storage box, eight booster packs, ink dividers, damage dice and a lore counter.",
+    src: ["https://lorcanaplayer.com/product/archazias-island-illumineers-trove/"],
+  },
+  // Disney Lorcana: Archazia's Island Gift Box
+  607765: {
+    ex: "wide",
+    retail: ["Game stores", "Mass retail"],
+    date: "2025-03-07",
+    msrp: 29.99,
+    box: "1 Lilo - Escape Artist alternate-art glimmer foil promo, a card storage box (holds ~250 sleeved cards), 3 card dividers, and 5 random booster packs from earlier sets (Rise of the Floodborn through Azurite Sea, not Archazia's Island).",
+    src: ["https://lorcana.gg/archazias-island-products/", "https://lorcanaplayer.com/product/gift-box/"],
+  },
+  // Disney Lorcana: Into the Inklands Bundle
+  614148: {
+    ex: "exclusive",
+    retail: ["Costco"],
+    note: "Costco exclusive.",
+    date: "2025-01-18",
+    msrp: 44.99,
+    box: "2 Into the Inklands starter decks (Ruby/Sapphire and Amber/Emerald, each with its own booster pack), 4 additional Into the Inklands booster packs, and 1 glimmer-foil Mickey Mouse - Pirate Captain Costco Bundle Promo (red border).",
+    more: "Released well after Into the Inklands itself; the Mickey promo has a red border.",
+    src: ["https://lorcanaplayer.com/product/into-the-inklands-bundle/", "https://lorcanaplayer.com/card/mickey-mouse-pirate-captain-costco-bundle-promo/", "https://diskingdom.com/2025/01/18/costco-launch-exclusive-new-lorcana-bundle-with-new-promo-card/"],
+  },
+  // Disney Lorcana: Reign of Jafar Illumineer's Trove
+  623061: {
+    date: "2025-05-30",
+    msrp: 49.99,
+    box: "One storage box, eight booster packs, eight ink-color dividers, six damage-counter dice and a lore counter.",
+    src: ["https://lorcanaplayer.com/product/reign-of-jafar-illumineers-trove/"],
+  },
+  // Disney Lorcana: Illumineer's Quest: Palace Heist
+  623065: {
+    ex: "wide",
+    retail: ["Game stores", "Mass retail"],
+    date: "2025-05-30",
+    msrp: 59.99,
+    box: "Two 60-card player decks (Amethyst/Sapphire and Amber/Steel), 50-card Jafar scenario deck, two double-sided battleground cards, playmat, damage counters, lore tokens and a Reforged Crown tile.",
+    more: "Game stores first (May 30, 2025), larger retailers a week later.",
+    src: ["https://lorcanaplayer.com/product/illumineers-quest-palace-heist/", "https://icv2.com/articles/reviews/view/59846/review-disney-lorcana-tcg-illumineers-quest-palace-heist-card-game-expansion", "https://www.bestbuy.com/site/disney-lorcana-reign-of-jafar-illumineers-quest-palace-heist/6626501.p"],
+  },
+  // Disney Lorcana: Fabled Illumineer's Trove
+  645299: {
+    ex: "wide",
+    retail: ["Target", "Walmart", "Best Buy", "Game stores"],
+    date: "2025-08-29",
+    msrp: 49.99,
+    box: "One storage box, eight booster packs, eight ink-color dividers, six damage-counter dice and a lore counter.",
+    src: ["https://lorcanaplayer.com/product/fabled-illumineers-trove/"],
+  },
+  // Disney Lorcana: Fabled Gift Set
+  645308: {
+    ex: "wide",
+    retail: ["Target", "Amazon", "Best Buy", "Game stores"],
+    date: "2025-10",
+    msrp: 29.99,
+    box: "1 Elsa - The Fifth Spirit glimmer foil promo, 5 random booster packs from earlier sets, an Elsa storage box, and 3 punch-out dividers.",
+    more: "The first Collection Starter Set; Fabled's gift set was replaced by this format.",
+    src: ["https://www.laughingplace.com/disney-merchandise/new-disney-lorcana-collection-gift-sets/", "https://screenrant.com/disney-lorcana-fabled-set-elsa-gift-box/", "https://lorcanacollectors.com/fabled-product-guide/"],
+  },
+  // Disney Lorcana: Fabled Collection Starter Set
+  646033: {
+    ex: "wide",
+    retail: ["Target", "Amazon", "Best Buy", "Ravensburger online store", "Game stores"],
+    date: "2025-10",
+    msrp: 29.99,
+    box: "4 Fabled booster packs, a Mickey Mouse - Brave Little Tailor card portfolio, 1 glimmer-foil Tinker Bell - Giant Fairy promo card, and a collector's guide.",
+    src: ["https://gamingtrend.com/news/ravensburger-introduces-two-new-ways-to-jumpstart-your-disney-lorcana-tcg-collection/", "https://lorcanaplayer.com/product/collection-starter-set/", "https://lorcanacollectors.com/fabled-product-guide/"],
+  },
+  // Disney Lorcana: Whispers in the Well Illumineer's Trove
+  652709: {
+    date: "2025-11-07",
+    msrp: 49.99,
+    box: "One storage box, eight booster packs, six ink-color dividers, six glow-in-the-dark damage-counter dice and a lore counter.",
+    src: ["https://lorcanaplayer.com/product/whispers-in-the-well-illumineers-trove/"],
+  },
+  // Disney Lorcana: Collector Set Bundle
+  662116: {
+    ex: "exclusive",
+    retail: ["Costco"],
+    note: "Costco exclusive.",
+    date: "2025-11-04",
+    msrp: 44.99,
+    msrpNote: "$39.99 reported in warehouses",
+    box: "6 The First Chapter booster packs (12 cards each), a Disney Villains 9-pocket card portfolio (252-card capacity; Evil Queen, Gaston, Maleficent, Captain Hook, Ursula, Scar), and 1 glimmer-foil The Queen - Mirror Seeker promo card (blue border).",
+    more: "A rare return of The First Chapter packs. Some Costco locations limit TCG purchases per member.",
+    src: ["https://thetoyinsider.com/disney-lorcana-collector-set-bundle-launch/", "https://lorcanaplayer.com/new-the-first-chapter-collector-set-costco/", "https://bleedingcool.com/games/tabletop/card-games/disney-lorcana/disney-lorcana-the-first-chapter-returns-with-exclusive-costco-set/"],
+  },
+  // Disney Lorcana: Winterspell Illumineer's Trove
+  664826: {
+    date: "2026-02-13",
+    msrp: 49.99,
+    box: "Eight Winterspell booster packs, storage box, one lore counter and six damage dice.",
+    src: ["https://lorcanaplayer.com/product/winterspell-illumineers-trove/"],
+  },
+  // Disney Lorcana: Portfolio Bundle
+  666352: {
+    ex: "limited",
+    retail: ["Target", "EB Games"],
+    note: "Reported as sold at Target and EB Games around Black Friday 2025.",
+    date: "2025-11",
+    box: "2 The First Chapter booster packs, 2 Rise of the Floodborn booster packs, and 1 Nicholas Kole card portfolio (Shimmering Skies art).",
+    more: "No official launch price was verified.",
+    src: ["https://lorcanaplayer.com/product/portfolio-bundle/", "https://murphstradingcards.com/products/disney-lorcana-portfolio-bundle"],
+  },
+  // Disney Lorcana: Winterspell Gift Box - Scrooge McDuck
+  668328: {
+    ex: "wide",
+    retail: ["Game stores", "GameStop", "Best Buy"],
+    date: "2026-03-13",
+    msrp: 29.99,
+    box: "1 Scrooge McDuck - S.H.U.S.H. Agent glimmer foil promo, a Scrooge McDuck storage box (holds 250 sleeved cards), 5 random booster packs, and 3 punch-out dividers.",
+    src: ["https://lorcanaplayer.com/product/scrooge-mcduck-gift-box/", "https://disneynerds.com/2026/04/28/lorcana-fans-two-new-gift-bundles/", "https://www.gamestop.com/toys-games/trading-cards/products/disney-lorcana-winterspell-chapter-11-gift-box---scrooge-mcduck/20031627.html"],
+  },
+  // Disney Lorcana: Winterspell Collection Starter Set - Stitch Edition
+  668330: {
+    ex: "wide",
+    retail: ["Best Buy", "Amazon", "Ravensburger online store"],
+    date: "2026-03-13",
+    msrp: 29.99,
+    box: "4 Winterspell booster packs, a Stitch - Rock Star card portfolio (holds up to 80 cards), 1 glimmer-foil Stitch - Carefree Snowboarder promo (amber border), and a collector's guide.",
+    src: ["https://icv2.com/articles/news/view/61139/ravensburger-announces-three-disney-lorcana-boxed-sets", "https://www.thegamer.com/disney-lorcana-stitch-winterspell-starter-set-promo-card/", "https://lorcanaplayer.com/product/collection-starter-set-stitch-edition/"],
+  },
+  // Disney Lorcana: Wilds Unknown Illumineer's Trove
+  678168: {
+    date: "2026-05-08",
+    msrp: 49.99,
+    box: "Eight Wilds Unknown booster packs, storage box, lore counter and dice.",
+    src: ["https://lorcanaplayer.com/product/wilds-unknown-illumineers-trove/"],
+  },
+  // Disney Lorcana: Wilds Unknown 2-Player Starter Set
+  682038: {
+    ex: "wide",
+    retail: ["Best Buy", "BoxLunch", "Amazon", "Game stores"],
+    date: "2026-05-08",
+    msrp: 29.99,
+    box: "Two 60-card decks (Amber/Emerald and Amethyst/Ruby, 2 foil cards each), 2 deck boxes, 2 lore counters, 13 tokens and a quick-start rulebook.",
+    src: ["https://icv2.com/articles/news/view/61139/ravensburger-announces-three-disney-lorcana-boxed-sets", "https://lorcanaplayer.com/product/wilds-unknown-2-player-starter-set/", "https://www.bestbuy.com/product/disney-lorcana-wilds-unknown-2-player-starter-set/CJ6QGKQ8H4"],
+  },
+  // Disney Lorcana: Wilds Unknown Prerelease Box
+  682077: {
+    ex: "exclusive",
+    retail: ["Game store prerelease events"],
+    note: "Handed out at game store prerelease events.",
+    date: "2026-05-08",
+    msrp: 39.99,
+    box: "6 Wilds Unknown booster packs, 1 random glimmer foil Traveler promo (6 variants, one per ink), 1 postcard, 4 dice, a Pack Rush rules booklet and a deck box.",
+    src: ["https://lorcanaplayer.com/product/wilds-unknown-prerelease-box/", "https://facetofacegames.com/en-us/products/disney-lorcana-wilds-unknown-prerelease-pack"],
+  },
+  // Disney Lorcana: Attack of the Vine! Illumineer's Trove
+  690388: {
+    ex: "wide",
+    retail: ["Game stores", "Disney Parks", "Mass retail", "Best Buy", "GameStop"],
+    date: "2026-07-17",
+    msrp: 49.99,
+    box: "Eight Attack of the Vine! booster packs, storage box, six card dividers, six dice and a lore counter.",
+    more: "Game stores and select Disney Parks July 17; everywhere July 24.",
+    src: ["https://lorcanaplayer.com/product/attack-of-the-vine-illumineers-trove/", "https://www.disneylorcana.com/en-US/news/2026/06/attack-of-the-vine-press-release", "https://icv2.com/articles/previews/view/62945/preview-disney-lorcana-attack-vine-illumineers-trove"],
+  },
+  // Disney Lorcana: Attack of the Vine! Prerelease Box
+  690389: {
+    ex: "exclusive",
+    retail: ["Game store prerelease events"],
+    note: "Handed out at game store prerelease events.",
+    date: "2026-07-17",
+    msrp: 39.99,
+    box: "6 Attack of the Vine! booster packs, 1 of 6 random gold-foil-stamped promo cards (Pocahontas, Buzz Lightyear, Boo, Merlin, Maximus, Dixie Dash), 1 of 3 random posters (Up, Encanto, Mickey & Minnie), 4 dice, a rules booklet and a deck box.",
+    src: ["https://www.disneylorcana.com/en-US/news/2026/07/attack-of-the-vine-prerelease", "https://lorcanaplayer.com/product/attack-of-the-vine-prerelease-box/", "https://bleedingcool.com/collectibles/new-pre-release-kits-revealed-for-disney-lorcana-attack-of-the-vine/"],
+  },
+  // Disney Lorcana: Attack of the Vine! Collection Starter Set - Rapunzel Edition
+  696136: {
+    ex: "wide",
+    retail: ["Best Buy", "Amazon", "Game stores"],
+    date: "2026-09-04",
+    msrp: 29.99,
+    box: "4 Attack of the Vine! booster packs, a 4-pocket Rapunzel - High Climber card portfolio, 1 glimmer-foil Rapunzel - Ethereal Protector promo card, and a collector's guide.",
+    src: ["https://lorcanaplayer.com/product/collection-starter-set-rapunzel-edition/", "https://icv2.com/articles/news/view/62632/ravensburger-will-release-new-disney-lorcana-collection-starter-set", "https://www.bestbuy.com/product/disney-lorcana-attack-of-the-vine-collection-starter-set-rapunzel-edition/CJ6QGKYQ9K"],
+  },
+  // Illumineer's Quest: The Great Hunny Rescue
+  701135: {
+    date: "2026-10-02",
+    msrp: 59.99,
+    box: "50-card Vine scenario deck with storage box, two 60-card player decks with storage boxes, 10 Vine Tendril cards, 6 Encounter cards, a 5-card prize pack, 30 tokens, game board and rulebook.",
+    more: "Not yet released as of Sep 30, 2026. A solo or co-op quest to save Piglet from the Vine.",
+    src: ["https://lorcanaplayer.com/product/illumineers-quest-the-great-hunny-rescue/", "https://inksighttcg.com/guides/illumineers-quest-great-hunny-rescue.html"],
+  },
+  // Disney Lorcana: Curator's Collection: Heroines Edition
+  702474: {
+    ex: "exclusive",
+    retail: ["World of Disney, Disney's Pin Traders and select Disney Stores"],
+    note: "Sold only at select Disney Parks and Disney Stores, not at game stores or mass retail.",
+    date: "2026-07-17",
+    msrp: 99.99,
+    box: "Six borderless foil promo cards with new art: Ariel - Spectacular Singer, Elsa - Trusted Sister, Jasmine - Royal Seafarer, Mulan - Elite Archer, Anna - Trusting Sister, Tinker Bell - Giant Fairy.",
+    more: "Limited quantities; Ravensburger advised buying on release day.",
+    src: ["https://www.disneylorcana.com/en-US/news/2026/06/curators-collection-heroines", "https://cardgamer.com/game-hub/for-collectors/disney-lorcana-curators-collection-heroines-edition/"],
+  },
+  // Disney Lorcana: Hyperia City Illumineer's Trove
+  706243: {
+    date: "2026-10-16",
+    msrp: 49.99,
+    box: "Eight Hyperia City booster packs, storage box, lore counter, six card dividers and six dice.",
+    more: "Not yet released as of Sep 30, 2026. Game stores Oct 16, mass retail Oct 23.",
+    src: ["https://lorcanaplayer.com/product/hyperia-city-illumineers-trove/"],
+  },
+  // Disney Lorcana: D23 Collection - 2026
+  711071: {
+    ex: "limited",
+    retail: ["D23 2026 and select Disney Parks and Stores"],
+    note: "Sold at D23 and select Disney locations.",
+    date: "2026-08-14",
+    msrp: 99.99,
+    box: "Six foil cards, five reprints with expanded borderless art: Angel - Siren Singer, Pocahontas - Following the Wind, Mushu - Stealthy Dragon, Judy Hopps - Uncovering Clues, Mr. Incredible - Taking Out the Trash, plus one card not revealed in the sources.",
+    more: "A separate $189.97 D23 bundle (limit one per person) added a Woody promo, a Hunny Wizard playmat, a lorebook and two pins.",
+    src: ["https://inksighttcg.com/blog/lorcana-d23-2026-collection-disney-store-release.html", "https://wdwnt.com/2026/07/first-look-at-d23-2026-lorcana-bundle-including-woody-promo-card/", "https://nostalgicavenue.com/shoptalk-d23-2026-lorcana-bundle-revealed-with-woody-promo-card"],
+  },
+  // Disney Lorcana: Hyperia City 2-Player Starter Set
+  717854: {
+    date: "2026-10-23",
+    msrp: 29.99,
+    box: "Two 60-card decks, Technically Terrific (Emerald/Sapphire, Baymax) and Madcap Whimsy (Amethyst/Steel, Madam Mim), 4 foil cards total, 2 deck boxes, 2 lore counters, 13 tokens and a quick-start rulebook. No booster packs.",
+    more: "Not yet released as of Sep 30, 2026; prerelease weekend starts Oct 16.",
+    src: ["https://www.thornberrymedia.com/post/disney-lorcana-hyperia-city-2-player-starter-set", "https://lorcanaplayer.com/product/hyperia-city-2-player-starter-set/", "https://www.fantasylandnews.com/2026/09/22/disney-lorcana-hyperia-city-release-date-coco-ink-drops/"],
+  },
+  // Disney Lorcana: Hyperia City Gift Box - Beast
+  719729: {
+    date: "2026-11-13",
+    msrp: 29.99,
+    box: "1 Beast - Snowfield Troublemaker glimmer foil promo, a Beast storage box (holds ~250 sleeved cards), 5 booster packs, and 3 punch-out dividers.",
+    more: "Not yet released as of Sep 30, 2026; retail channels not verified.",
+    src: ["https://lorcanaplayer.com/product/beast-gift-box/", "https://tcgsealedalerts.com/blog/hyperia-city-sealed-product-preview"],
+  },
+  // Disney Lorcana: Wilds Unknown Best Buddies Bundle
+  719823: {
+    ex: "exclusive",
+    retail: ["Costco"],
+    note: "Costco exclusive (item #1939190).",
+    date: "2026-09",
+    msrp: 39.99,
+    msrpNote: "$49.99 on Costco.com",
+    box: "6 Wilds Unknown booster packs, a Wilds Unknown-themed 9-pocket card portfolio (252-card capacity), glimmer-foil promos Sulley - Protective Monster and Violet Parr - Super Resilient, and a Mike Wazowski - Well-Rounded Entertainer pin.",
+    more: "The promos are 18/PD1 Sulley - Protective Monster and 19/PD1 Violet Parr - Super Resilient; the pin is Mike Wazowski.",
+    src: ["https://lorcanaplayer.com/product/best-buddies-bundle/"],
+  },
+  // Disney Lorcana: Wonder Bundle
+  721004: {
+    ex: "exclusive",
+    retail: ["Sam's Club"],
+    note: "Sam's Club exclusive.",
+    date: "2026-09-25",
+    msrp: 39.98,
+    msrpNote: "Sam's Club listing price",
+    box: "3 Winterspell booster packs and 3 Attack of the Vine! booster packs (72 cards).",
+    more: "One source also lists a Stitch portfolio; the Sam's Club listing does not mention one.",
+    src: ["https://lorcanaplayer.com/product/wonder-bundle/", "https://www.samsclub.com/ip/disney-lorcana-tcg-wonder-bundle-trading-cards/20842509165"],
+  },
+};
+const sealedInfoDate = (v) => {
+  const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(v || "");
+  if(!m) return v || "";
+  const mo = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+m[2] - 1];
+  return m[3] ? `${mo} ${+m[3]}, ${m[1]}` : `${mo} ${m[1]}`;
+};
+const SEALED_EX_LABEL = {exclusive: "Exclusive", limited: "Limited availability"};
+const SealedAbout = ({info}) => {
+  if(!info) return null;
+  const facts = [
+    info.retail && info.retail.length ? ["Sold at", info.retail.join(" · ")] : null,
+    info.date ? ["Released", sealedInfoDate(info.date)] : null,
+    info.msrp != null ? ["Launch price", "$" + Number(info.msrp).toFixed(2) + (info.msrpNote ? " (" + info.msrpNote + ")" : "")] : null,
+    info.box ? ["In the box", info.box] : null,
+  ].filter(Boolean);
+  if(!facts.length && !info.note && !info.more) return null;
+  return html`<section class="sealed-about" aria-label="About this product">
+    <div class="sealed-about-head">
+      <span class="sealed-about-title">About this product</span>
+      ${(info.ex === "exclusive" || info.ex === "limited") && html`<span class=${"sealed-about-badge sealed-about-badge--" + info.ex}>${SEALED_EX_LABEL[info.ex]}</span>`}
+    </div>
+    ${info.note && html`<p class="sealed-about-note">${info.note}</p>`}
+    ${facts.length > 0 && html`<dl class="sealed-about-facts">
+      ${facts.map(([k, v]) => html`<div key=${k} class="sealed-about-fact"><dt>${k}</dt><dd>${v}</dd></div>`)}
+    </dl>`}
+    ${info.more && html`<p class="sealed-about-more">${info.more}</p>`}
+    ${info.src && info.src.length > 0 && html`<div class="sealed-about-src">Sources: ${info.src.map((u, i) => {
+      const href = safeHttpUrl(u);
+      let host = u; try { host = new URL(u).hostname.replace(/^www\./, ""); } catch {}
+      return href ? html`<${React.Fragment} key=${u}>${i > 0 ? ", " : ""}<a href=${href} target="_blank" rel="noopener nofollow">${host}</a><//>` : null;
+    })}</div>`}
+  </section>`;
+};
+
 // Sealed product detail popup — opened by clicking any tile in
 // SealedCollectionView (and reused by the Screener's sealed mode). Shows
 // image + name + set/type, current Low + NM Market with per-window Δ%
@@ -26345,6 +26798,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
             onCommit=${patch => updateSealedMeta(own, patch)}/>`}
         </div>
       </div>
+      ${SEALED_PRODUCT_INFO[pid] && html`<${SealedAbout} info=${SEALED_PRODUCT_INFO[pid]}/>`}
       <div class="sealed-detail-deltas">
         <div class="sealed-detail-deltas-lblrow">
           <span class="sealed-detail-deltas-side-lbl"></span>
@@ -26776,7 +27230,11 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
                         ${COLLECTIBLE_GLYPHS[item.product_type] || null}</div>`}
                       <div class="gc-card-body">
                         <div class="gc-card-name" title=${item.name}>${cleanSealedName(item.name)}</div>
-                        <div class="gc-card-sub muted">${item.is_collectible ? item.collectible_source : dtype}</div>
+                        <div class="gc-card-sub muted">${item.is_collectible ? item.collectible_source : dtype}${(() => {
+                          const inf = SEALED_PRODUCT_INFO[item.tcgplayer_product_id];
+                          return inf && inf.ex === "exclusive" && inf.retail && inf.retail[0]
+                            ? html` · <span class="gc-card-excl" title=${inf.note || ""}>${inf.retail[0]} exclusive</span>` : null;
+                        })()}</div>
                         <div class="gc-card-raw">
                           ${item.is_collectible
                             ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${item.collectible_date}</span>`
@@ -31991,7 +32449,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           const total = own.normal.size + own.foil.size + own.enchanted.size + own.iconic.size + own.epic.size;
           const denom = tot.normal + tot.foil + tot.enchanted + tot.iconic + tot.epic;
           const pct = denom ? (total/denom*100) : 0;
-          return html`<div key=${setName} class="set-progress-card" onClick=${()=>setSelectedSet(setName)}
+          return html`<div key=${setName} class="set-progress-card set-progress-card--flat" onClick=${()=>setSelectedSet(setName)}
             role="button" tabIndex="0" onKeyDown=${keyActivate(()=>setSelectedSet(setName))}>
             <${SetHeading} set=${setName} klass="set-progress-name"/>
             <div class="set-progress-row">
@@ -32012,7 +32470,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           const total = own.normal.size + own.foil.size + own.enchanted.size + own.iconic.size + own.epic.size;
           const denom = tot.normal + tot.foil + tot.enchanted + tot.iconic + tot.epic;
           const pct = denom ? (total/denom*100) : 0;
-          return html`<div key=${setName} class="set-progress-card" onClick=${()=>setSelectedSet(setName)}
+          return html`<div key=${setName} class="set-progress-card set-progress-card--flat" onClick=${()=>setSelectedSet(setName)}
             role="button" tabIndex="0" onKeyDown=${keyActivate(()=>setSelectedSet(setName))}>
             <${SetHeading} set=${setName} klass="set-progress-name"/>
             <div class="set-progress-row">
@@ -32026,6 +32484,25 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         const nPct = tot.normal ? (nOwn/tot.normal*100) : 0;
         const fPct = tot.foil   ? (fOwn/tot.foil*100)   : 0;
         const mis = setMissing[setName];
+        // A promo set that splits Non-Foil / Foil (the two Lorcana Challenge sets)
+        // is drawn as ONE row, Non-Foil left and Foil right, so it takes exactly the
+        // room a promos-only tile does and the two kinds of tile line up in the grid
+        // (2026-09-30, Zaven). A booster set keeps its stacked rows and chase pills.
+        if(!MAINLINE_SETS.includes(setName) && tot.foil > 0 && !CHASE_KEYS.some(k => tot[k] > 0)){
+          const half = (label, n, d, pc, foil) => html`<div class="set-progress-half">
+            <span class="set-progress-row-label">${label}</span>
+            <span class="set-progress-row-counts">${n}/${d}<span class="set-progress-pct">${completionPct(n, d)}%</span></span>
+            <div class="progress-bar"><div class=${"progress-fill"+(foil?" foil":"")} style=${{width:pc+"%"}}/></div>
+          </div>`;
+          return html`<div key=${setName} class="set-progress-card set-progress-card--flat" onClick=${()=>setSelectedSet(setName)}
+            role="button" tabIndex="0" onKeyDown=${keyActivate(()=>setSelectedSet(setName))}>
+            <${SetHeading} set=${setName} klass="set-progress-name"/>
+            <div class="set-progress-split">
+              ${half("Non-Foil", nOwn, tot.normal, nPct, false)}
+              ${half("Foil", fOwn, tot.foil, fPct, true)}
+            </div>
+          </div>`;
+        }
         // "Set 9" beside the logo: plenty of players think in set numbers, not
         // names (2026-09-25, Zaven). Booster sets only — a promo set has no number.
         const setNo = MAINLINE_SETS.indexOf(setName);

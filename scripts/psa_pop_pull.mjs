@@ -54,6 +54,16 @@ const YEARS = [
   { year: 2026, headingID: 326969 },
 ];
 
+// Sets PSA files under a slug the year pages' "-en-" test rejects. The 2022 promo
+// heading is the Gen Con 2022 reveal cards (Promo Set 1 #1-7: Mickey, Stitch Rock
+// Star, Elsa, Cruella, Maleficent, Robin Hood, Hook), which have PSA graded sales
+// and no population anywhere else. `name` is what the loader reads, so it is
+// spelled like the other P1 heading and joins Promo Set 1.
+const EXTRA_SETS = [
+  { year: 2022, headingID: 220272, name: "Disney Lorcana EN P1-Promo",
+    path: "/pop/tcg-cards/2022/disney-lorcana-promo/220272" },
+];
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const jitter = () => DELAY_MS[0] + Math.random() * (DELAY_MS[1] - DELAY_MS[0]);
 
@@ -171,7 +181,8 @@ async function main() {
   try {
     // Phase 1
     let sets = [];
-    for (const y of YEARS) {
+    // --set <extra heading> goes straight to it: no year pages, so one fewer request.
+    for (const y of (only && EXTRA_SETS.some((x) => x.headingID === only) ? [] : YEARS)) {
       const res = await s.evaluate(discoverExpr(`/pop/tcg-cards/${y.year}/${y.headingID}`));
       assertNotWall(res, `year ${y.year}`);
       const seen = new Set();
@@ -185,6 +196,7 @@ async function main() {
       console.log(`  ${y.year}: ${mine.length} English Lorcana sets (${skipped.size} non-English skipped)`);
       await sleep(jitter());
     }
+    for (const x of EXTRA_SETS) if (!sets.some((y) => y.headingID === x.headingID)) sets.push(x);
     sets.sort((a, b) => a.year - b.year || a.headingID - b.headingID);
     writeFileSync(join(OUT, "psa_lorcana_sets.json"), JSON.stringify(sets, null, 2));
     console.log(`\n${sets.length} English Lorcana sets total -> pop_output/psa_lorcana_sets.json`);

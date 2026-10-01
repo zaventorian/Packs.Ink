@@ -32,12 +32,11 @@ const grabLine = (p) => {
 // point of the fold is that the two compose.
 const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const searchNorm = (s) => (s||\"\")", ";"),
-  grabLine("const popNameKey = ").replace("const popNameKey = ", "const popNameKey = ")
-    + NL + "  .replace(/[^a-z0-9]+/g, \" \").trim();",
+  grab("const popNameKey = ", ".trim();"),
   grab("const POP_SET_ALIASES = [", NL + "];"),
   grab("const popSetName = (label) => {", NL + "};"),
-  grabLine("const popCardKey = ") + NL
-    + "  popNameKey(setName) + \"|\" + popNameKey(productName) + \"|\" + String(cn == null ? \"\" : cn).trim();",
+  grabLine("const popNumKey = "),
+  grab("const popCardKey = ", "popNumKey(cn);"),
   grabLine("const POP_FOIL_VARIETY = "),
   grabLine("const POP_NONFOIL_VARIETY = "),
   grab("const gradedPopBucket = (variety) => {", NL + "};"),
@@ -157,6 +156,12 @@ section("3. popCardKey");
      "the key is fold-insensitive on both set and name");
   eq(popCardKey("X", "Y", null), popCardKey("X", "Y", ""), "a missing number is empty, not 'null'");
   ok(popCardKey("X", "Y", " 12 ").endsWith("|12"), "the number is trimmed");
+  eq(popCardKey("D23 Collection", "Bruno", "04"), popCardKey("D23 Collection", "Bruno", "4"),
+     "PSA's zero-padded D23 numbers join the catalog's");
+  ok(popCardKey("X", "Y", "24A").endsWith("|24A"), "a lettered number is untouched");
+  ok(popCardKey("X", "Y", "0").endsWith("|0"), "a lone zero stays");
+  eq(popNameKey("Maleficent/Maleficent - Monstrous Dragon"), popNameKey("Maleficent - Monstrous Dragon"),
+     "PSA's doubled lead name folds to one");
 }
 
 // 4. Variety -> printing, and the half that must stay unmapped
@@ -175,7 +180,7 @@ section("4. gradedPopBucket");
   // ⚠ Rarity and provenance are NOT printings. Forcing them into a bucket is
   // how a League Promo's pops end up counted as a base card's non-foil.
   for (const v of ["Enchanted", "Epic", "Iconic", "League Promo", "Disney Cruise",
-                   "D23 Collection", "Top 8", "Fabled Set Championship Prize"])
+                   "D23 Collection", "World Championship", "Fabled Set Championship Prize"])
     eq(gradedPopBucket(v), null, `${v} is not a printing`);
 }
 
@@ -250,6 +255,10 @@ section("6. real pulled data (skipped when pop_output is empty)");
   const dir = new URL("./pop_output/", import.meta.url);
   let files = [];
   try { files = readdirSync(dir).filter((f) => /^psa_pop_\d+_/.test(f)); } catch {}
+  // Several pulls sit in the folder; only each heading's newest one is current.
+  { const best = new Map();
+    for (const f of files) { const h = f.split("_")[2]; if (!best.has(h) || f > best.get(h)) best.set(h, f); }
+    files = [...best.values()]; }
   if (!files.length) {
     console.log("  (no pulled files — run scripts/psa_pop_pull.mjs to exercise this)");
   } else {
