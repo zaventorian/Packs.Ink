@@ -820,11 +820,16 @@ const D = await mod("discord/src/data.js");
       ok(l.startsWith(c.n + " — "), `suggestion starts with the card's name (${l})`);
       const px = f[5] ?? f[4];
       if (px != null) { priced++; ok(!/\$\d/.test(l.slice(c.n.length)), `suggestion leaves the price out (${l})`); }
+      ok(!/Non-foil/.test(l) && (f[3] || !/Foil/.test(l)), `suggestion doesn't name a plain finish (${l})`);
       ok(!/ \dc\b/.test(l.slice(c.n.length)), `suggestion leaves the cost out (${l})`);
       ok(!/\blore\b/.test(l.slice(c.n.length)), `suggestion writes lore as the symbol (${l})`);
       const set = R.sets[p.s] || {};
       if (set.main && !/…/.test(l)) ok(l.includes(`S${set.main}`), `suggestion names the set's number (${l})`);
     })));
+    for (const q of ["elsa", "ursula", "mickey", "stitch"]) {
+      const lines = R.suggest(q, 25).filter((x) => x.kind === "card").map((x) => x.label);
+      ok(new Set(lines).size === lines.length, `suggestions for "${q}" have no repeated lines`);
+    }
     ok(seen > 200 && priced > 100, `every fixture printing checked (${seen}, ${priced} priced)`);
     const sug = R.suggest("elsa spirit", 5).find((s) => s.kind === "card");
     ok(sug && /🟪/.test(sug.label) && /S\d+\)?$/.test(sug.label) && / \| /.test(sug.label), `a /card suggestion carries the stats on its line (${sug && sug.label})`);

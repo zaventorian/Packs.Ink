@@ -630,11 +630,18 @@ export function createResolver(index) {
     const q = String(raw || "").trim();
     const out = [];
     const seen = new Set();
+    const seenLines = new Set();
     const pushCard = (i, p, fi) => {
       const f = p.f[fi] || p.f[0];
       const key = cardKey(p, fi);
       if (seen.has(key)) return;
       seen.add(key);
+      // A suggestion doesn't name the finish, so a card's foil and non-foil
+      // would read as one line twice: only the first (the better match) stays.
+      // A NAMED finish (Top Prize / Prize Wall) is a different market and stays.
+      const same = p.id + "|" + (f[3] || "");
+      if (seenLines.has(same)) return;
+      seenLines.add(same);
       out.push({ kind: "card", i, p, fi, value: key, label: suggestLabel(cards[i], p, fi), plain: cardLabel(cards[i], p, fi) });
     };
     const pushSealed = (x, front) => {
@@ -862,12 +869,13 @@ export function createResolver(index) {
   // then the set name shortens to its number ("Hyperia City (S14)" → "S14"),
   // then the last keywords, "uninkable" and the word "Location" (stats.js);
   // the finish and the price stay, because two suggestions for one card are
-  // told apart by them. No price: a suggestion is for choosing a card, and the
+  // told apart by them — except plain foil / non-foil, which nobody searching
+  // for a card is choosing between (the reply has the Foil button). No price: a suggestion is for choosing a card, and the
   // reply that follows has the numbers.
   function suggestLabel(c, p, fi) {
     const set = sets[p.s] || {};
-    const fl = finishLabel(p, fi);
-    const printing = [{ k: "rar", t: p.r }, { k: "var", t: p.var }, { k: "fin", t: fl && fl !== p.var ? fl : null },
+    const named = (p.f[fi] || [])[3];       // Top Prize / Prize Wall / Text Error — never plain foil
+    const printing = [{ k: "rar", t: p.r }, { k: "var", t: p.var }, { k: "fin", t: named && named !== p.var ? named : null },
       setPart(set)];
     const room = 100 - c.n.length - 3;
     if (room < 12) return cardLabel(c, p, fi);
