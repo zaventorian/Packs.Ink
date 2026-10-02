@@ -820,6 +820,7 @@ const D = await mod("discord/src/data.js");
       ok(l.startsWith(c.n + " — "), `suggestion starts with the card's name (${l})`);
       const px = f[5] ?? f[4];
       if (px != null) { priced++; ok(!/\$\d/.test(l.slice(c.n.length)), `suggestion leaves the price out (${l})`); }
+      ok(!/Non-foil/.test(l), `suggestion doesn't say Non-foil (${l})`);
       ok(!/ \dc\b/.test(l.slice(c.n.length)), `suggestion leaves the cost out (${l})`);
       ok(!/\blore\b/.test(l.slice(c.n.length)), `suggestion writes lore as the symbol (${l})`);
       const set = R.sets[p.s] || {};
