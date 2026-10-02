@@ -26,7 +26,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // Every text file the Worker serves that renders UI. build_dist.mjs is the
 // include-list; these are the ones that hold markup, copy or styles.
 const FILES = ["Index.html", "styles.css", "picks.html", "ticker.html", "swiss.html",
-  "privacy.html", "logo.js"];
+  "privacy.html", "logo.js", "box.html"];
 
 // In Nunito Sans's latin subset, so the page font draws them as type.
 const ALLOWED = new Set([0x00a9, 0x00ae, 0x2122]);
