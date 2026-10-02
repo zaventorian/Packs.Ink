@@ -127,6 +127,41 @@ def repoint_decks(sb, mapping, commit):
     return moved
 
 
+def repoint_versions(sb, mapping, commit):
+    """Same re-point inside deck_versions.cards (jsonb array of encrypted card_ids)."""
+    n = 0
+    for v in sb.select("deck_versions", columns="deck_id,version,cards"):
+        out, changed = [], False
+        for c in v.get("cards") or []:
+            old = deck_dec(c.get("card_id"))
+            if old in mapping:
+                c = {**c, "card_id": deck_enc(mapping[old])}
+                changed = True
+            out.append(c)
+        if changed:
+            n += 1
+            if commit:
+                sb.update("deck_versions", match={"deck_id": v["deck_id"], "version": v["version"]},
+                          patch={"cards": out})
+    return n
+
+
+def report_orphans(sb, card_ids):
+    """Nightly tripwire: deck rows whose (decrypted) card_id has no cards row."""
+    orphans = {}
+    for r in sb.select("deck_cards", columns="deck_id,card_id"):
+        cid = deck_dec(r["card_id"])
+        if cid not in card_ids:
+            orphans.setdefault(cid, set()).add(r["deck_id"])
+    if orphans:
+        top = ", ".join(f"{k} ({len(v)})" for k, v in sorted(orphans.items())[:8])
+        msg = f"{len(orphans)} deck card id(s) have no cards row: {top}"
+        print(msg)
+        print(f"::warning title=orphaned deck cards::{msg}")
+    else:
+        print("No orphaned deck cards.")
+
+
 def _norm_cn(cn):
     cn = str(cn or "").split("/", 1)[0].strip()
     if not cn:
@@ -190,6 +225,11 @@ def main():
             if r.get("tcgplayer_product_id") is not None:
                 real_by_pid[r["tcgplayer_product_id"]] = r["id"]
 
+    try:
+        report_orphans(sb, {r["id"] for r in rows})
+    except Exception as e:
+        print(f"orphan check skipped: {repr(e)[:120]}")
+
     superseded = []
     for pid, key, tpid in prestage:
         real = real_by_key.get(key) or (real_by_pid.get(tpid) if tpid is not None else None)
@@ -206,6 +246,7 @@ def main():
     failed = set()
     try:
         deck_moved = repoint_decks(sb, dict(superseded), args.commit)
+        repoint_versions(sb, dict(superseded), args.commit)
     except Exception as e:
         # Without the deck re-point, deleting ANY stand-in orphans deck rows.
         print(f"deck re-point FAILED ({repr(e)[:120]}) — keeping every stand-in")

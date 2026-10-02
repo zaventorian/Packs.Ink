@@ -30,6 +30,8 @@ const cards = await all("cards?select=id,set_id,collector_number&order=id");
 const ids = new Set(cards.map(c=>c.id));
 const sets = await all("sets?select=id,code&order=id");
 const setByCode = new Map(sets.map(s=>[String(s.code), s.id]));
+// Legacy client-only ids that were later given a real cards row.
+const ALIAS = {"extras:544487":"crd_custom_544487_piglet_pooh"};
 const byKey = new Map(cards.filter(c=>!c.id.startsWith("crd_prestage_")).map(c=>[c.set_id+"|"+String(c.collector_number).split("/")[0].replace(/^0+/,""), c.id]));
 const dc = await all("deck_cards?select=deck_id,card_id,printing,quantity&order=deck_id,card_id,printing");
 
@@ -41,17 +43,17 @@ const plan=[], skipped=new Map();
 for(const r of dc){
   const id=dec(r.card_id); if(ids.has(id)) continue;
   const m=/^crd_prestage_set(\d+)_(\d+)$/.exec(id);
-  const real = m && byKey.get(setByCode.get(m[1])+"|"+m[2]);
+  const real = ALIAS[id] || (m && byKey.get(setByCode.get(m[1])+"|"+m[2]));
   if(real) plan.push({...r, old:id, real}); else skipped.set(id,(skipped.get(id)||0)+1);
 }
 console.log(`${dc.length} deck rows; ${plan.length} repairable, ${skipped.size} unrepairable id(s):`, [...skipped.keys()].join(", ")||"none");
 for(const p of plan) console.log(`  deck ${p.deck_id.slice(0,8)} ${p.old} -> ${p.real} x${p.quantity} (${p.printing})`);
-if(!COMMIT){ console.log("Dry run. Re-run with --commit."); process.exit(0); }
+if(!COMMIT) console.log("Dry run. Re-run with --commit.");
 
-fs.writeFileSync(new URL(`./repair_orphan_deck_cards_backup_${Date.now()}.json`, import.meta.url), JSON.stringify(plan,null,1));
+if(COMMIT) fs.writeFileSync(new URL(`./repair_orphan_deck_cards_backup_${Date.now()}.json`, import.meta.url), JSON.stringify(plan,null,1));
 const have = new Map(dc.map(r=>[r.deck_id+"|"+r.card_id+"|"+r.printing, r]));
 const rowUrl=(deck,cid,pr)=>`${U}/rest/v1/deck_cards?deck_id=eq.${deck}&card_id=eq.${encodeURIComponent(cid)}&printing=eq.${encodeURIComponent(pr)}`;
-for(const p of plan){
+for(const p of COMMIT?plan:[]){
   const newEnc=encDet(p.real), tgt=have.get(p.deck_id+"|"+newEnc+"|"+p.printing);
   if(tgt){
     const q=Math.min(99,(tgt.quantity||0)+(p.quantity||0));
@@ -61,4 +63,23 @@ for(const p of plan){
     await must(await fetch(rowUrl(p.deck_id,p.card_id,p.printing),{method:"PATCH",headers:H,body:JSON.stringify({card_id:newEnc})}));
   }
 }
-console.log("Repaired", plan.length, "row(s).");
+if(COMMIT) console.log("Repaired", plan.length, "row(s).");
+
+// ---- deck_versions: the same ids live inside each snapshot's jsonb `cards` array ----
+const vers = await all("deck_versions?select=deck_id,version,cards&order=deck_id,version");
+const vplan=[];
+for(const v of vers){
+  let changed=false; const cardsOut=[];
+  for(const c of v.cards||[]){
+    const id=dec(c.card_id); let nid=id;
+    if(!ids.has(id)){ if(ALIAS[id]){nid=ALIAS[id];changed=true;} else { const m=/^crd_prestage_set(\d+)_(\d+)$/.exec(id); const real=m&&byKey.get(setByCode.get(m[1])+"|"+m[2]); if(real){nid=real;changed=true;} } }
+    cardsOut.push(nid===id?c:{...c,card_id:encDet(nid)});
+  }
+  if(changed) vplan.push({deck_id:v.deck_id,version:v.version,before:v.cards,after:cardsOut});
+}
+console.log(`${vers.length} versions; ${vplan.length} need repair`);
+if(COMMIT && vplan.length){
+  fs.writeFileSync(new URL(`./repair_orphan_deck_versions_backup_${Date.now()}.json`, import.meta.url), JSON.stringify(vplan.map(({deck_id,version,before})=>({deck_id,version,cards:before})),null,1));
+  for(const v of vplan) await must(await fetch(`${U}/rest/v1/deck_versions?deck_id=eq.${v.deck_id}&version=eq.${v.version}`,{method:"PATCH",headers:H,body:JSON.stringify({cards:v.after})}));
+  console.log("Repaired", vplan.length, "version snapshot(s).");
+}
