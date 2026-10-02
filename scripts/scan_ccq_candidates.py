@@ -289,8 +289,7 @@ def main():
             print(f"    {r['starts_on']}  {r['title'][:58]}")
 
     if not args.apply:
-        print("
-DRY RUN — nothing written. Re-run with --apply.")
+        print("\nDRY RUN — nothing written. Re-run with --apply.")
         print("Proposals land UNCONFIRMED (admin-only); rows passing auto_publish_ok publish.")
         return 0
 
