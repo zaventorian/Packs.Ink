@@ -46,6 +46,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import hmac
 import os
 import sys
 
@@ -57,7 +60,6 @@ from supabase_client import Supabase
 # Tables that reference cards.id via card_id, with the OTHER columns that (with
 # card_id) identify a unique row — used to merge quantities on re-point.
 REF_TABLES = [
-    ("deck_cards", ["deck_id", "printing"]),
     ("collection_items", ["user_id", "printing"]),
     ("graded_collection_items", ["user_id", "printing", "grader", "grade"]),
 ]
@@ -71,6 +73,58 @@ PLAIN_REF_COLS = [
     ("scan_samples", "predicted_card_id"),
     ("graded_sales", "card_id"),
 ]
+
+
+# deck_cards.card_id is stored ENCRYPTED ("e1:...", the codec in Index.html), so an
+# `eq.<plaintext id>` filter never matches a deck row. Re-pointing decks by plaintext
+# did nothing, the stand-in was deleted, and every deck holding one showed "(unknown)"
+# (Hyperia City, 2026-10-02). Decks therefore go through this codec.
+DECK_KEY = base64.urlsafe_b64decode("TFS-sPPVpi6lHP4MDDD1_VMS5csp0eggEnIIgqcCVYo" + "=")
+
+
+def _b64u(b):
+    return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+
+def deck_dec(tok):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    if not isinstance(tok, str) or not tok.startswith("e1:"):
+        return tok
+    raw = base64.urlsafe_b64decode(tok[3:] + "=" * (-len(tok[3:]) % 4))
+    return AESGCM(DECK_KEY).decrypt(raw[:12], raw[12:], None).decode()
+
+
+def deck_enc(plain):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    iv = hmac.new(DECK_KEY, ("iv:" + plain).encode(), hashlib.sha256).digest()[:12]
+    return "e1:" + _b64u(iv + AESGCM(DECK_KEY).encrypt(iv, plain.encode(), None))
+
+
+def repoint_decks(sb, mapping, commit):
+    """mapping: {old_card_id: new_card_id}. Re-point deck_cards rows (matched by their
+    DECRYPTED card_id), merging quantity into an existing target row. Returns
+    {old_id: count}. Raises on any error so the caller keeps the stand-in."""
+    rows = sb.select("deck_cards", columns="deck_id,card_id,printing,quantity")
+    have = {(r["deck_id"], r["card_id"], r["printing"]): r for r in rows}
+    moved = {}
+    for r in rows:
+        old = deck_dec(r["card_id"])
+        if old not in mapping:
+            continue
+        moved[old] = moved.get(old, 0) + 1
+        if not commit:
+            continue
+        new_enc = deck_enc(mapping[old])
+        tgt = have.get((r["deck_id"], new_enc, r["printing"]))
+        key = {"deck_id": r["deck_id"], "printing": r["printing"]}
+        if tgt:
+            sb.update("deck_cards", match={**key, "card_id": new_enc},
+                      patch={"quantity": min(99, (tgt.get("quantity") or 0) + (r.get("quantity") or 0))})
+            sb.delete("deck_cards", {"deck_id": f"eq.{r['deck_id']}", "printing": f"eq.{r['printing']}",
+                                     "card_id": f"eq.{r['card_id']}"})
+        else:
+            sb.update("deck_cards", match={**key, "card_id": r["card_id"]}, patch={"card_id": new_enc})
+    return moved
 
 
 def _norm_cn(cn):
@@ -150,8 +204,15 @@ def main():
     # A stand-in whose re-point failed is excluded from the delete pass — better
     # a duplicate tile for one more day than orphaned deck/collection rows.
     failed = set()
+    try:
+        deck_moved = repoint_decks(sb, dict(superseded), args.commit)
+    except Exception as e:
+        # Without the deck re-point, deleting ANY stand-in orphans deck rows.
+        print(f"deck re-point FAILED ({repr(e)[:120]}) — keeping every stand-in")
+        print(f"::warning title=retire_prestaged deck re-point::{repr(e)[:200]}")
+        return
     for pid, real_id in superseded:
-        moved = 0
+        moved = deck_moved.get(pid, 0)
         try:
             for table, keycols in REF_TABLES:
                 moved += repoint(sb, table, keycols, pid, real_id, args.commit)
