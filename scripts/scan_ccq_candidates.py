@@ -28,13 +28,25 @@ That last pair is the whole problem: the name net cannot tell an official
 Challenge Championship Qualifier from a store saying "possible" or from a
 national qualifier for something else. Judging them is a human call.
 
-So this script writes rows with **confirmed = false**, which migration 139 keeps
-out of everyone's calendar but an admin's, and a person rules on them in the
-editor on /calendar. Same shape as the acks in scripts/catalog_watch.json: the
-machine proposes, a person decides, and the decision is recorded.
+So the default is: write rows with **confirmed = false**, which migration 139
+keeps out of everyone's calendar but an admin's, and a person rules on them in
+the editor on /calendar. Same shape as the acks in scripts/catalog_watch.json.
 
-⚠ NEVER make this flip `confirmed` to true. A wrong date next to a tournament
-somebody would travel for is the most expensive mistake this calendar can make.
+AUTO-PUBLISH (2026-10-02, Zaven's call: qualifiers should appear on their own).
+A listing is published straight away (confirmed = true, source 'ccq-scan-auto',
+note saying so) ONLY when every gate holds -- see auto_publish_ok():
+  * the title says CCQ / championship qualifier, with no hedge, no exclude word
+    and no national/other-championship word ("German Championship Qualifier");
+  * capacity >= AUTO_MIN_CAPACITY. Both qualifiers confirmed by hand that day
+    from Ravensburger's own graphics ran capacity 128; a store's own weekly
+    "Saturday CCQ" runs 20-64. Capacity is the one field that separates them;
+  * it has coordinates and a country (the calendar's region filter and map need
+    them; an ungeocoded row falls into "Elsewhere");
+  * it has not already started.
+Everything else stays an unconfirmed proposal for a person. An auto row is
+distinguishable (source) so it can be audited, and a person overriding one
+should set source to something else, which freezes it against this script.
+Known limit: nothing UNPUBLISHES an auto row if the store later cancels it.
 
 IDEMPOTENT: rows are keyed on calendar_events.event_id (unique), which is the
 RPH event id, so re-running proposes nothing twice and never disturbs a row a
@@ -83,6 +95,11 @@ EXCLUDE = (
 # Titles that hedge. Kept (they are usually real) but flagged in the note, so
 # whoever reviews knows the STORE was unsure, not us.
 HEDGES = ("possible", "maybe", "tentative", "tbc", "tbd")
+# Titles naming some OTHER championship's qualifier (a national league, not the
+# official Challenge track). Blocks auto-publish only; still proposed.
+NOT_OFFICIAL = ("german championship", "national championship", "league championship",
+                "-side", "side)", "side event", "legendz")
+AUTO_MIN_CAPACITY = 128
 
 
 def http_json(url: str, method: str = "GET", body=None, extra_headers=None):
@@ -108,7 +125,7 @@ def fetch_candidates():
     url = (
         f"{SUPABASE_URL}/rest/v1/lorcana_events"
         "?select=event_id,name,start_datetime,end_datetime,timezone,store_name,"
-        "city,state,country,url,gameplay_format"
+        "city,state,country,latitude,longitude,capacity,url,gameplay_format"
         f"&or=({ors})"
         "&start_datetime=gte.now()"
         "&order=start_datetime.asc&limit=500"
@@ -151,6 +168,44 @@ def local_day(row) -> str | None:
         return ts[:10]
 
 
+def local_end_day(ev, start_day):
+    """Last day of a multi-day event, or None. An event that runs past midnight
+    into the small hours (ends before 06:00 local) is still one day."""
+    ts = ev.get("end_datetime")
+    if not ts:
+        return None
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        tz = ev.get("timezone")
+        if tz:
+            try:
+                dt = dt.astimezone(ZoneInfo(tz))
+            except Exception:
+                pass
+        day = dt.date().isoformat()
+        return day if day > start_day and dt.hour >= 6 else None
+    except Exception:
+        return None
+
+
+def auto_publish_ok(ev, row) -> bool:
+    low = (ev.get("name") or "").lower()
+    if any(h in low for h in HEDGES) or any(n in low for n in NOT_OFFICIAL):
+        return False
+    if (ev.get("capacity") or 0) < AUTO_MIN_CAPACITY:
+        return False
+    if ev.get("latitude") is None or ev.get("longitude") is None or not ev.get("country"):
+        return False
+    return bool(ev.get("start_datetime")) and ev["start_datetime"] > _now_iso()
+
+
+def _now_iso():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
 def to_row(ev) -> dict | None:
     title = (ev.get("name") or "").strip()
     low = title.lower()
@@ -163,7 +218,7 @@ def to_row(ev) -> dict | None:
     note_bits = ["Proposed by scan_ccq_candidates.py from the Ravensburger Play listing."]
     if any(h in low for h in HEDGES):
         note_bits.append("⚠ The store's own title hedges — confirm before publishing.")
-    return {
+    row = {
         "kind": "ccq",
         "title": title,
         "subtitle": ev.get("store_name") or None,
@@ -176,7 +231,20 @@ def to_row(ev) -> dict | None:
         "event_id": ev.get("event_id"),
         "confirmed": False,
         "notes": " ".join(note_bits),
+        "country": ev.get("country"),
+        "latitude": ev.get("latitude"),
+        "longitude": ev.get("longitude"),
     }
+    end = local_end_day(ev, day)
+    if end:
+        row["ends_on"] = end
+    if auto_publish_ok(ev, row):
+        row["confirmed"] = True
+        row["source"] = "ccq-scan-auto"
+        row["notes"] = ("Auto-published from the Ravensburger Play listing "
+                        "(a qualifier-sized event whose title names a CCQ); not yet "
+                        "checked against an official announcement.")
+    return row
 
 
 def main():
@@ -189,7 +257,7 @@ def main():
     existing = fetch_existing()
     print(f"RPH upcoming events matching the CCQ net: {len(events)}")
 
-    new_rows, refresh, skipped = [], [], 0
+    new_rows, refresh, promote, skipped = [], [], [], 0
     for ev in events:
         row = to_row(ev)
         if row is None:
@@ -198,7 +266,9 @@ def main():
         prior = existing.get(row["event_id"])
         if prior is None:
             new_rows.append(row)
-        elif prior.get("source") == "ccq-scan" and not prior.get("confirmed"):
+        elif prior.get("source") == "ccq-scan" and not prior.get("confirmed") and row["confirmed"]:
+            promote.append((prior["id"], row))
+        elif (prior.get("source") == "ccq-scan" and not prior.get("confirmed")) or prior.get("source") == "ccq-scan-auto":
             # Still un-ruled: refresh the date/title in case the store edited it.
             if prior.get("starts_on") != row["starts_on"] or prior.get("title") != row["title"]:
                 refresh.append((prior["id"], row))
@@ -209,6 +279,10 @@ def main():
     for r in new_rows:
         flag = " ⚠hedged" if "hedges" in (r["notes"] or "") else ""
         print(f"    {r['starts_on']}  {r['title'][:58]}{flag}")
+    if promote:
+        print(f"  PROMOTED to the public calendar (auto-publish gates passed): {len(promote)}")
+        for _id, r in promote:
+            print(f"    {r['starts_on']}  {r['title'][:58]}")
     if refresh:
         print(f"  candidates whose listing changed: {len(refresh)}")
         for _id, r in refresh:
@@ -220,6 +294,15 @@ def main():
         print("can publish one, from the editor on /calendar.")
         return 0
 
+    for _id, row in promote:
+        patch = {k: row[k] for k in ("title", "starts_on", "starts_at", "timezone", "location",
+                                      "url", "source", "confirmed", "notes", "country",
+                                      "latitude", "longitude")}
+        patch["ends_on"] = row.get("ends_on")
+        http_json(f"{SUPABASE_URL}/rest/v1/calendar_events?id=eq.{_id}", "PATCH",
+                  patch, {"Prefer": "return=minimal"})
+    if promote:
+        print(f"published {len(promote)} qualifier(s)")
     if new_rows:
         http_json(f"{SUPABASE_URL}/rest/v1/calendar_events", "POST", new_rows,
                   {"Prefer": "resolution=ignore-duplicates,return=minimal"})
@@ -231,7 +314,7 @@ def main():
                   {"Prefer": "return=minimal"})
     if refresh:
         print(f"refreshed {len(refresh)} changed listing(s)")
-    if not new_rows and not refresh:
+    if not new_rows and not refresh and not promote:
         print("nothing to do")
     return 0
 
