@@ -8,111 +8,235 @@
 <title>Ink.Box</title>
 <link rel="icon" href="/favicon-32.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Nunito+Sans:opsz,wght@6..12,400;6..12,600;6..12,700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@600;700&family=Cinzel:wght@600;700&family=Nunito+Sans:opsz,wght@6..12,400;6..12,600;6..12,700&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#0f0d20; --panel:#1a1533; --panel2:#241c45; --line:#352a5c; --text:#f3e8ff; --dim:#a99bc9;
-  --gold:#e8c850; --gold-ink:#1a1304; --bad:#ff7b8a; --good:#7be0a4;
-  --r:14px; --safe-b:env(safe-area-inset-bottom,0px);
+  --bg:#0f0d20; --bg2:#151130; --panel:#1a1533; --panel2:#241c45; --panel3:#2e2457; --line:#352a5c; --line2:#463976;
+  --text:#f3e8ff; --dim:#a99bc9; --faint:#7d70a3;
+  --gold:#e8c850; --gold2:#f4dc7c; --gold-ink:#1a1304; --bad:#ff7b8a; --good:#7be0a4;
+  --paper:#fbfaf5; --paper-ink:#17141f; --paper-dim:#5d5868;
+  --r:16px; --safe-b:env(safe-area-inset-bottom,0px);
+  --shadow:0 10px 30px rgba(4,2,14,.45);
 }
 *{box-sizing:border-box}
-html,body{margin:0;height:100%}
-body{background:var(--bg);color:var(--text);font:16px/1.45 "Nunito Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-  -webkit-tap-highlight-color:transparent;overscroll-behavior-y:contain}
+[hidden]{display:none !important}
+html,body{margin:0;min-height:100%}
+body{background:
+    radial-gradient(900px 420px at 85% -120px,rgba(232,200,80,.10),transparent 70%),
+    radial-gradient(700px 500px at -10% 12%,rgba(122,92,220,.16),transparent 70%),
+    var(--bg);
+  background-attachment:fixed;color:var(--text);
+  font:16px/1.45 "Nunito Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  -webkit-tap-highlight-color:transparent;overscroll-behavior-y:contain;-webkit-font-smoothing:antialiased}
 h1,h2,h3{font-family:Cinzel,Georgia,serif;font-weight:700;margin:0;letter-spacing:.02em}
-h2{font-size:1.05rem;color:var(--gold);margin:22px 0 10px}
+h2{font-size:.82rem;color:var(--gold);margin:26px 2px 10px;text-transform:uppercase;letter-spacing:.14em;display:flex;align-items:center;gap:10px}
+h2::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line2),transparent)}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
-.app{max-width:560px;margin:0 auto;min-height:100%;display:flex;flex-direction:column;padding-bottom:calc(74px + var(--safe-b))}
-header{position:sticky;top:0;z-index:5;background:linear-gradient(var(--bg) 70%,transparent);padding:14px 16px 10px;display:flex;align-items:center;gap:12px}
-header h1{font-size:1.35rem;flex:1}
+:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+svg.i{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.app{max-width:560px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;padding-bottom:calc(84px + var(--safe-b))}
+header{position:sticky;top:0;z-index:5;padding:14px 16px 12px;display:flex;align-items:center;gap:12px;
+  background:linear-gradient(rgba(15,13,32,.96) 62%,rgba(15,13,32,0));backdrop-filter:blur(6px)}
+.brand{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+.brand .mark{width:34px;height:34px;border-radius:10px;flex:none;box-shadow:0 4px 14px rgba(232,200,80,.18)}
+header h1{font-size:1.3rem}
 header h1 span{color:var(--gold)}
-.pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:6px 12px;font-size:.82rem;color:var(--dim);max-width:60%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dot{width:9px;height:9px;border-radius:50%;background:var(--dim);flex:none}
-.dot.ok{background:var(--good)} .dot.bad{background:var(--bad)} .dot.wait{background:var(--gold)}
-main{padding:0 16px;flex:1}
+.pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:rgba(26,21,51,.8);border-radius:999px;padding:7px 12px;font-size:.8rem;font-weight:600;color:var(--dim);max-width:58%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--faint);flex:none}
+.dot.ok{background:var(--good);box-shadow:0 0 0 3px rgba(123,224,164,.16)} .dot.bad{background:var(--bad)} .dot.wait{background:var(--gold)}
+main{padding:2px 16px 0;flex:1}
 section[hidden]{display:none}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px}
+section{animation:rise .22s ease-out}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.card{background:linear-gradient(180deg,var(--panel),#17122e);border:1px solid var(--line);border-radius:var(--r);padding:14px;box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
 .card + .card{margin-top:12px}
 .row{display:flex;gap:10px;align-items:center}
 .row > .grow{flex:1;min-width:0}
 .muted{color:var(--dim);font-size:.88rem}
-.field{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px 14px;outline:none}
-.field:focus{border-color:var(--gold)}
-textarea.field{min-height:150px;resize:vertical;font-size:.92rem}
+.field{width:100%;background:rgba(10,8,24,.75);border:1px solid var(--line);border-radius:12px;padding:12px 14px;outline:none;transition:border-color .15s,box-shadow .15s}
+.field::placeholder{color:var(--faint)}
+.field:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(232,200,80,.14)}
+textarea.field{min-height:150px;resize:vertical;font-size:1rem}
 select.field{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--dim) 50%),linear-gradient(135deg,var(--dim) 50%,transparent 50%);background-position:calc(100% - 18px) 55%,calc(100% - 13px) 55%;background-size:5px 5px;background-repeat:no-repeat;padding-right:34px}
-.btn{border:1px solid var(--line);background:var(--panel2);border-radius:12px;padding:11px 14px;font-weight:700;min-height:46px;display:inline-flex;align-items:center;justify-content:center;gap:8px;text-align:center}
-.btn.gold{background:var(--gold);color:var(--gold-ink);border-color:var(--gold)}
+.btn{border:1px solid var(--line2);background:var(--panel2);border-radius:12px;padding:11px 14px;font-weight:700;min-height:46px;display:inline-flex;align-items:center;justify-content:center;gap:8px;text-align:center;transition:transform .08s,background .15s,border-color .15s}
+.btn:active{transform:scale(.97)}
+.btn.gold{background:linear-gradient(180deg,var(--gold2),var(--gold));color:var(--gold-ink);border-color:var(--gold);box-shadow:0 6px 18px rgba(232,200,80,.18)}
 .btn.ghost{background:transparent}
 .btn.small{min-height:36px;padding:6px 12px;font-size:.88rem}
 .btn.danger{color:var(--bad)}
-.btn:disabled{opacity:.45;cursor:default}
+.btn:disabled{opacity:.45;cursor:default;transform:none}
 .btn.block{width:100%}
+.btn.on{border-color:var(--gold);color:var(--gold)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.seg{display:flex;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:3px;gap:3px}
-.seg button{flex:1;border:0;background:transparent;border-radius:9px;padding:8px 6px;font-weight:700;color:var(--dim);min-height:38px}
-.seg button.on{background:var(--panel2);color:var(--gold)}
+.seg{display:flex;background:rgba(10,8,24,.75);border:1px solid var(--line);border-radius:12px;padding:3px;gap:3px}
+.seg button{flex:1;border:0;background:transparent;border-radius:9px;padding:8px 6px;font-weight:700;font-size:.9rem;color:var(--dim);min-height:38px;transition:background .15s,color .15s}
+.seg button.on{background:var(--panel3);color:var(--gold);box-shadow:inset 0 1px 0 rgba(255,255,255,.06)}
 .list{list-style:none;margin:0;padding:0}
 .list li{display:flex;gap:12px;align-items:center;padding:10px 4px;border-bottom:1px solid var(--line)}
 .list li:last-child{border-bottom:0}
 .list li.tap{cursor:pointer}
 .list .t{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .list .s{color:var(--dim);font-size:.84rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.thumb{width:44px;height:61px;border-radius:5px;background:var(--panel2);object-fit:cover;flex:none}
+.thumb{width:44px;height:61px;border-radius:5px;background:var(--panel2);object-fit:cover;flex:none;box-shadow:0 2px 8px rgba(0,0,0,.4)}
 .qty{font-weight:700;color:var(--gold);min-width:1.6em;text-align:right}
-.say{white-space:pre-wrap;margin-top:12px;padding:12px 14px;background:var(--bg);border-radius:12px;border:1px solid var(--line);font-size:.95rem}
-.tag{font-size:.74rem;font-weight:700;border-radius:6px;padding:2px 7px;background:var(--panel2);color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+.tag{font-size:.72rem;font-weight:700;border-radius:6px;padding:3px 7px;background:var(--panel2);color:var(--dim);text-transform:uppercase;letter-spacing:.05em}
 .tag.done{color:var(--good)} .tag.error{color:var(--bad)} .tag.printing,.tag.queued,.tag.sent{color:var(--gold)}
-nav{position:fixed;left:0;right:0;bottom:0;z-index:6;background:rgba(15,13,32,.96);backdrop-filter:blur(8px);border-top:1px solid var(--line);padding-bottom:var(--safe-b)}
+
+/* the command bar */
+.ask{position:relative;display:flex;align-items:center;gap:6px;background:rgba(10,8,24,.8);border:1px solid var(--line2);border-radius:18px;padding:6px 6px 6px 16px;transition:border-color .15s,box-shadow .15s}
+.ask:focus-within{border-color:var(--gold);box-shadow:0 0 0 3px rgba(232,200,80,.14)}
+.ask input{flex:1;min-width:0;background:transparent;border:0;outline:0;padding:10px 0;font-size:1.02rem}
+.ask input::placeholder{color:var(--faint)}
+.ask .ic{width:44px;height:44px;border-radius:13px;border:0;background:transparent;color:var(--dim);display:grid;place-items:center;flex:none}
+.ask .ic.live{color:var(--gold);background:var(--panel2)}
+.ask .go{width:46px;height:46px;border-radius:14px;border:0;background:linear-gradient(180deg,var(--gold2),var(--gold));color:var(--gold-ink);display:grid;place-items:center;flex:none}
+.ask .go:active{transform:scale(.95)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:12px 16px 4px;margin:0 -16px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;border:1px solid var(--line2);background:rgba(36,28,69,.7);color:var(--text);border-radius:999px;padding:8px 14px;font-size:.88rem;font-weight:600;white-space:nowrap}
+.chip:active{background:var(--panel3)}
+
+/* answers come out as paper */
+.answer{margin-top:14px}
+.asked{color:var(--dim);font-size:.86rem;margin:0 6px 8px;display:flex;gap:8px;align-items:baseline}
+.asked b{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.said{margin:0 6px 14px;font-size:1.04rem;line-height:1.4}
+.slot{height:12px;border-radius:7px;background:#06040e;box-shadow:inset 0 2px 5px #000,0 1px 0 rgba(255,255,255,.07);position:relative;z-index:2}
+.feed{overflow:hidden;margin:-6px 12px 0;padding-bottom:12px}
+.paper{background:var(--paper);color:var(--paper-ink);padding:16px 14px 18px;position:relative;font-family:Barlow,"Nunito Sans",system-ui,sans-serif;font-size:.95rem;line-height:1.35;
+  animation:feed .5s cubic-bezier(.2,.85,.25,1);filter:drop-shadow(0 12px 14px rgba(0,0,0,.4))}
+@keyframes feed{from{transform:translateY(-55%)}to{transform:none}}
+.paper::after{content:"";position:absolute;left:0;right:0;bottom:-9px;height:10px;
+  background:linear-gradient(135deg,var(--paper) 50%,transparent 50%) 0 0/12px 10px repeat-x,linear-gradient(225deg,var(--paper) 50%,transparent 50%) 0 0/12px 10px repeat-x}
+.paper.busy{color:var(--paper-dim);text-align:center;letter-spacing:.3em;animation:feed .5s cubic-bezier(.2,.85,.25,1),blink 1.1s ease-in-out infinite}
+@keyframes blink{50%{opacity:.6}}
+.p-title{font-family:"Barlow Condensed",Barlow,sans-serif;font-weight:700;font-size:1.5rem;line-height:1.1;text-transform:uppercase;text-align:center;letter-spacing:.01em}
+.p-rule{border-top:1.5px solid var(--paper-ink);margin:8px 0}
+.p-rule.dashed{border-top-style:dashed}
+.p-gap{height:8px}
+.p-h{background:var(--paper-ink);color:var(--paper);font-weight:600;padding:3px 8px;margin:9px 0 5px;font-size:.92rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.p-text{margin:2px 0;overflow-wrap:anywhere}
+.p-text.pre{white-space:pre-wrap}
+.p-text.small,.p-row.small{font-size:.8rem;color:var(--paper-dim)}
+.p-text.center{text-align:center}
+.p-text.italic{font-style:italic}
+.p-text.bold,.p-row.bold{font-weight:600}
+.p-row{display:flex;gap:8px;align-items:baseline;padding:1.5px 0}
+.p-row .p-lead{font-weight:700;min-width:1.7em}
+.p-row .p-l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.p-row .p-r{font-weight:500;white-space:nowrap}
+.p-row .p-col{width:3.1em;text-align:right;font-weight:500;flex:none}
+.p-sub{padding-left:.8em}
+.p-choice{cursor:pointer;border-radius:6px;margin:0 -6px;padding:6px}
+.p-choice:active{background:#e9e6dc}
+.p-choice b{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis}
+.p-where{display:block;font-size:.8rem;color:var(--paper-dim)}
+.p-chart{display:block;width:100%;height:auto;margin:6px 0 2px}
+.p-foot{text-align:center;font-size:.72rem;font-weight:500;color:var(--paper-dim);margin-top:10px;letter-spacing:.04em}
+.actions{display:flex;gap:10px;margin:14px 12px 0;flex-wrap:wrap}
+.actions .btn{flex:1;min-width:0}
+.printing{margin:12px 12px 0;display:flex;gap:10px;align-items:center;color:var(--dim);font-size:.9rem}
+.printing .t{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* look things up */
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.tile{display:flex;gap:11px;align-items:center;text-align:left;border:1px solid var(--line);background:linear-gradient(180deg,var(--panel),#17122e);border-radius:14px;padding:12px;min-height:64px;transition:transform .08s,border-color .15s}
+.tile:active{transform:scale(.97);border-color:var(--gold)}
+.tile .ib{width:38px;height:38px;border-radius:11px;background:var(--panel3);color:var(--gold);display:grid;place-items:center;flex:none}
+.tile b{display:block;font-size:.95rem;line-height:1.15}
+.tile span{display:block;color:var(--dim);font-size:.78rem;line-height:1.2;margin-top:2px}
+.tile:disabled{opacity:.5}
+
+nav{position:fixed;left:0;right:0;bottom:0;z-index:6;background:rgba(15,13,32,.94);backdrop-filter:blur(10px);border-top:1px solid var(--line);padding-bottom:var(--safe-b)}
 nav .in{max-width:560px;margin:0 auto;display:flex}
-nav button{flex:1;border:0;background:transparent;color:var(--dim);padding:10px 4px 9px;font-size:.74rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:3px}
+nav button{flex:1;border:0;background:transparent;color:var(--faint);padding:10px 4px 9px;font-size:.72rem;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:3px;position:relative;transition:color .15s}
 nav button.on{color:var(--gold)}
+nav button.on::before{content:"";position:absolute;top:-1px;width:34px;height:2px;border-radius:2px;background:var(--gold)}
 nav svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.sheet-bg{position:fixed;inset:0;background:rgba(5,3,14,.72);z-index:20;display:flex;align-items:flex-end;justify-content:center}
-.sheet{background:var(--panel);border:1px solid var(--line);border-radius:20px 20px 0 0;width:100%;max-width:560px;max-height:92vh;overflow:auto;padding:18px 16px calc(18px + var(--safe-b))}
+.sheet-bg{position:fixed;inset:0;background:rgba(5,3,14,.72);z-index:20;display:flex;align-items:flex-end;justify-content:center;animation:fade .15s}
+@keyframes fade{from{opacity:0}}
+.sheet{background:var(--panel);border:1px solid var(--line2);border-bottom:0;border-radius:22px 22px 0 0;width:100%;max-width:560px;max-height:92vh;overflow:auto;padding:10px 16px calc(18px + var(--safe-b));animation:up .22s cubic-bezier(.2,.8,.2,1)}
+@keyframes up{from{transform:translateY(40px);opacity:.4}}
+.sheet::before{content:"";display:block;width:40px;height:4px;border-radius:2px;background:var(--line2);margin:0 auto 12px}
 .sheet h3{font-size:1.15rem}
-.sheet .art{display:block;margin:12px auto;max-height:42vh;max-width:100%;border-radius:12px}
+.sheet .art{display:block;margin:12px auto;max-height:42vh;max-width:100%;border-radius:12px;box-shadow:var(--shadow)}
 .sheet .art.print{background:#fff;border-radius:6px;padding:4px}
 .stepper{display:flex;align-items:center;gap:6px}
-.stepper button{width:44px;height:44px;border-radius:12px;border:1px solid var(--line);background:var(--panel2);font-size:1.3rem;font-weight:700}
+.stepper button{width:44px;height:44px;border-radius:12px;border:1px solid var(--line2);background:var(--panel2);font-size:1.3rem;font-weight:700}
 .stepper b{min-width:2ch;text-align:center;font-size:1.2rem}
-.toast{position:fixed;left:50%;bottom:calc(90px + var(--safe-b));transform:translateX(-50%);background:var(--text);color:#17112b;border-radius:12px;padding:10px 16px;font-weight:700;z-index:40;max-width:88vw;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+.toast{position:fixed;left:50%;bottom:calc(96px + var(--safe-b));transform:translateX(-50%);background:var(--text);color:#17112b;border-radius:12px;padding:10px 16px;font-weight:700;z-index:40;max-width:88vw;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.5);animation:up .2s}
 .toast.bad{background:var(--bad);color:#2a0810}
-label.lbl{display:block;font-size:.82rem;color:var(--dim);font-weight:700;margin:12px 0 6px}
+label.lbl{display:block;font-size:.8rem;color:var(--dim);font-weight:700;margin:14px 0 6px}
 input[type=range]{width:100%;accent-color:var(--gold)}
 .empty{text-align:center;color:var(--dim);padding:26px 10px}
+.search{position:relative}
+.search svg{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--faint);pointer-events:none}
+.search .field{padding-left:44px}
 a{color:var(--gold)}
+code{background:var(--panel2);border-radius:6px;padding:1px 6px;font-size:.86em}
+@media (prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important}}
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+  <symbol id="i-trend" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></symbol>
+  <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M8 4h8v5a4 4 0 0 1-8 0zM8 6H4.5a3.5 3.5 0 0 0 3.6 4.4M16 6h3.5a3.5 3.5 0 0 1-3.6 4.4M12 13v4M8.5 20h7M10 17h4v3h-4z"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.6L19.5 10.5l-5.6 1.9L12 18l-1.9-5.6L4.5 10.5l5.6-1.9zM19 16.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4M8 14h2M14 14h2M8 17h2"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s7-6.2 7-11.5a7 7 0 0 0-14 0C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M5 4.5h10.5A2.5 2.5 0 0 1 18 7v13H7.5A2.5 2.5 0 0 1 5 17.5zM5 17.5A2.5 2.5 0 0 1 7.5 15H18M9 8.5h5"/></symbol>
+  <symbol id="i-coins" viewBox="0 0 24 24"><ellipse cx="9" cy="7" rx="5.5" ry="2.8"/><path d="M3.5 7v4.5c0 1.5 2.5 2.8 5.5 2.8M3.5 11.5V16c0 1.5 2.5 2.8 5.5 2.8"/><ellipse cx="15" cy="13" rx="5.5" ry="2.8"/><path d="M9.5 13v4.5c0 1.5 2.5 2.8 5.5 2.8s5.5-1.3 5.5-2.8V13"/></symbol>
+  <symbol id="i-dice" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M8.5 8.5h.01M15.5 8.5h.01M12 12h.01M8.5 15.5h.01M15.5 15.5h.01"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+</svg>
 <div class="app">
   <header>
-    <h1>Ink<span>.</span>Box</h1>
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 512 512" aria-hidden="true"><rect width="512" height="512" rx="120" fill="#241c45"/><rect x="96" y="232" width="320" height="176" rx="28" fill="#0f0d20" stroke="#e8c850" stroke-width="16"/><rect x="176" y="88" width="160" height="224" rx="14" fill="#f3e8ff"/><path d="M256 128l34 59v68l-34 20-34-20v-68z" fill="#0f0d20"/><rect x="150" y="300" width="212" height="18" rx="9" fill="#0f0d20"/><circle cx="372" cy="366" r="13" fill="#e8c850"/></svg>
+      <h1>Ink<span>.</span>Box</h1>
+    </div>
     <button class="pill" id="linkPill" title="Connection"><span class="dot" id="linkDot"></span><span id="linkText">Connecting…</span></button>
   </header>
   <main>
     <!-- PRINT -->
     <section id="tab-print">
-      <div class="card">
-        <form id="cmdForm" class="row">
-          <input class="field grow" id="cmdInput" placeholder="Card name, or “open a pack”" autocomplete="off" autocapitalize="off" enterkeyhint="send" aria-label="Command">
-          <button class="btn" type="button" id="micBtn" hidden aria-label="Speak">
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
-          </button>
-          <button class="btn gold" type="submit">Go</button>
-        </form>
-        <div class="say" id="cmdSay" hidden></div>
-        <ul class="list" id="cmdChoices"></ul>
-        <p class="muted" style="margin:10px 2px 0">Try: <i>stitch rock star</i> · <i>print 4 be our guest</i> · <i>random legendary amber</i> · <i>how much is elsa spirit of winter</i> · <i>help</i></p>
+      <form id="cmdForm" class="ask">
+        <input id="cmdInput" placeholder="A card name, or ask something" autocomplete="off" autocapitalize="off" enterkeyhint="send" aria-label="Command">
+        <button class="ic" type="button" id="micBtn" hidden aria-label="Speak"><svg class="i"><use href="#i-mic"/></svg></button>
+        <button class="go" type="submit" aria-label="Send"><svg class="i" style="stroke-width:2.4"><use href="#i-send"/></svg></button>
+      </form>
+      <div class="chips" id="chips">
+        <button class="chip" data-cmd="random card">Random card</button>
+        <button class="chip" data-fill="print 4 ">Print 4 of&hellip;</button>
+        <button class="chip" data-fill="price ">Price of&hellip;</button>
+        <button class="chip" data-cmd="how many legendary cards in set 12">How many&hellip;</button>
+        <button class="chip" data-cmd="best ev">Best EV</button>
+        <button class="chip" data-cmd="help">Help</button>
       </div>
 
-      <h2>Print style</h2>
-      <div class="seg" id="modeSeg">
-        <button data-v="proxy">Proxy (clean text)</button>
-        <button data-v="art">Art (real card)</button>
+      <div class="answer" id="answer" hidden>
+        <div class="asked"><span>You asked</span><b id="askedText"></b></div>
+        <p class="said" id="saidText" hidden></p>
+        <div class="slot"></div>
+        <div class="feed" id="feed"></div>
+        <div class="printing" id="printingNow" hidden><span class="tag printing">printing</span><span class="t" id="printingText"></span></div>
+        <div class="actions" id="answerActions"></div>
       </div>
 
-      <h2>Open a pack</h2>
+      <h2>Look it up</h2>
+      <div class="tiles">
+        <button class="tile" data-cmd="movers"><span class="ib"><svg class="i"><use href="#i-trend"/></svg></span><div><b>Movers</b><span>Prices today</span></div></button>
+        <button class="tile" data-cmd="meta"><span class="ib"><svg class="i"><use href="#i-trophy"/></svg></span><div><b>The meta</b><span>What's winning</span></div></button>
+        <button class="tile" data-cmd="new cards"><span class="ib"><svg class="i"><use href="#i-spark"/></svg></span><div><b>New cards</b><span>Just revealed</span></div></button>
+        <button class="tile" data-cmd="calendar"><span class="ib"><svg class="i"><use href="#i-cal"/></svg></span><div><b>Calendar</b><span>What's next</span></div></button>
+        <button class="tile" id="eventsTile"><span class="ib"><svg class="i"><use href="#i-pin"/></svg></span><div><b>Events</b><span>Near you</span></div></button>
+        <button class="tile" data-cmd="ev"><span class="ib"><svg class="i"><use href="#i-coins"/></svg></span><div><b>Pack value</b><span>EV by set</span></div></button>
+      </div>
+
+      <h2>Sets and packs</h2>
       <div class="card">
         <div class="grid2">
           <select class="field" id="packSet" aria-label="Set"></select>
@@ -122,21 +246,29 @@ a{color:var(--gold)}
             <option value="summary">Receipt only</option>
           </select>
         </div>
-        <button class="btn gold block" id="packBtn" style="margin-top:10px">Open pack</button>
+        <button class="btn gold block" id="packBtn" style="margin-top:10px">Open a pack</button>
+        <div class="grid2" style="margin-top:10px">
+          <button class="btn" id="boxBtn">Open a box</button>
+          <button class="btn" id="setBtn">Set guide</button>
+        </div>
+        <p class="muted" style="margin:10px 2px 0">A box is 24 simulated packs, summed up on one slip.</p>
       </div>
 
-      <h2>Quick prints</h2>
-      <div class="grid2">
-        <button class="btn" data-cmd="random card">Random card</button>
-        <button class="btn" data-job='{"type":"ev_table"}'>EV table</button>
-        <button class="btn" data-job='{"type":"test"}'>Test page</button>
-        <button class="btn" data-cmd="print help">Command list</button>
+      <h2>Cards print as</h2>
+      <div class="seg" id="modeSeg">
+        <button data-v="proxy">Proxy (clean text)</button>
+        <button data-v="art">Art (real card)</button>
+      </div>
+      <div class="grid2" style="margin-top:12px">
+        <button class="btn ghost small" data-job='{"type":"test"}'>Test page</button>
+        <button class="btn ghost small" data-cmd="print help">Print the command list</button>
       </div>
     </section>
 
     <!-- CARDS -->
     <section id="tab-cards" hidden>
-      <input class="field" id="searchInput" placeholder="Search cards" autocomplete="off" autocapitalize="off" enterkeyhint="search">
+      <div class="search"><svg class="i"><use href="#i-search"/></svg>
+        <input class="field" id="searchInput" aria-label="Search cards" placeholder="Search cards" autocomplete="off" autocapitalize="off" enterkeyhint="search"></div>
       <ul class="list" id="searchList" style="margin-top:8px"></ul>
       <div class="empty" id="searchEmpty">Search by name. On your home Wi-Fi you can add filters too: <i>legendary amber</i>, <i>stitch cost 7</i>, <i>evasive set 12</i>.</div>
     </section>
@@ -155,19 +287,19 @@ a{color:var(--gold)}
         <h2>From a packs.ink link</h2>
         <div class="card">
           <form id="deckLinkForm" class="row">
-            <input class="field grow" id="deckLink" placeholder="packs.ink/?d=…" autocomplete="off" autocapitalize="off" inputmode="url">
+            <input class="field grow" id="deckLink" aria-label="packs.ink deck link" placeholder="packs.ink/?d=…" autocomplete="off" autocapitalize="off" inputmode="url">
             <button class="btn gold" type="submit">Load</button>
           </form>
         </div>
         <h2>Paste a decklist</h2>
         <div class="card">
-          <textarea class="field" id="deckText" placeholder="4 Ariel - Spectacular Singer&#10;4 Be Our Guest&#10;3 Elsa - Spirit of Winter&#10;…" spellcheck="false"></textarea>
+          <textarea class="field" id="deckText" aria-label="Decklist" placeholder="4 Ariel - Spectacular Singer&#10;4 Be Our Guest&#10;3 Elsa - Spirit of Winter&#10;…" spellcheck="false"></textarea>
           <button class="btn gold block" id="deckTextBtn" style="margin-top:10px">Read decklist</button>
         </div>
       </div>
       <div id="deckView" hidden>
         <button class="btn ghost small" id="deckBack">&larr; Decks</button>
-        <h2 id="deckName" style="margin-top:12px"></h2>
+        <h3 id="deckName" style="margin-top:14px;font-size:1.25rem"></h3>
         <div class="muted" id="deckMeta"></div>
         <label class="lbl">Copies</label>
         <div class="seg" id="copiesSeg"><button data-v="full" class="on">Full deck</button><button data-v="one">One of each</button></div>
@@ -189,7 +321,7 @@ a{color:var(--gold)}
         <div class="card">
           <ul class="list" id="deviceList"></ul>
           <form id="pairForm" class="row" style="margin-top:10px">
-            <input class="field grow" id="pairCode" placeholder="Pairing code (XXXX-XXXX)" autocomplete="off" autocapitalize="characters" maxlength="12">
+            <input class="field grow" id="pairCode" aria-label="Pairing code" placeholder="Pairing code (XXXX-XXXX)" autocomplete="off" autocapitalize="characters" maxlength="12">
             <button class="btn gold" type="submit">Pair</button>
           </form>
           <p class="muted" style="margin:10px 2px 0">On the box, print a pairing slip (Box tab on your home Wi-Fi, or run <code>python -m inkbox pair</code>).</p>
@@ -206,13 +338,13 @@ a{color:var(--gold)}
         <h2>Paper</h2>
         <div class="card">
           <label class="lbl" style="margin-top:0">Printer</label>
-          <select class="field" id="setDriver">
+          <select class="field" id="setDriver" aria-label="Printer">
             <option value="escpos">Receipt printer (ESC/POS)</option>
             <option value="brother_ql">Brother QL label printer</option>
             <option value="preview">No printer (save previews)</option>
           </select>
           <label class="lbl">Roll loaded</label>
-          <select class="field" id="setMedia"></select>
+          <select class="field" id="setMedia" aria-label="Roll loaded"></select>
           <label class="lbl">Card size</label>
           <div class="seg" id="scaleSeg"><button data-v="true">True size (63&times;88)</button><button data-v="fit">Fill the paper</button></div>
           <button class="btn small block" id="togGuides" style="margin-top:10px"></button>
@@ -220,7 +352,7 @@ a{color:var(--gold)}
         <h2>Print quality</h2>
         <div class="card">
           <label class="lbl" style="margin-top:0">Lightness <span id="gammaVal"></span></label>
-          <input type="range" id="setGamma" min="0.8" max="2.2" step="0.05">
+          <input type="range" id="setGamma" aria-label="Lightness" min="0.8" max="2.2" step="0.05">
           <p class="muted" style="margin:4px 0 0">Prints too dark and muddy? Slide right. Washed out? Slide left.</p>
           <label class="lbl">Shading</label>
           <div class="seg" id="ditherSeg"><button data-v="fs">Smooth</button><button data-v="ordered">Halftone</button><button data-v="threshold">Hard</button></div>
@@ -230,22 +362,42 @@ a{color:var(--gold)}
             <button class="btn small" id="togFlavor"></button>
           </div>
         </div>
-        <h2>Button &amp; voice</h2>
+        <h2>Button and voice</h2>
         <div class="card">
           <div class="muted" id="voiceInfo"></div>
           <label class="lbl">When the box needs to answer you</label>
           <div class="seg" id="replySeg"><button data-v="print">Print a slip</button><button data-v="speak">Speak</button><button data-v="both">Both</button><button data-v="silent">Stay quiet</button></div>
           <label class="lbl">A quick tap of the button does</label>
           <form id="tapForm" class="row">
-            <input class="field grow" id="tapCmd" placeholder="random card" autocomplete="off" autocapitalize="off" maxlength="80">
+            <input class="field grow" id="tapCmd" aria-label="Tap command" placeholder="random card" autocomplete="off" autocapitalize="off" maxlength="80">
             <button class="btn" type="submit">Save</button>
           </form>
           <p class="muted" style="margin:10px 2px 0">Hold the button and talk to print. Leave the tap command empty to make taps do nothing.</p>
         </div>
+        <h2>Home and updates</h2>
+        <div class="card">
+          <label class="lbl" style="margin-top:0">Home, for &ldquo;events near me&rdquo;</label>
+          <form id="homeForm" class="row">
+            <input class="field grow" id="homePlace" aria-label="Home place" placeholder="Postal code, or town and state" autocomplete="off" maxlength="60">
+            <button class="btn" type="submit">Save</button>
+          </form>
+          <label class="lbl">Look this far</label>
+          <div class="seg" id="radiusSeg"><button data-v="25">25 mi</button><button data-v="50">50 mi</button><button data-v="100">100 mi</button><button data-v="200">200 mi</button></div>
+          <label class="lbl">Refresh cards and prices</label>
+          <div class="seg" id="syncSeg"><button data-v="0">Only when asked</button><button data-v="6">Every 6 hours</button><button data-v="24">Daily</button></div>
+          <label class="lbl">When new cards are revealed</label>
+          <div class="seg" id="newSeg"><button data-v="off">Do nothing</button><button data-v="list">Print a list</button><button data-v="cards">Print the cards</button></div>
+          <label class="lbl">Morning price report</label>
+          <div class="row">
+            <button class="btn small grow" id="togReport"></button>
+            <select class="field" id="reportHour" aria-label="Hour" style="width:auto;min-width:112px;padding-top:8px;padding-bottom:8px"></select>
+          </div>
+          <p class="muted" id="autoInfo" style="margin:10px 2px 0"></p>
+        </div>
         <h2>Box</h2>
         <div class="card">
           <div class="grid2">
-            <button class="btn" id="syncBtn">Update card catalog</button>
+            <button class="btn" id="syncBtn">Update cards now</button>
             <button class="btn" id="pairSlipBtn">Link to packs.ink</button>
           </div>
           <p class="muted" id="catalogInfo" style="margin:10px 2px 0"></p>
@@ -256,8 +408,8 @@ a{color:var(--gold)}
         <h2>Wi-Fi setup</h2>
         <div class="card">
           <form id="wifiForm">
-            <input class="field" id="wifiSsid" placeholder="Network name" autocomplete="off" autocapitalize="off">
-            <input class="field" id="wifiPsk" placeholder="Password" type="password" autocomplete="off" style="margin-top:8px">
+            <input class="field" id="wifiSsid" aria-label="Network name" placeholder="Network name" autocomplete="off" autocapitalize="off">
+            <input class="field" id="wifiPsk" aria-label="Wi-Fi password" placeholder="Password" type="password" autocomplete="off" style="margin-top:8px">
             <button class="btn gold block" type="submit" style="margin-top:10px">Join network</button>
           </form>
         </div>
@@ -352,7 +504,9 @@ async function sbFetch(path, opts = {}) {
   try { res = await fetch(SB + path, Object.assign({ headers: sbHeaders(!!opts.body) }, opts)); }
   catch { throw new Error("Couldn't reach packs.ink. Check your connection."); }
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  let data = null;
+  // Not JSON: a captive portal or proxy answered instead of packs.ink
+  try { data = text ? JSON.parse(text) : null; } catch { throw new Error("Couldn't reach packs.ink. Check your connection."); }
   if (!res.ok) throw new Error((data && (data.message || data.error_description)) || `packs.ink error ${res.status}`);
   return data;
 }
@@ -553,7 +707,7 @@ const cloud = {
     for (let i = 0; i < 20; i++) {              // the box polls every few seconds
       await new Promise((r) => setTimeout(r, 1500));
       const rows = await sbGet(`inkbox_jobs?select=status,message&id=eq.${id}`);
-      if (rows[0] && ["done", "error", "canceled"].includes(rows[0].status)) return { say: rows[0].message || "Done.", choices: [], jobs: [] };
+      if (rows[0] && ["done", "error", "canceled"].includes(rows[0].status)) return parseRelayReply(rows[0].message);
     }
     await sbRpc("inkbox_cancel_job", { p_job_id: id }).catch(() => {});      // don't leave it to fire later
     return { say: "The box didn't answer, so that was cancelled. Check it's switched on.", choices: [], jobs: [] };
@@ -618,6 +772,20 @@ const ble = {
   settings(patch) { return this.request({ op: "settings", patch }); },
 };
 
+/* The relay carries a short text reply (see short_reply in inkbox/server/cloud.py). */
+const PRINT_HINT = "Send 'print it' for the full slip.";
+function parseRelayReply(message) {
+  let say = message || "Done.", printable = false, choices = [];
+  if (say.endsWith(PRINT_HINT)) { say = say.slice(0, -PRINT_HINT.length).trim(); printable = true; }
+  if (say.startsWith("Which one?")) {
+    const lines = say.split("\n").slice(1);
+    choices = lines.filter((l) => /^\d+\. /.test(l)).map((l) => ({ display_name: l.replace(/^\d+\. /, "") }));
+    const more = lines.find((l) => /^\+\d+ more/.test(l));
+    say = "Which one?" + (more ? "\n...and " + more.slice(1) + ". Add words to narrow it down." : "");
+  }
+  return { say, choices, jobs: [], printable };
+}
+
 const fallbackLink = () => (CFG.mode === "lan" ? lan : cloud);
 let link = fallbackLink(), status = null;
 const sessionId = Math.random().toString(36).slice(2, 10);
@@ -628,7 +796,7 @@ function jobTitle(p) {
   if (p.type === "deck" || p.type === "decklist") return p.name || "Deck";
   if (p.type === "pack") return "Booster pack";
   if (p.type === "command") return "“" + (p.text || "") + "”";
-  return { test: "Test page", ev_table: "EV table", text: p.title || "Note", list: p.title || "Card list" }[p.type] || "Print job";
+  return { test: "Test page", ev_table: "EV table", text: p.title || "Note", list: p.title || "Card list", slip: p.title || "Report" }[p.type] || "Print job";
 }
 
 /* ── printing ───────────────────────────────────────────────────────────── */
@@ -657,6 +825,22 @@ function seg(id, value, onChange) {
   paint(value);
   return paint;
 }
+/* A small question sheet (instead of the browser's prompt box). Resolves to the text, or null. */
+function askFor(title, hint, placeholder, value = "") {
+  return new Promise((resolve) => {
+    const input = el("input", { class: "field", placeholder, value, autocomplete: "off", maxlength: 60 });
+    const done = (v) => { bg.remove(); resolve(v); };
+    const form = el("form", { onsubmit: (e) => { e.preventDefault(); done(input.value.trim() || null); } },
+      el("h3", {}, title), el("p", { class: "muted", style: "margin:6px 0 12px" }, hint), input,
+      el("div", { class: "grid2", style: "margin-top:12px" },
+        el("button", { class: "btn", type: "button", onclick: () => done(null) }, "Cancel"),
+        el("button", { class: "btn gold", type: "submit" }, "Save")));
+    const bg = el("div", { class: "sheet-bg", onclick: (e) => { if (e.target === bg) done(null); } },
+      el("div", { class: "sheet", role: "dialog", "aria-label": title }, form));
+    document.body.append(bg);
+    input.focus();
+  });
+}
 
 /* ── status ─────────────────────────────────────────────────────────────── */
 async function refreshStatus() {
@@ -673,7 +857,7 @@ function paintPill(cls, text) { $("linkDot").className = "dot " + cls; $("linkTe
 $("linkPill").addEventListener("click", () => showTab("box"));
 function setLink(l) { link = l; refreshStatus().then(() => { if (!$("tab-box").hidden) refreshBox(); }); }
 
-let setsFilled = false;
+let setsFilled = false, setList = [];
 async function fillSets() {
   if (setsFilled) return;
   let sets = status && status.sets;
@@ -686,38 +870,147 @@ async function fillSets() {
   }
   if (!sets.length) return;
   setsFilled = true;
+  setList = [...sets].sort((a, b) => b.code - a.code);
   const sel = $("packSet");
-  sel.replaceChildren(el("option", { value: "" }, "Newest set"),
-    ...[...sets].sort((a, b) => b.code - a.code).map((s) => el("option", { value: s.code }, s.name)));
+  sel.replaceChildren(el("option", { value: "" }, "Newest set"), ...setList.map((s) => el("option", { value: s.code }, s.name)));
   sel.value = store.get("packSet", "");
+}
+
+/* ── answers on paper ───────────────────────────────────────────────────── */
+const SVGNS = "http://www.w3.org/2000/svg";
+function chartView(b) {
+  const pts = (b.points || []).map((p) => [String(p[0]), Number(p[1])]).filter((p) => Number.isFinite(p[1]));
+  const wrap = el("div", {});
+  if (pts.length < 2) return wrap;
+  const W = 320, H = 96, vals = pts.map((p) => p[1]);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  const x = (i) => (i * W / (pts.length - 1)).toFixed(1), y = (v) => ((hi - v) / (hi - lo) * H).toFixed(1);
+  const line = pts.map((p, i) => `${x(i)},${y(p[1])}`).join(" ");
+  const svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("viewBox", `0 -2 ${W} ${H + 4}`); svg.setAttribute("class", "p-chart"); svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", b.caption || "Price chart");
+  const add = (tag, attrs) => { const n = document.createElementNS(SVGNS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); svg.append(n); };
+  for (const gy of [0, H / 2, H]) add("line", { x1: 0, x2: W, y1: gy, y2: gy, stroke: "#17141f", "stroke-width": 0.6, "stroke-dasharray": "1 4" });
+  add("polygon", { points: `0,${H} ${line} ${W},${H}`, fill: "#17141f", opacity: 0.1 });
+  add("polyline", { points: line, fill: "none", stroke: "#17141f", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" });
+  add("circle", { cx: W - 2.5, cy: y(vals[vals.length - 1]), r: 3.2, fill: "#17141f" });
+  const money = (v) => "$" + (v >= 1000 ? Math.round(v).toLocaleString() : v.toFixed(2));
+  wrap.append(el("div", { class: "p-row small" }, el("span", { class: "p-l" }, "high " + money(Math.max(...vals))),
+      el("span", { class: "p-r" }, "low " + money(Math.min(...vals)))), svg,
+    el("div", { class: "p-row small" }, el("span", { class: "p-l" }, pts[0][0]), el("span", { class: "p-r" }, pts[pts.length - 1][0])));
+  if (b.caption) wrap.append(el("div", { class: "p-text small center" }, b.caption));
+  return wrap;
+}
+function blockView(b) {
+  const cls = (base) => base + (b.size === "small" ? " small" : "") + (b.bold ? " bold" : "");
+  if (b.t === "h") return el("div", { class: "p-h" }, b.s || "");
+  if (b.t === "rule") return el("div", { class: "p-rule" + (b.dashed ? " dashed" : "") });
+  if (b.t === "gap") return el("div", { class: "p-gap" });
+  if (b.t === "chart") return chartView(b);
+  if (b.t === "text") return el("div", { class: cls("p-text") + (b.align === "center" ? " center" : "") + (b.style === "italic" ? " italic" : "") }, b.s || "");
+  if (b.t === "row") {
+    const row = el("div", { class: cls("p-row") }, b.lead ? el("span", { class: "p-lead" }, b.lead) : null,
+      el("span", { class: "p-l" }, b.l || ""),
+      b.cols ? b.cols.map((c) => el("span", { class: "p-col" }, c)) : el("span", { class: "p-r" }, b.r || ""));
+    return b.sub ? el("div", {}, row, el("div", { class: "p-text small p-sub" }, b.sub)) : row;
+  }
+  return null;
+}
+function paperView(r) {
+  const paper = el("div", { class: "paper" });
+  const slip = r.slip, choices = r.choices || [];
+  if (slip && slip.type === "slip") {
+    if (slip.title) paper.append(el("div", { class: "p-title" }, slip.title), el("div", { class: "p-rule" }));
+    paper.append(...(slip.blocks || []).map(blockView).filter(Boolean));
+  } else if (choices.length) {
+    paper.append(el("div", { class: "p-title" }, "Which one?"), el("div", { class: "p-rule" }),
+      ...choices.map((c, i) => el("div", { class: "p-row p-choice", role: "button", tabindex: 0,
+        onclick: () => runCommand(String(i + 1), c.display_name),
+        onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); runCommand(String(i + 1), c.display_name); } } },
+        el("span", { class: "p-lead" }, (i + 1) + "."),
+        el("span", { class: "p-l" }, el("b", {}, c.display_name),
+          el("span", { class: "p-where" }, [c.set_name, c.rarity].filter(Boolean).join(" · "))))));
+    const more = (r.say || "").split("\n").find((l) => l.startsWith("...and"));
+    if (more) paper.append(el("div", { class: "p-text small center", style: "margin-top:6px" }, more.replace("...and", "and")));
+  } else {
+    paper.append(el("div", { class: "p-text pre" }, r.say || "Done."));
+  }
+  paper.append(el("div", { class: "p-foot" }, "ink.box · packs.ink"));
+  return paper;
+}
+let lastReply = null;
+function showReply(asked, r) {
+  lastReply = r;
+  $("answer").hidden = false;
+  $("askedText").textContent = asked;
+  $("feed").replaceChildren(paperView(r));
+  // a report: the one-sentence answer the box would say, then the slip it would print
+  const report = !!(r.slip && r.slip.type === "slip" && r.say);
+  $("saidText").hidden = !report;
+  $("saidText").textContent = report ? r.say : "";
+  const jobs = r.jobs || [], actions = [];
+  $("printingNow").hidden = !jobs.length;
+  if (jobs.length) $("printingText").textContent = jobs.map((j) => j.title).join(", ");
+  if (r.slip) {
+    actions.push(el("button", { class: "btn gold", onclick: (e) => busy(e.currentTarget, () => printJob(r.slip, "Printing that slip.")) }, "Print this"));
+  } else if (r.printable === true) {
+    // through packs.ink only the sentence comes back; the box says when there is a slip behind it
+    actions.push(el("button", { class: "btn", onclick: (e) => busy(e.currentTarget, () => runCommand("print it", "Print that answer")) }, "Print the full answer"));
+  }
+  if (r.cards > 0) {
+    actions.push(el("button", { class: "btn", onclick: (e) => busy(e.currentTarget, () => runCommand("print them all", "Print those cards")) },
+      r.cards === 1 ? "Print the card" : `Print the ${r.cards} cards`));
+  }
+  $("answerActions").replaceChildren(...actions);
+  if (jobs.length) setTimeout(refreshJobs, 600);
+}
+async function runCommand(text, label) {
+  text = text.trim();
+  if (!text) return;
+  $("answer").hidden = false;
+  $("askedText").textContent = label || text;
+  $("feed").replaceChildren(el("div", { class: "paper busy" }, "· · ·"));
+  $("answerActions").replaceChildren(); $("printingNow").hidden = true; $("saidText").hidden = true;
+  if ($("tab-print").hidden) showTab("print");
+  $("answer").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  try {
+    showReply(label || text, await link.command(text));
+  } catch (e) { showReply(label || text, { say: e.message, printable: false }); }
 }
 
 /* ── print tab ──────────────────────────────────────────────────────────── */
 seg("modeSeg", mode, (v) => { mode = v; store.set("mode", v); });
 $("packWhat").value = store.get("packWhat", "all");
-async function runCommand(text) {
-  text = text.trim();
-  if (!text) return;
-  $("cmdSay").hidden = false; $("cmdSay").textContent = "…"; $("cmdChoices").replaceChildren();
-  try {
-    const r = await link.command(text);
-    const choices = r.choices || [];
-    $("cmdSay").textContent = (choices.length ? (r.say || "").split("\n")[0] : r.say) || "Done.";
-    $("cmdChoices").replaceChildren(...choices.map((c, i) =>
-      el("li", { class: "tap", onclick: () => runCommand(String(i + 1)) },
-        el("span", { class: "qty" }, i + 1), el("div", { class: "grow" }, el("div", { class: "t" }, c.display_name),
-        el("div", { class: "s" }, `${c.set_name} · ${c.rarity}`)))));
-    if (r.jobs && r.jobs.length) setTimeout(refreshJobs, 600);
-  } catch (e) { $("cmdSay").textContent = e.message; }
-}
-$("cmdForm").addEventListener("submit", (e) => { e.preventDefault(); const v = $("cmdInput").value; $("cmdInput").value = ""; runCommand(v); });
+$("cmdForm").addEventListener("submit", (e) => { e.preventDefault(); const v = $("cmdInput").value; $("cmdInput").value = ""; $("cmdInput").blur(); runCommand(v); });
 document.querySelectorAll("[data-cmd]").forEach((b) => b.addEventListener("click", () => busy(b, () => runCommand(b.dataset.cmd))));
+document.querySelectorAll("[data-fill]").forEach((b) => b.addEventListener("click", () => { $("cmdInput").value = b.dataset.fill; $("cmdInput").focus(); }));
 document.querySelectorAll("[data-job]").forEach((b) => b.addEventListener("click", () => busy(b, () => printJob(JSON.parse(b.dataset.job)))));
 $("packBtn").addEventListener("click", () => busy($("packBtn"), async () => {
   store.set("packSet", $("packSet").value); store.set("packWhat", $("packWhat").value);
   const payload = { type: "pack", what: $("packWhat").value };
   if ($("packSet").value) payload.set_code = $("packSet").value;
   await printJob(payload, "Pack opened. Good luck!");
+}));
+const pickedSet = () => $("packSet").value || (setList[0] && setList[0].code) || "";
+$("boxBtn").addEventListener("click", () => busy($("boxBtn"), () => {
+  store.set("packSet", $("packSet").value);
+  return runCommand($("packSet").value ? `open a set ${$("packSet").value} box` : "open a box", "Open a box");
+}));
+$("setBtn").addEventListener("click", () => busy($("setBtn"), () => {
+  if (!pickedSet()) throw new Error("Pick a set first.");
+  return runCommand("set " + pickedSet(), "Set guide");
+}));
+$("eventsTile").addEventListener("click", () => busy($("eventsTile"), async () => {
+  // The box remembers one home place; ask for it the first time.
+  if (status && status.home && !status.home.place && link.settings) {
+    const where = await askFor("Where's home?", "A postal code, or a town and state. The box uses it for “events near me”.", "60120 or Elgin IL");
+    if (!where) return;
+    await link.settings({ home: { place: where } });
+    await refreshStatus();
+  }
+  await runCommand("events near me");
 }));
 
 // Voice: Chrome's speech recognition, where the page is allowed to use the mic.
@@ -730,10 +1023,10 @@ $("packBtn").addEventListener("click", () => busy($("packBtn"), async () => {
   btn.addEventListener("click", () => {
     const rec = new SR();
     rec.lang = "en-US"; rec.maxAlternatives = 1;
-    btn.classList.add("gold");
+    btn.classList.add("live");
     rec.onresult = (e) => runCommand(e.results[0][0].transcript);
     rec.onerror = (e) => { if (e.error === "not-allowed") { btn.hidden = true; toast("Microphone isn't allowed here.", true); } };
-    rec.onend = () => btn.classList.remove("gold");
+    rec.onend = () => btn.classList.remove("live");
     rec.start();
   });
 })();
@@ -771,7 +1064,8 @@ function openCard(c) {
     const r = await link.preview(payload());
     img.src = r.pages[0]; img.classList.add("print");
   }) }, "Preview") : null;
-  const printBtn = el("button", { class: "btn gold", onclick: (e) => busy(e.target, async () => {
+  const priceBtn = el("button", { class: "btn", onclick: () => { close(); runCommand("price " + c.display_name.replace(" - ", " "), "Price of " + c.display_name); } }, "Price and chart");
+  const printBtn = el("button", { class: "btn gold block", style: "margin-top:10px", onclick: (e) => busy(e.target, async () => {
     await printJob(payload(), qty > 1 ? `Printing ${qty} copies.` : "Printing."); close();
   }) }, "Print");
   const bg = el("div", { class: "sheet-bg", onclick: (e) => { if (e.target === bg) close(); } },
@@ -783,8 +1077,9 @@ function openCard(c) {
         el("div", { class: "stepper" },
           el("button", { "aria-label": "Fewer", onclick: () => { qty = Math.max(1, qty - 1); count.textContent = qty; } }, "−"), count,
           el("button", { "aria-label": "More", onclick: () => { qty = Math.min(20, qty + 1); count.textContent = qty; } }, "+")),
-        el("div", { class: "grow" })),
-      el("div", { class: previewBtn ? "grid2" : "", style: "margin-top:14px" }, previewBtn, printBtn.classList.add("block") || printBtn)));
+        el("div", { class: "grow muted", style: "text-align:right" }, "copies")),
+      el("div", { class: previewBtn ? "grid2" : "", style: "margin-top:14px" }, previewBtn, priceBtn),
+      printBtn));
   const close = () => bg.remove();
   document.body.append(bg);
 }
@@ -885,7 +1180,7 @@ $("deckTextBtn").addEventListener("click", () => busy($("deckTextBtn"), async ()
 }));
 
 /* ── box tab ────────────────────────────────────────────────────────────── */
-let paintScale, paintDither, paintReply;
+let paintScale, paintDither, paintReply, paintRadius, paintSync, paintNew;
 async function refreshBox() {
   await refreshStatus();
   const s = status, box = $("boxStatus");
@@ -910,7 +1205,7 @@ async function refreshBox() {
     box.replaceChildren(
       el("div", { class: "row" }, el("span", { class: "dot " + (p.ready ? "ok" : "bad") }), el("b", { class: "grow" }, s.name), el("span", { class: "tag" }, link.label)),
       el("div", { class: "muted", style: "margin-top:6px" }, [p.simulated ? "No printer attached (saving previews)" : p.ready ? "Printer ready" : s.offline ? "Box is offline" : "Printer not found",
-        p.media_label, s.catalog && s.catalog.cards ? `${s.catalog.cards} cards` : "", s.version ? "v" + s.version : ""].filter(Boolean).join(" · ")));
+        p.media_label, s.catalog && s.catalog.cards ? `${s.catalog.cards.toLocaleString()} cards` : "", s.version ? "v" + s.version : ""].filter(Boolean).join(" · ")));
   }
   if (hosted && session) paintDevices();
   paintSettings();
@@ -938,6 +1233,8 @@ $("pairForm").addEventListener("submit", (e) => { e.preventDefault(); busy(e.sub
   toast("Paired!"); setLink(cloud);
 }); });
 
+const hourLabel = (h) => `${h % 12 || 12} ${h < 12 ? "AM" : "PM"}`;
+$("reportHour").replaceChildren(...Array.from({ length: 24 }, (_, h) => el("option", { value: h }, hourLabel(h))));
 function paintSettings() {
   const s = status, editable = s && s.media_options && link.settings;
   $("settingsWrap").hidden = !editable;
@@ -957,17 +1254,36 @@ function paintSettings() {
       : !b.voice ? (b.error || "Voice is off; the button still does tap and hold commands.")
       : b.heard ? `Voice is on. Last heard: “${b.heard}”` : "Voice is on. Hold the button and talk.";
   }
+  if (s.home && s.auto) {
+    if (document.activeElement !== $("homePlace")) $("homePlace").value = s.home.place || "";
+    paintRadius(s.home.radius); paintSync(s.auto.sync_hours); paintNew(s.auto.new_cards);
+    $("togReport").textContent = "Print it each morning: " + (s.auto.morning_report ? "on" : "off");
+    $("togReport").classList.toggle("on", !!s.auto.morning_report);
+    $("reportHour").value = s.auto.report_hour; $("reportHour").disabled = !s.auto.morning_report;
+    const a = (s.links && s.links.auto) || {};
+    $("autoInfo").textContent = a.error ? "Last update failed: " + a.error
+      : s.live === false ? "Live answers are switched off on this box, so prices come from the last sync."
+      : a.sync_age_hours != null ? `Cards and prices last refreshed ${a.sync_age_hours < 1 ? "within the hour" : Math.round(a.sync_age_hours) + " hours ago"}. Movers, the meta, events and the calendar are always fetched fresh.`
+      : "Movers, the meta, events and the calendar are always fetched fresh.";
+  }
   $("togGuides").textContent = "Trim lines beside the card: " + (s.print.guides ? "on" : "off");
   $("togPrice").textContent = "Price: " + (s.print.show_price ? "shown" : "hidden");
   $("togFlavor").textContent = "Flavor text: " + (s.print.show_flavor ? "shown" : "hidden");
-  $("catalogInfo").textContent = s.catalog.last_sync ? `Catalog synced ${new Date(s.catalog.last_sync).toLocaleDateString()}.` : "Catalog has never been synced.";
+  $("catalogInfo").textContent = s.catalog.last_sync ? `Catalog synced ${new Date(s.catalog.last_sync).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}.` : "Catalog has never been synced.";
   $("syncBtn").hidden = $("pairSlipBtn").hidden = link !== lan;
 }
-const saveSettings = (patch) => busy(null, async () => { const r = await link.settings(patch); if (r && r.printer) status = r; await refreshBox(); });
+// Resolves true only when the box took the change (busy() has already shown the error otherwise)
+const saveSettings = (patch) => busy(null, async () => { const r = await link.settings(patch); if (r && r.printer) status = r; await refreshBox(); return true; });
 paintScale = seg("scaleSeg", "true", (v) => saveSettings({ print: { scale: v } }));
 paintDither = seg("ditherSeg", "fs", (v) => saveSettings({ tone: { dither: v } }));
 paintReply = seg("replySeg", "print", (v) => saveSettings({ voice: { reply: v } }));
-$("tapForm").addEventListener("submit", (e) => { e.preventDefault(); saveSettings({ button: { press: $("tapCmd").value } }).then(() => toast("Saved.")); });
+paintRadius = seg("radiusSeg", "50", (v) => saveSettings({ home: { radius: Number(v) } }));
+paintSync = seg("syncSeg", "6", (v) => saveSettings({ auto: { sync_hours: Number(v) } }));
+paintNew = seg("newSeg", "off", (v) => saveSettings({ auto: { new_cards: v } }));
+$("tapForm").addEventListener("submit", (e) => { e.preventDefault(); saveSettings({ button: { press: $("tapCmd").value } }).then((ok) => ok && toast("Saved.")); });
+$("homeForm").addEventListener("submit", (e) => { e.preventDefault(); $("homePlace").blur(); saveSettings({ home: { place: $("homePlace").value } }).then((ok) => ok && toast("Saved.")); });
+$("togReport").addEventListener("click", () => saveSettings({ auto: { morning_report: !status.auto.morning_report } }));
+$("reportHour").addEventListener("change", () => saveSettings({ auto: { report_hour: Number($("reportHour").value) } }));
 $("setGamma").addEventListener("change", () => saveSettings({ tone: { gamma: Number($("setGamma").value) } }));
 $("setGamma").addEventListener("input", () => { $("gammaVal").textContent = "(" + Number($("setGamma").value).toFixed(2) + ")"; });
 $("setMedia").addEventListener("change", () => saveSettings({ printer: { media: $("setMedia").value } }));
@@ -1016,6 +1332,9 @@ $("cancelAll").addEventListener("click", () => busy($("cancelAll"), async () => 
 /* ── boot ───────────────────────────────────────────────────────────────── */
 (async function boot() {
   await initAuth().catch(() => {});
+  // Keep a pairing code from the slip's QR now: signing in redirects without the query string
+  const scanned = new URLSearchParams(location.search).get("pair");
+  if (scanned && !session) store.set("pendingPair", scanned);
   if (!allowed) {
     // Not public yet: without an invited account there is nothing here to use.
     document.querySelector("nav").hidden = true;
@@ -1041,6 +1360,8 @@ $("cancelAll").addEventListener("click", () => busy($("cancelAll"), async () => 
     else { store.set("pendingPair", pending); toast("Sign in to finish pairing."); }
   }
   setInterval(() => { if (!document.hidden) refreshStatus(); }, 15000);
+  // Coming back to the tab: what we knew about the box is as old as the time away
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshStatus(); });
 })();
 </script>
 </body>
