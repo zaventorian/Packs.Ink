@@ -848,21 +848,30 @@ export function createResolver(index) {
     if (label.length > 100) label = label.slice(0, 99) + "…";
     return label;
   }
+  // A set as a suggestion names it: "Hyperia City (S14)", shortening to "S14"
+  // when the line is tight. Promo sets have no number, so their short form is
+  // the set's code ("P3"), or nothing, in which case the name just gives way.
+  function setPart(set) {
+    if (!set || !set.n) return { k: "set", t: null };
+    if (set.main) return { k: "set", t: `${set.n} (S${set.main})`, short: `S${set.main}` };
+    return { k: "set", t: set.n, ...(set.code ? { short: set.code } : {}) };
+  }
   // What a /card suggestion says: the name, then the card's stats (Discord's
   // autocomplete has no sub-line, so they share the line), then which
-  // printing. Too long for Discord's 100, the set name goes first, then
-  // "inkable", the last keywords, "uninkable" and the word "Location" (stats.js);
+  // printing, set included. Too long for Discord's 100, "inkable" goes first,
+  // then the set name shortens to its number ("Hyperia City (S14)" → "S14"),
+  // then the last keywords, "uninkable" and the word "Location" (stats.js);
   // the finish and the price stay, because two suggestions for one card are
-  // told apart by them.
+  // told apart by them. No price: a suggestion is for choosing a card, and the
+  // reply that follows has the numbers.
   function suggestLabel(c, p, fi) {
     const set = sets[p.s] || {};
     const fl = finishLabel(p, fi);
-    const f = p.f[fi] || [];
     const printing = [{ k: "rar", t: p.r }, { k: "var", t: p.var }, { k: "fin", t: fl && fl !== p.var ? fl : null },
-      { k: "set", t: set.n }, { k: "px", t: money(f[5] ?? f[4]) }];
+      setPart(set)];
     const room = 100 - c.n.length - 3;
     if (room < 12) return cardLabel(c, p, fi);
-    return c.n + " — " + fitParts([statParts(c, { marks: true }), printing], room, ["set", "inkable", "kw", "uninkable", "type"], " | ", 0);
+    return c.n + " — " + fitParts([statParts(c, { marks: true }), printing], room, ["inkable", "~set", "kw", "uninkable", "type", "set"], " | ", 0);
   }
   function sealedLabel(p) {
     const px = money(p.mkt ?? p.low);
