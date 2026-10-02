@@ -811,7 +811,7 @@ const D = await mod("discord/src/data.js");
     const long = S.statsLineFor(elsa, ["Legendary", "#1 most played", "$123,456.00", "x".repeat(40)]);
     ok(long.length <= 100 && long.startsWith("Amethyst · 8c"), `stats: a sub-line never passes 100 characters, and keeps the stats first (${long})`);
     // Every suggestion line over the fixture: ≤100, the stats in it, and the
-    // price never cut off (a too-long line trims the stats with "…" instead).
+    // price left out (the reply has the numbers).
     let seen = 0, priced = 0;
     R.cards.forEach((c) => c.p.forEach((p) => p.f.forEach((f, fi) => {
       const l = R.suggestLabel(c, p, fi);
@@ -819,7 +819,7 @@ const D = await mod("discord/src/data.js");
       ok(l.length <= 100, `suggestion ≤100 characters (${l})`);
       ok(l.startsWith(c.n + " — "), `suggestion starts with the card's name (${l})`);
       const px = f[5] ?? f[4];
-      if (px != null) { priced++; ok(!l.endsWith("…") && /\$[\d,.]+$/.test(l), `suggestion keeps its price at the end (${l})`); }
+      if (px != null) { priced++; ok(!/\$\d/.test(l.slice(c.n.length)), `suggestion leaves the price out (${l})`); }
       ok(!/ \dc\b/.test(l.slice(c.n.length)), `suggestion leaves the cost out (${l})`);
       ok(!/\blore\b/.test(l.slice(c.n.length)), `suggestion writes lore as the symbol (${l})`);
       const set = R.sets[p.s] || {};
@@ -827,7 +827,7 @@ const D = await mod("discord/src/data.js");
     })));
     ok(seen > 200 && priced > 100, `every fixture printing checked (${seen}, ${priced} priced)`);
     const sug = R.suggest("elsa spirit", 5).find((s) => s.kind === "card");
-    ok(sug && /🟪/.test(sug.label) && /\(S\d+\)|S\d+ ·/.test(sug.label) && / \| /.test(sug.label), `a /card suggestion carries the stats on its line (${sug && sug.label})`);
+    ok(sug && /🟪/.test(sug.label) && /S\d+\)?$/.test(sug.label) && / \| /.test(sug.label), `a /card suggestion carries the stats on its line (${sug && sug.label})`);
     const nf = E.notFoundMessage(R, { kind: "none", query: "elsa?", suggestions: R.suggest("elsa", 5) }, "elsa?");
     const opts = (nf.components[0] || { components: [{ options: [] }] }).components[0].options;
     ok(opts.length && opts.every((o) => !/ \| /.test(o.label)) && opts.filter((o) => o.description).every((o) => /\d+c/.test(o.description)),

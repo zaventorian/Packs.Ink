@@ -862,13 +862,13 @@ export function createResolver(index) {
   // then the set name shortens to its number ("Hyperia City (S14)" → "S14"),
   // then the last keywords, "uninkable" and the word "Location" (stats.js);
   // the finish and the price stay, because two suggestions for one card are
-  // told apart by them.
+  // told apart by them. No price: a suggestion is for choosing a card, and the
+  // reply that follows has the numbers.
   function suggestLabel(c, p, fi) {
     const set = sets[p.s] || {};
     const fl = finishLabel(p, fi);
-    const f = p.f[fi] || [];
     const printing = [{ k: "rar", t: p.r }, { k: "var", t: p.var }, { k: "fin", t: fl && fl !== p.var ? fl : null },
-      setPart(set), { k: "px", t: money(f[5] ?? f[4]) }];
+      setPart(set)];
     const room = 100 - c.n.length - 3;
     if (room < 12) return cardLabel(c, p, fi);
     return c.n + " — " + fitParts([statParts(c, { marks: true }), printing], room, ["inkable", "~set", "kw", "uninkable", "type", "set"], " | ", 0);
