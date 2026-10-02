@@ -799,12 +799,12 @@ const D = await mod("discord/src/data.js");
   {
     const S = await mod("discord/src/stats.js");
     const demona = { n: "Demona - Scourge of the Wyvern Clan", i: ["Amethyst"], cost: 6, t: "Character", w: [], st: [5, 6, 2, null], ik: 1, x: "AD SAXUM COMMUTATE When you play…" };
-    eq(S.statsLineFor(demona), "Amethyst · 6c · inkable · 5/6 · 2 lore", "stats: a character in words");
+    eq(S.statsLineFor(demona), "Amethyst · 6c · inkable · 5/6 · 2⟡", "stats: a character in words");
     const elsa = { i: ["Amethyst"], cost: 8, t: "Character", w: ["Shift", "Evasive"], st: [4, 6, 3, null], ik: 0,
       x: "Evasive (Only characters with Evasive can challenge this character.)\nShift 6 {I} (You may pay 6 {I} to play this…)" };
     eq(S.keywordTags(elsa).join(", "), "Evasive, Shift 6", "stats: keywords in printed order, with their numbers");
-    eq(S.statsLineFor(elsa), "Amethyst · 8c · uninkable · 4/6 · 3 lore · Evasive · Shift 6", "stats: uninkable and keywords");
-    eq(S.statsLineFor({ i: ["Ruby"], cost: 3, t: "Location", st: [null, 5, 2, 1], ik: 1 }), "Ruby · 3c · inkable · Location · move 1 · 5 willpower · 2 lore", "stats: a location's move and willpower");
+    eq(S.statsLineFor(elsa), "Amethyst · 8c · uninkable · 4/6 · 3⟡ · Evasive · Shift 6", "stats: uninkable and keywords");
+    eq(S.statsLineFor({ i: ["Ruby"], cost: 3, t: "Location", st: [null, 5, 2, 1], ik: 1 }), "Ruby · 3c · inkable · Location · move 1 · 5 willpower · 2⟡", "stats: a location's move and willpower");
     eq(S.statsLineFor({ i: ["Ruby"], cost: 7, t: "Action - Song", st: [null, null, null, null], ik: 0 }), "Ruby · 7c · uninkable · Song", "stats: a song says so");
     eq(S.keywordTags({ w: ["Resist", "Singer"], x: "Resist +1 (Damage dealt…)\nSinger 5 (This character counts as cost 5 to sing songs.)" }).join(", "), "Resist +1, Singer 5", "stats: Resist +1, Singer 5");
     eq(S.keywordTags({ w: ["Shift"], x: "Universal Shift 4" }).join(), "Shift", "stats: a keyword's number is read only from its own line");
@@ -820,11 +820,14 @@ const D = await mod("discord/src/data.js");
       ok(l.startsWith(c.n + " — "), `suggestion starts with the card's name (${l})`);
       const px = f[5] ?? f[4];
       if (px != null) { priced++; ok(!l.endsWith("…") && /\$[\d,.]+$/.test(l), `suggestion keeps its price at the end (${l})`); }
-      if (c.cost != null && !/…/.test(l)) ok(l.includes(`${c.cost}c`), `suggestion shows the cost (${l})`);
+      ok(!/ \dc\b/.test(l.slice(c.n.length)), `suggestion leaves the cost out (${l})`);
+      ok(!/\blore\b/.test(l.slice(c.n.length)), `suggestion writes lore as the symbol (${l})`);
+      const set = R.sets[p.s] || {};
+      if (set.main && !/…/.test(l)) ok(l.includes(`S${set.main}`), `suggestion names the set's number (${l})`);
     })));
     ok(seen > 200 && priced > 100, `every fixture printing checked (${seen}, ${priced} priced)`);
     const sug = R.suggest("elsa spirit", 5).find((s) => s.kind === "card");
-    ok(sug && /🟪 \dc/.test(sug.label) && / \| /.test(sug.label), `a /card suggestion carries the stats on its line (${sug && sug.label})`);
+    ok(sug && /🟪/.test(sug.label) && /\(S\d+\)|S\d+ ·/.test(sug.label) && / \| /.test(sug.label), `a /card suggestion carries the stats on its line (${sug && sug.label})`);
     const nf = E.notFoundMessage(R, { kind: "none", query: "elsa?", suggestions: R.suggest("elsa", 5) }, "elsa?");
     const opts = (nf.components[0] || { components: [{ options: [] }] }).components[0].options;
     ok(opts.length && opts.every((o) => !/ \| /.test(o.label)) && opts.filter((o) => o.description).every((o) => /\d+c/.test(o.description)),
