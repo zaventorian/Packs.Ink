@@ -70,6 +70,11 @@ const SET_ORDER = [
 const SUPPRESSED_CARD_IDS = new Set([
   "crd_3649235bb31d4cf09fcdfa873f660fe3",  // "Promo Set 4" #7 Daisy Duck
   "crd_1923db6966fd4f2991e4dd850de4c627",  // "Promo Set 4" #8 Daisy Duck
+  // Into the Inklands #223 Piglet - Pooh Pirate Captain: Lorcast indexed the
+  // Deep Trouble quest card on 2026-10-03, two years after we built it as
+  // crd_custom_544487_piglet_pooh (supabase/82), which keeps the TCGplayer id,
+  // the price and every graded sale. The matcher skips this list too.
+  "crd_318c41d06e2340debaba878e3c926cdc",
 ]);
 // ---- site ----
 const PROMO_RARITY_SETS = new Set([
