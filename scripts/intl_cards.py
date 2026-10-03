@@ -137,6 +137,22 @@ def gallery_image_lang(card: dict) -> str | None:
     return m.group(1) if m else None
 
 
+_CI_KEY = re.compile(r"/ci/lorcana_([a-z]{2})_([a-z0-9]+)_([^_/]+)_([0-9a-f]{40})/?$")
+
+
+def gallery_api_image(detail_url: str | None) -> str | None:
+    """The same art on the official APP's image host, used when the gallery's
+    ravensburger.cloud key 404s (it does for ~1% of German cards, 2026-10-03):
+    .../ci/lorcana_de_set3_85_<sha>/  ->
+    https://api.lorcana.ravensburger.com/images/de/set3/85_<sha>.jpg
+    (1468x2048 JPEG - the app catalog, api.../v3/catalog/<lang>, uses it)."""
+    m = _CI_KEY.search(detail_url or "")
+    if not m:
+        return None
+    lang, set_slug, cn, sha = m.groups()
+    return f"https://api.lorcana.ravensburger.com/images/{lang}/{set_slug}/{cn}_{sha}.jpg"
+
+
 def gallery_name_key(card: dict) -> str:
     return name_key(card.get("name"), card.get("subtitle"))
 
@@ -219,6 +235,7 @@ def gallery_rows(lang: str, loc_cards: list[dict], en_map: dict[int, dict]) -> t
             "image_url": None,
             "image_thumb_url": None,
             "_src_image": (img + "card") if img else None,
+            "_alt_image": gallery_api_image(img),
             "_store_key": f"{lang}/{g.get('culture_invariant_id')}",
             "_ver": img,
             "source": "ravensburger-gallery",

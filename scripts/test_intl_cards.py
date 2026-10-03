@@ -112,6 +112,10 @@ r = rows[0]
 check(r["_src_image"].endswith("/card") and "lorcana_de_" in r["_src_image"], "art is the 800px `card` variant")
 check(r["text"] == "BOLD text\nSecond line", "ability name upper-cased, % becomes a newline")
 check(r["_store_key"] == "de/1", "store key is the source id, not our card id")
+check(ic.gallery_api_image("https://ravensburger.cloud/ci/lorcana_de_set3_85_95267571bdfe1674e7f7e9d41e43ea88b0ac8af3/")
+      == "https://api.lorcana.ravensburger.com/images/de/set3/85_95267571bdfe1674e7f7e9d41e43ea88b0ac8af3.jpg",
+      "fallback art path on the app's image host")
+check(ic.gallery_api_image("https://example.com/x") is None, "no fallback for an unknown art URL")
 
 # --- name-only rows never carry art
 extra = ic.text_only_rows("de", [{**r, "card_id": "c_ariel"}], cat)

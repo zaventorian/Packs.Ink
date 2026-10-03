@@ -201,7 +201,12 @@ def process_art(sb: Supabase, row: dict, archive: str | None, commit: bool) -> s
         except Exception:
             data = None
     if data is None:
-        data = get_bytes(row["_src_image"])
+        try:
+            data = get_bytes(row["_src_image"])
+        except ArtMissing:
+            if not row.get("_alt_image"):
+                raise
+            data = get_bytes(row["_alt_image"])
         if ap:
             os.makedirs(os.path.dirname(ap), exist_ok=True)
             with open(ap + ".part", "wb") as f:
