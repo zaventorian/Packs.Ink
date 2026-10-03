@@ -1303,6 +1303,16 @@ const setSiteLanguage = (lang) => {
   u.searchParams.delete("hl");
   window.location.replace(u.toString());
 };
+// Tournament placings are DATA ("Top 8", "1st"), so they are translated by
+// shape rather than looked up whole.
+const localizePlace = (p) => {
+  if(!p || SITE_LANG === "en") return p;
+  let m = /^Top\s*(\d+)$/i.exec(String(p).trim());
+  if(m) return _t("Top {n}", {n: m[1]});
+  m = /^(\d+)(st|nd|rd|th)$/i.exec(String(p).trim());
+  if(m) return _t("{n}th", {n: m[1]});
+  return p;
+};
 const setCardLanguage = (lang) => {
   try {
     if(!lang || lang === "auto") localStorage.removeItem(CARD_LANG_KEY);
@@ -16848,7 +16858,7 @@ function EVView({raw, sets, avgs, nc, setNc,
         <div class="ev-row-set">${setName}${PRERELEASE_SETS.has(setName) && html` <span class="ev-presale-tag" title=${EV_PRESALE_TIP}>${_t("Pre-sale")}</span>`} <span class="ev-row-set-hint">${extIcon()}</span>
           ${onSimulateSet && html`<button class="ev-row-simbtn"
             title=${"Simulate opening a "+setName+" box"}
-            onClick=${e=>{ e.stopPropagation(); onSimulateSet(setName); }}>${uiIcon("die",12)} Sim</button>`}
+            onClick=${e=>{ e.stopPropagation(); onSimulateSet(setName); }}>${uiIcon("die",12)} ${_t("Sim")}</button>`}
         </div>
         <div class="ev-row-vals">
           <div class="ev-row-val"><span class="ev-row-val-lbl-inline">${_t("per box")}</span>${fmt(ev)}</div>
@@ -18090,7 +18100,7 @@ const AmazonShelfTile = ({it}) => html`<div class="amz-tile">
     draggable="false" title=${it.name}>${it.name}</a>
   <div class="amz-tile-sub" title=${it.sub}>${it.sub}</div>
   <div class="amz-tile-px">${it.price != null
-    ? html`<span class="amz-tile-px-lbl">TCGplayer ${it.priceBasis}</span><b>${fmt(it.price)}</b>`
+    ? html`<span class="amz-tile-px-lbl">TCGplayer ${_t(it.priceBasis)}</span><b>${fmt(it.price)}</b>`
     : html`<span class="amz-tile-px-lbl">${_t(it.tcg ? "No TCGplayer price" : "Not on TCGplayer")}</span>`}</div>
   <a class="amz-tile-btn amz-tile-btn--amazon" href=${it.amazon} target="_blank" rel="noopener nofollow sponsored"
     draggable="false" title=${it.exact ? "Buy this on Amazon (affiliate link)" : "Search Amazon for this (affiliate link)"}>
@@ -39675,34 +39685,34 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const popCol = (key, label, field, tip, hidden) => ({
     key, label, defaultHidden: !!hidden,
     th:()=>html`<th key=${key} class="sortable th-num" title=${tip}
-      onClick=${(e)=>onSort(key, e)}>${label}${arrow(key)}</th>`,
+      onClick=${(e)=>onSort(key, e)}>${_t(label)}${arrow(key)}</th>`,
     td:(r)=>html`<td key=${key} class="td-num">${popNum(r[field])}</td>`});
   const gemCol = (label, hidden) => ({key:"popgem", label, defaultHidden: !!hidden,
-    th:()=>html`<th key="popgem" class="sortable th-num" title=${_t("Share of PSA-graded copies that came back a straight 10 — how hard the card is to grade. A low rate beside a high price is a genuinely scarce 10.")} onClick=${(e)=>onSort("popgem", e)}>${label}${arrow("popgem")}</th>`,
+    th:()=>html`<th key="popgem" class="sortable th-num" title=${_t("Share of PSA-graded copies that came back a straight 10 — how hard the card is to grade. A low rate beside a high price is a genuinely scarce 10.")} onClick=${(e)=>onSort("popgem", e)}>${_t(label)}${arrow("popgem")}</th>`,
     td:(r)=>html`<td key="popgem" class="td-num">${r.pop_gem == null ? "—" : (Math.round(1000 * r.pop_gem) / 10) + "%"}</td>`});
 
   const colDefs = (() => {
     const setCol = {key:"set", label:"Set",
-      th:()=>html`<th key="set" class="sortable th-set" title=${_t("Sort by set release order (newest first) — shift-click to use as a tiebreaker")} onClick=${(e)=>onSort("set_rank", e)}>Set${arrow("set_rank")}</th>`,
-      td:(r)=>html`<td key="set" class="td-set" title=${setNameById[r.set_id]||""}>${setNameById[r.set_id]||"—"}</td>`};
+      th:()=>html`<th key="set" class="sortable th-set" title=${_t("Sort by set release order (newest first) — shift-click to use as a tiebreaker")} onClick=${(e)=>onSort("set_rank", e)}>${_t("Set")}${arrow("set_rank")}</th>`,
+      td:(r)=>html`<td key="set" class="td-set" title=${setNameById[r.set_id]||""}>${_term("set", setNameById[r.set_id])||"—"}</td>`};
     const rarLbl = showSealed ? "Type" : "Rarity";
     const rarityCol = {key:"rarity", label:rarLbl,
-      th:()=>html`<th key="rarity" class="th-rarity">${rarLbl}</th>`,
+      th:()=>html`<th key="rarity" class="th-rarity">${_t(rarLbl)}</th>`,
       td:(r)=>html`<td key="rarity" class="td-rarity" title=${r._sealedProduct ? (r.display_type||"Sealed") : rarityLabel(r.rarity)}>
         ${r._sealedProduct
           ? html`<span class="price-db-sealed-type">${r.display_type || "Sealed"}</span>`
           : html`<${RarityTag} rarity=${rarityLabel(r.rarity)} hideText=${true}/>`}</td>`};
     const money = (key,label,sortK,field,title,muted,defaultHidden)=>({key,label,defaultHidden,
-      th:()=>html`<th key=${key} class="sortable th-num" title=${title} onClick=${(e)=>onSort(sortK, e)}>${label}${arrow(sortK)}</th>`,
+      th:()=>html`<th key=${key} class="sortable th-num" title=${title} onClick=${(e)=>onSort(sortK, e)}>${_t(label)}${arrow(sortK)}</th>`,
       td:(r)=>html`<td key=${key} class=${"td-num"+(muted?" muted":"")}>${fmtMoney(r[field])}</td>`});
     const salesCol = {key:"sales", label:"Sales", defaultHidden:true,
-      th:()=>html`<th key="sales" class="sortable th-num" title=${_t("Number of recorded eBay sales — shift-click to use as a tiebreaker")} onClick=${(e)=>onSort("sale_count", e)}>Sales${arrow("sale_count")}</th>`,
+      th:()=>html`<th key="sales" class="sortable th-num" title=${_t("Number of recorded eBay sales — shift-click to use as a tiebreaker")} onClick=${(e)=>onSort("sale_count", e)}>${_t("Sales")}${arrow("sale_count")}</th>`,
       td:(r)=>html`<td key="sales" class="td-num" title=${r.last_sold_date?"Last sold "+r.last_sold_date:""}>${r.sale_count!=null?r.sale_count:"—"}</td>`};
     // How recently this grader/grade last sold on eBay. Value + sort key already
     // live on the row (last_sold_date, from graded_sales_rollup). Recent sales
     // (<=14d) render in accent so fresh comps pop; >90d dims to muted.
     const soldCol = {key:"sold", label:"Sold",
-      th:()=>html`<th key="sold" class="sortable th-num" title=${_t("How recently this grader/grade last sold on eBay — click to sort by recency, shift-click another column to break ties within a day")} onClick=${(e)=>onSort("last_sold_date", e)}>Sold${arrow("last_sold_date")}</th>`,
+      th:()=>html`<th key="sold" class="sortable th-num" title=${_t("How recently this grader/grade last sold on eBay — click to sort by recency, shift-click another column to break ties within a day")} onClick=${(e)=>onSort("last_sold_date", e)}>${_t("Sold")}${arrow("last_sold_date")}</th>`,
       td:(r)=>{ const a=screenerSoldAge(r.last_sold_date);
         return html`<td key="sold" class=${"td-num"+(a&&a.days>90?" muted":"")}
           title=${r.last_sold_date||""}
@@ -39788,7 +39798,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return d > 3 ? d : null;
     };
     const lowCol = {key:"low", label:"Low",
-      th:()=>html`<th key="low" class="sortable th-num" title=${_t("TCGplayer's published Low Price. A clock mark flags a Low that hasn't changed in over 3 days.")} onClick=${(e)=>onSort("low", e)}>Low${arrow("low")}</th>`,
+      th:()=>html`<th key="low" class="sortable th-num" title=${_t("TCGplayer's published Low Price. A clock mark flags a Low that hasn't changed in over 3 days.")} onClick=${(e)=>onSort("low", e)}>${_t("Low")}${arrow("low")}</th>`,
       td:(r)=>{ const sd = lowStaleDays(r);
         return html`<td key="low" class="td-num">${fmtMoney(r.low_today)}${sd != null ? html`<span class="td-low-stale"
           title=${"Low unchanged for "+sd+" days — not fresh signal"}>${uiIcon("clock", 11)}</span>` : null}</td>`; }};
@@ -39903,7 +39913,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     <th class="th-check"></th>
     ${user && !watchlistsUnavailable && !showGraded && html`<th class="th-watch" title=${_t("Add to the active watchlist")}></th>`}
     <th></th>
-    <th class="sortable th-name" title=${_t("Click to sort by name — shift-click any column to set a tiebreaker")} onClick=${(e) => onSort("name", e)}>Name${arrow("name")}</th>
+    <th class="sortable th-name" title=${_t("Click to sort by name — shift-click any column to set a tiebreaker")} onClick=${(e) => onSort("name", e)}>${_t("Name")}${arrow("name")}</th>
     ${orderedCols.map(c => c.th())}
   </tr>`;
   const onGripDown = (e, key)=>{
@@ -40097,7 +40107,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           ${allColsOrdered.map((c,i)=>html`<div key=${c.key} class="price-db-colsmenu-row">
             <label class="price-db-colsmenu-lbl">
               <input type="checkbox" checked=${!colHidden.has(c.key)} onChange=${()=>toggleCol(c.key)}/>
-              ${c.label}
+              ${_t(c.label)}
             </label>
             <span class="price-db-colsmenu-move">
               <button title=${_t("Move up")} disabled=${i===0} onClick=${()=>moveCol(c.key,-1)}>▲</button>
@@ -45261,7 +45271,7 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
               disabled=${!r.deck_id}
               onClick=${()=>r.deck_id && openDeckById && openDeckById(r.deck_id, r.deck_share_token)}
               title=${(r.player_name || "Unknown") + (shownDeckName ? " · " + shownDeckName : "")}>
-              <span class="ht-place">${r.place || "—"}</span>
+              <span class="ht-place">${localizePlace(r.place) || "—"}</span>
               <span class="ht-player">${r.player_name || "Unknown"}${shownDeckName ? html`: <span class="ht-deck">${shownDeckName}</span>` : null}</span>
               <span class="ht-inks">
                 ${(r.deck_inks||[]).map((ink, i) => {
@@ -54016,7 +54026,7 @@ const RevealStrip = ({cards, variant, setLabel, onOpen, onOpenSet}) => {
     <a class="reveal-head" href=${setLabel ? "/cards?set=" + encodeURIComponent(setLabel) : "/cards"}
       onClick=${navHandler(() => onOpenSet && onOpenSet(setLabel))}
       title=${title + " — open the Cards tab"}>
-      <span class="reveal-kicker">${uiIcon("sparkle", 12)} Just revealed</span>
+      <span class="reveal-kicker">${uiIcon("sparkle", 12)} ${_t("Just revealed")}</span>
       <span class="reveal-title">${title}</span>
       ${/* ⚠ Deliberately NOT a count. The reel is capped at REVEAL_MAX_CARDS, so
             the honest number here is the number SHOWN — and on the day this
@@ -56671,7 +56681,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         ? html`<div class="deck-card-tourney" title="From this tournament">
             <span class="dct-trophy">${uiIcon("trophy", 13)}</span>
             <span class="dct-name">${tctx.tournament_name}</span>
-            ${tctx.place && html`<span class="dct-place">${tctx.place}</span>`}
+            ${tctx.place && html`<span class="dct-place">${localizePlace(tctx.place)}</span>`}
             ${tctx.num_players ? html`<span class="muted">· ${tctx.num_players}p</span>` : null}
           </div>
           <div class="deck-card-meta">${_t("by")} ${tctx.player_name || "Unknown player"} · ${s.total}${s.total < 60 ? " / 60" : ""} ${_t("cards")} · ${fmtUSD(s.value)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>`
@@ -59786,7 +59796,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                 ? html`<button class="deck-creator-link" onClick=${()=>onOpenTournament(tournamentContext.tournament_id)}
                     title=${_t("View this tournament")}>${tournamentContext.tournament_name}</button>`
                 : html`<span>${tournamentContext.tournament_name}</span>`}
-              ${tournamentContext.place ? html`<span> · ${tournamentContext.place}</span>` : null}
+              ${tournamentContext.place ? html`<span> · ${localizePlace(tournamentContext.place)}</span>` : null}
               ${tournamentContext.num_players ? html`<span class="muted"> · ${tournamentContext.num_players} players</span>` : null}`
             : "Viewing shared deck"}
         </div>
