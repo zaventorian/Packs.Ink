@@ -105,6 +105,18 @@ Full write-up: **`docs/i18n.md`** (source survey, matching rules, roadmap). Inva
   BAKED by `python scripts/build_i18n.py` from `i18n/src/*.json` (edit the sources, never the .js; bump
   `I18N_VER` in the head boot script). Loaded pre-paint, only for a non-English language, so English
   visitors pay nothing. **Changing language reloads the page** — by design.
+- **⚠ New on-screen text ships translated, in the same commit (2026-10-03).** Wrap it in `_t()`, add
+  the key to `i18n/src/ui.json` with ja / de / fr / it, run `python scripts/build_i18n.py`, bump
+  `I18N_VER`. Two guards enforce it in CI: `scripts/test_i18n_coverage.mjs` (via
+  `scripts/i18n_audit.mjs`) fails on any NEW unwrapped text node, visible attribute (title /
+  placeholder / aria-label / alt / our components' label props) or `flashToast("...")` literal
+  inside Index.html's html`` templates, against the ratchet `i18n/src/untranslated_baseline.json`;
+  and `build_i18n.py --check` fails on a `_t()` key missing from ui.json. The baseline only ever
+  SHRINKS (`node scripts/i18n_audit.mjs --update`; `--accept` to grow it is a deliberate act).
+  English on purpose (brands, Elo / scouting, admin screens, the FAQ template) is listed with a
+  reason in `i18n/src/english_on_purpose.json`. **⚠ The scanner cannot see text in DATA consts**
+  (`EVENT_TILES`, `NEWS_ARTICLES`, chip label arrays): translate those at the render site with
+  `_t(label)` so the key lands in ui.json, or carry per-language copies in the data.
 - **Wrapping a string changes the source text a guard test may anchor on** (`test_calendar`,
   `test_event_search`, `test_sealed_search` were taught both forms). Run the guard suite after a wrap.
 - **Nobody is prompted to switch** (Zaven, 2026-10-03). A language is chosen in ⚙ Preferences or the
