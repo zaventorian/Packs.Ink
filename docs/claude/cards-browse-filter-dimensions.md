@@ -11,6 +11,15 @@ Drawer + toolbar quick-filter chips (icon-only on toolbar):
 
 Drawer-only: **Price** (see below), Strength / Willpower / Lore (numeric buckets), Type, Set, Keywords, Classifications, Artist.
 
+### Set tiles, quest cards, Coconut chip (2026-10-03, Zaven)
+
+- **The drawer's Set filter is four sections of tiles, four across**: Sets (booster, newest first), Promo sets (C1-C3 included; Extras and any set `SET_ORDER` doesn't know close the section), Format Coconut, Illumineer's Quests. `groupSetsForFilter` returns `{mainline, promo, coconut, quest}`; `SetFilterTile` draws the art: the wordmark for a booster set, the Challenge badge for C1-C3, the printed stamp for a promo set that has one, the BOX photo for a quest (`QUEST_BOX_PIDS`, TCGplayer ids), the drawn coconut, else the Promo mark. `SET_TILE_LABELS` holds short names; the full name stays in `title` / `aria-label`.
+- **Cost / Strength / Willpower / Lore / Rarity are one line each** (`.drawer-chiprow`, a grid of `--n` equal cells). Willpower and Lore use Strength's 10 columns so the three stat rows line up.
+- **⚠ Quest cards are hidden from the Cards grid unless the search asks for them** (`questsAsked`): a quest set picked, the Quest rarity, or "quest" / "deep trouble" / "palace heist" / "hunny rescue" typed. A name search answered ONLY by quest cards still shows them, so a search never dead-ends. They answer to their quest's name through `cardVersionTerms`. `deep trouble` and `palace heist` are deliberately NOT `SET_NICKNAMES`: the boxes' foil promos sit in Extras under those labels and a set filter would hide them. `hunny rescue` IS, or "hunny" parses as the Hunny classification.
+- **The toolbar's Coconut chip** toggles `cardTypes` Coconut (the leaders), beside the legality chips. Not in the deck editor, which has its own leader button.
+- **Drawer picks show as removable pills under the toolbar** (`drawerPills`); the quick chips already show their own state and are left out.
+- **✓ Owned is hidden signed out** (`isAuthed !== false`): `collection` is `{}`, never null, so the old test showed a chip that filtered to nothing.
+
 ### Price ($) filters (added 2026-08-14)
 
 Four fields on the filter object — `priceMin`, `priceMax` (inclusive $ bounds, null = open end), `priceBasis` (`any` | `low` | `market`), `unpricedOnly` (bool). They live in `emptyFilter()`, so every `matchesCardFilter` caller gets them, and `serializeFilter`/`deserializeFilter` carry them for free (they're plain scalars, not Sets).

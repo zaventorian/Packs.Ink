@@ -7239,6 +7239,17 @@ const SET_NICKNAMES = {
   "c2":"Lorcana Challenge Promo (C2)", "lcp2":"Lorcana Challenge Promo (C2)",
   "c3":"Lorcana Challenge Promo (C3)", "lcp3":"Lorcana Challenge Promo (C3)",
   "extras":"Extras & Oddities", "oddities":"Extras & Oddities", "extras and oddities":"Extras & Oddities",
+  "promo set 4":"Promo Set 4", "promo 4":"Promo Set 4", "ps4":"Promo Set 4", "p4":"Promo Set 4",
+  "pd1":"PD1", "rph":"Ravensburger Play Hub Promos", "play hub":"Ravensburger Play Hub Promos", "play hub promos":"Ravensburger Play Hub Promos",
+  "cc1":"Curator's Collection: Heroines", "cc2":"Curator's Collection: Beauty and the Beast",
+  // Illumineer's Quests. "deep trouble" and "palace heist" are deliberately NOT
+  // here: the boxes' own foil promos sit in Extras under those labels, and a
+  // set filter would hide them. Those words reach the quest cards through
+  // cardVersionTerms instead. "hunny rescue" needs the alias, or "hunny" is
+  // read as the Hunny classification and the search finds nothing.
+  "q1":"Illumineer's Quest: Deep Trouble", "q2":"Illumineer's Quest: Palace Heist", "q3":"Illumineer's Quest: The Great Hunny Rescue",
+  "hunny rescue":"Illumineer's Quest: The Great Hunny Rescue", "great hunny rescue":"Illumineer's Quest: The Great Hunny Rescue",
+  "the great hunny rescue":"Illumineer's Quest: The Great Hunny Rescue",
 };
 const CARD_TYPE_ALIASES = {
   character:"Character", action:"Action", item:"Item",
@@ -8085,19 +8096,68 @@ const CARD_TYPES = ["Character","Action","Item","Location","Song",COCONUT_CARD_T
 // pull-rate-rarer chase in newer sets).
 const CARDS_RARITIES = ["Common","Uncommon","Rare","Super Rare","Legendary","Epic","Enchanted","Iconic","Promo"];
 
-// Split set names into normal vs promo/special, newest first within each group.
+// The drawer's Set filter, in four sections (Zaven, 2026-10-03): booster sets,
+// then promo sets, then Format Coconut, then the Illumineer's Quests. Newest
+// first within each. Extras & Oddities and any set SET_ORDER has not been told
+// about yet close out the promo section, so a new set is never unreachable.
 const groupSetsForFilter = (rawRows) => {
   const seen = new Set();
   for(const r of rawRows) if(r.Set) seen.add(r.Set);
-  const normal = [], promo = [];
+  const mainline = [], promo = [], other = [], coconut = [], quest = [];
   for(const s of seen){
     if(SET_PARENT[s]) continue;  // folded into parent's chip — not a separate filter
-    if(SET_ORDER.includes(s)) normal.push(s);
-    else promo.push(s);
+    if(MAINLINE_SETS.includes(s)) mainline.push(s);
+    else if(QUEST_SET_SET.has(s)) quest.push(s);
+    else if(s === COCONUT_SET_NAME) coconut.push(s);
+    else if(s !== EXTRAS_SET_NAME && SET_ORDER.includes(s)) promo.push(s);
+    else other.push(s);
   }
-  normal.sort((a,b) => SET_ORDER.indexOf(b) - SET_ORDER.indexOf(a));  // newest first
-  promo.sort((a,b) => a.localeCompare(b));
-  return {normal, promo};
+  const newest = (a,b) => SET_ORDER.indexOf(b) - SET_ORDER.indexOf(a);
+  mainline.sort(newest); promo.sort(newest); quest.sort(newest);
+  other.sort((a,b) => (a === EXTRAS_SET_NAME) - (b === EXTRAS_SET_NAME) || a.localeCompare(b));
+  return {mainline, promo: promo.concat(other), coconut, quest};
+};
+// Short labels for the drawer's set tiles, where a name gets ~70px under its
+// art. The full name stays in the tile's title and aria-label.
+const SET_TILE_LABELS = {
+  "Lorcana Challenge Promo (C1)": "Challenge C1",
+  "Lorcana Challenge Promo (C2)": "Challenge C2",
+  "Lorcana Challenge Promo (C3)": "Challenge C3",
+  "Curator's Collection: Heroines": "Curator's: Heroines",
+  "Curator's Collection: Beauty and the Beast": "Curator's: Beauty & Beast",
+  "Ravensburger Play Hub Promos": "Play Hub Promos",
+  "Illumineer's Quest: Deep Trouble": "Deep Trouble",
+  "Illumineer's Quest: Palace Heist": "Palace Heist",
+  "Illumineer's Quest: The Great Hunny Rescue": "The Great Hunny Rescue",
+};
+// A quest has no wordmark in the brand bundle, so its tile shows the box.
+// TCGplayer product ids of the three boxes (sealed_products).
+const QUEST_BOX_PIDS = {
+  "Illumineer's Quest: Deep Trouble": 543862,
+  "Illumineer's Quest: Palace Heist": 623065,
+  "Illumineer's Quest: The Great Hunny Rescue": 701135,
+};
+const CHALLENGE_PROMO_SETS = new Set(["Lorcana Challenge Promo (C1)", "Lorcana Challenge Promo (C2)", "Lorcana Challenge Promo (C3)"]);
+// One tile of the drawer's set grid: the set's art over its name. Art is the
+// official wordmark for a booster set, the Challenge badge for the Challenge
+// promos, the printed stamp for a promo set that has one, the box for a quest,
+// the coconut for Format Coconut, and the generic Promo mark otherwise.
+const SetFilterTile = ({set, active, onToggle}) => {
+  const logo = lorcanaSetArt(set);
+  let art;
+  if(logo) art = html`<${SetLogo} set=${set} klass="set-tile-logo" eager=${true}/>`;
+  else if(set === COCONUT_SET_NAME) art = html`<span class="set-tile-glyph set-tile-glyph--coconut">${uiIcon("coconut", 24)}</span>`;
+  else if(QUEST_BOX_PIDS[set]) art = html`<img class="set-tile-box" src=${proxyImg(tcgProductImg(QUEST_BOX_PIDS[set], 200))} alt="" loading="lazy"
+    onError=${e => { e.currentTarget.style.visibility = "hidden"; }}/>`;
+  else if(CHALLENGE_PROMO_SETS.has(set)) art = html`<img class="set-tile-badge" src=${LORCANA_ART + "marks/challenge-badge.png"} alt="" loading="lazy"/>`;
+  else if(PROMO_STAMPS[set]) art = html`<${LorcanaGlyph} src=${PROMO_STAMPS[set]} size=${24} klass="set-tile-stamp"/>`;
+  else if(set === EXTRAS_SET_NAME) art = html`<span class="set-tile-glyph">${uiIcon("sparkle", 22)}</span>`;
+  else art = html`<img class="set-tile-badge set-tile-badge--promo" src=${RARITY_ICONS.Promo} alt="" loading="lazy"/>`;
+  return html`<button class=${"set-tile" + (active ? " active" : "")} onClick=${onToggle}
+    title=${set} aria-label=${set} aria-pressed=${active ? "true" : "false"}>
+    <span class="set-tile-art">${art}</span>
+    <span class="set-tile-name">${SET_TILE_LABELS[set] || set}</span>
+  </button>`;
 };
 // Min/max price across a card's printings. Works on a group ({normal,foil}
 // sub-rows) or a flat catalog row. null when wholly unpriced.
@@ -8156,6 +8216,11 @@ const priceSmartChip = (min, max) => ({kind:"price", value: priceRangeLabel(min,
 const cardVersionTerms = (row) => {
   const terms = [];
   if(row.variant_label) terms.push(row.variant_label);
+  // A quest card answers to its quest's name ("deep trouble", "hunny rescue")
+  // and to "illumineer's quest", the way the box's own promos in Extras answer
+  // to their variant label. Nothing else can find them: they are hidden from
+  // the plain browse (see questsAsked) and the set name is not in the haystack.
+  if(QUEST_SET_SET.has(row.Set)) terms.push(row.Set.replace(/^Illumineer's Quest:\s*/, "") + "  illumineer's quest");
   if(typeof SPLIT_BY_PRINTING_SETS_GLOBAL !== "undefined" && SPLIT_BY_PRINTING_SETS_GLOBAL.has(row.Set)){
     // Group objects carry {normal, foil}; flat catalog rows carry Printing.
     const isFoil = row.isSplitPrinting ? !!row.foil
@@ -11286,7 +11351,7 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
       </div>
       <div class="drawer-section">
         <div class="drawer-section-head">${_t("Cost")}</div>
-        <div class="cards-chipgroup">
+        <div class="drawer-chiprow" style=${{"--n": COST_BUCKETS.length}}>
           ${COST_BUCKETS.map(c => html`<button key=${c} class=${"chip cost cost-hex-chip "+(filter.costs.has(c)?"active":"")}
             onClick=${()=>setFilter(f=>({...f,costs:toggleSet(f.costs,c)}))}
             title=${c===9?_t("Cost 9+"):_t("Cost {n}", {n: c})} aria-label=${c===9?_t("Cost 9+"):_t("Cost {n}", {n: c})}>
@@ -11296,7 +11361,7 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
       </div>
       <div class="drawer-section">
         <div class="drawer-section-head"><${LorcanaGlyph} src=${LORCANA_CARD_GLYPHS.strength} size=${14} klass="drawer-head-glyph"/>${_t("Strength")}</div>
-        <div class="cards-chipgroup">
+        <div class="drawer-chiprow" style=${{"--n": STRENGTH_BUCKETS.length}}>
           ${STRENGTH_BUCKETS.map(n => html`<button key=${n} class=${"chip "+(filter.strengths.has(n)?"active":"")}
             onClick=${()=>setFilter(f=>({...f,strengths:toggleSet(f.strengths,n)}))}
             title=${n===9?_t("Strength 9+"):_t("Strength {n}", {n})}>${n===9?"9+":n}</button>`)}
@@ -11304,7 +11369,7 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
       </div>
       <div class="drawer-section">
         <div class="drawer-section-head"><${LorcanaGlyph} src=${LORCANA_CARD_GLYPHS.willpower} size=${14} klass="drawer-head-glyph"/>${_t("Willpower")}</div>
-        <div class="cards-chipgroup">
+        <div class="drawer-chiprow" style=${{"--n": STRENGTH_BUCKETS.length}}>
           ${WILLPOWER_BUCKETS.map(n => html`<button key=${n} class=${"chip "+(filter.willpowers.has(n)?"active":"")}
             onClick=${()=>setFilter(f=>({...f,willpowers:toggleSet(f.willpowers,n)}))}
             title=${n===9?_t("Willpower 9+"):_t("Willpower {n}", {n})}>${n===9?"9+":n}</button>`)}
@@ -11312,7 +11377,7 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
       </div>
       <div class="drawer-section">
         <div class="drawer-section-head"><${LorcanaGlyph} src=${LORCANA_CARD_GLYPHS.lore} size=${14} klass="drawer-head-glyph"/>${_t("Lore")}</div>
-        <div class="cards-chipgroup">
+        <div class="drawer-chiprow" style=${{"--n": STRENGTH_BUCKETS.length}}>
           ${LORE_BUCKETS.map(n => html`<button key=${n} class=${"chip "+(filter.lores.has(n)?"active":"")}
             onClick=${()=>setFilter(f=>({...f,lores:toggleSet(f.lores,n)}))}
             title=${_t("Lore {n}", {n})}>${n}</button>`)}
@@ -11349,22 +11414,18 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
             onClick=${()=>setFilter(f=>({...f,legality:f.legality==="japan"?null:"japan"}))}>${_t("Japan Core")}</button>
         </div>
       </div>
-      <div class="drawer-section">
-        <div class="drawer-section-head">${_t("Set")}</div>
-        <div class="cards-chipgroup">
-          ${setsByGroup.normal.map(s => html`<button key=${s} class=${"chip "+(filter.sets.has(s)?"active":"")}
-            onClick=${()=>setFilter(f=>({...f,sets:toggleSet(f.sets,s)}))}>${s}</button>`)}
-        </div>
-        ${setsByGroup.promo.length > 0 && html`
-          <div class="drawer-divider"></div>
-          <div class="cards-chipgroup">
-            ${setsByGroup.promo.map(s => html`<button key=${s} class=${"chip promo "+(filter.sets.has(s)?"active":"")}
-              onClick=${()=>setFilter(f=>({...f,sets:toggleSet(f.sets,s)}))}>${s}</button>`)}
-          </div>`}
-      </div>
+      ${[["mainline", _t("Sets")], ["promo", _t("Promo sets")], ["coconut", COCONUT_SET_NAME], ["quest", _t("Illumineer's Quests")]]
+        .filter(([k]) => (setsByGroup[k] || []).length)
+        .map(([k, label]) => html`<div class="drawer-section" key=${"sets-" + k}>
+          <div class="drawer-section-head">${label}</div>
+          <div class="set-tile-grid">
+            ${setsByGroup[k].map(s => html`<${SetFilterTile} key=${s} set=${s} active=${filter.sets.has(s)}
+              onToggle=${()=>setFilter(f=>({...f,sets:toggleSet(f.sets,s)}))}/>`)}
+          </div>
+        </div>`)}
       <div class="drawer-section">
         <div class="drawer-section-head">${_t("Rarity")}</div>
-        <div class="cards-chipgroup">
+        <div class="drawer-chiprow" style=${{"--n": CARDS_RARITIES.length}}>
           ${CARDS_RARITIES.map(r => html`<button key=${r} class=${"chip chip-rarity-only "+(filter.rarities.has(r)?"active":"")}
             title=${_term("rarity", r)} aria-label=${_term("rarity", r)}
             onClick=${()=>setFilter(f=>({...f,rarities:toggleSet(f.rarities,r)}))}>
@@ -15012,6 +15073,17 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
 //     overlay used by the deck builder.
 // Stable references on these callbacks let React.memo on CardTile skip
 // unchanged tiles when filters change.
+// Does this search ask for Illumineer's Quest cards? See CardBrowser's grouped.
+const QUEST_SEARCH_WORDS = ["quest", "deep trouble", "palace heist", "hunny rescue"];
+const questsAsked = (f, parsed) => {
+  if(f.sets && [...f.sets].some(s => QUEST_SET_SET.has(s))) return true;
+  if(f.rarities && f.rarities.has(QUEST_RARITY)) return true;
+  const pf = (parsed && parsed.filters) || {};
+  if(pf.set && QUEST_SET_SET.has(pf.set)) return true;
+  if(pf.rarity === QUEST_RARITY) return true;
+  const text = searchNorm([f.search || "", ...((parsed && parsed.contains) || [])].join(" ").toLowerCase());
+  return QUEST_SEARCH_WORDS.some(w => text.includes(w));
+};
 const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
                       deckQtyAcrossName,
                       sortDefault="relevance",
@@ -15248,6 +15320,16 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   const allGroups = useMemo(() => { setPromoBaseSet(raw); return groupCards(raw); }, [raw]);
   const grouped = useMemo(()=>{
     let groups = smartCardFilter(allGroups, deferredFilter, parsed);
+    // Illumineer's Quest cards are board-game pieces, not cards anyone browses
+    // for (Zaven, 2026-10-03): they stay out of the grid unless the search asks
+    // for them — a quest set or the Quest rarity picked, or "quest" / a quest's
+    // name typed. A name search that ONLY quest cards answer still shows them,
+    // so a search can never dead-end on a card the catalog holds.
+    if(!questsAsked(deferredFilter, parsed)){
+      const noQuest = groups.filter(g => !QUEST_SET_SET.has(g.Set));
+      const searched = !!((deferredFilter.search || "").trim() || (parsed.contains && parsed.contains.length));
+      if(noQuest.length || !searched) groups = noQuest;
+    }
     // Coconut ink budget. A dual-ink card contributes BOTH of its inks, so once
     // a 3-ink Coconut deck is established a dual that brings a 4th ink can
     // never be legally added — showing it is just a trap. Hides any card whose
@@ -15273,7 +15355,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     // "Only show cards in my collection" toggle. A group qualifies if the
     // user owns >=1 of either its Normal or Foil printing. Collection map is
     // keyed by `card_id:tcg_printing` (see CollectionView).
-    if(deferredFilter.onlyOwned && collection){
+    if(deferredFilter.onlyOwned && collection && isAuthed !== false){
       groups = groups.filter(g => {
         const nKey = g.normal ? g.card_id + ":" + g.normal.tcg_printing : null;
         const fKey = g.foil   ? g.card_id + ":" + g.foil.tcg_printing   : null;
@@ -15383,6 +15465,35 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     return Array.from(s).sort((a,b) => a.localeCompare(b));
   }, [raw]);
   const activeCount = countActiveFilters(filter);
+  // The drawer's picks are invisible once it closes — a set or a keyword
+  // chosen there narrowed the grid with nothing on screen saying so. Each one
+  // gets a removable pill under the toolbar. The toolbar's own quick chips
+  // (ink, cost, rarity, legality, inkable, owned, Coconut) already show their
+  // state, so they are left out.
+  const drawerPills = useMemo(() => {
+    const out = [];
+    const each = (field, name) => {
+      for(const v of (filter[field] || [])){
+        if(field === "cardTypes" && v === COCONUT_CARD_TYPE) continue;
+        out.push({key: field + ":" + v, label: name(v),
+          clear: () => setFilter(f => ({...f, [field]: toggleSet(f[field], v)}))});
+      }
+    };
+    each("sets", v => SET_TILE_LABELS[v] || v);
+    each("cardTypes", v => v);
+    each("strengths", v => "Strength " + (v === 9 ? "9+" : v));
+    each("willpowers", v => "Willpower " + (v === 9 ? "9+" : v));
+    each("lores", v => "Lore " + v);
+    each("keywords", v => v);
+    each("classifications", v => v);
+    each("illustrators", v => "Art: " + v);
+    if(filter.dualInk) out.push({key: "dual", label: _t("Dual ink"), clear: () => setFilter(f => ({...f, dualInk: false}))});
+    if(filter.unpricedOnly) out.push({key: "unpriced", label: _t("No price data"), clear: () => setFilter(f => ({...f, unpricedOnly: false}))});
+    else if(filter.priceMin != null || filter.priceMax != null) out.push({key: "price",
+      label: priceRangeLabel(filter.priceMin, filter.priceMax) + (filter.priceBasis && filter.priceBasis !== "any" ? " (" + (filter.priceBasis === "low" ? "Low" : "NM Market") + ")" : ""),
+      clear: () => setFilter(f => ({...f, priceMin: null, priceMax: null}))});
+    return out;
+  }, [filter]);
 
   // Multi-select. Kept as a Set of card_ids so the selection persists
   // across filter changes (the user can stack a few from one filter, then
@@ -15669,7 +15780,14 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
           <button class=${"chip "+(filter.legality==="japan"?"active":"")}
             title=${_t("Japan Core — cards released in Japan (sets 1–9 + Wilds Unknown, plus the released cards from Whispers in the Well & Winterspell)")}
             onClick=${()=>setFilter(f=>({...f,legality:f.legality==="japan"?null:"japan"}))}>${_t("Japan Core")}</button>
-          ${collection && html`<button
+          ${!deckMode && html`<button
+            class=${"chip coconut-filter-chip "+(filter.cardTypes.has(COCONUT_CARD_TYPE)?"active":"")}
+            title=${_t("Show only the Format Coconut leaders")} aria-label=${_t("Coconut leaders")}
+            aria-pressed=${filter.cardTypes.has(COCONUT_CARD_TYPE) ? "true" : "false"}
+            onClick=${()=>setFilter(f=>({...f,cardTypes:toggleSet(f.cardTypes,COCONUT_CARD_TYPE)}))}>
+            ${uiIcon("coconut", 15)} ${_t("Coconut")}
+          </button>`}
+          ${collection && isAuthed !== false && html`<button
             class=${"chip "+(filter.onlyOwned?"active":"")}
             title=${_t("Show only cards you own (Normal or Foil)")}
             onClick=${()=>setFilter(f=>({...f,onlyOwned:!f.onlyOwned}))}>${_t("✓ Owned")}</button>`}
@@ -15713,6 +15831,10 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     ${parsedSummary.length > 0 && html`<div class="parsed-hint">
       <span class="parsed-hint-lbl">${_t("Filtering:")}</span>
       ${parsedSummary.map(p => html`<span class="parsed-hint-pill" key=${p}>${p}</span>`)}
+    </div>`}
+    ${drawerPills.length > 0 && html`<div class="drawer-active-strip" aria-label=${_t("Active filters")}>
+      ${drawerPills.map(p => html`<button key=${p.key} class="drawer-active-pill" onClick=${p.clear}
+        title=${_t("Remove this filter")}>${p.label}<span aria-hidden="true">×</span></button>`)}
     </div>`}
     ${hasSelection && html`<div class="cards-bulk-slot" ref=${bulkSlotRef}
       style=${bulkDocked && bulkH ? {height: bulkH + "px"} : null}>
