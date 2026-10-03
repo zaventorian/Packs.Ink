@@ -86,8 +86,16 @@ INCLUDE = (
 )
 # Words that mean this is NOT the official qualifier track, even though the
 # title matched. Checked against the lowercased title.
+# Side events run AT a CCQ ("Big Sunday Core Constructed (RHS-CCQ-SIDE)",
+# "CCQ - PARALELO 1") carry the word CCQ but qualify nobody. Zaven, 2026-10-03:
+# not CCQs, never add them. Dropped here so they are not even proposed.
 EXCLUDE = (
     "side event",
+    "-side",
+    "side)",
+    "side-event",
+    "paralelo",
+    "parallel",
     "practice",
     "mock",
     "watch party",
