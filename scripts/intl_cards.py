@@ -431,6 +431,12 @@ OFFICIAL_TERMS = {
         "it": {"Common": "Comune", "Uncommon": "Non comune", "Rare": "Rara", "Super Rare": "Super rara", "Legendary": "Leggendaria",
                "Epic": "Epica", "Enchanted": "Incantata", "Iconic": "Iconica", "Promo": "Promo"},
     },
+    "printing": {
+        "ja": {"Normal": "ノーマル", "Foil": "フォイル", "Cold Foil": "コールドフォイル", "Holofoil": "ホロフォイル", "Non-Foil": "ノンフォイル"},
+        "de": {"Normal": "Normal", "Foil": "Foil", "Cold Foil": "Cold Foil", "Holofoil": "Holofoil", "Non-Foil": "Nicht-Foil"},
+        "fr": {"Normal": "Normale", "Foil": "Foil", "Cold Foil": "Cold foil", "Holofoil": "Holo", "Non-Foil": "Non foil"},
+        "it": {"Normal": "Normale", "Foil": "Foil", "Cold Foil": "Cold foil", "Holofoil": "Olografica", "Non-Foil": "Non foil"},
+    },
     "type": {
         "ja": {"Character": "キャラクター", "Action": "アクション", "Item": "アイテム", "Location": "ロケーション", "Song": "ソング"},
         "de": {"Character": "Charakter", "Action": "Aktion", "Item": "Gegenstand", "Location": "Ort", "Song": "Lied"},
@@ -508,7 +514,7 @@ def derive_terms(lang: str, rows: list[dict], cat: Catalog, sets: list[dict],
                 # title of the card's own booster set names the set.
                 if t and en and "スタートデッキ" not in st and "プロモーション" not in st and "キュレーター" not in st:
                     set_names.setdefault(en, t)
-    out = {k: dict(OFFICIAL_TERMS[k].get(lang, {})) for k in ("ink", "rarity", "type")}
+    out = {k: dict(OFFICIAL_TERMS[k].get(lang, {})) for k in ("ink", "rarity", "type", "printing")}
     out["class"] = dict(sorted(classes.items()))
     out["set"] = dict(sorted(set_names.items()))
     return out

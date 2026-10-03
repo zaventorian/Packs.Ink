@@ -73,7 +73,8 @@ def main() -> int:
     manifest, got, skipped, failed = [], 0, 0, 0
     for row in rows:
         set_code = str(int(row["setId"])) if (row["setId"] or "").isdigit() else row["setId"]
-        fn = f"{row['setId']}-{row['number']}.webp"
+        safe = "".join(ch if ch.isalnum() else "_" for ch in str(row["number"]))  # promo numbers carry "/P1"
+        fn = f"{row['setId']}-{safe}.webp"
         path = os.path.join(out_dir, fn)
         cands = by_set_cn.get((set_code, str(row["number"])), [])
         manifest.append({"file": fn, "dreamborn_id": row["id"], "set": set_code, "number": row["number"],

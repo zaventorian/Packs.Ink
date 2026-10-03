@@ -2989,7 +2989,7 @@ const RarityTag = ({rarity, hideText, klass}) => {
   return html`<span class=${"rarity-tag "+(klass||"")}>
     ${src && html`<img class="rarity-tag-icon" src=${src} alt="" aria-hidden="true"
       onError=${e=>{ e.target.style.display="none"; }}/>`}
-    ${!hideText && html`<span class="rarity-tag-text">${rarity}</span>`}
+    ${!hideText && html`<span class="rarity-tag-text">${_term("rarity", rarity)}</span>`}
   </span>`;
 };
 
@@ -8767,7 +8767,7 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
         <div class="card-row-name" title=${productName}>${productName}</div>
         <div class="card-row-meta">
           ${group.Rarity ? html`<${RarityTag} rarity=${group.Rarity} hideText=${true}/>` : null}
-          ${group.Set ? html`<span class="card-row-set">${group.Set}${group.Number?` #${group.Number}`:""}</span>` : null}
+          ${group.Set ? html`<span class="card-row-set">${_term("set", group.Set)}${group.Number?` #${group.Number}`:""}</span>` : null}
         </div>
       </div>
       <div class="card-row-prices">
@@ -16582,20 +16582,23 @@ const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback
         ${/* The separators are interpolated strings: htm drops whitespace
               that contains a newline, so a "·" starting its own line rendered
               jammed against the link before it ("@packs_ink· @HighScoreZAP·"). */""}
-        follow <a href="https://x.com/packs_ink" target="_blank" rel="noopener">@packs_ink</a>${" · "}
+        ${_t("follow")} <a href="https://x.com/packs_ink" target="_blank" rel="noopener">@packs_ink</a>${" · "}
         <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener">@HighScoreZAP</a>${" · "}
         <a href="/privacy">${_t("Privacy & Terms")}</a>
       </div>
+      ${/* The Amazon sentence stays VERBATIM English in every language: it is the
+            Associates programme's required disclosure, not copy to translate. */""}
       <div class="footer-disclosure">
-        Unofficial fan site, not affiliated with, endorsed by, or sponsored by Disney or Ravensburger. Disney Lorcana is a trademark of Disney.
-        Data via Lorcast and TCGCSV. Links may earn a TCGplayer affiliate commission at no cost to you. As an Amazon Associate I earn from qualifying purchases.
+        ${_t("Unofficial fan site, not affiliated with, endorsed by, or sponsored by Disney or Ravensburger. Disney Lorcana is a trademark of Disney.")}${" "}
+        ${_t("Data via Lorcast and TCGCSV. Links may earn a TCGplayer affiliate commission at no cost to you.")}${" "}
+        As an Amazon Associate I earn from qualifying purchases.
       </div>
       ${(onFeedback || onViewFeedback) && html`<div class="footer-feedback-row" style=${{marginTop:8,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
         ${onFeedback && html`<button class="footer-feedback-btn" onClick=${onFeedback}
           title=${feedbackUnread > 0 ? feedbackUnread + " new " + replyWord(feedbackUnread) + " to your feedback" : undefined}
           style=${{display:"inline-flex",alignItems:"center",gap:6,background:"var(--btn-bg)",border:"1px solid var(--btn-border)",
             color:"var(--btn-text)",borderRadius:999,padding:"5px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
-          ${uiIcon("chat")} Send feedback${feedbackUnread > 0 && html`<span class="footer-feedback-badge"
+          ${uiIcon("chat")} ${_t("Send feedback")}${feedbackUnread > 0 && html`<span class="footer-feedback-badge"
             aria-label=${feedbackUnread + " new " + replyWord(feedbackUnread)}>${feedbackUnread > 9 ? "9+" : feedbackUnread}</span>`}</button>`}
         ${onViewFeedback && html`<button class="footer-feedback-btn" onClick=${onViewFeedback}
           title=${feedbackAdminUnread > 0 ? feedbackAdminUnread + (feedbackAdminUnread === 1 ? " conversation" : " conversations") + " with new activity" : undefined}
@@ -17510,7 +17513,7 @@ const AmazonBuyLink = ({product, setName, cls}) => {
     title=${a.exact
       ? "Buy this on Amazon (affiliate link)"
       : "Search Amazon for this product (affiliate link)"}>
-    ${uiIcon("cart", 13)} ${a.exact ? "Buy on Amazon" : "Find on Amazon"} ${extIcon()}</a>`;
+    ${uiIcon("cart", 13)} ${_t(a.exact ? "Buy on Amazon" : "Find on Amazon")} ${extIcon()}</a>`;
 };
 
 // The small Amazon BUTTON that sits beside a TCGplayer price (2026-09-26,
@@ -18088,10 +18091,10 @@ const AmazonShelfTile = ({it}) => html`<div class="amz-tile">
   <div class="amz-tile-sub" title=${it.sub}>${it.sub}</div>
   <div class="amz-tile-px">${it.price != null
     ? html`<span class="amz-tile-px-lbl">TCGplayer ${it.priceBasis}</span><b>${fmt(it.price)}</b>`
-    : html`<span class="amz-tile-px-lbl">${it.tcg ? "No TCGplayer price" : "Not on TCGplayer"}</span>`}</div>
+    : html`<span class="amz-tile-px-lbl">${_t(it.tcg ? "No TCGplayer price" : "Not on TCGplayer")}</span>`}</div>
   <a class="amz-tile-btn amz-tile-btn--amazon" href=${it.amazon} target="_blank" rel="noopener nofollow sponsored"
     draggable="false" title=${it.exact ? "Buy this on Amazon (affiliate link)" : "Search Amazon for this (affiliate link)"}>
-    ${it.exact ? "Buy on Amazon" : "Find on Amazon"} ${extIcon()}</a>
+    ${_t(it.exact ? "Buy on Amazon" : "Find on Amazon")} ${extIcon()}</a>
   ${it.tcg && html`<a class="amz-tile-btn" href=${it.tcg} target="_blank" rel="noopener nofollow sponsored"
     draggable="false" title=${_t("Buy this on TCGplayer (affiliate link)")}>TCGplayer ${extIcon()}</a>`}
 </div>`;
@@ -23455,19 +23458,19 @@ const relativeTime = (iso) => {
   if(!Number.isFinite(then)) return "";
   const diff = Math.max(0, Date.now() - then);
   const sec = Math.floor(diff / 1000);
-  if(sec < 60)              return "just now";
+  if(sec < 60)              return _t("just now");
   const min = Math.floor(sec / 60);
-  if(min < 60)              return min + "m ago";
+  if(min < 60)              return _t("{n}m ago", {n: min});
   const hr = Math.floor(min / 60);
-  if(hr < 24)               return hr + "h ago";
+  if(hr < 24)               return _t("{n}h ago", {n: hr});
   const day = Math.floor(hr / 24);
-  if(day < 7)               return day + "d ago";
+  if(day < 7)               return _t("{n}d ago", {n: day});
   const wk = Math.floor(day / 7);
-  if(wk < 5)                return wk + "w ago";
+  if(wk < 5)                return _t("{n}w ago", {n: wk});
   const mo = Math.floor(day / 30);
-  if(mo < 12)               return mo + "mo ago";
+  if(mo < 12)               return _t("{n}mo ago", {n: mo});
   const yr = Math.floor(day / 365);
-  return yr + "y ago";
+  return _t("{n}y ago", {n: yr});
 };
 // Absolute time in the viewer's local timezone — used as a hover tooltip
 // so the relative time stays scannable. Format: "Jun 12, 2024, 3:42 PM".
@@ -25102,7 +25105,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                       <span class=${"picker-check "+(sel?"checked":"")}>${sel?"✓":""}</span>
                       <span class="picker-text">
                         <span class="hpi-name">${cardDisplayTitle(c)}</span>
-                        <span class="hpi-sub">${c.Set}${c.Number?" · #"+c.Number.split("/")[0]:""}${c.ink?" · "+c.ink:""}</span>
+                        <span class="hpi-sub">${_term("set", c.Set)}${c.Number?" · #"+c.Number.split("/")[0]:""}${c.ink?" · "+c.ink:""}</span>
                       </span>
                     </button>`;
                   }))
@@ -27017,7 +27020,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
               // the link, and as a search it says "Find", never "Buy".
               ? (product.amazon_q && html`<a class="sealed-detail-buy sealed-detail-buy--amazon"
                   href=${amazonSearchUrl(product.amazon_q)} target="_blank" rel="noopener nofollow sponsored"
-                  title="Search Amazon for this playmat (affiliate link)">${uiIcon("cart", 13)} Find on Amazon ${extIcon()}</a>`)
+                  title="Search Amazon for this playmat (affiliate link)">${uiIcon("cart", 13)} ${_t("Find on Amazon")} ${extIcon()}</a>`)
               : html`<${AmazonBuyLink} product=${product} setName=${setName}/>`}
           </div>
           <div class="sealed-detail-affiliate muted">
@@ -31419,7 +31422,7 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, splitTiers, presel
                     ${c.img_small && html`<img src=${c.img_small} class="gc-add-hit-thumb" alt=""/>`}
                     <div style=${{minWidth:0,flex:1,textAlign:"left"}}>
                       <div style=${{fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>${cardDisplayName(c)}</div>
-                      <div class="muted" style=${{fontSize:10,display:"flex",alignItems:"center",gap:4}}>${c.Set} · #${(c.Number||"").split("/")[0] || "?"} · <${RarityTag} rarity=${c.Rarity} hideText=${true}/></div>
+                      <div class="muted" style=${{fontSize:10,display:"flex",alignItems:"center",gap:4}}>${_term("set", c.Set)} · #${(c.Number||"").split("/")[0] || "?"} · <${RarityTag} rarity=${c.Rarity} hideText=${true}/></div>
                     </div>
                   </button>`)}
           </div>
@@ -31429,7 +31432,7 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, splitTiers, presel
             ${picked.img_small && html`<img src=${picked.img_small} alt="" style=${{width:60,height:84,objectFit:"cover",borderRadius:4}}/>`}
             <div style=${{minWidth:0,flex:1}}>
               <div style=${{fontWeight:700,fontSize:14}}>${cardDisplayName(picked)}</div>
-              <div class="muted" style=${{fontSize:11,display:"flex",alignItems:"center",gap:4}}>${picked.Set} · #${(picked.Number||"").split("/")[0] || "?"} · <${RarityTag} rarity=${picked.Rarity} hideText=${true}/></div>
+              <div class="muted" style=${{fontSize:11,display:"flex",alignItems:"center",gap:4}}>${_term("set", picked.Set)} · #${(picked.Number||"").split("/")[0] || "?"} · <${RarityTag} rarity=${picked.Rarity} hideText=${true}/></div>
             </div>
             <button class="settings-action link" onClick=${()=>setPickedId(null)}>${_t("Change")}</button>
           </div>
@@ -36465,7 +36468,7 @@ function MarketExplainer({id, children}){
   const toggle = () => setOpen(o => { const v = !o; try { localStorage.setItem(KEY, v ? "1" : "0"); } catch {} return v; });
   return html`<div class="market-explain">
     <button class=${"market-explain-toggle"+(open?" open":"")} onClick=${toggle} aria-expanded=${open}>
-      ⓘ How this works <span class="market-explain-chev">${open ? "▴" : "▾"}</span>
+      ⓘ ${_t("How this works")} <span class="market-explain-chev">${open ? "▴" : "▾"}</span>
     </button>
     ${open && html`<div class="market-explainer">${children}</div>`}
   </div>`;
@@ -36896,7 +36899,7 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
                 loading="lazy" title=${_t("View card details")} onClick=${()=>setDetailGroup(g)}/>`}
               <div class="trade-card-main">
                 <div class="trade-card-name trade-card-clickable" title=${_t("View card details")} onClick=${()=>setDetailGroup(g)}>${tradeCardTitle(g)}</div>
-                ${layout!=="compact" && html`<div class="trade-card-sub">${g.Set}${g.Number?" · #"+String(g.Number).split("/")[0]:""}${(g.ink||(g.inks&&g.inks[0]))?" · "+(g.ink||g.inks[0]):""}</div>`}
+                ${layout!=="compact" && html`<div class="trade-card-sub">${_term("set", g.Set)}${g.Number?" · #"+String(g.Number).split("/")[0]:""}${(g.ink||(g.inks&&g.inks[0]))?" · "+(g.ink||g.inks[0]):""}</div>`}
                 <div class="trade-printings">
                   ${g.normal && renderPrinting(side, e, g, "qN", "Non-Foil", "normal")}
                   ${g.foil   && renderPrinting(side, e, g, "qF", tradeFoilLabel(g.foil), "foil")}
@@ -36943,7 +36946,7 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
                   <img class="trade-result-img" src=${proxyImg(g.img_small||g.img_normal)} alt="" loading="lazy"/>
                   <span class="trade-result-text">
                     <span class="trade-result-name">${tradeCardTitle(g)}</span>
-                    <span class="trade-result-sub">${g.Set}${g.Number?" · #"+String(g.Number).split("/")[0]:""}</span>
+                    <span class="trade-result-sub">${_term("set", g.Set)}${g.Number?" · #"+String(g.Number).split("/")[0]:""}</span>
                   </span>
                   <span class="trade-result-px">${tradeMoney(getCardPrice(g))}</span>
                   ${(inA||inB) && html`<span class="trade-result-in" title=${_t("Already on a side")}>${inA&&inB?"A+B":(inA?"A":"B")}</span>`}
@@ -40554,7 +40557,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         <thead ref=${sizeHeadRef} class="price-db-sizehead" aria-hidden="true">${headRow()}</thead>
         <tbody>
           ${filtered.slice(0, visibleRows).map((r) => {
-            const img = r.image_small || r.image_normal;
+            const img = cardDisplayImage(r.card_id, r.image_small || r.image_normal);
             const key = screenerRowKey(r);
             const isSel = selected.has(key);
             const tcg = tcgUrl(r.tcgplayer_product_id, r.printing);
@@ -40590,7 +40593,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                 <div class="td-name-main">
                   <span class="td-name-link" onClick=${openThisRow}
                     role="button" tabIndex="0" onKeyDown=${keyActivate(openThisRow)}
-                    style=${{cursor:"pointer"}}>${r.name}${r.version ? " - " + r.version : ""}</span>
+                    style=${{cursor:"pointer"}}>${(!isSealedRow && locFullName(cardLocOf(r.card_id))) || (r.name + (r.version ? " - " + r.version : ""))}</span>
                   ${tcg && html`<a class="td-tcg-link" href=${tcg} target="_blank"
                     rel="noopener nofollow sponsored"
                     title="Open on TCGplayer (affiliate link)">${extIcon()}</a>`}
@@ -40602,7 +40605,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                   })()}
                 </div>
                 <div class="td-name-meta">
-                  ${isSealedRow ? (r.display_type || r.product_type || "Sealed") : (() => { const vl = gradedVariantLabel(r._variant, setNameById[r.set_id]); return html`${r.printing + " #" + (r.collector_number || "?")}${vl ? html`<span class="variant-badge">${vl}</span>` : ""}`; })()}
+                  ${isSealedRow ? (r.display_type || r.product_type || "Sealed") : (() => { const vl = gradedVariantLabel(r._variant, setNameById[r.set_id]); return html`${_term("printing", r.printing) + " #" + (r.collector_number || "?")}${vl ? html`<span class="variant-badge">${vl}</span>` : ""}`; })()}
                 </div>
               </td>
               ${orderedCols.map(c => c.td(r))}
@@ -43235,7 +43238,7 @@ const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
       </a>`}
     </div>
     <div class="mt-name">${name}</div>
-    <div class="mt-meta">${card.rarity}${prBadge?" · "+prBadge:""}</div>
+    <div class="mt-meta">${_term("rarity", card.rarity)}${prBadge?" · "+_t(prBadge):""}</div>
     <div class="mt-prices">
       <${Tip} text=${TIP_LOW} class="mt-lbl">LOW<//>
       <span class="mt-now">${fmt(parseP(card.low_today))}</span>
@@ -51815,7 +51818,7 @@ function GearView({sealedPrices, setsMeta}){
               <div class="gear-card-btns">
                 <a class="gear-btn gear-btn--amazon" href=${it.url} target="_blank" rel="noopener nofollow sponsored"
                   title=${it.search ? "Search Amazon (affiliate link)" : "This product on Amazon (affiliate link)"}>
-                  ${it.search ? "Find on Amazon" : "Buy on Amazon"} ${extIcon()}</a>
+                  ${_t(it.search ? "Find on Amazon" : "Buy on Amazon")} ${extIcon()}</a>
                 ${tcg && html`<a class="gear-btn" href=${tcg} target="_blank" rel="noopener nofollow sponsored"
                   title=${it.search ? "The pictured product on TCGplayer (affiliate link)" : "This product on TCGplayer (affiliate link)"}>TCGplayer ${extIcon()}</a>`}
               </div>
@@ -54021,7 +54024,7 @@ const RevealStrip = ({cards, variant, setLabel, onOpen, onOpenSet}) => {
             "38 cards revealed!", two different figures for what a reader takes
             to be one thing. The tile owns the count (it counts the SET, which
             is the number anyone means); the reel owns the pictures. */""}
-      <span class="reveal-count">See them →</span>
+      <span class="reveal-count">${_t("See them →")}</span>
     </a>
     <div class=${"reveal-window" + (grabbing ? " reveal-window--grabbing" : "")} ref=${winRef}
       onPointerDown=${onDown} onPointerMove=${onMoveDrag}
@@ -54404,17 +54407,17 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
     <div class="deck-card-actions deck-act-row">
       <button class="deck-act deck-act--sm" disabled=${!hasDeck}
         onClick=${e=>{e.stopPropagation(); onCopyDeckLink && onCopyDeckLink(r);}}
-        title="Copy share link">${DECK_ICONS.copy}<span>Link</span></button>
+        title="Copy share link">${DECK_ICONS.copy}<span>${_t("Link")}</span></button>
       <button class="deck-act deck-act--sm" disabled=${!hasDeck}
         onClick=${e=>{e.stopPropagation(); onCopyDecklist && onCopyDecklist(r);}}
-        title="Copy the decklist as text">${DECK_ICONS.copy}<span>List</span></button>
+        title="Copy the decklist as text">${DECK_ICONS.copy}<span>${_t("List")}</span></button>
       <button class="deck-act deck-act--sm" disabled=${!hasDeck}
         onClick=${e=>{e.stopPropagation(); onCopyDeckImage && onCopyDeckImage(r);}}
-        title="Copy the deck poster image">${DECK_ICONS.copy}<span>Image</span></button>
+        title="Copy the deck poster image">${DECK_ICONS.copy}<span>${_t("Image")}</span></button>
       ${isAdmin && deckSep("t1")}
       ${isAdmin && html`<button class="deck-act deck-act--sm" title="Edit this deck"
         onClick=${e=>{e.stopPropagation(); onEditDeck && onEditDeck(r);}}>
-        ${DECK_ICONS.edit}<span>Edit</span></button>`}
+        ${DECK_ICONS.edit}<span>${_t("Edit")}</span></button>`}
       ${isAdmin && html`<button class="deck-act deck-act--sm deck-act--danger"
         title="Remove this deck from the tournament"
         onClick=${e=>{e.stopPropagation(); onDeleteDeck && onDeleteDeck(r);}}>
@@ -56585,9 +56588,9 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         <div class="deck-card-name">${d.name || "Untitled deck"}</div>
         ${visibilityPill(d.visibility)}
       </div>
-      <div class="deck-card-meta">${s.total}${s.total < 60 ? " / 60" : ""} cards · ${fmtUSD(s.value)} · ${completionPct(s.owned, s.total)}% owned${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>
+      <div class="deck-card-meta">${s.total}${s.total < 60 ? " / 60" : ""} ${_t("cards")} · ${fmtUSD(s.value)} · ${completionPct(s.owned, s.total)}% owned${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>
       ${renderDeckChips(s)}
-      ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>Updated ${relativeTime(d.updated_at)}</div>`}
+      ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>${_t("Updated {when}", {when: relativeTime(d.updated_at)})}</div>`}
       ${/* Two clusters: three things you COPY, then the ones that CHANGE the
             deck. The row wraps on a narrow tile, and because copy comes first
             the wrap lands on the group boundary instead of mid-thought. The
@@ -56599,23 +56602,23 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); copyDeckLinkToClipboard(d);}}
           title=${d.visibility === "private" ? "Private decks have no shareable link" : "Copy share link"}>
-          ${DECK_ICONS.copy}<span>Link</span></button>
+          ${DECK_ICONS.copy}<span>${_t("Link")}</span></button>
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); copyDeckListToClipboard(d);}}
-          title="Copy the decklist as text">${DECK_ICONS.copy}<span>List</span></button>
+          title="Copy the decklist as text">${DECK_ICONS.copy}<span>${_t("List")}</span></button>
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); copyDeckImageFromTile(d, ownerDisplayName);}}
-          title="Copy the deck poster image">${DECK_ICONS.copy}<span>Image</span></button>
+          title="Copy the deck poster image">${DECK_ICONS.copy}<span>${_t("Image")}</span></button>
         ${deckSep("d1")}
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); renameDeck(d.id, d.name);}}
-          title="Rename this deck">${DECK_ICONS.rename}<span>Rename</span></button>
+          title="Rename this deck">${DECK_ICONS.rename}<span>${_t("Rename")}</span></button>
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); duplicateDeck(d.id);}}
-          title="Make a copy of this deck">${DECK_ICONS.duplicate}<span>Duplicate</span></button>
+          title="Make a copy of this deck">${DECK_ICONS.duplicate}<span>${_t("Duplicate")}</span></button>
         <button class="deck-act deck-act--sm deck-act--danger"
           onClick=${e=>{e.stopPropagation(); deleteDeck(d.id);}}
-          title="Delete this deck">${DECK_ICONS.trash}<span>Delete</span></button>
+          title="Delete this deck">${DECK_ICONS.trash}<span>${_t("Delete")}</span></button>
       </div>
     </a>`;
   };
@@ -56671,27 +56674,27 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             ${tctx.place && html`<span class="dct-place">${tctx.place}</span>`}
             ${tctx.num_players ? html`<span class="muted">· ${tctx.num_players}p</span>` : null}
           </div>
-          <div class="deck-card-meta">by ${tctx.player_name || "Unknown player"} · ${s.total}${s.total < 60 ? " / 60" : ""} cards · ${fmtUSD(s.value)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>`
-        : html`<div class="deck-card-meta">by ${creatorName} · ${s.total}${s.total < 60 ? " / 60" : ""} cards · ${fmtUSD(s.value)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>`}
+          <div class="deck-card-meta">${_t("by")} ${tctx.player_name || "Unknown player"} · ${s.total}${s.total < 60 ? " / 60" : ""} ${_t("cards")} · ${fmtUSD(s.value)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>`
+        : html`<div class="deck-card-meta">${_t("by")} ${creatorName} · ${s.total}${s.total < 60 ? " / 60" : ""} ${_t("cards")} · ${fmtUSD(s.value)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>`}
       ${renderDeckChips(s)}
-      ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>Updated ${relativeTime(d.updated_at)}</div>`}
+      ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>${_t("Updated {when}", {when: relativeTime(d.updated_at)})}</div>`}
       <button class="deck-card-preview"
         onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, creatorName);}}
         title="Preview the deck" aria-label=${"Preview " + (d.name || "this deck")}>${uiIcon("eye", 24)}</button>
       <div class="deck-card-actions deck-act-row">
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); copyDeckLinkToClipboard(d);}}
-          title="Copy share link">${DECK_ICONS.copy}<span>Link</span></button>
+          title="Copy share link">${DECK_ICONS.copy}<span>${_t("Link")}</span></button>
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); copyDeckListToClipboard(d);}}
-          title="Copy the decklist as text">${DECK_ICONS.copy}<span>List</span></button>
+          title="Copy the decklist as text">${DECK_ICONS.copy}<span>${_t("List")}</span></button>
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); copyDeckImageFromTile(d, creatorName);}}
-          title="Copy the deck poster image">${DECK_ICONS.copy}<span>Image</span></button>
+          title="Copy the deck poster image">${DECK_ICONS.copy}<span>${_t("Image")}</span></button>
         ${deckSep("x1")}
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); if(user) duplicateExternalDeck(d); else if(onSignIn) onSignIn();}}
-          title=${user ? "Copy this deck into your own decks" : "Sign in to copy this deck into your own decks"}>${DECK_ICONS.duplicate}<span>Duplicate</span></button>
+          title=${user ? "Copy this deck into your own decks" : "Sign in to copy this deck into your own decks"}>${DECK_ICONS.duplicate}<span>${_t("Duplicate")}</span></button>
         ${opts.showUnfavorite && html`<button class="deck-act deck-act--sm deck-act--danger"
           onClick=${e=>{e.stopPropagation(); toggleFavorite(d.id);}}
           title="Remove from your favorites">${DECK_ICONS.star}<span>Unfavorite</span></button>`}
@@ -59885,7 +59888,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       </span>`}
       ${deck.updated_at && html`<span class="deck-updated"
         title=${"Last updated " + absoluteLocalTime(deck.updated_at) + " (your local time)"}>
-        Updated ${relativeTime(deck.updated_at)}
+        ${_t("Updated {when}", {when: relativeTime(deck.updated_at)})}
       </span>`}
       ${favoriteCount > 0 && html`<span class="deck-fav-count"
         title=${favoriteCount + " user" + (favoriteCount===1?"":"s") + " favorited this deck"}>
@@ -59989,7 +59992,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           <button onClick=${()=>setNotesOpen(o=>!o)}
             class=${"deck-act "+((deck.description || deck.youtube_url) ? "active" : "")}
             title="Add notes or a YouTube video for this deck (optional)">
-            ${DECK_ICONS.notes}<span>Notes</span>
+            ${DECK_ICONS.notes}<span>${_t("Notes")}</span>
           </button>
           ${notesOpen && html`<div class="deck-notes-popover">
             <div class="deck-share-section-title">Notes</div>
@@ -60009,11 +60012,11 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         ${(isOwnDeck || shareVersions) && html`<button class="deck-act"
           onClick=${()=>setHistoryOpen(true)}
           title="See earlier versions of this deck and what changed between them">
-          ${DECK_ICONS.history}<span>History</span></button>`}
+          ${DECK_ICONS.history}<span>${_t("History")}</span></button>`}
         ${deckSep("s2")}
         <button class="deck-act" onClick=${()=>setMulliganOpen(true)}
           title="Simulate drawing your opening hand and mulliganing">
-          ${DECK_ICONS.mulligan}<span>Mulligan</span></button>
+          ${DECK_ICONS.mulligan}<span>${_t("Mulligan")}</span></button>
         ${deckSep("s3")}
         ${/* One cluster for "get this deck out of the app", so the three ways
               of doing it read as alternatives rather than three unrelated
@@ -60021,19 +60024,19 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
               implies; the titles keep the full phrasing. */""}
         <button onClick=${()=>setPosterOpen(true)} class="deck-act deck-toolbar-keep"
           title="Export the deck as an image — copy it or save it as a PNG">
-          ${DECK_ICONS.image}<span>Image</span></button>
+          ${DECK_ICONS.image}<span>${_t("Image")}</span></button>
         <button onClick=${()=>setProxyOpen(true)} class="deck-act"
           title="Print proxies — a print-and-cut PDF at true card size">
-          ${DECK_ICONS.proxies}<span>Proxies</span></button>
+          ${DECK_ICONS.proxies}<span>${_t("Proxies")}</span></button>
         <button onClick=${handleExport} class="deck-act deck-toolbar-keep"
           title="Copy this deck as a plain-text decklist">
-          ${DECK_ICONS.copy}<span>Decklist</span></button>
+          ${DECK_ICONS.copy}<span>${_t("Decklist")}</span></button>
         ${isOwnDeck && (onDuplicate || onDelete) && deckSep("s4")}
         ${isOwnDeck && onDuplicate && html`<button onClick=${onDuplicate} class="deck-act"
-          title="Make a copy of this deck">${DECK_ICONS.duplicate}<span>Duplicate</span></button>`}
+          title="Make a copy of this deck">${DECK_ICONS.duplicate}<span>${_t("Duplicate")}</span></button>`}
         ${isOwnDeck && onDelete && html`<button onClick=${onDelete}
           class="deck-act deck-act--danger deck-toolbar-keep"
-          title="Delete this deck">${DECK_ICONS.trash}<span>Delete</span></button>`}
+          title="Delete this deck">${DECK_ICONS.trash}<span>${_t("Delete")}</span></button>`}
       </div>
     </div>
     ${/* Gated on `legal`, not on format === "invalid" — a Coconut deck keeps its
@@ -60465,7 +60468,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                     : html`<span class="deck-variant-thumb deck-variant-thumb--placeholder"></span>`}
                   <span class="deck-variant-meta">
                     <span class="deck-variant-set">${v.set || "—"}${numShort ? " · #" + numShort : ""}</span>
-                    ${v.rarity && html`<span class="deck-variant-rarity">${v.rarity}</span>`}
+                    ${v.rarity && html`<span class="deck-variant-rarity">${_term("rarity", v.rarity)}</span>`}
                   </span>
                   ${isCurrent && html`<span class="deck-variant-check" aria-label="Current version">✓</span>`}
                 </button>
@@ -61544,7 +61547,20 @@ function App(){
       // itself there already.
       const subQ = (view === "market" && marketSub && marketSub !== "ev" && !MARKET_SUB_PATHS[marketSub])
         ? "?a=" + marketSub : "";
-      link.href = "https://packs.ink" + viewPathFor(view, marketSub) + subQ;
+      // Language: a page rendered in Japanese is the ?hl=ja page, and says so —
+      // a canonical without it would tell a crawler the Japanese page is a
+      // duplicate of the English one. Every page also lists its language
+      // alternates (hreflang), English as x-default.
+      const base = "https://packs.ink" + viewPathFor(view, marketSub) + subQ;
+      const withHl = (k) => k === "en" ? base : base + (base.includes("?") ? "&" : "?") + "hl=" + k;
+      link.href = withHl(SITE_LANG);
+      document.querySelectorAll('link[rel="alternate"][hreflang]').forEach(n => n.remove());
+      for(const l of [...SITE_LANGS, {k: "x-default"}]){
+        const alt = document.createElement("link");
+        alt.rel = "alternate"; alt.hreflang = l.k;
+        alt.href = withHl(l.k === "x-default" ? "en" : l.k);
+        document.head.appendChild(alt);
+      }
     } catch {/* no-op */}
   }, [view, marketSub]);
   // Mirror the Analytics sub-tab into ?a=<sub> while viewing Analytics.
