@@ -258,7 +258,7 @@ check(d_emb[0]["title"] == "Lorcana movers · Mon, Sep 28, 2026", f"daily title 
 check([a.split(" ·")[0] for a in authors[1:]] == ["✦ CHASE", "◆ BASE CARDS", "★ PROMOS", "✧ FOILS"],
       f"daily sections in order ({authors})")
 chase = d_emb[1]["description"]
-check(chase.index("Minnie Mouse") < chase.index("Eeyore"), "chase ranks by DOLLARS, not percent")
+check(chase.index("Eeyore") < chase.index("Minnie Mouse"), "chase ranks by PERCENT, not dollars")
 check("Buzz Lightyear" not in chase, "a $6.86 Epic is under the chase floor")
 base = d_emb[2]["description"]
 check("Max Goof" in base and "Cheap" not in base, "a $4.49 card is under the base floor")
@@ -279,7 +279,7 @@ for label, text in (("daily", dtext), ("weekly", wtext)):
     check(not any("tcgplayer.com" in u and not u.startswith(rep.TCG_AFFILIATE_BASE) for u in links),
           f"{label}: no bare TCGplayer link")
 foot = d_emb[-1].get("footer", {}).get("text", "")
-check(rep.AFFILIATE_NOTE in foot and "/reports" in foot, f"the footer carries the disclosure and names /reports ({foot})")
+check(foot == "packs.ink · /reports", f"the footer is just the brand and /reports ({foot})")
 check(rep.tcg_url(649228, "Cold Foil") == rep.TCG_AFFILIATE_BASE + "?u=https%3A%2F%2Fwww.tcgplayer.com%2Fproduct%2F649228%2F%3FLanguage%3DEnglish%26Printing%3DCold%2520Foil",
       "tcg_url matches the site's encodeURIComponent form")
 check(rep.tcg_url(649228, "Normal").endswith("%3FLanguage%3DEnglish"), "a Normal printing carries no Printing param")
@@ -347,8 +347,8 @@ with redirect_stdout(io.StringIO()):
 rep.EMBED_TOTAL_LIMIT = saved
 check(squeezed and sum(rep.embed_chars(e) for e in squeezed["embeds"]) <= 2600, "build_report fits the report under the cap")
 check(squeezed and squeezed["embeds"][0]["title"].startswith("Lorcana week in review"), "the squeezed report keeps its header")
-check(squeezed and rep.AFFILIATE_NOTE in (squeezed["embeds"][-1].get("footer") or {}).get("text", ""),
-      "the squeezed report keeps its disclosure footer")
+check(squeezed and "/reports" in (squeezed["embeds"][-1].get("footer") or {}).get("text", ""),
+      "the squeezed report keeps its footer")
 
 # ── 9. pure pieces ──
 check(rep.bucket_of({"rarity": "Epic", "printing": "Holofoil"}) == "chase", "an Epic is chase")

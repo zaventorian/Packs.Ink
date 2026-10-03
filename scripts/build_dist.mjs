@@ -56,6 +56,12 @@ const FILES = [
   // linked from nowhere, so it ships only because it must be reachable by
   // anyone who is handed the address.
   "picks.html",
+  // Ink.Box companion page at /box (the thermal card printer's phone app).
+  // Unlisted like /picks - noindex + robots-disallowed, linked from nowhere -
+  // and useless without an account on the inkbox_testers allow-list (migration
+  // 177): everyone else gets a "not available" card. GENERATED from the Ink.Box
+  // repo (tools/packsink.py build); edit it there, not here.
+  "box.html",
   "robots.txt",
   "sitemap.xml",
   "og-image.png",

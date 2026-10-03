@@ -340,7 +340,8 @@ def main():
             stats["skip_no_id"] += 1
             continue
         title = r.get("title", "")
-        card, conf, cn_conflict = match_one(title, by_cn, inv)
+        card, conf, cn_conflict = match_one(title, by_cn, inv,
+                                            parse_date(r.get("date_last_sold_text")))
         if card:
             stats["matched"] += 1
         else:

@@ -32,12 +32,14 @@ const grabLine = (p) => {
 // point of the fold is that the two compose.
 const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const searchNorm = (s) => (s||\"\")", ";"),
-  grabLine("const popNameKey = ").replace("const popNameKey = ", "const popNameKey = ")
-    + NL + "  .replace(/[^a-z0-9]+/g, \" \").trim();",
+  grab("const popNameKey = ", ".trim();"),
   grab("const POP_SET_ALIASES = [", NL + "];"),
   grab("const popSetName = (label) => {", NL + "};"),
-  grabLine("const popCardKey = ") + NL
-    + "  popNameKey(setName) + \"|\" + popNameKey(productName) + \"|\" + String(cn == null ? \"\" : cn).trim();",
+  grabLine("const popNumKey = "),
+  grab("const popCardKey = ", "popNumKey(cn);"),
+  grab("const popLeadKey = ", ");"),
+  grab("const popLooseKey = ", "popNumKey(cn);"),
+  grab("const popRowsFor = ", NL + "};"),
   grabLine("const POP_FOIL_VARIETY = "),
   grabLine("const POP_NONFOIL_VARIETY = "),
   grab("const gradedPopBucket = (variety) => {", NL + "};"),
@@ -58,12 +60,12 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const RAW_POP_COL_KEYS = "),
   grab("const rawPopPick = (rows, printing, cardId) => {", NL + "};"),
   grab("const screenerColOn = (pref, key) =>", ";"),
-  "export {popNameKey, popSetName, popCardKey, gradedPopBucket, gradedPopStats,"
+  "export {popRowsFor, popLooseKey, popNameKey, popSetName, popCardKey, gradedPopBucket, gradedPopStats,"
   + " POP_SET_ALIASES, POP_SORT_FIELD, gradedPopPick, RAW_POP_COL_KEYS, rawPopPick,"
   + " screenerColOn, setBadges};",
 ].join(NL)));
 
-const { popNameKey, popSetName, popCardKey, gradedPopBucket, gradedPopStats,
+const { popRowsFor, popLooseKey, popNameKey, popSetName, popCardKey, gradedPopBucket, gradedPopStats,
         POP_SORT_FIELD, gradedPopPick, RAW_POP_COL_KEYS, rawPopPick,
         screenerColOn, setBadges } = mod;
 const SRC = src;
@@ -157,6 +159,12 @@ section("3. popCardKey");
      "the key is fold-insensitive on both set and name");
   eq(popCardKey("X", "Y", null), popCardKey("X", "Y", ""), "a missing number is empty, not 'null'");
   ok(popCardKey("X", "Y", " 12 ").endsWith("|12"), "the number is trimmed");
+  eq(popCardKey("D23 Collection", "Bruno", "04"), popCardKey("D23 Collection", "Bruno", "4"),
+     "PSA's zero-padded D23 numbers join the catalog's");
+  ok(popCardKey("X", "Y", "24A").endsWith("|24A"), "a lettered number is untouched");
+  ok(popCardKey("X", "Y", "0").endsWith("|0"), "a lone zero stays");
+  eq(popNameKey("Maleficent/Maleficent - Monstrous Dragon"), popNameKey("Maleficent - Monstrous Dragon"),
+     "PSA's doubled lead name folds to one");
 }
 
 // 4. Variety -> printing, and the half that must stay unmapped
@@ -175,7 +183,7 @@ section("4. gradedPopBucket");
   // ⚠ Rarity and provenance are NOT printings. Forcing them into a bucket is
   // how a League Promo's pops end up counted as a base card's non-foil.
   for (const v of ["Enchanted", "Epic", "Iconic", "League Promo", "Disney Cruise",
-                   "D23 Collection", "Top 8", "Fabled Set Championship Prize"])
+                   "D23 Collection", "World Championship", "Fabled Set Championship Prize"])
     eq(gradedPopBucket(v), null, `${v} is not a printing`);
 }
 
@@ -250,6 +258,10 @@ section("6. real pulled data (skipped when pop_output is empty)");
   const dir = new URL("./pop_output/", import.meta.url);
   let files = [];
   try { files = readdirSync(dir).filter((f) => /^psa_pop_\d+_/.test(f)); } catch {}
+  // Several pulls sit in the folder; only each heading's newest one is current.
+  { const best = new Map();
+    for (const f of files) { const h = f.split("_")[2]; if (!best.has(h) || f > best.get(h)) best.set(h, f); }
+    files = [...best.values()]; }
   if (!files.length) {
     console.log("  (no pulled files — run scripts/psa_pop_pull.mjs to exercise this)");
   } else {
@@ -387,6 +399,39 @@ section("9. Raw-mode pop columns");
      "raw pop fields land on COPIES of the rows, not on the shared price_movers objects");
   ok(SRC.includes("const rawPopCols = (showGraded || showSealed) ? [] : ["),
      "the pop columns are Raw-only in that branch — never on the Sealed table");
+}
+
+{
+  // The fallback join: tried only after the exact key misses.
+  const rows = [
+    ["Ursula's Return", "Ursula", "57", 1],
+    ["Promo Set 2", "Jafar", "33", 2],
+    ["Promo Set 2", "Hiro Hamada - Armor Designer", "24A", 3],
+    ["Promo Set 2", "Hiro Hamada - Armor Designer", "24B", 4],
+    ["Shimmering Skies", "Maleficent - Fearsome Queen", "35", 5],
+    ["Fabled", "Elsa - Snow Queen", "10", 6],
+    ["Into the Inklands", "Piglet - Pooh Pirate Captain", "223", 7, "Illumineer's Quest Deep Trouble"],
+  ];
+  const byCard = new Map();
+  for(const [set, subj, no, id, variety] of rows){
+    const r = {spec_id: id};
+    const iq = /illumineer/i.test(variety || "") ? ["~iq|" + subj.split(" - ")[0].toLowerCase() + "|" + no] : [];
+    for(const k of [popCardKey(set, subj, no), popLooseKey(set, subj, no), ...iq]){
+      if(!byCard.has(k)) byCard.set(k, []);
+      byCard.get(k).push(r);
+    }
+  }
+  const ids = (set, n, no) => popRowsFor(byCard, set, n, no).map(r => r.spec_id).join(",");
+  eq(ids("Ursula's Return", "Ursula - Mad Sea Witch", "57"), "1", "bare PSA name joins on lead name + number");
+  eq(ids("Promo Set 2", "Jafar - Conniving Vizier", "33"), "2", "Jafar joins");
+  eq(ids("Promo Set 2", "Hiro Hamada - Armor Designer", "24"), "3", "a bare 24 reads PSA's 24A, not 24A+24B");
+  eq(ids("Promo Set 2", "Hiro Hamada - Armor Designer", "24B"), "4", "an exact 24B is untouched");
+  eq(ids("Shimmering Skies", "Maleficent - Formidable Queen", "35"), "5", "a respelled subtitle joins");
+  eq(ids("Fabled", "Elsa - Snow Queen", "10"), "6", "exact still wins");
+  eq(ids("Fabled", "Elsa - Snow Queen", "11"), "", "a different number never joins");
+  eq(ids("Winterspell", "Ursula - Mad Sea Witch", "57"), "", "a different set never joins");
+  eq(ids("Illumineer's Quest – Deep Trouble", "Piglet - Pooh Pirate Captain", "223"), "7", "the quest card joins PSA's booster-set filing");
+  eq(ids("Ursula's Return", "Piglet - Pooh Pirate Captain", "223"), "", "but only for a quest set");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

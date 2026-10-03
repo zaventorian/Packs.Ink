@@ -109,6 +109,9 @@ COCONUT_SLUGS = {
     25: "darkwing-duck-launchpad-st-canards-finest",
     # Beta 2, revealed 2026-09-24.
     26: "pete-bad-guy",
+    # Revealed 2026-10-01. The first leader with no version: its associated card is the
+    # Item "The Black Cauldron".
+    27: "the-black-cauldron",
 }
 
 

@@ -551,6 +551,20 @@ Guards: `scripts/test_amazon_links.mjs`.
 - ⚠ NOTHING flags that moment.
 - ⚠ It runs over a FIXTURE entry spliced into the real `.map`
 
+## Sealed product info + Collection set grid (2026-09-30)
+
+Full notes: `docs/claude/sealed-product-info.md`. **Read it before changing this area.**
+
+- `SEALED_PRODUCT_INFO` (keyed by TCGplayer pid) drives **About this product**; every entry was read off a named source, and an unverifiable field is ABSENT, never guessed. Retailer claims are published to users.
+- A promo set absent from `SET_ORDER` is never drawn in the Collection grid. A new promo set needs `SET_ORDER`, `UNIFIED_TILE_SETS`, `PROMO_RARITY_SETS`, `NUMBERED_PROMO_SETS`, `DREAMBORN_CN_SUFFIX_SETS`, then `node discord/tools/extract_site.mjs`.
+
+## /box — the invite-only Ink.Box page (2026-10-02)
+
+Full notes: `docs/claude/box.md`. **Read it before changing this area.**
+
+- **⚠ `box.html` is GENERATED** from the Ink.Box repo (`python tools/packsink.py build`, copy `dist/box.html`). Rotating `SUPABASE_URL` / `SUPABASE_KEY` / `DECK_ENC_KEY_B64` in Index.html means rebuilding it; `scripts/test_box_page.mjs` goes red until you do.
+- Not for normal people: noindex + robots Disallow + no links + `is_inkbox_user()` gate (migration 177). The RPC gate is the real one.
+
 ## Sealed enhancements (2026-06-05 — modal + Δ% + Screener)
 
 Full notes: `docs/claude/sealed-enhancements.md` (4 KB). **Read it before changing this area.**

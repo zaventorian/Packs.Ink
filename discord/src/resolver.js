@@ -630,11 +630,18 @@ export function createResolver(index) {
     const q = String(raw || "").trim();
     const out = [];
     const seen = new Set();
+    const seenLines = new Set();
     const pushCard = (i, p, fi) => {
       const f = p.f[fi] || p.f[0];
       const key = cardKey(p, fi);
       if (seen.has(key)) return;
       seen.add(key);
+      // A suggestion doesn't name the finish, so a card's foil and non-foil
+      // would read as one line twice: only the first (the better match) stays.
+      // A NAMED finish (Top Prize / Prize Wall) is a different market and stays.
+      const same = p.id + "|" + (f[3] || "");
+      if (seenLines.has(same)) return;
+      seenLines.add(same);
       out.push({ kind: "card", i, p, fi, value: key, label: suggestLabel(cards[i], p, fi), plain: cardLabel(cards[i], p, fi) });
     };
     const pushSealed = (x, front) => {
@@ -848,21 +855,31 @@ export function createResolver(index) {
     if (label.length > 100) label = label.slice(0, 99) + "…";
     return label;
   }
+  // A set as a suggestion names it: "Hyperia City (S14)", shortening to "S14"
+  // when the line is tight. Promo sets have no number, so their short form is
+  // the set's code ("P3"), or nothing, in which case the name just gives way.
+  function setPart(set) {
+    if (!set || !set.n) return { k: "set", t: null };
+    if (set.main) return { k: "set", t: `${set.n} (S${set.main})`, short: `S${set.main}` };
+    return { k: "set", t: set.n, ...(set.code ? { short: set.code } : {}) };
+  }
   // What a /card suggestion says: the name, then the card's stats (Discord's
   // autocomplete has no sub-line, so they share the line), then which
-  // printing. Too long for Discord's 100, the set name goes first, then
-  // "inkable", the last keywords, "uninkable" and the word "Location" (stats.js);
+  // printing, set included. Too long for Discord's 100, "inkable" goes first,
+  // then the set name shortens to its number ("Hyperia City (S14)" → "S14"),
+  // then the last keywords, "uninkable" and the word "Location" (stats.js);
   // the finish and the price stay, because two suggestions for one card are
-  // told apart by them.
+  // told apart by them — except plain foil / non-foil, which nobody searching
+  // for a card is choosing between (the reply has the Foil button). No price: a suggestion is for choosing a card, and the
+  // reply that follows has the numbers.
   function suggestLabel(c, p, fi) {
     const set = sets[p.s] || {};
-    const fl = finishLabel(p, fi);
-    const f = p.f[fi] || [];
-    const printing = [{ k: "rar", t: p.r }, { k: "var", t: p.var }, { k: "fin", t: fl && fl !== p.var ? fl : null },
-      { k: "set", t: set.n }, { k: "px", t: money(f[5] ?? f[4]) }];
+    const named = (p.f[fi] || [])[3];       // Top Prize / Prize Wall / Text Error — never plain foil
+    const printing = [{ k: "rar", t: p.r }, { k: "var", t: p.var }, { k: "fin", t: named && named !== p.var ? named : null },
+      setPart(set)];
     const room = 100 - c.n.length - 3;
     if (room < 12) return cardLabel(c, p, fi);
-    return c.n + " — " + fitParts([statParts(c, { marks: true }), printing], room, ["set", "inkable", "kw", "uninkable", "type"], " | ", 0);
+    return c.n + " — " + fitParts([statParts(c, { marks: true }), printing], room, ["inkable", "~set", "kw", "uninkable", "type", "set"], " | ", 0);
   }
   function sealedLabel(p) {
     const px = money(p.mkt ?? p.low);

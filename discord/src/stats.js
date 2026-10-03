@@ -9,10 +9,11 @@
 //    2 lore · Evasive".
 //  - ⚠ An autocomplete suggestion has NO sub-line — Discord shows one line of
 //    ≤100 characters and nothing else — so the stats go ON that line, after
-//    the name, with the ink as its coloured square to save room. When the line
-//    is too long the least useful parts go first (the set name, "inkable",
-//    the last keywords, "uninkable", the word "Location"); the name, cost,
-//    numbers, lore, rarity and price stay.
+//    the name, with the ink as its coloured square to save room (and no
+//    cost: it never tells two cards apart). When the line is too long the least
+//    useful parts go first ("inkable", then the set name shortens to its
+//    number, the last keywords, "uninkable", the word "Location", the set);
+//    the name, numbers, lore (written 2⟡), rarity and price stay.
 
 // The six inks as Discord's coloured squares.
 export const INK_MARK = { Amber: "🟨", Amethyst: "🟪", Emerald: "🟩", Ruby: "🟥", Sapphire: "🟦", Steel: "⬜" };
@@ -40,7 +41,9 @@ export function statParts(c, { marks = false } = {}) {
   const inks = (c.i || []).filter(Boolean);
   const cost = c.cost != null ? `${c.cost}c` : null;
   if (marks) {
-    const t = [inkMarks(inks), cost].filter(Boolean).join(" ");
+    // A suggestion list is for telling cards apart, and cost never does that
+    // (Zaven: "that isn't helpful") — the ink square stays, the cost goes.
+    const t = inkMarks(inks);
     if (t) parts.push({ k: "ink", t });
   } else {
     if (inks.length) parts.push({ k: "ink", t: inks.join("/") });
@@ -61,7 +64,7 @@ export function statParts(c, { marks = false } = {}) {
   } else if (type) {
     parts.push({ k: "type", t: /Song/i.test(type) ? "Song" : type.replace(/\s*-.*$/, "") });
   }
-  if (lore != null) parts.push({ k: "lore", t: `${lore} lore` });
+  if (lore != null) parts.push({ k: "lore", t: `${lore}⟡` });
   for (const t of keywordTags(c)) parts.push({ k: "kw", t });
   return parts;
 }
@@ -76,6 +79,12 @@ export function fitParts(groups, max = 100, drop = [], between = " · ", trim = 
   const gs = groups.map((g) => g.filter((p) => p && p.t));
   const text = () => gs.map((g) => g.map((p) => p.t).join(" · ")).filter(Boolean).join(between);
   for (const k of drop) {
+    // "~set" shortens that kind's parts to their `short` form (a set's name to
+    // its number) instead of dropping them — the next entry may still drop it.
+    if (k[0] === "~") {
+      for (const g of gs) for (const p of g) if (p.k === k.slice(1) && p.short && text().length > max) p.t = p.short;
+      continue;
+    }
     while (text().length > max) {
       let gi = -1, pi = -1;
       gs.forEach((g, a) => g.forEach((p, b) => { if (p.k === k) { gi = a; pi = b; } }));

@@ -83,7 +83,7 @@ console.log("\n== data integrity ==");
 // +2 Amber (Woody&Buzz, Madrigal), +2 Amethyst (Peter Pan&Tinker Bell,
 // Aladdin&Genie), +1 Ruby (Belle&Beast), +1 Sapphire (Darkwing&Launchpad).
 const COCONUT_INKS = ["Amber","Amethyst","Emerald","Ruby","Sapphire","Steel"];
-check("26 Coconut cards", COCONUT_CARDS.length, 26);
+check("27 Coconut cards", COCONUT_CARDS.length, 27);
 // The durable half of the old "3 per ink" check. A typo'd ink ("Steal") would
 // leave the card out of CoconutLeaderPicker entirely — it renders one group per
 // canonical ink — and nothing else would notice.
@@ -97,12 +97,12 @@ check("every dual leader's second ink is canonical",
 check("every ink has a leader",
   COCONUT_INKS.every(i => COCONUT_CARDS.some(c => c.ink === i)), true);
 check("per-ink counts (primary ink)", COCONUT_INKS.map(
-  i => COCONUT_CARDS.filter(c=>c.ink===i).length), [5,5,4,4,4,4]);
-check("slugs unique", new Set(COCONUT_CARDS.map(c=>c.slug)).size, 26);
-check("collector numbers 1..26", COCONUT_CARDS.map(c=>c.cn).sort((a,b)=>a-b),
-  Array.from({length:26},(_,i)=>i+1));
-check("every associated name is '<name> - <version>'",
-  COCONUT_CARDS.every(c => c.associated === `${c.name} - ${c.version}`), true);
+  i => COCONUT_CARDS.filter(c=>c.ink===i).length), [6,5,4,4,4,4]);
+check("slugs unique", new Set(COCONUT_CARDS.map(c=>c.slug)).size, 27);
+check("collector numbers 1..27", COCONUT_CARDS.map(c=>c.cn).sort((a,b)=>a-b),
+  Array.from({length:27},(_,i)=>i+1));
+check("every associated name is '<name> - <version>' (or the bare name, for a card with no version)",
+  COCONUT_CARDS.every(c => c.associated === (c.version ? `${c.name} - ${c.version}` : c.name)), true);
 
 // ── dual-ink leaders (wave-2, 2026-09-17) ────────────────────────────────
 console.log("\n== dual-ink leaders ==");

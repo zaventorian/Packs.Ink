@@ -14,10 +14,9 @@ freshness rules come from discord_digest.py, so a report can never disagree
 with the digest about a card; the LAYOUT is the report's own (2026-09-28):
 
   * Sections by kind of card, because one list ranked by percent was mostly
-    $5 foils jumping 30% on one sale. CHASE (Enchanted / Epic / Iconic) and
-    PROMOS rank by DOLLARS: a $2,839 Iconic up $145 is +5.4% and was ranked
-    19th by percent. BASE CARDS (non-foil) and FOILS (base-rarity foils) rank
-    by percent. Each has a price floor AND a minimum dollar move, so a $4
+    $5 foils jumping 30% on one sale. CHASE (Enchanted / Epic / Iconic),
+    PROMOS, BASE CARDS (non-foil) and FOILS (base-rarity foils) all rank by
+    PERCENT (Zaven, 2026-10-02: dollar deltas are not interesting). Each has a price floor AND a minimum dollar move, so a $4
     card moving 50 cents never makes the list.
   * The weekly adds the bigger trends: the whole market, chase cards, sealed,
     the hottest and coolest set and the rarity that moved most (the
@@ -105,11 +104,11 @@ CHASE_RARITIES = {"Enchanted", "Epic", "Iconic"}
 # min_price / min_usd: the floor. Both have to clear, so a $4 card moving
 # 50 cents is out however big its percent is (Zaven, 2026-09-28: "raise the floor").
 SECTIONS = {
-    "chase": {"title": "✦ CHASE", "rank": "usd", "min_price": 10.0, "min_usd": 2.0,
+    "chase": {"title": "✦ CHASE", "rank": "pct", "min_price": 10.0, "min_usd": 2.0,
               "color": 0xE3B341, "lines": {"1d": 4, "7d": 5}},
     "base": {"title": "◆ BASE CARDS", "rank": "pct", "min_price": 5.0, "min_usd": 1.0,
              "color": 0x5B9CF5, "lines": {"1d": 4, "7d": 5}},
-    "promo": {"title": "★ PROMOS", "rank": "usd", "min_price": 10.0, "min_usd": 2.0,
+    "promo": {"title": "★ PROMOS", "rank": "pct", "min_price": 10.0, "min_usd": 2.0,
               "color": 0xC77DFF, "lines": {"1d": 3, "7d": 4}},
     "foil": {"title": "✧ FOILS", "rank": "pct", "min_price": 5.0, "min_usd": 1.0,
              "color": 0x9AA0AB, "lines": {"1d": 3, "7d": 4}},
@@ -127,7 +126,7 @@ STANDING_PER_SECTION = 10
 # Discord refuses a message whose embeds hold more than 6000 characters. Every
 # card link is ~160 of them, so the weekly trims its last sections to fit.
 EMBED_TOTAL_LIMIT = 5900
-FOOTER = "packs.ink · NM Market via TCGCSV · not financial advice · " + AFFILIATE_NOTE
+FOOTER = "packs.ink"
 RARITY_ORDER = ("Common", "Uncommon", "Rare", "Super Rare", "Legendary", "Enchanted", "Epic", "Iconic")
 MAINLINE_MIN_COMPONENTS = 100   # a set index this wide is a booster set, not a promo run
 
@@ -787,7 +786,7 @@ def build_report(sb, price_date, window, session=requests, now=None):
     if len(embeds) == 1:
         return None
     embeds.extend(extra_embeds(sb, price_date, window, sets, now=now))
-    embeds[-1]["footer"] = {"text": FOOTER + " · posted by the packs.ink bot — /reports"}
+    embeds[-1]["footer"] = {"text": FOOTER + " · /reports"}
 
     fitted = fit_embeds(embeds)
     names = set(files)

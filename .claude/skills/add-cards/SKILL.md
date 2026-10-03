@@ -108,8 +108,16 @@ field is unreadable, **leave it out** (null) rather than guess.
   | bronze-orange triangle | Rare |
   | silver fan-in-a-diamond | Super Rare |
   | gold fan-in-a-pentagon | Legendary |
-  | multicolour gem (full-art foil) | Enchanted |
-  Epic/Iconic/Promo: compare against `Logos/rarity/*.svg` (open one in the browser pane to see it).
+  | rainbow HEXAGON with an open diamond centre (full-art foil) | Enchanted |
+  | rainbow SHELL / fan shape (full-art foil) | Epic |
+  Iconic/Promo: compare against `Logos/rarity/*.svg` (open one in the browser pane to see it).
+  ⚠ **Enchanted and Epic are both multicolour full-art cards and are told apart ONLY by this icon,**
+  and the authority is the site's own files: `Logos/rarity/enchanted.svg` is the HEXAGON and
+  `Logos/rarity/epic.svg` is the SHELL. This table was written backwards once (2026-10-01, "fixed" in
+  the wrong direction from a guess) and every Hyperia City #205-240 was flipped; Zaven caught it in
+  the Cards-tab rarity filter. Numbers above 204 mix Enchanted, Epic and Iconic, so never infer
+  rarity from the number or the art. Crop the bottom-centre of each card, and render the two
+  `Logos/rarity/` files beside the crops (headless Chromium, `<img>` tags) rather than trusting memory.
 - **card_type** — `Character`, `Action`, `Action - Song`, `Item`, `Location` (exact strings the
   catalog already uses). Items/actions have no strength/willpower/lore/classifications. A song is
   the TYPE `Action - Song` and never a `Song` classification; the importer refuses that shape
