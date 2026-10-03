@@ -635,6 +635,11 @@ Discord movers report. Guarded by `node scripts/test_quest_cards.mjs` and
   come from TCGplayer's listing via the same script: `crd_quest_<q>_os<k>`
   (numbered by product id, so stable), no collector number, "(Oversized)" in the
   version. Q3 has none listed yet; re-run the script when it does.
+  TCGplayer has NO photo for three Palace Heist pieces (Reforged Crown, both
+  battlegrounds: 403 at every size); `ART_OVERRIDES` takes CardTrader's scans.
+- **A Battleground is landscape, like a Location**: its image is stored on its
+  side (the importer turns a landscape scan a quarter turn) and
+  `isLandscapeCard` turns it back upright.
 - The three Quest BOXES now file under their quest set in the Sealed tab (the
   ETL's group→set mapping matches them by name), not "Other / Promo".
 - The foil promo cards packed in the boxes (Mickey - Playful Sorcerer, Bolt -

@@ -62,14 +62,15 @@ prods = [
     {"productId": 552741, "name": "Ursula - Ruler of Lorcana (Oversized)", "extendedData": []},
     {"productId": 552746, "name": "Anna - Ensnared Sister", "extendedData": [{"name": "Number", "value": "1/31"}]},
 ]
-over = Q.oversized_rows("Q1", prods, lambda q, slot, pid: f"img/{q}/{slot}/{pid}")
+over = Q.oversized_rows("Q1", prods, lambda q, slot, pid, portrait: f"img/{q}/{slot}/{pid}/{portrait}")
 ok("only the oversized products", [r["tcgplayer_product_id"] for r in over], [552741, 552745])
 ok("numbered os1.. in product-id order", [r["id"] for r in over], ["crd_quest_q1_os1", "crd_quest_q1_os2"])
 ok("no collector number on an oversized card", over[0]["collector_number"], None)
 ok("boss is a Character, battleground a Battleground", [r["card_type"] for r in over], ["Character", "Battleground"])
 ok("rarity Quest", {r["rarity"] for r in over}, {"Quest"})
 ok("description becomes text", over[1]["text"], "Difficulty: Hard\nUrsula draws 1 more card each turn.")
-ok("art slot", over[0]["image_normal"], "img/Q1/os1/552741")
+ok("art slot", over[0]["image_normal"], "img/Q1/os1/552741/False")
+ok("a battleground is stored portrait, like a Location", over[1]["image_normal"], "img/Q1/os2/552745/True")
 ok("Q3 oversized go to Lorcast's Q3 set", Q.OVERSIZED_GROUPS["Q3"][1], "set_5a55ed51fe9144248bc9d1b5656bc6b4")
 
 ok("Q3 is a quest code", L._is_quest_code("Q3"), True)

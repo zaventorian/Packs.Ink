@@ -73,5 +73,8 @@ ok("the Collection grid has an Illumineer's Quests section", src.includes("<span
 ok("quests don't count toward the headline completion %",
    src.includes("if(r.Set !== EXTRAS_SET_NAME && !QUEST_SET_SET.has(r.Set)){"), true);
 
+ok("a Battleground turns upright like a Location",
+   /const isLandscapeCard = \(row\) =>\n[^\n]*t === "Location" \|\| t === "Battleground"/.test(src), true);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

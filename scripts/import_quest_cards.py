@@ -24,7 +24,7 @@ Usage:
 """
 from __future__ import annotations
 
-import argparse, io, json, os, re, sys, zipfile
+import argparse, hashlib, io, json, os, re, sys, zipfile
 
 import requests
 from dotenv import load_dotenv
@@ -36,6 +36,12 @@ from supabase_client import Supabase
 LJSON_ZIP = "https://lorcanajson.org/files/current/en/allCards.json.zip"
 TCGCSV = "https://tcgcsv.com/tcgplayer/71/{gid}/products"
 TCG_IMG = "https://tcgplayer-cdn.tcgplayer.com/product/{pid}_in_1000x1000.jpg"
+# TCGplayer has no photo for these (403 at every size); CardTrader's scans do.
+ART_OVERRIDES = {
+    639461: "https://www.cardtrader.com/uploads/blueprints/image/354191/the-reforged-crown-illumineer-s-quest-palace-heist.jpg",
+    639901: "https://www.cardtrader.com/uploads/blueprints/image/354193/jafar-s-throne-room-secret-passage-illumineer-s-quest-palace-heist.jpg",
+    639904: "https://www.cardtrader.com/uploads/blueprints/image/354192/the-crown-chamber-full-alert-illumineer-s-quest-palace-heist.jpg",
+}
 BUCKET = "card-art"
 IMG_WIDTH = 734
 QUESTS = {"Q1": "set_quest_q1", "Q2": "set_quest_q2"}
@@ -122,7 +128,7 @@ def oversized_rows(quest: str, products: list[dict], img_url_for) -> list[dict]:
         ext = {e.get("name"): e.get("value") for e in p.get("extendedData") or []}
         name, ver = split_oversized(p["name"])
         ctype = ext.get("CardType") or ("Battleground" if ver.startswith("Battleground") else "Character")
-        url = img_url_for(quest, f"os{k}", p["productId"])
+        url = img_url_for(quest, f"os{k}", p["productId"], ctype == "Battleground")
         out.append({
             "id": f"crd_quest_{quest.lower()}_os{k}", "set_id": set_id, "collector_number": None,
             "name": name, "version": ver, "rarity": "Quest",
@@ -135,8 +141,13 @@ def oversized_rows(quest: str, products: list[dict], img_url_for) -> list[dict]:
     return out
 
 
-def optimize(data: bytes) -> bytes:
+def optimize(data: bytes, portrait: bool = False) -> bytes:
+    """734px JPEG. portrait=True turns a landscape scan on its side (a quarter
+    turn counter-clockwise), the way every Location image is framed, so the
+    site's landscapeArt turns it back upright."""
     im = Image.open(io.BytesIO(data)).convert("RGB")
+    if portrait and im.width > im.height:
+        im = im.rotate(90, expand=True)
     if im.width > IMG_WIDTH:
         im = im.resize((IMG_WIDTH, round(im.height * IMG_WIDTH / im.width)), Image.LANCZOS)
     buf = io.BytesIO(); im.save(buf, "JPEG", quality=84, optimize=True); return buf.getvalue()
@@ -163,17 +174,20 @@ def main():
 
     sb = Supabase() if args.commit else None
 
-    def store(quest: str, slot, src: str | None) -> str | None:
+    def store(quest: str, slot, src: str | None, portrait: bool = False) -> str | None:
         if not args.commit or not src:
             return None
         try:
-            jpg = optimize(requests.get(src, headers=UA, timeout=45).content)
+            jpg = optimize(requests.get(src, headers=UA, timeout=45).content, portrait)
             path = f"quests/{quest.lower()}/{slot}.jpg"
             up = requests.post(f"{sb.url}/storage/v1/object/{BUCKET}/{path}",
                                headers={**sb.auth_headers(), "Content-Type": "image/jpeg", "x-upsert": "true"},
                                data=jpg, timeout=60)
             if up.ok:
-                return f"{sb.url}/storage/v1/object/public/{BUCKET}/{path}"
+                # ?v= so a re-upload reaches people: packsink-img-v1 survives
+                # deploys and keys on the URL.
+                v = hashlib.md5(jpg).hexdigest()[:8]
+                return f"{sb.url}/storage/v1/object/public/{BUCKET}/{path}?v={v}"
             print(f"  {quest} {slot} UPLOAD FAIL {up.status_code}")
         except Exception as e:
             print(f"  {quest} {slot} IMAGE ERR {repr(e)[:120]}")
@@ -190,7 +204,8 @@ def main():
     n_over = 0
     for quest, (gid, _) in OVERSIZED_GROUPS.items():
         prods = requests.get(TCGCSV.format(gid=gid), headers=UA, timeout=60).json().get("results") or []
-        over = oversized_rows(quest, prods, lambda q, slot, pid: store(q, slot, TCG_IMG.format(pid=pid)))
+        over = oversized_rows(quest, prods, lambda q, slot, pid, portrait: store(
+            q, slot, ART_OVERRIDES.get(pid) or TCG_IMG.format(pid=pid), portrait))
         for r in over:
             print(f"  {quest} oversized: {r['name']} - {r['version']} | {r['card_type']} | pid {r['tcgplayer_product_id']}"
                   + ("" if not args.commit else (" ok" if r["image_normal"] else " NO ART")))
