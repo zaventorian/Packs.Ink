@@ -204,8 +204,9 @@ console.log("6. source-level: sealed can never displace a card");
     "home card suggestions still depend on [q, raw] only");
   ok(/sealedSuggestions[\s\S]{0,400}searchSealedProducts/.test(hqs),
     "home sealed list comes from searchSealedProducts");
-  ok(hqs.indexOf('home-quick-search-divider">Sealed products') >
-     hqs.indexOf('home-quick-search-divider">Variants'),
+  // The divider text may be translated: >${_t("Sealed products")}<.
+  const divAt = (w) => Math.max(hqs.indexOf('home-quick-search-divider">' + w), hqs.indexOf('home-quick-search-divider">${_t("' + w));
+  ok(divAt("Sealed products") > divAt("Variants"),
     "the home sealed section renders AFTER the cards, not before");
 
   const cb = src.slice(src.indexOf("const CardBrowser ="),

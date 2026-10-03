@@ -87,6 +87,7 @@ const DIRS = [
   ["Logos", { excludeExt: [".ai", ".pdf"], exclude: ["Logo on Black.png"] }],
   ["vendor", {}],   // react/react-dom/htm/supabase/html2canvas + ort WASM + opencv
   ["scanner", {}],  // ONNX weights + card indexes (sw.js keeps both in SCAN_CACHE)
+  ["i18n", {}],     // UI dictionaries, loaded by the pre-paint boot only for a non-English language
 ];
 
 // Guard: the worker's proxy routes and the paths baked into Index.html + sw.js

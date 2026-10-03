@@ -1,0 +1,103 @@
+name: Localized cards
+
+# Keeps card_localizations (migration 179) current: every Lorcana card printed
+# in Japanese (Takara Tomy's card list) and in German, French and Italian
+# (Ravensburger's gallery), matched to our cards, with each printing's art as
+# a WebP in the card-art bucket. See scripts/sync_intl_cards.py and
+# docs/i18n.md.
+#
+# Daily is plenty: both publishers add cards a reveal or a release at a time.
+# A run that finds nothing new downloads nothing — art is only fetched for a
+# printing whose source version changed (?v= on the stored URL).
+#
+# A language whose SOURCE is unreachable is a WARNING, not a red run: Takara
+# Tomy may refuse a datacenter IP, and a permanently red job is one everyone
+# learns to ignore. The run still goes red if art uploads fail, because that
+# leaves rows pointing at images that were never written.
+
+on:
+  schedule:
+    - cron: "40 4 * * *"   # after catalog watch (03:30) so new cards exist in `cards` first
+  workflow_dispatch:
+    inputs:
+      langs:
+        description: "Languages (comma separated)"
+        default: "ja,de,fr,it"
+      commit:
+        description: "Write rows and upload art (off = dry run)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: intl-cards
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: pip install -r scripts/requirements.txt
+      - name: Guard test (offline)
+        run: python scripts/test_intl_cards.py
+      - name: Sync
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          LANGS: ${{ github.event.inputs.langs || 'ja,de,fr,it' }}
+          COMMIT: ${{ github.event_name == 'schedule' || github.event.inputs.commit == 'true' }}
+        run: |
+          set -o pipefail
+          flags="--langs $LANGS --report report.json --terms-out terms.json"
+          if [ "$COMMIT" = "true" ]; then flags="$flags --commit"; fi
+          python -u scripts/sync_intl_cards.py $flags | tee sync.log
+      - name: Summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          out = ["## Localized cards", ""]
+          try:
+              rep = json.load(open("report.json", encoding="utf8"))
+          except Exception:
+              rep = {}
+          for lang, st in rep.items():
+              if "error" in st:
+                  print(f"::warning::{lang}: source unavailable - {st['error']}")
+                  out.append(f"- **{lang}**: source unavailable ({st['error']})")
+              else:
+                  st.pop("unmatched_files", None)
+                  out.append(f"- **{lang}**: " + ", ".join(f"{k} {v}" for k, v in st.items()))
+          # The glossary is regenerated each run; a change is a reason to
+          # re-bake i18n/<lang>.js (python scripts/build_i18n.py) by hand.
+          try:
+              new = json.load(open("terms.json", encoding="utf8"))
+              cur = json.load(open("i18n/src/terms.json", encoding="utf8"))
+              changed = [l for l in new if new[l] != cur.get(l)]
+              if changed:
+                  out.append("")
+                  out.append(f"Glossary changed for {', '.join(changed)} - download the `terms` artifact into "
+                             "i18n/src/terms.json and run `python scripts/build_i18n.py`.")
+          except Exception:
+              pass
+          open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf8").write("\n".join(out) + "\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: terms
+          path: |
+            terms.json
+            report.json
+            sync.log
+          if-no-files-found: ignore

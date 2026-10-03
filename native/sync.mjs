@@ -45,6 +45,7 @@ const DIRS = [
   // vendor/opencv still works: the worker falls back to jsDelivr's copy.
   ["vendor", {}],
   ["scanner", {}],
+  ["i18n", {}],     // UI dictionaries (see SITE_LANGS in Index.html)
   ["Logos", {}],
 ];
 

@@ -220,12 +220,13 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // App-shell styles/scripts (styles.css, logo.js): network-first, same as the
+  // App-shell styles/scripts (styles.css, logo.js, the i18n dictionaries):
+  // network-first, same as the
   // HTML — so a freshly-served (network-first) Index.html is NEVER paired with
   // a STALE cache-first stylesheet. That skew is what rendered the home page's
   // mover tiles at giant natural-image size after a deploy until the visitor
   // hard-refreshed. Falls back to cache only when the network is unreachable.
-  if (url.origin === self.location.origin && /\/(styles\.css|logo\.js|scanner\.js|scanner-worker\.js|scanner-ocr-worker\.js)$/.test(url.pathname)) {
+  if (url.origin === self.location.origin && /\/(styles\.css|logo\.js|scanner\.js|scanner-worker\.js|scanner-ocr-worker\.js|i18n\/[a-z]{2}\.js)$/.test(url.pathname)) {
     event.respondWith(
       fetch(req)
         .then((res) => {
