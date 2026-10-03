@@ -33,6 +33,7 @@ const parts = [
   // "what is new" rule). REVEAL_EXCLUDED_SETS reads this, so the slice needs it
   // — the eval is the whole span, not just the declarations this test asserts on.
   slice(/^const EXTRAS_SET_NAME = /m, /^const EXTRAS_SET_NAME = .*$/m, "EXTRAS_SET_NAME"),
+  slice(/^const QUEST_SETS = \[/m, /^const QUEST_RARITY = .*$/m, "QUEST_SETS"),
   slice(/^const SPECIAL_DECK_LIMITS = \{/m, /^const getFormat = .*$/m, "formats+coconut"),
   slice(/^function checkDeckLegality\(/m, /^\}/m, "checkDeckLegality"),
 ];

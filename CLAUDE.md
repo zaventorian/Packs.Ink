@@ -2838,6 +2838,32 @@ default, guarded by `python scripts/test_import_duels_art.py`) upgrades only row
 - **A scanner-index rebuild follows an art change** (`fetch_cards.py` → `build_index.py` →
   `build_text_index.py`, then bump `IDXV`/`TXTV` and `test_scanner_asset_cache.mjs --update`).
 
+## Illumineer's Quest cards are NOT promos (2026-10-03)
+
+An Illumineer's Quest is a co-op board game in a box. The cards in its scenario
+deck (Ursula's, Jafar's, the Vine's) are game pieces, so they never take the
+Promo rarity and never sit with the promo sets (Zaven). Rarity **"Quest"**, three
+sets in `QUEST_SETS`, a ruled-off **Illumineer's Quests** section at the foot of
+the Collection grid, out of the headline completion %, the reveal reel and the
+Discord movers report. Guarded by `node scripts/test_quest_cards.mjs` and
+`python scripts/test_import_quest_cards.py`.
+
+- **Q3 The Great Hunny Rescue** is Lorcast's (`Hunny Rescue – Illumineer's Quest`,
+  mapped in `SET_DISPLAY_NAMES`). Lorcast files it as Promo; `load_lorcast.py`
+  writes "Quest" for any set code `Q<n>`. No TCGplayer singles yet (group 24734
+  holds only the box); link pids through `TCG_PID_OVERRIDES` once listed.
+- **Q1 Deep Trouble (31) and Q2 Palace Heist (35)** Lorcast never indexed.
+  `python scripts/import_quest_cards.py [--commit]` loads them from LorcanaJSON
+  into hand-minted sets `set_quest_q1` / `set_quest_q2` (migration 179, codes
+  Q1/Q2, so a later Lorcast copy is skipped by the code-collision check), ids
+  `crd_quest_<q>_<n>`, official art copied to `card-art/quests/`. TCGplayer sells
+  them (groups 23528 / 24257, already priced as sealed "Promo Single" rows), so
+  the pid gives them a price.
+- **Not loaded:** the oversized boss cards and double-sided battlegrounds
+  (TCGplayer lists them; no collector numbers).
+- The foil promo cards packed in the boxes (Mickey - Playful Sorcerer, Bolt -
+  Superdog ...) are playable cards and stay in Extras & Oddities.
+
 ## Set conventions
 
 - **`MAINLINE_SETS`** = booster-pack sets (TFC → Attack of the Vines). Used by EV, Pack Sim, Box Sim, Playset Cost, Price Graphing, Card Averages, Heatmap, Home "newest set".
