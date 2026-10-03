@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en" data-theme="aurora" data-mode="dark">
 <head>
 <script>
@@ -1260,15 +1260,12 @@ const lorcastToProxy = (url) => {
 // still showing the old language. It is also why the dictionary can be read
 // at module scope: it is loaded before this script runs, and never changes.
 // See docs/i18n.md for the source survey and what is left to translate.
-// `offer` is the one-time suggestion shown to a visitor whose browser asks for
-// that language (LanguageSuggest), written IN that language: the dictionary is
-// not loaded yet when it is needed, so it lives here.
 const SITE_LANGS = [
   {k: "en", label: "English",  html: "en"},
-  {k: "ja", label: "日本語",    html: "ja", offer: {q: "Packs.Inkを日本語で表示しますか？カードも日本語版で表示されます。", yes: "日本語で見る", no: "英語のまま"}},
-  {k: "de", label: "Deutsch",  html: "de", offer: {q: "Packs.Ink auf Deutsch anzeigen? Karten erscheinen dann in der deutschen Ausgabe.", yes: "Auf Deutsch", no: "Englisch behalten"}},
-  {k: "fr", label: "Français", html: "fr", offer: {q: "Afficher Packs.Ink en français ? Les cartes apparaîtront dans leur version française.", yes: "En français", no: "Garder l'anglais"}},
-  {k: "it", label: "Italiano", html: "it", offer: {q: "Vuoi Packs.Ink in italiano? Le carte appariranno nella versione italiana.", yes: "In italiano", no: "Resta in inglese"}},
+  {k: "ja", label: "日本語",    html: "ja"},
+  {k: "de", label: "Deutsch",  html: "de"},
+  {k: "fr", label: "Français", html: "fr"},
+  {k: "it", label: "Italiano", html: "it"},
 ];
 const SITE_LANG_KEY = "packsink:lang";
 const CARD_LANG_KEY = "packsink:cardLang";
@@ -1330,32 +1327,6 @@ const setCardLanguage = (lang) => {
   window.location.reload();
 };
 
-// One-time offer for a visitor whose browser prefers a language we have, on an
-// English page they never chose. Either answer is remembered (choosing English
-// stores "en"; the ✕ stores a dismissal), so it is asked once per device.
-const LANG_SUGGEST_DISMISSED_KEY = "packsink:langSuggestDismissed";
-const suggestedSiteLang = () => {
-  if(SITE_LANG !== "en") return null;
-  try {
-    if(localStorage.getItem(SITE_LANG_KEY) || localStorage.getItem(LANG_SUGGEST_DISMISSED_KEY)) return null;
-    if(new URLSearchParams(window.location.search).has("hl")) return null;
-  } catch { return null; }
-  const prefs = (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language || ""]);
-  const first = String(prefs[0] || "").toLowerCase().split("-")[0];
-  const hit = SITE_LANGS.find(l => l.k === first && l.offer);
-  return hit || null;
-};
-const LanguageSuggest = () => {
-  const [lang, setLang] = useState(() => suggestedSiteLang());
-  if(!lang) return null;
-  const dismiss = () => { try { localStorage.setItem(LANG_SUGGEST_DISMISSED_KEY, "1"); } catch {} setLang(null); };
-  return html`<div class="lang-suggest" role="dialog" aria-label=${lang.label} lang=${lang.html}>
-    <span class="lang-suggest-q">${uiIcon("globe", 15)} ${lang.offer.q}</span>
-    <button type="button" class="lang-suggest-yes" onClick=${() => setSiteLanguage(lang.k)}>${lang.offer.yes}</button>
-    <button type="button" class="lang-suggest-no" onClick=${() => { try { localStorage.setItem(SITE_LANG_KEY, "en"); } catch {} setLang(null); }}>${lang.offer.no}</button>
-    <button type="button" class="lang-suggest-x" onClick=${dismiss} aria-label="Dismiss">${uiIcon("close", 13)}</button>
-  </div>`;
-};
 const AUX_VERSION_KEY   = "packsink:auxCacheVersion";
 // Price-derived auxiliary caches: cheaply rebuildable from Supabase, safe to
 // wipe when the catalog refreshes or we need to free quota. IMPORTANT: this is
@@ -1652,7 +1623,10 @@ function localizeCatalog(rows, loc){
   return rows.map(r => {
     const e = loc.get(r.card_id);
     if(!e) return r;
-    const out = {...r, loc_name: locFullName(e), loc_text: e.text || null, loc_flavor: e.flavor_text || null, loc_classes: e.classifications || null};
+    // match_how 'machine' = an UNOFFICIAL translation of a card never printed in
+    // this language (load_mt_card_text.py): text only, name stays English.
+    const out = {...r, loc_name: locFullName(e), loc_text: e.text || null, loc_flavor: e.flavor_text || null,
+      loc_classes: e.classifications || null, loc_mt: e.match_how === "machine"};
     if(e.image_url){
       out.loc_art = true;
       out.img_small_en = r.img_small; out.img_normal_en = r.img_normal; out.img_large_en = r.img_large;
@@ -10929,7 +10903,11 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           ${inkable!=null && html`<div class="stat-pill"><span class="lbl">${_t("Inkwell")}</span><span class="val">${_t(inkable?"Inkable":"Uninkable")}</span></div>`}
         </div>
 
-        ${rulesText && html`<div class="card-detail-rules">${rulesText}</div>`}
+        ${rulesText && html`<div class="card-detail-rules">${rulesText}
+          ${(group.loc_mt || cardLocOf(group.card_id)?.match_how === "machine") && html`<div class="card-detail-mt-note"
+            title=${_t("This card was not printed in this language, so there is no official text. This translation is ours.")}>
+            ${uiIcon("globe", 12)} ${_t("Unofficial translation — not printed in this language")}</div>`}
+        </div>`}
         ${flavor && html`<div class="card-detail-flavor">"${flavor}"</div>`}
 
         ${!user && html`<div class="signin-prompt">
@@ -16625,7 +16603,13 @@ const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback
               jammed against the link before it ("@packs_ink· @HighScoreZAP·"). */""}
         ${_t("follow")} <a href="https://x.com/packs_ink" target="_blank" rel="noopener">@packs_ink</a>${" · "}
         <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener">@HighScoreZAP</a>${" · "}
-        <a href="/privacy">${_t("Privacy & Terms")}</a>
+        <a href="/privacy">${_t("Privacy & Terms")}</a>${" · "}
+        <label class="footer-lang" title="Language">
+          ${uiIcon("globe", 13)}
+          <select value=${SITE_LANG} onChange=${e => setSiteLanguage(e.target.value)} aria-label="Language">
+            ${SITE_LANGS.map(l => html`<option key=${l.k} value=${l.k}>${l.label}</option>`)}
+          </select>
+        </label>
       </div>
       ${/* The Amazon sentence stays VERBATIM English in every language: it is the
             Associates programme's required disclosure, not copy to translate. */""}
@@ -16825,11 +16809,11 @@ function EVView({raw, sets, avgs, nc, setNc,
       <div class="ev-header-title">
         <div class="ev-header-eyebrow">${_t("Market analytics")}</div>
         <h2 class="ev-header-h2">${_t("Expected Value")}</h2>
-        <div class="ev-header-sub">Estimated booster-box and pack value at current TCGplayer ${useMarket?"NM Market":"Low"} prices.</div>
+        <div class="ev-header-sub">${_t("Estimated booster-box and pack value at current TCGplayer {basis} prices.", {basis: useMarket?_t("NM Market"):_t("Low")})}</div>
       </div>
       <div class="ev-toggles">
         <${PriceModeToggle} priceMode=${priceMode} setPriceMode=${setPriceMode}/>
-        <${Tip} text="Treats any card worth less than $1.00 as $0. Gives a more realistic 'sellable' EV by ignoring bulk penny cards.">
+        <${Tip} text=${_t("Treats any card worth less than $1.00 as $0. Gives a more realistic 'sellable' EV by ignoring bulk penny cards.")}>
           <label class=${"ev-toggle"+(nc?" on":"")}>
             <input type="checkbox" checked=${nc} onChange=${e=>setNc(e.target.checked)}/>
             <div class="ev-toggle-text">
@@ -16839,22 +16823,22 @@ function EVView({raw, sets, avgs, nc, setNc,
           </label>
         <//>
         <div class=${"ev-toggle ev-toggle-group"+(ne?" on":"")}>
-          <${Tip} text="Click 'Exclude chase' to drop both Enchanted and Iconic from EV (the one-click default). The two checkboxes below let you exclude just one if you want to keep, say, Enchanteds in play.">
+          <${Tip} text=${_t("Click 'Exclude chase' to drop both Enchanted and Iconic from EV (the one-click default). The two checkboxes below let you exclude just one if you want to keep, say, Enchanteds in play.")}>
             <button class="ev-toggle-group-btn" onClick=${()=>setExcludeBoth(!ne)}>
               <div class="ev-toggle-text">
-                <div class="ev-toggle-title">${ne ? "Excluding chase" : "Exclude chase"}</div>
-                <div class="ev-toggle-sub">${ne ? "Enchanted + Iconic skipped" : "Skip Enchanted + Iconic"}</div>
+                <div class="ev-toggle-title">${ne ? _t("Excluding chase") : _t("Exclude chase")}</div>
+                <div class="ev-toggle-sub">${ne ? _t("Enchanted + Iconic skipped") : _t("Skip Enchanted + Iconic")}</div>
               </div>
             </button>
           <//>
           <div class="ev-toggle-group-rows">
             <label class=${"ev-toggle-sub-row"+(excludeEnchanted?" on":"")}>
               <input type="checkbox" checked=${excludeEnchanted} onChange=${e=>setExcludeEnchanted(e.target.checked)}/>
-              Enchanted
+              ${_term("rarity", "Enchanted")}
             </label>
             <label class=${"ev-toggle-sub-row"+(excludeIconic?" on":"")}>
               <input type="checkbox" checked=${excludeIconic} onChange=${e=>setExcludeIconic(e.target.checked)}/>
-              Iconic
+              ${_term("rarity", "Iconic")}
             </label>
           </div>
         </div>
@@ -16869,13 +16853,13 @@ function EVView({raw, sets, avgs, nc, setNc,
           <div class="ev-row-val"><span class="ev-row-val-lbl">${_t("per pack")}</span></div>
         </div>
         ${anyBoxData && html`<div class="ev-row-box">
-          <div class="ev-row-val"><span class="ev-row-val-lbl" title=${_t("Booster box price on TCGplayer — the price links there")}>box · TCGplayer</span></div>
-          <div class="ev-row-val"><span class="ev-row-val-lbl">EV − box</span></div>
+          <div class="ev-row-val"><span class="ev-row-val-lbl" title=${_t("Booster box price on TCGplayer — the price links there")}>${_t("box · TCGplayer")}</span></div>
+          <div class="ev-row-val"><span class="ev-row-val-lbl">${_t("EV − box")}</span></div>
         </div>`}
         <div class="ev-row-deltas-wrap">
           <div class="ev-row-deltas-title">${_t("EV change")}</div>
           <div class="ev-row-deltas">
-            ${EV_WINDOWS.map(([k,,label])=>html`<div key=${k} class="ev-delta-cell ev-delta-head">${k}</div>`)}
+            ${EV_WINDOWS.map(([k,,label])=>html`<div key=${k} class="ev-delta-cell ev-delta-head">${_t(k)}</div>`)}
           </div>
         </div>
       </div>
@@ -16885,10 +16869,10 @@ function EVView({raw, sets, avgs, nc, setNc,
         role=${openSetHistory ? "button" : null}
         tabIndex=${openSetHistory ? 0 : null}
         onKeyDown=${openSetHistory ? (e)=>{ if(e.target===e.currentTarget && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); openSetHistory(setName);} } : null}
-        title=${openSetHistory ? "Open price history for "+setName : null}>
-        <div class="ev-row-set">${setName}${PRERELEASE_SETS.has(setName) && html` <span class="ev-presale-tag" title=${EV_PRESALE_TIP}>${_t("Pre-sale")}</span>`} <span class="ev-row-set-hint">${extIcon()}</span>
+        title=${openSetHistory ? _t("Open price history for {set}", {set: setName}) : null}>
+        <div class="ev-row-set">${setName}${PRERELEASE_SETS.has(setName) && html` <span class="ev-presale-tag" title=${_t(EV_PRESALE_TIP)}>${_t("Pre-sale")}</span>`} <span class="ev-row-set-hint">${extIcon()}</span>
           ${onSimulateSet && html`<button class="ev-row-simbtn"
-            title=${"Simulate opening a "+setName+" box"}
+            title=${_t("Simulate opening a {set} box", {set: setName})}
             onClick=${e=>{ e.stopPropagation(); onSimulateSet(setName); }}>${uiIcon("die",12)} ${_t("Sim")}</button>`}
         </div>
         <div class="ev-row-vals">
@@ -16898,11 +16882,11 @@ function EVView({raw, sets, avgs, nc, setNc,
         ${anyBoxData && html`<div class="ev-row-box">
           ${box
             ? html`<div class="ev-row-val">
-                <span class="ev-row-val-lbl-inline">box · TCGplayer</span>
+                <span class="ev-row-val-lbl-inline">${_t("box · TCGplayer")}</span>
                 ${box.url
                   ? html`<a href=${box.url} target="_blank" rel="noopener nofollow sponsored"
                       onClick=${e=>e.stopPropagation()}
-                      class="ev-box-link" title=${box.name + " on TCGplayer (affiliate link)"}>${fmt(box.price)}<span class="ev-box-link-ext">${extIcon()}</span></a>`
+                      class="ev-box-link" title=${_t("{name} on TCGplayer (affiliate link)", {name: box.name})}>${fmt(box.price)}<span class="ev-box-link-ext">${extIcon()}</span></a>`
                   : fmt(box.price)}
                 ${(() => {
                   const az = amazonForSealed(box.product, setName);
@@ -16917,20 +16901,20 @@ function EVView({raw, sets, avgs, nc, setNc,
                 const cls = diffVsBox > 0 ? "up" : (diffVsBox < 0 ? "down" : "flat");
                 const sign = diffVsBox > 0 ? "+" : "";
                 return html`<div class=${"ev-box-diff ev-box-diff-"+cls}
-                  title=${diffVsBox>0?"Cracking is +EV at current box price":"Box price exceeds EV — buy singles"}>
-                  <span class="ev-row-val-lbl-inline">EV − box</span>${sign}${fmt(diffVsBox)}
+                  title=${diffVsBox>0?_t("Cracking is +EV at current box price"):_t("Box price exceeds EV — buy singles")}>
+                  <span class="ev-row-val-lbl-inline">${_t("EV − box")}</span>${sign}${fmt(diffVsBox)}
                 </div>`;
               })()}`
-            : html`<div class="ev-row-val ev-row-val-dim"><span class="ev-row-val-lbl-inline">box · TCGplayer</span>—</div>
-              <div class="ev-box-diff ev-box-diff-none"><span class="ev-row-val-lbl-inline">EV − box</span>—</div>`}
+            : html`<div class="ev-row-val ev-row-val-dim"><span class="ev-row-val-lbl-inline">${_t("box · TCGplayer")}</span>—</div>
+              <div class="ev-box-diff ev-box-diff-none"><span class="ev-row-val-lbl-inline">${_t("EV − box")}</span>—</div>`}
         </div>`}
         <div class="ev-row-deltas">
           ${EV_WINDOWS.map(([k,,label])=>{
             const pct = deltas[k];
-            if(pct == null) return html`<div key=${k} class="ev-delta-cell ev-delta-none" title=${"No data for "+label}>—</div>`;
+            if(pct == null) return html`<div key=${k} class="ev-delta-cell ev-delta-none" title=${_t("No data for {span}", {span: _t(label)})}>—</div>`;
             const cls = pct > 0 ? "up" : (pct < 0 ? "down" : "flat");
             const arrow = pct > 0 ? "▲" : (pct < 0 ? "▼" : "·");
-            return html`<div key=${k} class=${"ev-delta-cell ev-delta-"+cls} title=${label}>
+            return html`<div key=${k} class=${"ev-delta-cell ev-delta-"+cls} title=${_t(label)}>
               <span class="ev-delta-arrow">${arrow}</span>${Math.abs(pct).toFixed(1)}%
             </div>`;
           })}
@@ -16939,12 +16923,12 @@ function EVView({raw, sets, avgs, nc, setNc,
     </div>
 
     <p class="muted" style=${{fontSize:11,marginTop:12}}>
-      ${hist.status === "loading" && "Loading history…"}
-      ${hist.status === "error" && ("History unavailable: " + hist.error)}
-      ${hist.status === "empty" && "No historical data yet — check back after the next daily update."}
-      ${hist.status === "ready" && `Prices via TCGCSV (TCGplayer ${useMarket?"NM Market":"Low"}). Change windows compare ${hist.latest} against earlier snapshots.`}
-      ${" "}Box-price and Amazon links are affiliate links — we may earn a commission
-      at no extra cost to you. As an Amazon Associate I earn from qualifying purchases.
+      ${hist.status === "loading" && _t("Loading history…")}
+      ${hist.status === "error" && _t("History unavailable: {err}", {err: hist.error})}
+      ${hist.status === "empty" && _t("No historical data yet — check back after the next daily update.")}
+      ${hist.status === "ready" && _t("Prices via TCGCSV (TCGplayer {basis}). Change windows compare {date} against earlier snapshots.", {basis: useMarket?_t("NM Market"):_t("Low"), date: hist.latest})}
+      ${" "}${_t("Box-price and Amazon links are affiliate links — we may earn a commission at no extra cost to you.")}
+      As an Amazon Associate I earn from qualifying purchases.
     </p>
   </div>`;
 }
@@ -18182,24 +18166,24 @@ function AvgView({sets, avgs, nc, setNc, priceMode, setPriceMode, metric, setMet
   };
   return html`<div>
     <${MarketHeader} title=${_t("Set Breakdown")} sub=${shareMode
-      ? "Where each set's box value lives — every rarity's share of box EV."
-      : "Average " + (useMarket?"NM Market":"Low") + " price per card, by rarity, for each set."}>
+      ? _t("Where each set's box value lives — every rarity's share of box EV.")
+      : _t("Average {basis} price per card, by rarity, for each set.", {basis: useMarket?_t("NM Market"):_t("Low")})}>
       <div class="market-sim-kind" role="group" aria-label=${_t("Metric")}>
-        <button class=${!shareMode?"active":""} onClick=${()=>setMetric("avg")}>$ per card</button>
-        <button class=${shareMode?"active":""}  onClick=${()=>setMetric("share")}>% of box EV</button>
+        <button class=${!shareMode?"active":""} onClick=${()=>setMetric("avg")}>${_t("$ per card")}</button>
+        <button class=${shareMode?"active":""}  onClick=${()=>setMetric("share")}>${_t("% of box EV")}</button>
       </div>
     <//>
     <${MarketExplainer} id="avg">
-      <strong>${_t("Set Breakdown")}</strong> — the typical price per card at each rarity inside a booster. Multiplying the average by the pull rate gives that rarity's contribution to box EV; summing across rarities gives the <em>${_t("EV / box")}</em> row at the bottom. Pick exactly two sets on the chip strip to reveal an A−B Diff column.
+      <strong>${_t("Set Breakdown")}</strong> — ${_t("the typical price per card at each rarity inside a booster. Multiplying the average by the pull rate gives that rarity's contribution to box EV; summing across rarities gives the {evbox} row at the bottom. Pick exactly two sets on the chip strip to reveal an A−B Diff column.", {evbox: _t("EV / box")})}
       <ul class="market-explainer-defs">
-        <li><strong>$ per card</strong> — current average ${useMarket?"TCGplayer NM Market":"TCGplayer Low"} price across every card of that rarity in the set. Hover a cell for that set's pull rate.</li>
-        <li><strong>% of box EV</strong> — (average price × pull rate) ÷ total box EV. A 50%+ Enchanted cell means half a box's value rides on hitting one; a flatter column means returns are steadier.</li>
-        <li><strong>${"<$1 → $0"}</strong> — count any card below $1 as $0 before averaging (filters bulk noise).</li>
+        <li><strong>${_t("$ per card")}</strong> — ${_t("current average TCGplayer {basis} price across every card of that rarity in the set. Hover a cell for that set's pull rate.", {basis: useMarket?_t("NM Market"):_t("Low")})}</li>
+        <li><strong>${_t("% of box EV")}</strong> — ${_t("(average price × pull rate) ÷ total box EV. A 50%+ Enchanted cell means half a box's value rides on hitting one; a flatter column means returns are steadier.")}</li>
+        <li><strong>${"<$1 → $0"}</strong> — ${_t("count any card below $1 as $0 before averaging (filters bulk noise).")}</li>
       </ul>
     <//>
     <div class="market-filter-row">
       <${PriceModeToggle} priceMode=${priceMode} setPriceMode=${setPriceMode}/>
-      <${Tip} text="Treats any card worth less than $1.00 as $0. More realistic 'sellable' average — ignores bulk pennies.">
+      <${Tip} text=${_t("Treats any card worth less than $1.00 as $0. More realistic 'sellable' average — ignores bulk pennies.")}>
         <label class="market-flag">
           <input type="checkbox" checked=${nc} onChange=${e=>setNc(e.target.checked)}/>${" <$1→$0"}
         </label>
@@ -18208,7 +18192,7 @@ function AvgView({sets, avgs, nc, setNc, priceMode, setPriceMode, metric, setMet
     <div class="card-avg-chips">
       <span class="card-avg-chips-lbl">${_t("Sets (newest first):")}</span>
       <button class=${"card-avg-chip"+(allOn?" active":"")}
-        title=${allOn ? "Back to the newest sets" : "Show every set"}
+        title=${allOn ? _t("Back to the newest sets") : _t("Show every set")}
         onClick=${()=>setSelected(allOn ? defaultSel() : new Set(sets))}>${_t("All")}</button>
       ${sets.map(s => html`<button key=${s}
         class=${"card-avg-chip"+(selected.has(s)?" active":"")}
@@ -18224,10 +18208,10 @@ function AvgView({sets, avgs, nc, setNc, priceMode, setPriceMode, metric, setMet
             ${visibleSets.map(s => html`<th key=${s} style=${{minWidth:90,whiteSpace:"nowrap"}}>
               ${openSetHistory
                 ? html`<button class="card-avg-set-head" onClick=${()=>openSetHistory(s)}
-                    title=${"Open price history for "+s}>${s} <span class="card-avg-set-head-hint">${extIcon()}</span></button>`
+                    title=${_t("Open price history for {set}", {set: s})}>${s} <span class="card-avg-set-head-hint">${extIcon()}</span></button>`
                 : s}
             </th>`)}
-            ${showDiff && html`<th style=${{minWidth:80}}>Diff (A−B)</th>`}
+            ${showDiff && html`<th style=${{minWidth:80}}>${_t("Diff (A−B)")}</th>`}
           </tr>
         </thead>
         <tbody>
@@ -18235,10 +18219,10 @@ function AvgView({sets, avgs, nc, setNc, priceMode, setPriceMode, metric, setMet
             const cells = visibleSets.map(s => cellVal(s, r));
             const diff = showDiff && cells[0] != null && cells[1] != null ? cells[0] - cells[1] : null;
             return html`<tr key=${r}>
-              <td class="mkt-sticky-col" style=${{fontWeight:500}}>${r}</td>
+              <td class="mkt-sticky-col" style=${{fontWeight:500}}>${_term("rarity", r)}</td>
               ${cells.map((v,i) => {
                 const s = visibleSets[i];
-                const tip = s + ": pull ≈ " + getPull(s)[r] + " per box";
+                const tip = _t("{set}: pull ≈ {n} per box", {set: s, n: getPull(s)[r]});
                 if(shareMode){
                   const pct = v || 0;
                   const int = Math.min(1, pct/40);
@@ -18279,10 +18263,10 @@ function AvgView({sets, avgs, nc, setNc, priceMode, setPriceMode, metric, setMet
     </div>
     <p class="muted" style=${{fontSize:11,marginTop:8}}>
       ${shareMode
-        ? "Share of box EV from each rarity" + (onlyOne ? " for "+onlyOne : "") + ". Darker = higher contribution."
-        : "Average " + (useMarket?"TCGplayer NM Market":"Low") + " price per card by rarity" + (onlyOne ? " for "+onlyOne : "") + "."}
-      ${showDiff && " A = "+visibleSets[0]+", B = "+visibleSets[1]+". Diff = A − B."}
-      ${" "}Pull rates: Sets 1–11 use the original print run; Wilds Unknown onward pulls 6 Legendaries, ~30 Rares, 2.5 Epics and 0.333 Enchanteds per box — hover any cell for the exact rate.
+        ? (onlyOne ? _t("Share of box EV from each rarity for {set}. Darker = higher contribution.", {set: onlyOne}) : _t("Share of box EV from each rarity. Darker = higher contribution."))
+        : (onlyOne ? _t("Average {basis} price per card by rarity for {set}.", {basis: useMarket?_t("TCGplayer NM Market"):_t("Low"), set: onlyOne}) : _t("Average {basis} price per card by rarity.", {basis: useMarket?_t("TCGplayer NM Market"):_t("Low")}))}
+      ${showDiff && " " + _t("A = {a}, B = {b}. Diff = A − B.", {a: visibleSets[0], b: visibleSets[1]})}
+      ${" "}${_t("Pull rates: Sets 1–11 use the original print run; Wilds Unknown onward pulls 6 Legendaries, ~30 Rares, 2.5 Epics and 0.333 Enchanteds per box — hover any cell for the exact rate.")}
     </p>
   </div>`;
 }
@@ -22121,7 +22105,7 @@ const CardGrid=({cards,showImages,theme,onCardClick})=>html`<div style=${{displa
     return html`<div class=${"card"+(handleClick?" clickable":"")} key=${i} onClick=${handleClick}>
       ${showImages&&imgSrc?html`<img class="card-img" src=${imgSrc} alt=${c.name} loading="lazy"/>`:showImages?html`<div class="card-img-placeholder">${c.name?.substring(0,12)}</div>`:null}
       <${Badge} rarity=${c.rarity} foil=${foil} theme=${theme}/><div style=${{fontSize:11,fontWeight:500,lineHeight:1.4,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",minHeight:26}}>${c.name}</div>
-      ${!showImages&&ink&&html`<div class="muted" style=${{fontSize:10}}>${ink}</div>`}
+      ${!showImages&&ink&&html`<div class="muted" style=${{fontSize:10}}>${_term("ink", ink)}</div>`}
       ${url
         ? html`<a href=${url} target="_blank" rel="noopener nofollow sponsored" class="sim-buy-btn" onClick=${e=>e.stopPropagation()}>${fmt(c.price)}<span class="sim-buy-ext">${extIcon()}</span></a>`
         : html`<div class="sim-buy-btn disabled">${fmt(c.price)}</div>`}
@@ -22138,19 +22122,19 @@ function PackSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSe
   const onCardClick = (c) => { const g = groupFromSimCard(c, rawData); if(g) setSelectedGroup(g); };
   return html`<div>
     <div class="row">
-      <${SetSel} val=${s} onChange=${v=>{setS(v);setPack(null);setHist([]);onSetChange&&onSetChange(v);}} placeholder="Select a set..." sets=${sets}/>
-      <button onClick=${open} disabled=${!s} class=${s?"active":""}>${hist.length===0?"Open pack":"Open another"}</button>
-      ${hist.length>0&&html`<button onClick=${()=>{setPack(null);setHist([]);}} style=${{color:"var(--text-muted)",border:"1px solid var(--border)"}}>Reset</button>`}
-      <label style=${{display:"flex",alignItems:"center",gap:5,fontSize:12,cursor:"pointer",color:"var(--text-dim)",marginLeft:6}}><input type="checkbox" checked=${showImg} onChange=${e=>setShowImg(e.target.checked)}/> Show images</label>
+      <${SetSel} val=${s} onChange=${v=>{setS(v);setPack(null);setHist([]);onSetChange&&onSetChange(v);}} placeholder=${_t("Select a set...")} sets=${sets}/>
+      <button onClick=${open} disabled=${!s} class=${s?"active":""}>${hist.length===0?_t("Open pack"):_t("Open another")}</button>
+      ${hist.length>0&&html`<button onClick=${()=>{setPack(null);setHist([]);}} style=${{color:"var(--text-muted)",border:"1px solid var(--border)"}}>${_t("Reset")}</button>`}
+      <label style=${{display:"flex",alignItems:"center",gap:5,fontSize:12,cursor:"pointer",color:"var(--text-dim)",marginLeft:6}}><input type="checkbox" checked=${showImg} onChange=${e=>setShowImg(e.target.checked)}/> ${_t("Show images")}</label>
     </div>
     ${hist.length>0&&html`<div class="stat-grid stat-grid-4" style=${{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:"1rem"}}>
-      <${Stat} label="Packs" value=${hist.length}/><${Stat} label="Avg" value=${fmt(hist.reduce((a,b)=>a+b,0)/hist.length)}/><${Stat} label="Best pack" value=${fmt(Math.max(...hist))} accent="var(--green)"/><${Stat} label=${"Hits \u2265$5"} value=${(hist.filter(p=>p>=5).length/hist.length*100).toFixed(0)+"%"}/>
+      <${Stat} label=${_t("Packs")} value=${hist.length}/><${Stat} label=${_t("Avg")} value=${fmt(hist.reduce((a,b)=>a+b,0)/hist.length)}/><${Stat} label=${_t("Best pack")} value=${fmt(Math.max(...hist))} accent="var(--green)"/><${Stat} label=${_t("Hits ≥$5")} value=${(hist.filter(p=>p>=5).length/hist.length*100).toFixed(0)+"%"}/>
     </div>`}
     ${pack&&html`<div>
-      <div class="muted" style=${{fontSize:11,marginBottom:8}}>Pack #${hist.length} \u2014 ${s}</div>
+      <div class="muted" style=${{fontSize:11,marginBottom:8}}>${_t("Pack #{n}", {n: hist.length})} \u2014 ${s}</div>
       <${CardGrid} cards=${pack} showImages=${showImg} theme=${theme} onCardClick=${onCardClick}/>
       <div style=${{display:"flex",justifyContent:"space-between",padding:"8px 14px",background:"var(--stat-bg)",border:"1px solid var(--border)",borderRadius:8,marginTop:10}}>
-        <span style=${{color:"var(--text-dim)"}}>Pack total</span>
+        <span style=${{color:"var(--text-dim)"}}>${_t("Pack total")}</span>
         <span style=${{fontWeight:600,fontSize:15,color:total>=5?"var(--green)":"inherit"}}>${fmt(total)}</span>
       </div>
     </div>`}
@@ -22187,16 +22171,18 @@ function Histogram({data, line}){
   const w0 = ents.length > 1 ? (+ents[1][0] - +ents[0][0]) : 10;
   const lineX = (line != null && ents.length) ? ((line - +ents[0][0]) / w0) * (bw + 2) : null;
   const lineOn = lineX != null && lineX >= 0 && lineX <= ents.length * (bw + 2);
-  return html`<div><div class="muted" style=${{fontSize:11,marginBottom:6}}>Distribution across ${data.n.toLocaleString()} simulated boxes</div>
+  return html`<div><div class="muted" style=${{fontSize:11,marginBottom:6}}>${_t("Distribution across {n} simulated boxes", {n: data.n.toLocaleString()})}</div>
     <div class="scr"><svg width=${ents.length*(bw+2)+10} height=${H+28} style=${{display:"block"}}>
       ${ents.map(([b,c],i)=>{const bh=Math.max(2,(c/maxC)*H),x=i*(bw+2),near=Math.abs(+b-data.mean)<15;
         return html`<g key=${b}><rect x=${x} y=${H-bh} width=${bw} height=${bh} fill=${near?"var(--accent)":"rgba(200,168,70,0.25)"} rx="2"/>
           ${i%skip===0&&html`<text x=${x+bw/2} y=${H+18} textAnchor="middle" fontSize="9" fill="var(--text-muted)">$${b}</text>`}</g>`;})}
       <line x1="0" y1=${H} x2=${ents.length*(bw+2)} y2=${H} stroke="var(--border)" strokeWidth="0.5"/>
       ${lineOn && html`<line x1=${lineX} y1="0" x2=${lineX} y2=${H} stroke="var(--green)" strokeWidth="1.5" strokeDasharray="4,3"/>`}</svg></div>
-    <div class="muted" style=${{fontSize:11,marginTop:4}}>Dark = near mean (${fmt(data.mean)}). ${line != null
-      ? `${((data.totals.filter(t=>t>=line).length/data.n)*100).toFixed(1)}% of boxes beat today's ${fmt(line)} box price${lineOn ? " (the dashed line)" : ""}.`
-      : `${((data.totals.filter(t=>t>=100).length/data.n)*100).toFixed(1)}% of boxes hit $100+.`}</div></div>`;
+    <div class="muted" style=${{fontSize:11,marginTop:4}}>${_t("Dark = near mean ({mean}).", {mean: fmt(data.mean)})} ${line != null
+      ? (lineOn
+        ? _t("{pct}% of boxes beat today's {price} box price (the dashed line).", {pct: ((data.totals.filter(t=>t>=line).length/data.n)*100).toFixed(1), price: fmt(line)})
+        : _t("{pct}% of boxes beat today's {price} box price.", {pct: ((data.totals.filter(t=>t>=line).length/data.n)*100).toFixed(1), price: fmt(line)}))
+      : _t("{pct}% of boxes hit $100+.", {pct: ((data.totals.filter(t=>t>=100).length/data.n)*100).toFixed(1)})}</div></div>`;
 }
 
 function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSet,onSetChange,onOpenOdds,sealedPrices}){
@@ -22222,24 +22208,24 @@ function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSet
   };
   return html`<div>
     <div class="row">
-      <${SetSel} val=${s} onChange=${v=>{setS(v);setRes(null);setBoxHist([]);onSetChange&&onSetChange(v);}} placeholder="Select a set..." sets=${sets}/>
-      <button onClick=${openBox} disabled=${!s} class=${s?"active":""}>${boxHist.length===0?"Open a box":"Open another"}</button>
-      ${boxHist.length>0&&html`<button onClick=${()=>{setRes(null);setBoxHist([]);}} style=${{color:"var(--text-muted)",border:"1px solid var(--border)"}}>Reset</button>`}
+      <${SetSel} val=${s} onChange=${v=>{setS(v);setRes(null);setBoxHist([]);onSetChange&&onSetChange(v);}} placeholder=${_t("Select a set...")} sets=${sets}/>
+      <button onClick=${openBox} disabled=${!s} class=${s?"active":""}>${boxHist.length===0?_t("Open a box"):_t("Open another")}</button>
+      ${boxHist.length>0&&html`<button onClick=${()=>{setRes(null);setBoxHist([]);}} style=${{color:"var(--text-muted)",border:"1px solid var(--border)"}}>${_t("Reset")}</button>`}
     </div>
     ${boxHist.length>0&&html`<div class="stat-grid stat-grid-4" style=${{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:"1rem"}}>
-      <${Stat} label="Boxes opened" value=${boxHist.length}/>
-      <${Stat} label="Avg box" value=${fmt(boxHist.reduce((a,b)=>a+b.total,0)/boxHist.length)}/>
-      <${Stat} label="Best box" value=${fmt(bestBox?.total)} accent="var(--green)"/>
-      <${Stat} label=${boxPrice != null ? "Spent at " + fmt(boxPrice) + "/box" : "Total spent"} value=${boxPrice != null ? fmt(boxHist.length*boxPrice) : "—"}/>
+      <${Stat} label=${_t("Boxes opened")} value=${boxHist.length}/>
+      <${Stat} label=${_t("Avg box")} value=${fmt(boxHist.reduce((a,b)=>a+b.total,0)/boxHist.length)}/>
+      <${Stat} label=${_t("Best box")} value=${fmt(bestBox?.total)} accent="var(--green)"/>
+      <${Stat} label=${boxPrice != null ? _t("Spent at {price}/box", {price: fmt(boxPrice)}) : _t("Total spent")} value=${boxPrice != null ? fmt(boxHist.length*boxPrice) : "—"}/>
     </div>`}
     ${res&&html`<div style=${{marginBottom:"1.5rem"}}>
-      <div class="muted" style=${{fontSize:11,marginBottom:8}}>Box #${res.num} \u2014 ${s}</div>
+      <div class="muted" style=${{fontSize:11,marginBottom:8}}>${_t("Box #{n}", {n: res.num})} \u2014 ${s}</div>
       <div style=${{display:"flex",gap:16,flexWrap:"wrap"}}>
         <div style=${{flex:1,minWidth:200}}>
           <div class="stat-grid stat-grid-3" style=${{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
-            <${Stat} label="Box total" value=${fmt(res.total)} accent=${res.total>=(boxPrice ?? 100)?"var(--green)":null}/>
-            <${Stat} label="Best pull" value=${(res.best?.name||"").substring(0,24)}/>
-            <${Stat} label="Best card $" value=${fmt(res.best?.price)} accent=${res.best?.price>=10?"var(--green)":null}/>
+            <${Stat} label=${_t("Box total")} value=${fmt(res.total)} accent=${res.total>=(boxPrice ?? 100)?"var(--green)":null}/>
+            <${Stat} label=${_t("Best pull")} value=${(res.best?.name||"").substring(0,24)}/>
+            <${Stat} label=${_t("Best card $")} value=${fmt(res.best?.price)} accent=${res.best?.price>=10?"var(--green)":null}/>
           </div>
           <div style=${{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(145px,1fr))",gap:5}}>
             ${/* RARS already lists the Foil tiers; doubling it with r+" Foil" drew
@@ -22247,14 +22233,14 @@ function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSet
             ${[...RARS, ...Object.keys(res.rc).filter(k=>!RARS.includes(k))].filter(k=>res.rc[k]).map(k=>{
               const b=k.replace(" Foil",""),st=getBadgeStyle(b,theme),foil=k.includes("Foil");
               return html`<div class="card" key=${k} style=${{flexDirection:"row",alignItems:"center",padding:"5px 10px"}}>
-                <span class="badge" style=${{background:st.bg,color:st.fg,fontSize:9}}>${foil?"\u2726 ":""}${k}</span>
+                <span class="badge" style=${{background:st.bg,color:st.fg,fontSize:9}}>${foil?"\u2726 ":""}${foil ? _t("{rarity} Foil", {rarity: _term("rarity", b)}) : _term("rarity", k)}</span>
                 <span style=${{marginLeft:"auto",fontWeight:600}}>${res.rc[k]}</span>
               </div>`;
             })}
           </div>
         </div>
         ${res.best&&(res.best.img_small||res.best.img_normal)&&html`<div class="best-card-display" onClick=${openBestPull} style=${{cursor:"pointer"}}>
-          <div style=${{fontSize:10,color:"var(--text-muted)",textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>Best Pull</div>
+          <div style=${{fontSize:10,color:"var(--text-muted)",textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>${_t("Best Pull")}</div>
           <img src=${res.best.img_normal||res.best.img_small} alt=${res.best.name} style=${{width:"100%",borderRadius:6}}/>
           <div style=${{fontSize:12,fontWeight:600,marginTop:6}}>${res.best.name}</div>
           <div style=${{fontSize:14,fontWeight:600,color:"var(--green)"}}>${fmt(res.best.price)}</div>
@@ -22263,11 +22249,11 @@ function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSet
       </div>
     </div>`}
     ${boxHist.length>1&&html`<div style=${{marginBottom:"1.5rem"}}>
-      <div style=${{fontWeight:600,fontSize:13,marginBottom:8,fontFamily:"'Cinzel',serif"}}>Box History</div>
+      <div style=${{fontWeight:600,fontSize:13,marginBottom:8,fontFamily:"'Cinzel',serif"}}>${_t("Box History")}</div>
       <div class="scr"><table>
-        <thead><tr><th>Box #</th><th>Total</th><th>Best Pull</th><th>Best Card $</th></tr></thead>
+        <thead><tr><th>${_t("Box #")}</th><th>${_t("Total")}</th><th>${_t("Best Pull")}</th><th>${_t("Best Card $")}</th></tr></thead>
         <tbody>${boxHist.slice().reverse().map(b=>html`<tr key=${b.num} style=${{background:b===bestBox?"var(--accent-glow)":"inherit"}}>
-          <td style=${{fontWeight:500}}>Box #${b.num}${b===bestBox?" ★":""}</td>
+          <td style=${{fontWeight:500}}>${_t("Box #{n}", {n: b.num})}${b===bestBox?" ★":""}</td>
           <td style=${{color:b.total>=100?"var(--green)":"inherit"}}>${fmt(b.total)}</td>
           <td style=${{textAlign:"left",maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>${b.best?.name||"\u2014"}</td>
           <td style=${{color:b.best?.price>=10?"var(--green)":"inherit"}}>${fmt(b.best?.price)}</td>
@@ -22275,10 +22261,10 @@ function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSet
       </table></div>
     </div>`}
     ${s&&html`<p class="muted" style=${{fontSize:11,marginTop:"1rem"}}>
-      Want statistics from thousands of boxes instead of single opens?
+      ${_t("Want statistics from thousands of boxes instead of single opens?")}
       ${onOpenOdds
-        ? html`<button style=${{marginLeft:6,padding:"2px 10px",fontSize:11}} onClick=${onOpenOdds}>Switch to Odds →</button>`
-        : html`Switch to the <strong>Odds</strong> mode above.`}
+        ? html`<button style=${{marginLeft:6,padding:"2px 10px",fontSize:11}} onClick=${onOpenOdds}>${_t("Switch to Odds →")}</button>`
+        : _t("Switch to the Odds mode above.")}
     </p>`}
   </div>`;
 }
@@ -36166,13 +36152,14 @@ function EloView({eloPinned, setEloPinned, user, onSignIn}){
 function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
   return html`<div class="faq-section">
     ${onStartTour && html`<div class="faq-tours">
-      <button class="faq-tour-btn" onClick=${onStartTour}>${uiIcon("wave")} Quick welcome tour</button>
-      ${onStartSiteWalk && html`<button class="faq-tour-btn" onClick=${onStartSiteWalk}>${uiIcon("compass")} Full site walkthrough</button>`}
+      <button class="faq-tour-btn" onClick=${onStartTour}>${uiIcon("wave")} ${_t("Quick welcome tour")}</button>
+      ${onStartSiteWalk && html`<button class="faq-tour-btn" onClick=${onStartSiteWalk}>${uiIcon("compass")} ${_t("Full site walkthrough")}</button>`}
       ${onStartSectionTour && Object.entries(COACH_TOURS)
         .filter(([, t]) => !(t.requiresUser && !user))
         .map(([v, t]) => html`<button key=${v} class="faq-tour-btn faq-tour-btn--section"
           onClick=${()=>onStartSectionTour(v)}>${uiIcon("compass")} ${t.title}</button>`)}
     </div>`}
+    ${I18N && I18N.faqHtml ? html`<div class="faq-body" dangerouslySetInnerHTML=${{__html: I18N.faqHtml}}></div>` : html`
     <h2>What is Packs.Ink?</h2>
     <p>Packs.Ink is a market and collection tracker for the Disney Lorcana TCG. Use it to <strong>watch prices and price movement</strong>, <strong>track what you own</strong> (raw, sealed, and graded), <strong>build decks</strong>, and <strong>share lists and tournament results</strong> with the community. Prices update daily.</p>
 
@@ -36306,6 +36293,7 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
 
     <h2>Disclaimer</h2>
     <p>Packs.Ink is an unofficial fan site. Disney Lorcana TCG is a trademark of Disney; the game is operated by Ravensburger. This site is not affiliated with, endorsed by, or sponsored by Disney or Ravensburger.</p>
+    `}
   </div>`;
 }
 
@@ -36319,19 +36307,19 @@ function SetDetail({data,mult,activeRars,theme,onOpenCard}){
   return html`<div style=${{padding:"12px 16px",background:"var(--bg-surface)",borderTop:"1px solid var(--border)"}}
     onClick=${e=>e.stopPropagation()}>
     <div style=${{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>
-      <button onClick=${()=>setRf(null)} class=${rf===null?"active":""} style=${{fontSize:11,padding:"3px 8px"}}>All</button>
+      <button onClick=${()=>setRf(null)} class=${rf===null?"active":""} style=${{fontSize:11,padding:"3px 8px"}}>${_t("All")}</button>
       ${SET_RARS.filter(r=>activeRars.has(r)).map(r=>{const s=getBadgeStyle(r,theme);
         return html`<button key=${r} onClick=${()=>setRf(rf===r?null:r)}
           style=${{background:rf===r?s.bg:"transparent",color:rf===r?s.fg:"var(--btn-text)",
-            border:rf===r?"1px solid "+(s.fg+"40"):"1px solid var(--btn-border)",fontSize:11,padding:"3px 8px",borderRadius:6}}>${r} (${data.byRar[r]?.count||0})</button>`;
+            border:rf===r?"1px solid "+(s.fg+"40"):"1px solid var(--btn-border)",fontSize:11,padding:"3px 8px",borderRadius:6}}>${_term("rarity", r)} (${data.byRar[r]?.count||0})</button>`;
       })}
     </div>
     <div style=${{maxHeight:400,overflowY:"auto"}}>
       <table><thead><tr>
-        <th style=${{textAlign:"left"}}>Card</th>
-        <th>Rarity</th>
-        <th>${mult===4?"Playset (4x)":"Price (1x)"}</th>
-        <th>Each</th>
+        <th style=${{textAlign:"left"}}>${_t("Card")}</th>
+        <th>${_t("Rarity")}</th>
+        <th>${mult===4?_t("Playset (4x)"):_t("Price (1x)")}</th>
+        <th>${_t("Each")}</th>
         <th style=${{width:40}}></th>
       </tr></thead>
       <tbody>${cards.map((c,i)=>{
@@ -36341,14 +36329,14 @@ function SetDetail({data,mult,activeRars,theme,onOpenCard}){
         return html`<tr key=${i}
           class=${clickable ? "playset-row clickable" : "playset-row"}
           onClick=${clickable ? handleOpen : null}
-          title=${clickable ? "Open card details" : null}>
+          title=${clickable ? _t("Open card details") : null}>
           <td style=${{textAlign:"left",maxWidth:340,overflow:"hidden",whiteSpace:"nowrap"}}>
             ${c.img_small?html`<img src=${c.img_small} alt="" style=${{width:24,height:34,borderRadius:3,verticalAlign:"middle",marginRight:6,objectFit:"cover"}}/>`:null}
             <span style=${{verticalAlign:"middle"}}>${c.name}</span>
             ${url && html`<a href=${url} target="_blank" rel="noopener nofollow sponsored"
               onClick=${e=>e.stopPropagation()}
               class="playset-tcg-btn"
-              title="Open on TCGplayer">TCG ${extIcon()}</a>`}
+              title=${_t("Open on TCGplayer")}>TCG ${extIcon()}</a>`}
           </td>
           <td><${Badge} rarity=${c.rarity} theme=${theme}/></td>
           <td style=${{fontWeight:600}}>${fmt((c.price||0)*mult)}</td>
@@ -36357,7 +36345,7 @@ function SetDetail({data,mult,activeRars,theme,onOpenCard}){
         </tr>`;})}</tbody></table>
     </div>
     <div style=${{display:"flex",justifyContent:"space-between",padding:"8px 12px",background:"var(--stat-bg)",border:"1px solid var(--border)",borderRadius:6,marginTop:8}}>
-      <span style=${{color:"var(--text-dim)",fontSize:12}}>${cards.length} cards${rf?" ("+rf+")":""}</span>
+      <span style=${{color:"var(--text-dim)",fontSize:12}}>${_t("{n} cards", {n: cards.length})}${rf?" ("+_term("rarity", rf)+")":""}</span>
       <span style=${{fontWeight:600}}>${fmt(cards.reduce((t,c)=>t+(c.price||0),0)*mult)}</span>
     </div>
   </div>`;
@@ -36425,18 +36413,18 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode,user,collectio
     return t;};
   return html`<div>
     <${MarketHeader} title=${_t("Playset Cost")}
-      sub="What it costs to buy every constructed-legal card in a set — as a 4-of playset or a 1-of master set.">
+      sub=${_t("What it costs to buy every constructed-legal card in a set — as a 4-of playset or a 1-of master set.")}>
       <div class="market-sim-kind" role="group" aria-label=${_t("Mode")}>
         <button onClick=${()=>setMode("playset")} class=${mode==="playset"?"active":""}>${_t("Playset (4x)")}</button>
         <button onClick=${()=>setMode("master")} class=${mode==="master"?"active":""}>${_t("Master Set (1x)")}</button>
       </div>
     <//>
     <${MarketExplainer} id="setval">
-      <strong>${_t("Playset Cost")}</strong> — what it would cost to buy every constructed-legal card in a set, at the listed price tier. <em>${_t("Playset")}</em> = 4 copies of every card (a fully tournament-ready collection); <em>${_t("Master Set")}</em> = 1 copy of each (a complete collection without duplicates). Normal printings only — foils, Enchanteds, Iconics, and Epics are excluded because they're collector tier and don't see constructed play.
+      <strong>${_t("Playset Cost")}</strong> — ${_t("what it would cost to buy every constructed-legal card in a set, at the listed price tier.")} <em>${_t("Playset")}</em> = ${_t("4 copies of every card (a fully tournament-ready collection);")} <em>${_t("Master Set")}</em> = ${_t("1 copy of each (a complete collection without duplicates). Normal printings only — foils, Enchanteds, Iconics, and Epics are excluded because they're collector tier and don't see constructed play.")}
       <ul class="market-explainer-defs">
-        <li><strong>${_t("Total")}</strong> — the cost to assemble that mode for that set at the active price tier.</li>
-        <li><strong>${_t("Rarity columns")}</strong> — the contribution from each rarity. Toggle a rarity chip off to drop it from the Total.</li>
-        <li><strong>${_t("Still to buy")}</strong> — signed in, the same total less the copies already in your collection. Any printing counts toward the four.</li>
+        <li><strong>${_t("Total")}</strong> — ${_t("the cost to assemble that mode for that set at the active price tier.")}</li>
+        <li><strong>${_t("Rarity columns")}</strong> — ${_t("the contribution from each rarity. Toggle a rarity chip off to drop it from the Total.")}</li>
+        <li><strong>${_t("Still to buy")}</strong> — ${_t("signed in, the same total less the copies already in your collection. Any printing counts toward the four.")}</li>
         <li>${_t("Click any set row to expand into card-by-card detail.")}</li>
       </ul>
     <//>
@@ -36446,7 +36434,7 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode,user,collectio
         ${SET_RARS.map(r=>{const s=getBadgeStyle(r,theme),on=activeRars.has(r);
           return html`<button key=${r} onClick=${()=>toggleRar(r)} style=${{background:on?s.bg:"transparent",color:on?s.fg:"var(--text-muted)",
             border:on?"1px solid "+(s.fg+"40"):"1px solid var(--border)",borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:600,
-            opacity:on?1:0.4,transition:"all 0.15s"}}>${r}</button>`;
+            opacity:on?1:0.4,transition:"all 0.15s"}}>${_term("rarity", r)}</button>`;
         })}
       </div>
     </div>
@@ -36454,7 +36442,7 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode,user,collectio
       <thead><tr>
         <th class="mkt-sticky-col" style=${{textAlign:"left",minWidth:160}}>${_t("Set")}</th><th style=${{minWidth:90}}>${_t("Total")}</th>
         ${showOwned && html`<th style=${{minWidth:96}} title=${_t("The Total less the copies already in your collection (any printing counts).")}>${_t("Still to buy")}</th>`}
-        ${SET_RARS.map(r=>html`<th key=${r} style=${{minWidth:70,opacity:activeRars.has(r)?1:0.3}}>${r}</th>`)}
+        ${SET_RARS.map(r=>html`<th key=${r} style=${{minWidth:70,opacity:activeRars.has(r)?1:0.3}}>${_term("rarity", r)}</th>`)}
         <th style=${{width:40}}>${_t("Cards")}</th>
       </tr></thead>
       <tbody>${sets.map(s=>{const d=setData[s];if(!d) return null;const total=getTotal(s),isExp=expanded===s;
@@ -36472,7 +36460,7 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode,user,collectio
           </td></tr>`}
         <//>`;})}</tbody>
     </table></div>
-    <p class="muted" style=${{fontSize:11,marginTop:8}}>Normal printings only (excludes foils, Enchanted, Epic, Iconic). ${mode==="playset"?"Playset = 4 copies of each card.":"Master Set = 1 copy of each card."} Prices via Lorcast (TCGplayer).</p>
+    <p class="muted" style=${{fontSize:11,marginTop:8}}>${_t("Normal printings only (excludes foils, Enchanted, Epic, Iconic).")} ${mode==="playset"?_t("Playset = 4 copies of each card."):_t("Master Set = 1 copy of each card.")} ${_t("Prices via Lorcast (TCGplayer).")}</p>
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
@@ -36487,7 +36475,7 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode,user,collectio
 
 // Compact Low / Market segmented control rendered inline in each sub-view's
 // filter row. Centralised so the styling and Tip copy stay consistent.
-const PriceModeToggle = ({priceMode, setPriceMode, style}) => html`<${Tip} text="Low = TCGplayer's published Low Price, tracking the cheap end of the market. NM Market = TCGplayer's smoothed average of recent Near Mint sales — the reference for what a clean copy is worth.">
+const PriceModeToggle = ({priceMode, setPriceMode, style}) => html`<${Tip} text=${_t("Low = TCGplayer's published Low Price, tracking the cheap end of the market. NM Market = TCGplayer's smoothed average of recent Near Mint sales — the reference for what a clean copy is worth.")}>
   <div class="price-mode-toggle" role="group" aria-label=${_t("Price source")} style=${style||null}>
     <span class="price-mode-label">${_t("Price")}</span>
     <button class=${priceMode==="low"?"active":""}    onClick=${()=>setPriceMode("low")}>${_t("Low")}</button>
@@ -36558,28 +36546,28 @@ function MonteCarloView({rawData, sets, theme, presetSet, onSetChange, sealedPri
   };
   return html`<div>
     <${MarketExplainer} id="odds">
-      <strong>${_t("What this does:")}</strong> simulates opening thousands of booster boxes in seconds — drawing each card with realistic pull rates — and plots the distribution of total box EV. Reading the histogram: the dark bar is near the mean; the tail shows how often a box prints money (and how often it bricks).
+      <strong>${_t("What this does:")}</strong> ${_t("simulates opening thousands of booster boxes in seconds — drawing each card with realistic pull rates — and plots the distribution of total box EV. Reading the histogram: the dark bar is near the mean; the tail shows how often a box prints money (and how often it bricks).")}
     <//>
     <div class="row">
       <${SetSel} val=${s} onChange=${v=>{ setS(v); setDist(null); onSetChange&&onSetChange(v); }} placeholder=${_t("Select a set...")} sets=${sets}/>
       <select value=${n} onChange=${e=>setN(+e.target.value)} style=${{width:160}}>
-        ${[100,500,1000,5000].map(v=>html`<option key=${v} value=${v}>${v.toLocaleString()} boxes</option>`)}
+        ${[100,500,1000,5000].map(v=>html`<option key=${v} value=${v}>${_t("{n} boxes", {n: v.toLocaleString()})}</option>`)}
       </select>
       <button onClick=${runSim} disabled=${!s || running} class=${s && !running ? "active" : ""}>
-        ${running ? "Running…" : "Run simulation"}
+        ${running ? _t("Running…") : _t("Run simulation")}
       </button>
     </div>
     ${dist && html`<div style=${{marginTop:"1rem"}}>
       <div class="stat-grid stat-grid-4" style=${{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:"1rem"}}>
-        <${Stat} label="Mean"   value=${fmt(dist.mean)}/>
-        <${Stat} label="Median" value=${fmt(dist.median)}/>
-        <${Stat} label="Min"    value=${fmt(dist.min)}/>
-        <${Stat} label="Max"    value=${fmt(dist.max)} accent="var(--green)"/>
+        <${Stat} label=${_t("Mean")} value=${fmt(dist.mean)}/>
+        <${Stat} label=${_t("Median")} value=${fmt(dist.median)}/>
+        <${Stat} label=${_t("Min")} value=${fmt(dist.min)}/>
+        <${Stat} label=${_t("Max")} value=${fmt(dist.max)} accent="var(--green)"/>
       </div>
       <${Histogram} data=${dist} line=${boxPrice}/>
       <p class="muted" style=${{fontSize:11,marginTop:10}}>
-        ${dist.n.toLocaleString()} simulated boxes for ${s}. Mean is the long-run average box value; median is the typical box (half above, half below).${boxPrice != null
-          ? ` A booster box of ${s} is ${fmt(boxPrice)} on TCGplayer today (Low) — anything to the right of that on the histogram is profit at single-card resale.`
+        ${_t("{n} simulated boxes for {set}. Mean is the long-run average box value; median is the typical box (half above, half below).", {n: dist.n.toLocaleString(), set: s})}${boxPrice != null
+          ? " " + _t("A booster box of {set} is {price} on TCGplayer today (Low) — anything to the right of that on the histogram is profit at single-card resale.", {set: s, price: fmt(boxPrice)})
           : ""}
       </p>
     </div>`}
@@ -36609,7 +36597,13 @@ const tradeFoilLabel = (row) => {
   return "Foil";
 };
 const tradeCardTitle = (g) => (["Enchanted","Iconic","Epic","Promo"].includes(g.Rarity))
-  ? `${g["Product Name"]} (${g.Rarity})` : g["Product Name"];
+  ? `${g["Product Name"]} (${_term("rarity", g.Rarity)})` : g["Product Name"];
+// Fill {name} placeholders in an already-translated template with <strong>
+// nodes, so a sentence can keep its bold words in any language's word order.
+const strongVars = (tpl, map) => String(tpl).split(/(\{\w+\})/).map((p, i) => {
+  const m = /^\{(\w+)\}$/.exec(p);
+  return m && map[m[1]] != null ? html`<strong key=${i}>${map[m[1]]}</strong>` : p;
+});
 
 // URL-safe base64 (handles unicode side names) for the legacy inline trade link.
 const tradeB64UrlDecode = (s) => {
@@ -36678,8 +36672,14 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
   const [addSide, setAddSide] = useState("a");
   const [sideA, setSideA] = useState([]);   // [{key, qN, qF}]
   const [sideB, setSideB] = useState([]);
-  const [nameA, setNameA] = useState("Side A");
-  const [nameB, setNameB] = useState("Side B");
+  const SIDE_A = _t("Side A"), SIDE_B = _t("Side B");
+  // An untouched side name is stored and shared as the ENGLISH default and
+  // shown in the reader's language, so a trade sent from a Japanese session
+  // reads "Side A" to an English recipient rather than サイドA.
+  const nameOut = (v, loc, en) => v === loc ? en : v;
+  const nameIn = (v, en, loc) => v === en ? loc : v;
+  const [nameA, setNameA] = useState(SIDE_A);
+  const [nameB, setNameB] = useState(SIDE_B);
   const [resultsOpen, setResultsOpen] = useState(false);
   const searchWrapRef = useRef(null);
   const [layout, setLayout] = useState(()=>{
@@ -36713,14 +36713,14 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
       if(shared) skipPersistOnce.current = true;
       setSideA(clean(payload.a));
       setSideB(clean(payload.b));
-      if(typeof payload.nameA === "string" && payload.nameA) setNameA(payload.nameA);
-      if(typeof payload.nameB === "string" && payload.nameB) setNameB(payload.nameB);
+      if(typeof payload.nameA === "string" && payload.nameA) setNameA(nameIn(payload.nameA, "Side A", SIDE_A));
+      if(typeof payload.nameB === "string" && payload.nameB) setNameB(nameIn(payload.nameB, "Side B", SIDE_B));
     };
     if(shareToken){
       fetchTradeRecord(shareToken).then(payload => {
         if(cancelled) return;
         if(payload) apply(payload, true);
-        else flashToast("That trade link is no longer available");
+        else flashToast(_t("That trade link is no longer available"));
       });
     } else if(shareBlob){
       apply(decodeTrade(shareBlob), true);
@@ -36735,7 +36735,7 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
     // would clobber a saved trade before the hydration effect's setState lands.
     if(!persistReady.current){ persistReady.current = true; return; }
     if(skipPersistOnce.current){ skipPersistOnce.current = false; return; }
-    try{ localStorage.setItem(TRADE_PERSIST_KEY, JSON.stringify({a:sideA, b:sideB, nameA, nameB})); }catch{}
+    try{ localStorage.setItem(TRADE_PERSIST_KEY, JSON.stringify({a:sideA, b:sideB, nameA: nameOut(nameA, SIDE_A, "Side A"), nameB: nameOut(nameB, SIDE_B, "Side B")})); }catch{}
   }, [sideA, sideB, nameA, nameB]);
 
   // Close the search results dropdown when clicking/tapping outside the box.
@@ -36790,7 +36790,7 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
     (side==="a"?setSideA:setSideB)(prev => prev.filter(e => e.key !== key));
     if(!entry) return;
     const g = groupByKey.get(key);
-    flashToast("Removed " + ((g && g["Product Name"]) || "card"), 6000, {label: "Undo", run: () =>
+    flashToast(_t("Removed {name}", {name: (g && g["Product Name"]) || _t("card")}), 6000, {label: _t("Undo"), run: () =>
       (side==="a"?setSideA:setSideB)(prev => prev.some(e => e.key === key) ? prev
         : [...prev.slice(0, idx), entry, ...prev.slice(idx)])});
   };
@@ -36798,14 +36798,14 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
     const was = side==="a" ? sideA : sideB;
     if(!was.length) return;
     (side==="a"?setSideA:setSideB)([]);
-    flashToast("Cleared " + (side==="a" ? (nameA || "Side A") : (nameB || "Side B")), 6000, {label: "Undo", run: () =>
+    flashToast(_t("Cleared {name}", {name: side==="a" ? (nameA || SIDE_A) : (nameB || SIDE_B)}), 6000, {label: _t("Undo"), run: () =>
       (side==="a"?setSideA:setSideB)(cur => cur.length ? cur : was)});
   };
   const clearAll = () => {
     const a = sideA, b = sideB;
     if(!a.length && !b.length) return;
     setSideA([]); setSideB([]);
-    flashToast("Cleared the trade", 6000, {label: "Undo", run: () => {
+    flashToast(_t("Cleared the trade"), 6000, {label: _t("Undo"), run: () => {
       setSideA(cur => cur.length ? cur : a);
       setSideB(cur => cur.length ? cur : b);
     }});
@@ -36833,21 +36833,21 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
   // synchronously inside the click (reliable clipboard) and persist in the
   // background.
   const shareTrade = () => {
-    if(!sideA.length && !sideB.length){ flashToast("Add some cards first"); return; }
+    if(!sideA.length && !sideB.length){ flashToast(_t("Add some cards first")); return; }
     const token = genTradeToken();
     const url = SITE_ORIGIN + "/?t=" + token;
     // Say "copied" only when it was: the link exists nowhere else on screen,
     // so a silent failure left nothing to paste.
-    const fallback = () => { try { prompt("Copy this trade link:", url); } catch {} };
+    const fallback = () => { try { prompt(_t("Copy this trade link:"), url); } catch {} };
     try {
       if(navigator.clipboard && navigator.clipboard.writeText){
         navigator.clipboard.writeText(url)
-          .then(() => flashToast("Trade link copied — send it to the other party"), fallback);
+          .then(() => flashToast(_t("Trade link copied — send it to the other party")), fallback);
       } else fallback();
     } catch { fallback(); }
-    saveTradeRecord(token, sideA, sideB, nameA, nameB).then(
-      ({error}) => { if(error){ console.warn("create_trade failed:", error.message || error); flashToast("Couldn't save the link — tap Share again"); } },
-      (e) => { console.warn("create_trade failed:", e); flashToast("Couldn't save the link — tap Share again"); }
+    saveTradeRecord(token, sideA, sideB, nameOut(nameA, SIDE_A, "Side A"), nameOut(nameB, SIDE_B, "Side B")).then(
+      ({error}) => { if(error){ console.warn("create_trade failed:", error.message || error); flashToast(_t("Couldn't save the link — tap Share again")); } },
+      (e) => { console.warn("create_trade failed:", e); flashToast(_t("Couldn't save the link — tap Share again")); }
     );
   };
 
@@ -36878,14 +36878,14 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
   const diffMkt = ta.mkt - tb.mkt;
   // A cleared name read as "" — falsy — so the Difference row said "even" for a
   // lopsided trade.
-  const favName = (d) => d > 0.005 ? (nameA.trim() || "Side A") : (d < -0.005 ? (nameB.trim() || "Side B") : null);
+  const favName = (d) => d > 0.005 ? (nameA.trim() || SIDE_A) : (d < -0.005 ? (nameB.trim() || SIDE_B) : null);
 
   const renderPrinting = (side, e, g, field, label, klass) => {
     const row = klass === "normal" ? g.normal : g.foil;
     const qty = e[field] || 0;
     const url = tcgUrl(row.tcgplayer_product_id, row.tcg_printing);
     return html`<div class=${"trade-printing "+klass}>
-      <span class="trade-pr-label">${label}</span>
+      <span class="trade-pr-label">${_term("printing", label)}</span>
       <div class="trade-qty">
         <button class="trade-qty-btn" aria-label=${_t("Decrease quantity")} onClick=${()=>changeQty(side, e.key, field, -1)} disabled=${qty<=0}>−</button>
         <span class="trade-qty-val">${qty}</span>
@@ -36896,7 +36896,7 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
         <span class="trade-pr-mkt"><${Tip} text=${TIP_MARKET} class="trade-pr-tag">NM<//> ${tradeMoney(row["TCGPlayer Market"])}</span>
       </span>
       ${url && html`<span class="trade-pr-links">
-        <a class="trade-pr-link" href=${url} target="_blank" rel="noopener nofollow sponsored" title=${"View "+label+" on TCGplayer"}>${extIcon()}</a>
+        <a class="trade-pr-link" href=${url} target="_blank" rel="noopener nofollow sponsored" title=${_t("View {printing} on TCGplayer", {printing: _term("printing", label)})}>${extIcon()}</a>
       </span>`}
     </div>`;
   };
@@ -36935,27 +36935,27 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
       <div class="trade-tot"><span class="trade-tot-lbl">${_t("Low")}</span><span class="trade-tot-val">${tradeTotalMoney(t.low)}</span></div>
       <div class="trade-tot"><span class="trade-tot-lbl">${_t("NM Market")}</span><span class="trade-tot-val">${tradeTotalMoney(t.mkt)}</span></div>
     </div>
-    <div class="trade-side-meta">${t.cards} card${t.cards===1?"":"s"} · ${t.units} item${t.units===1?"":"s"}</div>
+    <div class="trade-side-meta">${t.cards===1 ? _t("{n} card", {n: t.cards}) : _t("{n} cards", {n: t.cards})} · ${t.units===1 ? _t("{n} item", {n: t.units}) : _t("{n} items", {n: t.units})}</div>
     <div class="trade-side-body">
       ${entries.length===0
-        ? html`<div class="trade-side-empty">No cards yet — set <strong>${_t("Add to")}</strong> above to <strong>${name}</strong>, then search and tap a card.</div>`
+        ? html`<div class="trade-side-empty">${strongVars(_t("No cards yet — set {addto} above to {name}, then search and tap a card."), {addto: _t("Add to"), name})}</div>`
         : sortEntries(entries).map(e => {
             const g = groupByKey.get(e.key);
             if(!g) return null;
-            const otherName = side==="a" ? (nameB||"Side B") : (nameA||"Side A");
+            const otherName = side==="a" ? (nameB||SIDE_B) : (nameA||SIDE_A);
             return html`<div key=${e.key} class=${"trade-card"+(layout==="compact"?" compact":"")}>
               ${layout!=="compact" && html`<img class="trade-card-img trade-card-clickable" src=${proxyImg(g.img_small||g.img_normal)} alt=""
                 loading="lazy" title=${_t("View card details")} onClick=${()=>setDetailGroup(g)}/>`}
               <div class="trade-card-main">
                 <div class="trade-card-name trade-card-clickable" title=${_t("View card details")} onClick=${()=>setDetailGroup(g)}>${tradeCardTitle(g)}</div>
-                ${layout!=="compact" && html`<div class="trade-card-sub">${_term("set", g.Set)}${g.Number?" · #"+String(g.Number).split("/")[0]:""}${(g.ink||(g.inks&&g.inks[0]))?" · "+(g.ink||g.inks[0]):""}</div>`}
+                ${layout!=="compact" && html`<div class="trade-card-sub">${_term("set", g.Set)}${g.Number?" · #"+String(g.Number).split("/")[0]:""}${(g.ink||(g.inks&&g.inks[0]))?" · "+_term("ink", g.ink||g.inks[0]):""}</div>`}
                 <div class="trade-printings">
                   ${g.normal && renderPrinting(side, e, g, "qN", "Non-Foil", "normal")}
                   ${g.foil   && renderPrinting(side, e, g, "qF", tradeFoilLabel(g.foil), "foil")}
                 </div>
               </div>
               <div class="trade-card-actions">
-                <button class="trade-move" title=${"Move to "+otherName} onClick=${()=>moveCard(side, e.key)}>⇄</button>
+                <button class="trade-move" title=${_t("Move to {name}", {name: otherName})} onClick=${()=>moveCard(side, e.key)}>⇄</button>
                 <button class="trade-remove" title=${_t("Remove from trade")} onClick=${()=>removeCard(side, e.key)}>×</button>
               </div>
             </div>`;
@@ -36965,28 +36965,28 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
 
   return html`<div class="trade-view">
     <${MarketHeader} title=${_t("Trade Compare")}
-      sub="Value both sides of a trade at live TCGplayer prices."/>
+      sub=${_t("Value both sides of a trade at live TCGplayer prices.")}/>
     <${MarketExplainer} id="trade">
-      Pick a side with <strong>${_t("Add to")}</strong>, search a card, and tap it to drop it on that side. Adjust the Non-Foil / Foil quantities per card — Packs.Ink totals each side's Low + NM Market value and shows the difference.
+      ${strongVars(_t("Pick a side with {addto}, search a card, and tap it to drop it on that side. Adjust the Non-Foil / Foil quantities per card — Packs.Ink totals each side's Low + NM Market value and shows the difference."), {addto: _t("Add to")})}
     <//>
 
     <div class="trade-controls">
       <div class="trade-addtoggle">
         <span class="trade-addtoggle-lbl">${_t("Add to")}</span>
         <div class="seg-toggle trade-seg">
-          <button class=${addSide==="a"?"active":""} onClick=${()=>setAddSide("a")}>${nameA||"Side A"}</button>
-          <button class=${addSide==="b"?"active":""} onClick=${()=>setAddSide("b")}>${nameB||"Side B"}</button>
+          <button class=${addSide==="a"?"active":""} onClick=${()=>setAddSide("a")}>${nameA||SIDE_A}</button>
+          <button class=${addSide==="b"?"active":""} onClick=${()=>setAddSide("b")}>${nameB||SIDE_B}</button>
         </div>
       </div>
       <div class="trade-searchwrap" ref=${searchWrapRef}>
         <input type="search" class="trade-search"
-          placeholder=${"Search a card to add to "+(addSide==="a"?(nameA||"Side A"):(nameB||"Side B"))+" — name, ink, rarity, set…"}
+          placeholder=${_t("Search a card to add to {name} — name, ink, rarity, set…", {name: addSide==="a"?(nameA||SIDE_A):(nameB||SIDE_B)})}
           value=${query}
           onInput=${e=>{ setQuery(e.target.value); setResultsOpen(true); }}
           onFocus=${()=>setResultsOpen(true)}/>
         ${resultsOpen && matches != null && html`<div class="trade-results">
           ${matches.length===0
-            ? html`<div class="trade-results-empty">No cards match "${query}"</div>`
+            ? html`<div class="trade-results-empty">${_t("No cards match “{q}”", {q: query})}</div>`
             : matches.map(g => {
                 const key = tradeGroupKey(g);
                 const inA = sideA.some(e=>e.key===key);
@@ -37007,7 +37007,7 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
                 outside — invisible as an affordance. Sticky so it stays
                 reachable while the list scrolls. */""}
           ${matches.length > 0 && html`<button class="trade-results-done"
-            onClick=${()=>setResultsOpen(false)}>✓ Done — close list</button>`}
+            onClick=${()=>setResultsOpen(false)}>✓ ${_t("Done — close list")}</button>`}
         </div>`}
       </div>
     </div>
@@ -37016,7 +37016,7 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
       <div class="trade-diff-head">
         <span class="trade-diff-title">${_t("Difference")}</span>
         <div class="trade-diff-tools">
-          <button class="trade-share-btn" title=${_t("Copy a link to this trade for the other party")} onClick=${shareTrade}>${uiIcon("link")} Share</button>
+          <button class="trade-share-btn" title=${_t("Copy a link to this trade for the other party")} onClick=${shareTrade}>${uiIcon("link")} ${_t("Share")}</button>
           <button class="trade-share-btn trade-clearall-btn" title=${_t("Remove every card from both sides")}
             disabled=${!sideA.length && !sideB.length} onClick=${clearAll}>${_t("Clear all")}</button>
           <div class="seg-toggle trade-layout-seg" title=${_t("Card layout")}>
@@ -37030,13 +37030,13 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
           <span class="trade-diff-lbl">${_t("Low")}</span>
           <span class="trade-diff-amt">${tradeTotalMoney(Math.abs(diffLow))}</span>
           <span class=${"trade-diff-dir"+(favName(diffLow)?"":" even")}
-            title=${_t("Side with the higher value")}>${favName(diffLow) ? "▲ "+favName(diffLow)+" worth more" : "even"}</span>
+            title=${_t("Side with the higher value")}>${favName(diffLow) ? "▲ "+_t("{name} worth more", {name: favName(diffLow)}) : _t("even")}</span>
         </div>
         <div class="trade-diff-row">
           <span class="trade-diff-lbl">${_t("NM Market")}</span>
           <span class="trade-diff-amt">${tradeTotalMoney(Math.abs(diffMkt))}</span>
           <span class=${"trade-diff-dir"+(favName(diffMkt)?"":" even")}
-            title=${_t("Side with the higher value")}>${favName(diffMkt) ? "▲ "+favName(diffMkt)+" worth more" : "even"}</span>
+            title=${_t("Side with the higher value")}>${favName(diffMkt) ? "▲ "+_t("{name} worth more", {name: favName(diffMkt)}) : _t("even")}</span>
         </div>
       </div>
     </div>
@@ -37045,7 +37045,7 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
       <span class="trade-sort-lbl">${_t("Sort")}</span>
       <div class="seg-toggle trade-sort-seg">
         <button class=${sortMode==="added"?"active":""} onClick=${()=>setSortMode("added")}>${_t("Added")}</button>
-        <button class=${sortMode.startsWith("price")?"active":""} onClick=${cyclePriceSort}>${sortMode==="price-asc"?"Price ↑":"Price ↓"}</button>
+        <button class=${sortMode.startsWith("price")?"active":""} onClick=${cyclePriceSort}>${_t("Price")} ${sortMode==="price-asc"?"↑":"↓"}</button>
         <button class=${sortMode==="name"?"active":""} onClick=${()=>setSortMode("name")}>${_t("Name")}</button>
         <button class=${sortMode==="release"?"active":""} onClick=${()=>setSortMode("release")}>${_t("Release")}</button>
       </div>
@@ -37056,7 +37056,7 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
       ${renderSide("b", sideB, nameB, setNameB, tb)}
     </div>
 
-    <p class="trade-note"><span class="trade-note-i">ⓘ</span> If a card's <strong>${_t("Low")}</strong> and <strong>${_t("NM Market")}</strong> values differ significantly, check it on TCGplayer to verify the current market price. Market swings, different printings/versions, or lagged data can cause a gap.</p>
+    <p class="trade-note"><span class="trade-note-i">ⓘ</span> ${strongVars(_t("If a card's {low} and {mkt} values differ significantly, check it on TCGplayer to verify the current market price. Market swings, different printings/versions, or lagged data can cause a gap."), {low: _t("Low"), mkt: _t("NM Market")})}</p>
 
     ${detailGroup && html`<${CardDetailModal} group=${detailGroup} theme=${theme}
       onClose=${()=>setDetailGroup(null)}
@@ -40818,13 +40818,13 @@ const DieFace = ({kind, v}) => {
       const f = COIN_FACES[v-1] || COIN_FACES[0];
       return html`<${React.Fragment}>
         <span class="dice-coin-letter">${f[0]}</span>
-        <span class="dice-word dice-word--coin">${f[1]}</span><//>`;
+        <span class="dice-word dice-word--coin">${_t(f[1])}</span><//>`;
     }
     if(kind === "rps"){
       const f = RPS_FACES[v-1] || RPS_FACES[0];
       return html`<${React.Fragment}>
         <svg class="dice-rps-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${RPS_ICONS[f[0]]}</svg>
-        <span class="dice-word">${f[1]}</span><//>`;
+        <span class="dice-word">${_t(f[1])}</span><//>`;
     }
     if(kind === "d6") return html`<span class="dice-pips" aria-hidden="true">
       ${Array.from({length:9}, (_, i) => html`<i key=${i}
@@ -40893,22 +40893,22 @@ function DiceTray({onOpen}){
 
   const settled = !spin;
   const summary = (() => {
-    if(!settled) return kind === "coin" ? "Flipping…" : "Rolling…";
+    if(!settled) return kind === "coin" ? _t("Flipping…") : _t("Rolling…");
     if(kind === "coin"){
-      if(vals.length === 1) return (COIN_FACES[vals[0]-1] || COIN_FACES[0])[1];
+      if(vals.length === 1) return _t((COIN_FACES[vals[0]-1] || COIN_FACES[0])[1]);
       const h = vals.filter(v => v === 1).length;
-      return `${h} heads · ${vals.length - h} tails`;
+      return _t("{h} heads · {t} tails", {h, t: vals.length - h});
     }
     if(kind === "rps"){
-      if(vals.length === 1) return (RPS_FACES[vals[0]-1] || RPS_FACES[0])[1];
+      if(vals.length === 1) return _t((RPS_FACES[vals[0]-1] || RPS_FACES[0])[1]);
       return RPS_FACES
         .map((f, n) => [f[1], vals.filter(v => v === n + 1).length])
         .filter(([, c]) => c > 0)
-        .map(([w, c]) => `${c} ${w.toLowerCase()}`)
+        .map(([w, c]) => _t({Rock: "{n} rock", Paper: "{n} paper", Scissors: "{n} scissors"}[w], {n: c}))
         .join(" · ");
     }
-    if(vals.length === 1) return `Rolled ${vals[0]}`;
-    return `Total ${vals.reduce((a, b) => a + b, 0)}`;
+    if(vals.length === 1) return _t("Rolled {n}", {n: vals[0]});
+    return _t("Total {n}", {n: vals.reduce((a, b) => a + b, 0)});
   })();
 
   return html`<${React.Fragment}>
@@ -40921,8 +40921,8 @@ function DiceTray({onOpen}){
             shortcut so the pip means one thing everywhere. */""}
       ${onOpen && html`<a class="dice-lore-btn" href="/analytics?a=lore"
         onClick=${navHandler(()=>onOpen("lore"))}
-        title="Open the Lore Tracker — keep score at the table"
-        aria-label="Open the Lore Tracker">${HOME_TOOL_ICONS.lore}</a>`}
+        title=${_t("Open the Lore Tracker — keep score at the table")}
+        aria-label=${_t("Open the Lore Tracker")}>${HOME_TOOL_ICONS.lore}</a>`}
       <svg width="0" height="0" style=${{position:"absolute"}} aria-hidden="true" focusable="false"><defs>
         <linearGradient id="diceSheen" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
@@ -40935,41 +40935,38 @@ function DiceTray({onOpen}){
           <stop offset="1" stop-color="#9a7b34"/>
         </radialGradient>
       </defs></svg>
-      <div class="dice-kindgrid" role="group" aria-label="Die type">
+      <div class="dice-kindgrid" role="group" aria-label=${_t("Die type")}>
         ${DICE_KINDS.map(d => html`<button key=${d.k}
           class=${"dice-kindbtn"+(kind===d.k?" active":"")}
           onClick=${()=>pickKind(d.k)} aria-pressed=${kind===d.k}>
           <${DiceMini} k=${d.k}/>
-          <span class="dice-kindlbl">${d.label}</span>
+          <span class="dice-kindlbl">${_t(d.label)}</span>
         </button>`)}
       </div>
       <div class="dice-bar">
-        <div class="dice-count" role="group" aria-label="Number of dice">
-          <button onClick=${()=>setDiceCount(count-1)} disabled=${count<=1} aria-label="One fewer die">−</button>
-          <span class="dice-count-n">${count} <span class="dice-count-w">${count===1?"die":"dice"}</span></span>
-          <button onClick=${()=>setDiceCount(count+1)} disabled=${count>=DICE_MAX} aria-label="One more die">+</button>
+        <div class="dice-count" role="group" aria-label=${_t("Number of dice")}>
+          <button onClick=${()=>setDiceCount(count-1)} disabled=${count<=1} aria-label=${_t("One fewer die")}>−</button>
+          <span class="dice-count-n">${count} <span class="dice-count-w">${count===1?_t("die"):_t("dice")}</span></span>
+          <button onClick=${()=>setDiceCount(count+1)} disabled=${count>=DICE_MAX} aria-label=${_t("One more die")}>+</button>
         </div>
-        <button class="dice-roll" onClick=${rollAll}>${kind==="coin" ? "Flip" : "Roll"}</button>
+        <button class="dice-roll" onClick=${rollAll}>${kind==="coin" ? _t("Flip") : _t("Roll")}</button>
       </div>
       <div class=${"dice-tray"+(vals.length<=3?" dice-tray--few":"")+(spin?" is-rolling":"")}>
         ${vals.map((v, i) => html`<button key=${i}
           class=${"dice-die dice-die--"+kind+(spin&&spin.has(i)?" is-spin":"")}
-          onClick=${()=>roll([i])} title=${kind==="coin" ? "Flip this one" : "Reroll this one"}
-          aria-label=${`Player ${i+1} rolled ${diceFaceLabel(kind, v)} — reroll`}>
-          ${count > 1 && html`<span class="dice-slot">Player ${i+1}</span>`}
+          onClick=${()=>roll([i])} title=${kind==="coin" ? _t("Flip this one") : _t("Reroll this one")}
+          aria-label=${_t("Player {n} rolled {face} — reroll", {n: i+1, face: _t(diceFaceLabel(kind, v))})}>
+          ${count > 1 && html`<span class="dice-slot">${_t("Player {n}", {n: i+1})}</span>`}
           <span class="dice-anim" key=${"t"+rollTick}><${DieFace} kind=${kind} v=${v}/></span>
         </button>`)}
       </div>
       <div class="dice-summary" aria-live="polite">${summary}</div>
-      ${count > 1 && html`<div class="dice-hint">Tap any die to ${kind==="coin"?"flip":"reroll"} just that one.</div>`}
+      ${count > 1 && html`<div class="dice-hint">${kind==="coin" ? _t("Tap any coin to flip just that one.") : _t("Tap any die to reroll just that one.")}</div>`}
     </div>
     <${MarketExplainer} id="dice">
-      <p>Every roll comes from the browser's cryptographic random source, drawn so that each
-      face is equally likely — no weighting, no house edge.</p>
-      <p>Dice stay in their seats on purpose. With one die per player you can roll the whole
-      table at once, and tapping a single die rerolls just that one, leaving everyone else's
-      number alone.</p>
-      <p>Your die type and count are remembered on this device.</p>
+      <p>${_t("Every roll comes from the browser's cryptographic random source, drawn so that each face is equally likely — no weighting, no house edge.")}</p>
+      <p>${_t("Dice stay in their seats on purpose. With one die per player you can roll the whole table at once, and tapping a single die rerolls just that one, leaving everyone else's number alone.")}</p>
+      <p>${_t("Your die type and count are remembered on this device.")}</p>
     <//>
   <//>`;
 }
@@ -40978,26 +40975,26 @@ function DiceTray({onOpen}){
 // tools are discoverable instead of hiding behind a bar of bare labels.
 // Reuses the home Toolbox's icon set so a tool looks the same everywhere.
 const MARKET_TOOL_INFO = {
-  ev:     {blurb:"What a sealed booster box is worth to crack.",
-           pts:["EV per box and per pack at today's prices","Measured against the current box price","One click into a simulated box"]},
-  trade:  {blurb:"Value both sides of a trade before you commit.",
-           pts:["Search cards onto either side, foil or not","Low and NM Market totals with the gap","Share the whole trade as a short link"]},
-  avg:    {blurb:"Where a set's value actually sits.",
-           pts:["Average card value by rarity","Each rarity's share of box EV","Compare any two sets side by side"]},
-  setval: {blurb:"What it costs to finish a set.",
-           pts:["Master set (1 of each) or a full playset","Priced off Low or NM Market","Counts what you already own"]},
-  sim:    {blurb:"Open packs and boxes at real pull rates.",
-           pts:["Pack, box, and thousand-box odds modes","Open any pulled card to add it to your collection","See how often a box beats its price"]},
-  swiss:  {blurb:"Will your record make the cut?",
-           pts:["Monte Carlo over any field size and round count","Draw safety and intentional-draw guidance","Prize-tier odds past the cut"]},
-  dice:   {blurb:"Dice, a coin, or rock-paper-scissors for the table.",
-           pts:["Up to 8 dice, each held in its own seat","d4 through d100, plus coins and rock-paper-scissors","Tap one die to reroll just that one"]},
-  lore:   {blurb:"Keep score at the table.",
-           pts:["One to four players, face-to-face on a phone","Every change logged, with one-tap undo","Knows the cards that move the 20-lore goal"]},
-  ticker: {blurb:"Put the market on your stream.",
-           pts:["A scrolling bar of the biggest movers","Pick the time frames and rarities it cycles","One URL to paste into an OBS browser source"]},
-  elo:    {blurb:"Ratings for the Chicagoland scene.",
-           pts:["Player leaderboard and event history","Store activity against the RPH tiers","Upcoming Set Championships at tracked stores"]},
+  ev:     {blurb:_t("What a sealed booster box is worth to crack."),
+           pts:[_t("EV per box and per pack at today's prices"),_t("Measured against the current box price"),_t("One click into a simulated box")]},
+  trade:  {blurb:_t("Value both sides of a trade before you commit."),
+           pts:[_t("Search cards onto either side, foil or not"),_t("Low and NM Market totals with the gap"),_t("Share the whole trade as a short link")]},
+  avg:    {blurb:_t("Where a set's value actually sits."),
+           pts:[_t("Average card value by rarity"),_t("Each rarity's share of box EV"),_t("Compare any two sets side by side")]},
+  setval: {blurb:_t("What it costs to finish a set."),
+           pts:[_t("Master set (1 of each) or a full playset"),_t("Priced off Low or NM Market"),_t("Counts what you already own")]},
+  sim:    {blurb:_t("Open packs and boxes at real pull rates."),
+           pts:[_t("Pack, box, and thousand-box odds modes"),_t("Open any pulled card to add it to your collection"),_t("See how often a box beats its price")]},
+  swiss:  {blurb:_t("Will your record make the cut?"),
+           pts:[_t("Monte Carlo over any field size and round count"),_t("Draw safety and intentional-draw guidance"),_t("Prize-tier odds past the cut")]},
+  dice:   {blurb:_t("Dice, a coin, or rock-paper-scissors for the table."),
+           pts:[_t("Up to 8 dice, each held in its own seat"),_t("d4 through d100, plus coins and rock-paper-scissors"),_t("Tap one die to reroll just that one")]},
+  lore:   {blurb:_t("Keep score at the table."),
+           pts:[_t("One to four players, face-to-face on a phone"),_t("Every change logged, with one-tap undo"),_t("Knows the cards that move the 20-lore goal")]},
+  ticker: {blurb:_t("Put the market on your stream."),
+           pts:[_t("A scrolling bar of the biggest movers"),_t("Pick the time frames and rarities it cycles"),_t("One URL to paste into an OBS browser source")]},
+  elo:    {blurb:_t("Ratings for the Chicagoland scene."),
+           pts:[_t("Player leaderboard and event history"),_t("Store activity against the RPH tiers"),_t("Upcoming Set Championships at tracked stores")]},
 };
 // ── Lore Tracker ────────────────────────────────────────────────────────────
 // An at-the-table score counter. The design rule that everything else follows:
@@ -41228,6 +41225,9 @@ const loreFmtClock = (ms) => {
   const s = Math.max(0, Math.round(ms / 1000));
   return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
 };
+// Display form of a seat's name: the stored default ("Player 2") is shown in
+// the site's language, while the stored value stays the plain default.
+const loreShowName = (name, i) => (name === loreDefaultName(i) ? _t("Player {n}", {n: i + 1}) : name);
 
 // Card-art picker for a seat's backdrop. Routes through the canonical
 // matchesCardFilter (per the single-matcher rule) rather than a local substring
@@ -41255,19 +41255,19 @@ function LoreArtPicker({seat, current, onPick, onClose}){
     }
     return out;
   }, [raw, parsed, blank]);
-  return html`<div class="lore-artpick" role="dialog" aria-label=${"Background art for " + seat}>
+  return html`<div class="lore-artpick" role="dialog" aria-label=${_t("Background art for {seat}", {seat})}>
     <div class="lore-artpick-bar">
       <input class="lore-artpick-q" type="search" autoFocus value=${q}
-        placeholder="Search cards — name, ink, rarity…"
-        aria-label="Search cards" onChange=${e => setQ(e.target.value)}/>
+        placeholder=${_t("Search cards — name, ink, rarity…")}
+        aria-label=${_t("Search cards")} onChange=${e => setQ(e.target.value)}/>
       ${current && html`<button class="lore-artpick-clear" onClick=${()=>{onPick(null); onClose();}}>
-        Remove</button>`}
-      <button class="lore-artpick-x" onClick=${onClose} aria-label="Close">${uiIcon("close", 16)}</button>
+        ${_t("Remove")}</button>`}
+      <button class="lore-artpick-x" onClick=${onClose} aria-label=${_t("Close")}>${uiIcon("close", 16)}</button>
     </div>
     ${!Array.isArray(raw) || !raw.length
-      ? html`<p class="lore-artpick-empty">The card catalogue hasn't loaded yet.</p>`
+      ? html`<p class="lore-artpick-empty">${_t("The card catalogue hasn't loaded yet.")}</p>`
       : !hits.length
-        ? html`<p class="lore-artpick-empty">No cards match that.</p>`
+        ? html`<p class="lore-artpick-empty">${_t("No cards match that.")}</p>`
         : html`<div class="lore-artpick-grid">
             ${hits.map(c => html`<button key=${c.id + c.img} class=${"lore-artpick-card"
                 + (current && current.id === c.id ? " active" : "")}
@@ -41374,13 +41374,13 @@ function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim,
           onError=${()=>setDeadArt(art.img)}/>`
       : html`<img class="lore-seat-crest" src=${INK_ICONS[ink]} alt="" aria-hidden="true"/>`}
     <div class="lore-seat-top">
-      <img class="lore-seat-shield" src=${INK_ICONS[ink]} alt=${ink} title=${ink}/>
+      <img class="lore-seat-shield" src=${INK_ICONS[ink]} alt=${_term("ink", ink)} title=${_term("ink", ink)}/>
       ${/* Coconut is a format about coconuts, so the seats get one. Drawn
             glyph from UI_ICON_PATHS, never an emoji — see the icons rule. */""}
       ${format === "coconut" && html`<span class="lore-seat-coco" aria-hidden="true"
-        title="Format Coconut">${uiIcon("coconut", 14)}</span>`}
+        title=${_t("Format Coconut")}>${uiIcon("coconut", 14)}</span>`}
       <input class="lore-seat-name" value=${name} maxLength=${24} size=${1}
-        aria-label=${"Name for seat " + (idx + 1)}
+        aria-label=${_t("Name for seat {n}", {n: idx + 1})}
         onPointerDown=${e => e.stopPropagation()}
         onChange=${e => onRename(idx, e.target.value)}/>
       ${/* The card this seat played, beside the number it changed. Pure
@@ -41400,7 +41400,7 @@ function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim,
     <button class="lore-tap" onPointerDown=${press(+1)} onPointerUp=${stop}
       onPointerCancel=${stop} onLostPointerCapture=${stop}
       onClick=${e => { if(e.detail === 0) bump(+1); }}
-      aria-label=${"Add lore to " + name}>
+      aria-label=${_t("Add lore to {name}", {name})}>
       <span class="lore-num-v" key=${total}>${total}</span>
     </button>
     <div class="lore-fx" aria-hidden="true">
@@ -41412,7 +41412,7 @@ function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim,
     <button class="lore-minus" onPointerDown=${press(-1)} onPointerUp=${stop}
       onPointerCancel=${stop} onLostPointerCapture=${stop}
       onClick=${e => { if(e.detail === 0) bump(-1); }}
-      disabled=${total <= 0} aria-label=${"Remove lore from " + name}>−</button>
+      disabled=${total <= 0} aria-label=${_t("Remove lore from {name}", {name})}>−</button>
     <div class="lore-rail" aria-hidden="true"><i style=${{transform:"scaleX("+pct+")"}}/></div>
   </div>`;
 }
@@ -41610,7 +41610,7 @@ function LoreTracker({onOpen, onHome}){
   const newGame = useCallback((opts) => {
     const g = gameRef.current;
     if(!(opts && opts.force) && g && g.events.length && !loreWinners(g).length
-       && !confirm("Start a new game? The scores on this one will be cleared.")) return;
+       && !confirm(_t("Start a new game? The scores on this one will be cleared."))) return;
     setEnded(false); setShowLog(false); setShowMods(false); setMenuOpen(false); setArtFor(null);
     setGame(loreNewGame(names.slice(0, count),
       {inks: inks.slice(0, count), arts: arts.slice(0, count), win: winTarget}));
@@ -41630,7 +41630,7 @@ function LoreTracker({onOpen, onHome}){
   const elapsedMs = now - game.startedAt;
   const leftMs = timerMins * 60000 - elapsedMs;
   const flipSeat = (i) => count === 2 && faceOff && i === 1;
-  const seatLabel = (i) => (names[i] || "").trim() || loreDefaultName(i);
+  const seatLabel = (i) => (names[i] || "").trim() || _t("Player {n}", {n: i + 1});
   // Player 1 sits at the BOTTOM of the screen, the opponent at the top. A phone
   // on a table between two people is propped facing whoever set it down, so the
   // near half is theirs and the far half is the other player's — which is also
@@ -41641,28 +41641,28 @@ function LoreTracker({onOpen, onHome}){
 
   const settings = html`<div class="lore-menu-body">
     <div class="lore-set-row">
-      <span class="lore-set-lbl">Players</span>
+      <span class="lore-set-lbl">${_t("Players")}</span>
       <div class="seg-toggle lore-count">
         ${[1,2,3,4].map(n => html`<button key=${n} class=${count===n?"active":""}
           onClick=${()=>setCount(n)} aria-pressed=${count===n}>${n}</button>`)}
       </div>
     </div>
     <div class="lore-set-row lore-set-row--names">
-      <span class="lore-set-lbl">Seats</span>
+      <span class="lore-set-lbl">${_t("Seats")}</span>
       <div class="lore-seatsetup">
         ${Array.from({length: count}, (_, i) => {
           const c = INK_COLORS[inks[i]] || INK_COLORS.Amber;
           return html`<div key=${i} class="lore-setseat"
             style=${{"--seat-ink": c.border, "--seat-ink-soft": c.bg}}>
             <input class="lore-nameinput" value=${names[i] || ""}
-              placeholder=${loreDefaultName(i)} maxLength=${24}
-              aria-label=${"Name for "+loreDefaultName(i)}
+              placeholder=${_t("Player {n}", {n: i + 1})} maxLength=${24}
+              aria-label=${_t("Name for {seat}", {seat: _t("Player {n}", {n: i + 1})})}
               onChange=${e => setNames(ns => ns.map((n, x) => x === i ? e.target.value : n))}/>
-            <div class="lore-inkpick" role="group" aria-label=${"Ink for "+seatLabel(i)}>
+            <div class="lore-inkpick" role="group" aria-label=${_t("Ink for {seat}", {seat: seatLabel(i)})}>
               ${INKS.map(k => html`<button key=${k}
                 class=${"lore-inkbtn"+(inks[i]===k?" active":"")}
                 style=${{"--ink":INK_COLORS[k].border}}
-                title=${k} aria-label=${k} aria-pressed=${inks[i]===k}
+                title=${_term("ink", k)} aria-label=${_term("ink", k)} aria-pressed=${inks[i]===k}
                 onClick=${()=>setInks(v => v.map((x, n) => n === i ? k : x))}>
                 <img src=${INK_ICONS[k]} alt=""/>
               </button>`)}
@@ -41672,7 +41672,7 @@ function LoreTracker({onOpen, onHome}){
               ${arts[i]
                 ? html`<img class="lore-artbtn-thumb" src=${arts[i].img} alt=""/>`
                 : uiIcon("image", 14)}
-              <span>${arts[i] ? (arts[i].name || "Card art") : "Card art"}</span>
+              <span>${arts[i] ? (arts[i].name || _t("Card art")) : _t("Card art")}</span>
             </button>
             ${artFor === i && html`<${LoreArtPicker} seat=${seatLabel(i)}
               current=${arts[i]} onClose=${()=>setArtFor(null)}
@@ -41686,81 +41686,73 @@ function LoreTracker({onOpen, onHome}){
           bar and every game still ran to the same target — so it was a setting
           that cost a row and answered a question a table can hold in its head. */""}
     <div class="lore-set-row">
-      <span class="lore-set-lbl">Timer</span>
+      <span class="lore-set-lbl">${_t("Timer")}</span>
       <div class="seg-toggle lore-timerseg">
         ${LORE_TIMER_MODES.map(([k,l]) => html`<button key=${k} class=${timerMode===k?"active":""}
-          onClick=${()=>setTimerMode(k)} aria-pressed=${timerMode===k}>${l}</button>`)}
+          onClick=${()=>setTimerMode(k)} aria-pressed=${timerMode===k}>${_t(l)}</button>`)}
       </div>
     </div>
     ${(timerMode === "down" || timerMode === "both") && html`<div class="lore-set-row">
-      <span class="lore-set-lbl">Round</span>
+      <span class="lore-set-lbl">${_t("Round")}</span>
       <div class="lore-set-stack">
         <div class="seg-toggle lore-timerseg">
           ${LORE_TIMER_MINS.map(n => html`<button key=${n}
             class=${(!minsCustom && timerMins===n)?"active":""}
             onClick=${()=>{setMinsCustom(false); setTimerMins(n);}}
-            aria-pressed=${!minsCustom && timerMins===n}>${n}m</button>`)}
+            aria-pressed=${!minsCustom && timerMins===n}>${_t("{n}m", {n})}</button>`)}
           <button class=${minsCustom?"active":""} onClick=${()=>setMinsCustom(true)}
-            aria-pressed=${minsCustom}>Custom</button>
+            aria-pressed=${minsCustom}>${_t("Custom")}</button>
         </div>
         ${minsCustom && html`<label class="lore-numrow">
           <${LoreNumInput} klass="lore-numinput" min=${LORE_MINS_MIN} max=${LORE_MINS_MAX}
-            value=${timerMins} label="Round length in minutes" onCommit=${setTimerMins}/>
-          <span>minutes</span>
+            value=${timerMins} label=${_t("Round length in minutes")} onCommit=${setTimerMins}/>
+          <span>${_t("minutes")}</span>
         </label>`}
       </div>
     </div>`}
     <div class="lore-set-row lore-set-opts">
       ${count === 2 && html`<label class="checkbox-group">
         <input type="checkbox" checked=${faceOff} onChange=${e=>setFaceOff(e.target.checked)}/>
-        Face-to-face (turn my opponent's side around)
+        ${_t("Face-to-face (turn my opponent's side around)")}
       </label>`}
       <label class="checkbox-group">
         <input type="checkbox" checked=${keepAwake} onChange=${e=>setKeepAwake(e.target.checked)}/>
-        Keep the screen awake while playing
+        ${_t("Keep the screen awake while playing")}
       </label>
     </div>
     <div class="lore-menu-acts">
-      <button class="lore-winbtn" onClick=${() => newGame()}>New game</button>
+      <button class="lore-winbtn" onClick=${() => newGame()}>${_t("New game")}</button>
       ${onOpen && html`<button class="lore-winbtn lore-winbtn--ghost"
-        onClick=${()=>onOpen("dice")}>${uiIcon("die", 14)} Roll for first player</button>`}
+        onClick=${()=>onOpen("dice")}>${uiIcon("die", 14)} ${_t("Roll for first player")}</button>`}
       ${/* Was "Exit full screen", which un-covered the page and left you on
             the Analytics tab still looking at a board — a step, not an exit.
             The board covers the nav, so the way out has to BE the way out. */""}
       ${onHome && html`<a class="lore-winbtn lore-winbtn--ghost lore-exit" href="/"
-        onClick=${navHandler(()=>onHome())}>${uiIcon("close", 14)} Exit to home</a>`}
+        onClick=${navHandler(()=>onHome())}>${uiIcon("close", 14)} ${_t("Exit to home")}</a>`}
     </div>
     ${/* The legality note used to sit under the setup screen. The screen is
           gone; the note isn't, because it's the honest part. */ ""}
     <details class="lore-menu-note">
-      <summary>Where you may actually use this</summary>
-      <p>Ravensburger's tournament rules let you track lore with the <em>official
-      Companion app</em> at Casual events, and at Competitive events bar electronic
-      devices capable of long-term storage or internet access altogether. A browser on
-      your phone is such a device, so treat this as a kitchen-table and casual-play
-      tool: at a Competitive event, use dice or paper and ask the judge. Other trackers
-      advertise themselves as "tournament legal" — as far as the published rules go,
-      that isn't a thing anyone can promise you.</p>
-      <p>Totals are added up from the list of changes rather than stored beside it, so
-      the history can never disagree with the number on screen. Lore stops at 0, and a
-      press that would go below it isn't recorded. Games save themselves as you play.</p>
+      <summary>${_t("Where you may actually use this")}</summary>
+      <p>${_t("Ravensburger's tournament rules let you track lore with the official Companion app at Casual events, and at Competitive events bar electronic devices capable of long-term storage or internet access altogether. A browser on your phone is such a device, so treat this as a kitchen-table and casual-play tool: at a Competitive event, use dice or paper and ask the judge. Other trackers advertise themselves as “tournament legal” — as far as the published rules go, that isn't a thing anyone can promise you.")}</p>
+      <p>${_t("Totals are added up from the list of changes rather than stored beside it, so the history can never disagree with the number on screen. Lore stops at 0, and a press that would go below it isn't recorded. Games save themselves as you play.")}</p>
     </details>
   </div>`;
 
   return html`<div class="lore-play is-live">
     <div class="lore-bar">
       <button class=${"lore-hud"+(menuOpen?" active":"")} onClick=${()=>setMenuOpen(v=>!v)}
-        aria-expanded=${menuOpen} title="Menu and settings" aria-label="Menu and settings">
+        aria-expanded=${menuOpen} title=${_t("Menu and settings")} aria-label=${_t("Menu and settings")}>
         ${uiIcon("list", 17)}</button>
       <button class="lore-hud" onClick=${undo} disabled=${!game.events.length}
-        title="Undo the last change" aria-label="Undo the last change">${uiIcon("undo", 17)}</button>
+        title=${_t("Undo the last change")} aria-label=${_t("Undo the last change")}>${uiIcon("undo", 17)}</button>
       <button class=${"lore-hud"+(showLog?" active":"")} onClick=${()=>setShowLog(v=>!v)}
-        aria-expanded=${showLog} title="Every change this game" aria-label="History">
+        aria-expanded=${showLog} title=${_t("Every change this game")} aria-label=${_t("History")}>
         ${uiIcon("clipboard", 17)}
         ${!!game.events.length && html`<span class="lore-hud-n">${game.events.length}</span>`}</button>
       <button class=${"lore-hud lore-hud--goal"+(showMods||modsOn?" active":"")}
         onClick=${()=>setShowMods(v=>!v)} aria-expanded=${showMods}
-        title="Cards that change how much lore it takes to win" aria-label="Win target">
+        title=${_t("Cards that change how much lore it takes to win")} aria-label=${_t("Win target")}>
         ${/* The number is dropped only when the seats actually DISAGREE — a
               modifier that every seat already meets (Donald at a Coconut
               table) leaves one honest number to show. */""}
@@ -41779,31 +41771,31 @@ function LoreTracker({onOpen, onHome}){
           individual seats mid-game. A modifier can only raise a seat's target,
           so Donald's 25 is a no-op at a Coconut table, which is correct. */""}
     ${showMods && html`<div class="lore-mods lore-mods--target">
-      <span class="lore-mods-lbl">Play to</span>
+      <span class="lore-mods-lbl">${_t("Play to")}</span>
       ${LORE_WIN_PRESETS.map(w => html`<button key=${w.win}
         class=${"lore-mod-btn"+((!winCustom && winTarget===w.win)?" active":"")}
         onClick=${()=>{setWinCustom(false); setWinTarget(w.win);}}
         aria-pressed=${!winCustom && winTarget===w.win}
-        title=${w.label+" — "+w.win+" lore"}>${w.label} <b>${w.win}</b></button>`)}
+        title=${_t("{format} — {n} lore", {format: _t(w.label), n: w.win})}>${_t(w.label)} <b>${w.win}</b></button>`)}
       <button class=${"lore-mod-btn"+(winCustom?" active":"")}
-        onClick=${()=>setWinCustom(true)} aria-pressed=${winCustom}>Custom</button>
+        onClick=${()=>setWinCustom(true)} aria-pressed=${winCustom}>${_t("Custom")}</button>
       ${winCustom && html`<${LoreNumInput} klass="lore-numinput lore-numinput--sm"
         min=${LORE_WIN_MIN} max=${LORE_WIN_MAX} value=${winTarget}
-        label="Lore needed to win" onCommit=${setWinTarget}/>`}
+        label=${_t("Lore needed to win")} onCommit=${setWinTarget}/>`}
     </div>`}
     ${(showMods || modsOn) && LORE_WIN_MODIFIERS.map(m => html`<div key=${m.id} class="lore-mods">
-      <span class="lore-mods-lbl" title=${m.help}>${m.card}</span>
+      <span class="lore-mods-lbl" title=${_t(m.help)}>${m.card}</span>
       ${game.players.map((p, i) => html`<button key=${i}
         class=${"lore-mod-btn"+((game.mods||[]).some(x=>x.id===m.id&&x.p===i)?" active":"")}
         onClick=${()=>toggleMod(m.id, i)}
-        title=${p.name+" played it — everyone else needs "+m.win}>${p.name}</button>`)}
+        title=${_t("{name} played it — everyone else needs {n}", {name: loreShowName(p.name, i), n: m.win})}>${loreShowName(p.name, i)}</button>`)}
     </div>`)}
     <div class=${"lore-seats lore-seats--n"+game.players.length+(flipSeat(1)?" lore-seats--face":"")}>
       ${/* seatOrder, not players.map — the render order is the SEATING order,
             while idx stays the true player index (it keys the score, the
             rename and every stored event). */""}
       ${seatOrder.map(i => { const p = game.players[i];
-        return html`<${LoreSeat} key=${i} idx=${i} name=${p.name} ink=${p.ink}
+        return html`<${LoreSeat} key=${i} idx=${i} name=${loreShowName(p.name, i)} ink=${p.ink}
         art=${p.art}
         total=${totals[i]} target=${targets[i]} delta=${delta} flip=${flipSeat(i)}
         winner=${winners.includes(i)} dim=${winners.length>0 && !winners.includes(i)}
@@ -41811,26 +41803,25 @@ function LoreTracker({onOpen, onHome}){
         onRename=${rename}/>`; })}
     </div>
     ${winners.length > 0 && !ended && html`<div class="lore-winbar">
-      <span>${winners.map(i => game.players[i].name).join(" & ")}
-        ${winners.length > 1 ? " reach " : " reaches "}${targets[winners[0]]} lore.</span>
-      <button class="lore-winbtn" onClick=${()=>setEnded(true)}>End game</button>
+      <span>${_t(winners.length > 1 ? "{names} reach {n} lore." : "{names} reaches {n} lore.",
+        {names: winners.map(i => loreShowName(game.players[i].name, i)).join(" & "), n: targets[winners[0]]})}</span>
+      <button class="lore-winbtn" onClick=${()=>setEnded(true)}>${_t("End game")}</button>
     </div>`}
     ${ended && html`<div class="lore-winbar lore-winbar--done">
       <span>${winners.length
-        ? winners.map(i => game.players[i].name).join(" & ")
-          + (winners.length > 1 ? " win." : " wins.")
-        : "Game over."}</span>
-      <button class="lore-winbtn" onClick=${() => newGame({force: true})}>Next game</button>
+        ? _t(winners.length > 1 ? "{names} win." : "{names} wins.", {names: winners.map(i => loreShowName(game.players[i].name, i)).join(" & ")})
+        : _t("Game over.")}</span>
+      <button class="lore-winbtn" onClick=${() => newGame({force: true})}>${_t("Next game")}</button>
     </div>`}
     ${showLog && html`<div class="lore-log">
       ${!game.events.length
-        ? html`<p class="lore-log-empty">Nothing yet — the first change lands here.</p>`
+        ? html`<p class="lore-log-empty">${_t("Nothing yet — the first change lands here.")}</p>`
         : html`<ol class="lore-log-list">
             ${game.events.map((e, i) => {
               const run = game.events.slice(0, i + 1).reduce((a, x) => a + (x.p === e.p ? x.d : 0), 0);
               return html`<li key=${i} class="lore-log-row">
                 <span class="lore-log-t">${loreFmtTime(e.t)}</span>
-                <span class="lore-log-who">${game.players[e.p] ? game.players[e.p].name : "—"}</span>
+                <span class="lore-log-who">${game.players[e.p] ? loreShowName(game.players[e.p].name, e.p) : "—"}</span>
                 <span class=${"lore-log-d"+(e.d>0?" up":" down")}>${e.d>0?"+":""}${e.d}</span>
                 <span class="lore-log-run">${run}</span>
               </li>`;
@@ -41839,11 +41830,11 @@ function LoreTracker({onOpen, onHome}){
     </div>`}
     ${menuOpen && html`<div class="lore-menu-wrap">
       <div class="lore-menu-scrim" onClick=${()=>{setMenuOpen(false); setArtFor(null);}}/>
-      <div class="lore-menu" role="dialog" aria-label="Lore tracker menu">
+      <div class="lore-menu" role="dialog" aria-label=${_t("Lore tracker menu")}>
         <div class="lore-menu-head">
-          <span>Settings</span>
+          <span>${_t("Settings")}</span>
           <button class="lore-hud" onClick=${()=>{setMenuOpen(false); setArtFor(null);}}
-            aria-label="Close menu">${uiIcon("close", 17)}</button>
+            aria-label=${_t("Close menu")}>${uiIcon("close", 17)}</button>
         </div>
         ${settings}
       </div>
@@ -41852,8 +41843,8 @@ function LoreTracker({onOpen, onHome}){
 }
 
 const AnalyticsOverview = ({subs, onOpen, onOpenSealed}) => html`<${React.Fragment}>
-  <${MarketHeader} title="Analytics"
-    sub="Every calculator on the site, and the question each one answers."/>
+  <${MarketHeader} title=${_t("Analytics")}
+    sub=${_t("Every calculator on the site, and the question each one answers.")}/>
   <div class="mkt-ov-grid">
     ${subs.filter(([k]) => k !== "overview" && MARKET_TOOL_INFO[k]).map(([k, label]) => html`<a key=${k}
       class="mkt-ov-card" href=${"/analytics?a="+k} onClick=${navHandler(()=>onOpen(k))}>
@@ -41867,8 +41858,8 @@ const AnalyticsOverview = ({subs, onOpen, onOpenSealed}) => html`<${React.Fragme
       </ul>
     </a>`)}
   </div>
-  ${onOpenSealed && html`<p class="mkt-ov-foot">Sealed product pricing lives in the
-    ${" "}<a href="/screener" onClick=${navHandler(onOpenSealed)}>Screener's Sealed mode</a>.</p>`}
+  ${onOpenSealed && html`<p class="mkt-ov-foot">${_t("Sealed product pricing lives in the")}
+    ${" "}<a href="/screener" onClick=${navHandler(onOpenSealed)}>${_t("Screener's Sealed mode")}</a>.</p>`}
 <//>`;
 
 /* The Stream Ticker's own config params, captured at MODULE LOAD.
@@ -41965,8 +41956,8 @@ function AutoHeightFrame({src, title, minHeight = 420, mirrorParamsAt = null}){
 function SwissEmbed(){
   const narrow = useMaxWidth(960);
   return narrow
-    ? html`<${AutoHeightFrame} src="/swiss?embed=1" title="Swiss Simulator"/>`
-    : html`<iframe class="market-embed-frame" src="/swiss?embed=1" title="Swiss Simulator"
+    ? html`<${AutoHeightFrame} src="/swiss?embed=1" title=${_t("Swiss Simulator")}/>`
+    : html`<iframe class="market-embed-frame" src="/swiss?embed=1" title=${_t("Swiss Simulator")}
         onLoad=${e => syncFrameTheme(e.currentTarget)}></iframe>`;
 }
 
@@ -42051,7 +42042,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
         onClick=${navHandler(()=>setSub(k))}>${l}</a>`)}
       ${openScreenerSealed && html`<a class="market-subtab market-subtab-ext" href="/screener"
         title=${_t("Sealed product pricing lives in the Screener's Sealed mode now")}
-        onClick=${navHandler(openScreenerSealed)}>Sealed ${extIcon()}</a>`}
+        onClick=${navHandler(openScreenerSealed)}>${_t("Sealed")} ${extIcon()}</a>`}
     </div>
     ${sub==="overview" && html`<${AnalyticsOverview} subs=${subsList} onOpen=${setSub}
       onOpenSealed=${openScreenerSealed}/>`}
@@ -42078,7 +42069,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
       openSetHistory=${openSetHistory}/>`}
     ${sub==="sim" && html`<${React.Fragment}>
       <${MarketHeader} title=${_t("Simulator")}
-        sub="Open simulated packs and boxes at real pull rates — or run thousands of boxes to see the odds.">
+        sub=${_t("Open simulated packs and boxes at real pull rates — or run thousands of boxes to see the odds.")}>
         <div class="market-sim-kind" role="group" aria-label=${_t("Simulator mode")}>
           <button class=${simKind==="pack"?"active":""} onClick=${()=>setSimKind("pack")}>${_t("Pack")}</button>
           <button class=${simKind==="box"?"active":""}  onClick=${()=>setSimKind("box")}>${_t("Box")}</button>
@@ -42096,12 +42087,12 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
     <//>`}
     ${sub==="swiss" && html`<${React.Fragment}>
       <${MarketHeader} title=${_t("Swiss Odds")}
-        sub="Monte Carlo odds for Swiss events — what record makes the cut, where the bubble sits, and whether to take the draw."/>
+        sub=${_t("Monte Carlo odds for Swiss events — what record makes the cut, where the bubble sits, and whether to take the draw.")}/>
       <${SwissEmbed}/>
     <//>`}
     ${sub==="ticker" && html`<${React.Fragment}>
       <${MarketHeader} title=${_t("Stream Ticker")}
-        sub="A scrolling bar of the biggest movers for your stream — set it up here, then paste one URL into an OBS browser source."/>
+        sub=${_t("A scrolling bar of the biggest movers for your stream — set it up here, then paste one URL into an OBS browser source.")}/>
       <${AutoHeightFrame} src=${"/ticker?embed=1" + (TICKER_EMBED_PARAMS ? "&" + TICKER_EMBED_PARAMS : "")}
         title=${_t("Stream Ticker")} mirrorParamsAt="/ticker"/>
     <//>`}
@@ -64148,7 +64139,6 @@ function App(){
   return html`<${TipsContext.Provider} value=${tipsEnabled}><${CatalogContext.Provider} value=${raw}><${GradedPremiumContext.Provider} value=${canViewGradedPremium && gradedTosOk}><${GradedAdminContext.Provider} value=${isGradedAdmin}><${ScoutContext.Provider} value=${canScout}><div>
     <${EnlargedCardOverlay}/>
     <${ImageSaverOverlay}/>
-    <${LanguageSuggest}/>
     ${!isOnline && html`<div class="offline-pill" role="status">${uiIcon("offline", 13)} Offline — showing saved data</div>`}
     ${feedbackNoticeVisible(feedbackUnread, feedbackNoticeDismissed) && !feedbackOpen && html`<div class="feedback-reply-notice" role="status">
       <button type="button" class="feedback-reply-notice-open" onClick=${()=>setFeedbackOpen(true)}>

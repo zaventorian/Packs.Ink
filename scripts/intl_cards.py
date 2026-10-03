@@ -44,9 +44,10 @@ GALLERY_CODE = {
     "CC1": "CC1", "CC2": "CC2", "RPH": "RPH",
 }
 # Gallery quest numbers -> our sets.code. Q1 (Deep Trouble) and Q2 (Palace
-# Heist) are Extras & Oddities rows with no `sets` row of their own, so they
-# fall through to the name match.
-GALLERY_QUEST = {"Q3": "Q3"}
+# Heist) have had `sets` rows (set_quest_q1 / _q2) since they were catalogued;
+# leaving them out here sent their cards to the name match, which a quest
+# card (a named scenario action, an oversized Ursula) mostly fails.
+GALLERY_QUEST = {"Q1": "Q1", "Q2": "Q2", "Q3": "Q3"}
 
 
 def compact(s: str | None) -> str:
@@ -449,7 +450,7 @@ OFFICIAL_TERMS = {
 
 # Gallery set ids -> our sets.code (for localized set names).
 _GALLERY_SET = {f"set{n}": str(n) for n in range(1, 40)}
-_GALLERY_SET.update({"quest3": "Q3"})
+_GALLERY_SET.update({"quest1": "Q1", "quest2": "Q2", "quest3": "Q3"})
 
 
 def tt_set_title(s: str) -> str | None:

@@ -93,6 +93,18 @@ Full write-up: **`docs/i18n.md`** (source survey, matching rules, roadmap). Inva
   visitors pay nothing. **Changing language reloads the page** — by design.
 - **Wrapping a string changes the source text a guard test may anchor on** (`test_calendar`,
   `test_event_search`, `test_sealed_search` were taught both forms). Run the guard suite after a wrap.
+- **Nobody is prompted to switch** (Zaven, 2026-10-03). A language is chosen in ⚙ Preferences or the
+  footer's language dropdown. A first-visit "switch to Japanese?" banner was built and removed the same
+  day — don't reintroduce one without asking.
+- **A card never printed in the card language still shows**: English art, plus an UNOFFICIAL
+  translation of its rules text (`i18n/cards_mt/<lang>.json` → `scripts/load_mt_card_text.py`,
+  `match_how='machine'`, `source='packs-ink-mt'`, name/art NULL, labelled in the card modal). The official
+  text always wins; a translation of an older English text (`en_hash`) is deleted, and the daily run's
+  artifact lists what needs (re)translating. The sync's pruning never touches these rows.
+- **How it works** is translated whole: `i18n/src/faq/<lang>.html` (from `python scripts/faq_source.py`,
+  first line `<!-- en:<hash> -->`) baked into the dictionary as `faqHtml`. It is injected as HTML, so the
+  guard checks every translation keeps the English page's exact tags. **The Amazon Associates sentence
+  stays English verbatim** in every language, FAQ included. The Elo pages are English on purpose.
 - Chinese prints are archived LOCALLY only (`scripts/archive_zh_cards.py`, unofficial source) — publishing
   them is Zaven's call.
 

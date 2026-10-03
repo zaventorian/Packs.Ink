@@ -82,6 +82,8 @@ check(ic.parse_identifier("27/204 DE 14") == {"cn": "27", "code": "14", "lang": 
 check(ic.parse_identifier("12/P4 EN 13")["code"] == "P4", "promo identifier keeps its family")
 check(ic.parse_identifier("1/C1 EN 1")["code"] == "cp", "C1 maps to our Challenge Promo code")
 check(ic.parse_identifier("5/204 EN Q3")["code"] == "Q3", "quest identifier")
+check(ic.parse_identifier("12/28 DE Q1")["code"] == "Q1" and ic.parse_identifier("3/35 FR Q2")["code"] == "Q2",
+      "Deep Trouble / Palace Heist identifiers map to their sets (they once fell through to the name match)")
 check(ic.parse_identifier("1TFC EN 1/P1") is None, "irregular identifier falls to the name match")
 
 # --- English twins
@@ -189,6 +191,79 @@ else:
         check(r.returncode != 0, "a page with under 1000 cards is reported as a failure")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+# --- unofficial translations (load_mt_card_text.py): the official text always wins
+os.environ.setdefault("SUPABASE_URL", "http://stub.invalid")
+os.environ.setdefault("SUPABASE_SERVICE_KEY", "stub")
+import load_mt_card_text as mtl  # noqa: E402
+cards = [{"id": "a", "name": "Alpha", "version": None, "text": "Draw a card."},
+         {"id": "b", "name": "Beta", "version": "X", "text": "Banish chosen item."},
+         {"id": "c", "name": "Gamma", "version": None, "text": "Gain 1 lore."},
+         {"id": "d", "name": "Delta", "version": None, "text": ""}]
+mt = {"a": {"en_hash": mtl.en_hash("Draw a card."), "text": "カードを１枚引く。"},
+      "b": {"en_hash": mtl.en_hash("Banish chosen item."), "text": "選んだアイテム１つを退場させる。"},
+      "c": {"en_hash": "stale0000000", "text": "古い訳"}}
+rows = [{"card_id": "b", "lang": "ja", "source": "takaratomy", "text": "公式"},
+        {"card_id": "c", "lang": "ja", "source": mtl.SOURCE, "text": "古い訳"}]
+pl = mtl.plan("ja", cards, rows, mt)
+check([r["card_id"] for r in pl["write"]] == ["a"], f"only the card with no official text gets an unofficial row ({pl['write']})")
+check(pl["write"] and pl["write"][0]["name"] is None and pl["write"][0]["image_url"] is None
+      and pl["write"][0]["match_how"] == "machine", "an unofficial row carries text only, marked machine")
+check(pl["delete"] == ["c"], "a translation of an older English text is deleted, not kept")
+check([t["card_id"] for t in pl["todo"]] == ["c"], "the stale card is listed for re-translation; a textless card is not")
+check(mtl.plan("de", cards, rows, mt)["write"] and len(mtl.plan("de", cards, rows, mt)["write"]) == 2,
+      "another language's official row does not block this one")
+for lang in mtl.LANGS:
+    p = os.path.join(mtl.MT_DIR, f"{lang}.json")
+    if os.path.exists(p):
+        d = json.load(open(p, encoding="utf8"))
+        bad = [k for k, v in d.items() if not (v.get("text") or "").strip() or len(v.get("en_hash") or "") != 12]
+        check(not bad, f"i18n/cards_mt/{lang}.json: every entry has text and a 12-char en_hash ({bad[:3]})")
+
+# --- the translated How-it-works pages keep the English page's structure
+from html.parser import HTMLParser  # noqa: E402
+import faq_source  # noqa: E402
+
+
+class _Tags(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tags, self.code, self._in = [], [], 0
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.append((tag, tuple(sorted(attrs))))
+        if tag in ("code", "kbd"):
+            self._in += 1
+            self.code.append("")
+
+    def handle_endtag(self, tag):
+        if tag in ("code", "kbd"):
+            self._in -= 1
+
+    def handle_data(self, data):
+        if self._in:
+            self.code[-1] += data
+
+
+def _parse(text):
+    p = _Tags()
+    p.feed(text)
+    return p
+
+
+en_faq = _parse(faq_source.faq_body())
+for lang in mtl.LANGS:
+    p = os.path.join(os.path.dirname(HERE), "i18n", "src", "faq", f"{lang}.html")
+    if not os.path.exists(p):
+        continue
+    tr = open(p, encoding="utf8").read()
+    got = _parse(tr)
+    check(got.tags == en_faq.tags, f"faq/{lang}.html has the English page's tags and attributes (it is injected as HTML)")
+    check(got.code == en_faq.code, f"faq/{lang}.html leaves search syntax in <code>/<kbd> untouched")
+    check("<script" not in tr.lower() and " on" not in "".join(" " + a for t, at in got.tags for a, _ in at),
+          f"faq/{lang}.html carries no script or event handler")
+    check("As an Amazon Associate I earn from qualifying purchases." in tr,
+          f"faq/{lang}.html keeps the Amazon Associates disclosure verbatim")
 
 # --- dictionaries are baked from their sources
 r = subprocess.run([sys.executable, os.path.join(HERE, "build_i18n.py"), "--check"], capture_output=True, text=True)

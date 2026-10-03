@@ -61,6 +61,16 @@ jobs:
           flags="--langs $LANGS --report report.json --terms-out terms.json"
           if [ "$COMMIT" = "true" ]; then flags="$flags --commit"; fi
           python -u scripts/sync_intl_cards.py $flags | tee sync.log
+      - name: Unofficial translations for never-printed cards
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          COMMIT: ${{ github.event_name == 'schedule' || github.event.inputs.commit == 'true' }}
+        run: |
+          flags="--todo mt_todo"
+          if [ "$COMMIT" = "true" ]; then flags="$flags --commit"; fi
+          python scripts/load_mt_card_text.py $flags | tee -a sync.log
       - name: Summary
         if: always()
         run: |
@@ -97,6 +107,7 @@ jobs:
         with:
           name: terms
           path: |
+            mt_todo/
             terms.json
             report.json
             sync.log

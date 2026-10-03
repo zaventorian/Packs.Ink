@@ -255,7 +255,7 @@ def main() -> int:
 
     existing: dict[tuple[str, str], dict] = {}
     try:
-        for r in sb.select("card_localizations", columns="card_id,lang,image_url,match_how"):
+        for r in sb.select("card_localizations", columns="card_id,lang,image_url,match_how,source"):
             existing[(r["card_id"], r["lang"])] = r
     except Exception as e:  # pre-179 database
         print(f"  card_localizations unreadable ({e}); treating as empty")
@@ -375,7 +375,9 @@ def main() -> int:
         if "error" in report.get(lang, {}):
             continue
         fresh = {r["card_id"] for r in clean if r["lang"] == lang}
-        on_file = {cid for (cid, l) in existing if l == lang}
+        # Unofficial translations (load_mt_card_text.py) are not this script's to
+        # prune: they exist precisely for cards no source lists.
+        on_file = {cid for (cid, l), r in existing.items() if l == lang and r.get("source") != "packs-ink-mt"}
         stale = on_file - fresh
         if not stale:
             continue
