@@ -76,7 +76,13 @@ so #7 there is five different cards.
   last three cards onto P4 #12/#15/#16. `SET_PARENT` is now empty but the mechanism stays.
 - **`SUPPRESSED_CARD_IDS`** drops Lorcast rows we refuse to carry — deleting them from `cards`
   doesn't stick, the daily Lorcast load re-inserts them. Today: Lorcast's P4 #7/#8 Daisy Duck -
-  Paranormal Investigator (printed `JA`); that card's promos are P3 #23/#24.
+  Paranormal Investigator (printed `JA`); that card's promos are P3 #23/#24. And Lorcast's
+  Into the Inklands #223 Piglet (2026-10-03), a duplicate of `crd_custom_544487_piglet_pooh`.
+  - **⚠ The graded matcher reads the list too** (`terapeak_match.fetch_catalog`). A suppressed
+    row that duplicates a card we carry goes in `SUPPRESSED_ALIASES` there, so its index entry
+    survives under OUR id: sellers title the Piglet "Into the Inklands #223", Lorcast's filing,
+    and dropped outright those titles match nothing. Before this the daily rematch had moved 4
+    Piglet sales onto the hidden row. Guarded by `python scripts/test_suppressed_aliases.py`.
 - **P3 runs to #63.** #58 Sulley / #60 Woody are REPRINT_PROMOS clones; #61/#62 are Japan's Fabled
   SC pair (Maleficent - Monstrous Dragon), unpriced synthetic rows from `supabase/160` labelled via
   `REGIONAL_EXCLUSIVE_LABEL`; #63 JP Buzz IS on TCGplayer (714954), so it keeps its price and gets

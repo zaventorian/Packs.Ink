@@ -142,7 +142,42 @@ def fetch_catalog():
         cards.extend(b)
         if len(b) < 1000:
             break
-    return cards
+    # Lorcast rows the site refuses to carry (SUPPRESSED_CARD_IDS in Index.html).
+    # A sale attributed to one is invisible on the site, and a suppressed row is
+    # usually a duplicate of a card we hold under another id (Piglet #223 tied
+    # with its own custom row and took 4 of its sales, 2026-10-03).
+    # A suppressed row that duplicates a card we carry is kept as an ALIAS of that
+    # card rather than dropped: sellers title the Deep Trouble Piglet "Into the
+    # Inklands #223", which is Lorcast's filing, and only that row's set name
+    # scores. Dropped, those titles match nothing.
+    bad = _suppressed_ids()
+    out = []
+    for c in cards:
+        cid = c.get("id")
+        if cid not in bad:
+            out.append(c)
+        elif cid in SUPPRESSED_ALIASES:
+            out.append(dict(c, id=SUPPRESSED_ALIASES[cid]["id"],
+                            tcgplayer_product_id=SUPPRESSED_ALIASES[cid]["pid"]))
+    return out
+
+
+# Suppressed Lorcast row -> the card we carry in its place.
+SUPPRESSED_ALIASES = {
+    "crd_318c41d06e2340debaba878e3c926cdc": {"id": "crd_custom_544487_piglet_pooh", "pid": 544487},
+}
+
+
+def _suppressed_ids():
+    import sys
+    from pathlib import Path
+    here = Path(__file__).resolve().parent
+    sys.path.insert(0, str(here / "scanner"))
+    try:
+        import scanner_scope
+        return scanner_scope.suppressed_card_ids(here.parent / "Index.html")
+    finally:
+        sys.path.pop(0)
 
 
 def fetch_sets():

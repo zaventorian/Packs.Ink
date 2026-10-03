@@ -250,7 +250,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=519">
+<link rel="stylesheet" href="styles.css?v=520">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -283,6 +283,29 @@
      party can republish them — so SRI is unnecessary; the ?v= key busts the cache
      on a re-vendor. To bump a version: re-download the pinned UMD build into
      /vendor/ and bump the ?v=. Load order matters: react → react-dom → htm. -->
+<!-- Browser page translation (Chrome / Edge "Translate this page") swaps React's
+     text nodes for <font> wrappers, so React's next insertBefore / removeChild
+     names a node that is no longer a child and throws: the view crashed to its
+     error screen for a German Edge visitor on /decks (Sentry JAVASCRIPT-1P,
+     2026-10-02). These two shims only act on that exact mismatch and are
+     otherwise the browser's own methods. -->
+<script>
+(function(){
+  if (typeof Node !== "function" || !Node.prototype) return;
+  var rm = Node.prototype.removeChild, ins = Node.prototype.insertBefore;
+  Node.prototype.removeChild = function(child){
+    if (child && child.parentNode !== this) {
+      if (child.parentNode) child.parentNode.removeChild(child);
+      return child;
+    }
+    return rm.apply(this, arguments);
+  };
+  Node.prototype.insertBefore = function(node, ref){
+    if (ref && ref.parentNode !== this) return ins.call(this, node, null);
+    return ins.apply(this, arguments);
+  };
+})();
+</script>
 <script src="/vendor/react.production.min.js?v=254"></script>
 <script src="/vendor/react-dom.production.min.js?v=254"></script>
 <script src="/vendor/htm.js?v=254"></script>
@@ -601,7 +624,7 @@ const deckVersionsUnavailable = (err) => {
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v64";  // v64: art for three Palace Heist oversized cards and the quest battlegrounds now stored sideways like Locations; same row count, so the cards-count probe would not refetch. (v63: Illumineer's Quest cards are their own sets with rarity "Quest" (no longer Promo), and Q3's set name is the display name, both baked into cached rows. (v62: Coconut leader The Black Cauldron (cn 27, the first versionless one) is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v61: two ink drop counter rows (Extras & Oddities, Hyperia City) are NEW synthetic rows baked in by transformSupabaseData, and Minnie Mouse 17/P4 gains its "Japanese Exclusive" label and moves to the Normal printing there, so a cache replay would show neither for 24h. (v60: Coconut rebalance — Snow White (Beta 1.1) + The Madrigal Family (Beta 2.1) ability text and re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording for 24h. (v59: Coconut leader Pete - Bad Guy (cn 26) is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v58: rows carry `added_at` (cards.inserted_at) for the new-card reveal reel — a replayed v57 record has no such field, so every card reads as "not new" and the reel stays dark for 24h on exactly the sessions a reveal wave is meant to reach. (v57: promo-set rework — SUPPRESSED_CARD_IDS, one placeholder row per unpriced P4/PD1 card, the P3 #63 "Japanese Exclusive" label, and the cards-count freshness probe (a v56 record has no cardCount). (v56: Coconut Beta 2 — The Vine - Towering Stalk is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v55: Elsa - Exploring the Unknown 59/P3 (JA) moved to JAPAN_ONLY_NONFOIL, so its img_* now point at the JP scan — the English frame is baked into cached rows and a replay would keep showing it for 24h. v54: Coconut Beta 1.1 — Stitch/Mufasa/Donald Duck/Robin Hood ability text + their re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording searchable for 24h. v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. v52: Coconut leader merge/suppress.))
+const CACHE_KEY = "packsink:catalog:v65";  // v65: Lorcast's duplicate Piglet #223 (Into the Inklands) is suppressed; same row count in `cards`, so the count probe would not refetch on its own. v64: art for three Palace Heist oversized cards and the quest battlegrounds now stored sideways like Locations; same row count, so the cards-count probe would not refetch. (v63: Illumineer's Quest cards are their own sets with rarity "Quest" (no longer Promo), and Q3's set name is the display name, both baked into cached rows. (v62: Coconut leader The Black Cauldron (cn 27, the first versionless one) is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v61: two ink drop counter rows (Extras & Oddities, Hyperia City) are NEW synthetic rows baked in by transformSupabaseData, and Minnie Mouse 17/P4 gains its "Japanese Exclusive" label and moves to the Normal printing there, so a cache replay would show neither for 24h. (v60: Coconut rebalance — Snow White (Beta 1.1) + The Madrigal Family (Beta 2.1) ability text and re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording for 24h. (v59: Coconut leader Pete - Bad Guy (cn 26) is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v58: rows carry `added_at` (cards.inserted_at) for the new-card reveal reel — a replayed v57 record has no such field, so every card reads as "not new" and the reel stays dark for 24h on exactly the sessions a reveal wave is meant to reach. (v57: promo-set rework — SUPPRESSED_CARD_IDS, one placeholder row per unpriced P4/PD1 card, the P3 #63 "Japanese Exclusive" label, and the cards-count freshness probe (a v56 record has no cardCount). (v56: Coconut Beta 2 — The Vine - Towering Stalk is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v55: Elsa - Exploring the Unknown 59/P3 (JA) moved to JAPAN_ONLY_NONFOIL, so its img_* now point at the JP scan — the English frame is baked into cached rows and a replay would keep showing it for 24h. v54: Coconut Beta 1.1 — Stitch/Mufasa/Donald Duck/Robin Hood ability text + their re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording searchable for 24h. v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. v52: Coconut leader merge/suppress.))
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -2090,6 +2113,11 @@ const SET_PARENT = {
 const SUPPRESSED_CARD_IDS = new Set([
   "crd_3649235bb31d4cf09fcdfa873f660fe3",  // "Promo Set 4" #7 Daisy Duck
   "crd_1923db6966fd4f2991e4dd850de4c627",  // "Promo Set 4" #8 Daisy Duck
+  // Into the Inklands #223 Piglet - Pooh Pirate Captain: Lorcast indexed the
+  // Deep Trouble quest card on 2026-10-03, two years after we built it as
+  // crd_custom_544487_piglet_pooh (supabase/82), which keeps the TCGplayer id,
+  // the price and every graded sale. The matcher skips this list too.
+  "crd_318c41d06e2340debaba878e3c926cdc",
 ]);
 // Promos live in their own sets (Promo Set 1/2/3, D23, EPCOT, LCP …) but are
 // reprints of cards from a mainline set. `_promoBaseSet` maps a promo's Product
