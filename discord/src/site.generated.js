@@ -34,8 +34,17 @@ const MAINLINE_SETS = [
   "Wilds Unknown","Attack of the Vine!","Hyperia City"
 ];
 // ---- site ----
+const QUEST_SETS = [
+  "Illumineer's Quest: Deep Trouble",
+  "Illumineer's Quest: Palace Heist",
+  "Illumineer's Quest: The Great Hunny Rescue",
+];
+// ---- site ----
 const SET_ORDER = [
   EXTRAS_SET_NAME,
+  // Quests sit below everything else once reversed for display; the Collection
+  // grid rules them off into a section of their own.
+  ...[...QUEST_SETS].reverse(),
   // Yearly promo sets — appear below mainline sets in the Collection grid
   // (reverse() in the renderer puts them between mainlines and EXTRAS).
   "Promo Set 1","Promo Set 2","Promo Set 3",
@@ -81,6 +90,8 @@ const SET_DISPLAY_NAMES = {
   // Lightyear's Magical Places promos share the set and aren't EPCOT cards.
   // EPCOT is a sub-label inside it, not a set of its own.
   "EPCOT Festival of the Arts": "Magical Places Promos",
+  // Lorcast's name for Q3. Ravensburger's is the product name below.
+  "Hunny Rescue – Illumineer's Quest": "Illumineer's Quest: The Great Hunny Rescue",
 };
 // ---- site ----
 const COLLECTOR_NUMBER_OVERRIDES = {
@@ -532,7 +543,7 @@ const calendarUpcoming = (events, fromYmd, limit) => {
 // ---- site ----
 const normalizeRarity = r => {
   if(!r) return r;
-  const m={"super_rare":"Super Rare","Super_rare":"Super Rare","common":"Common","Common":"Common","uncommon":"Uncommon","Uncommon":"Uncommon","rare":"Rare","Rare":"Rare","legendary":"Legendary","Legendary":"Legendary","enchanted":"Enchanted","Enchanted":"Enchanted","epic":"Epic","Epic":"Epic","iconic":"Iconic","Iconic":"Iconic","promo":"Promo","Promo":"Promo"};
+  const m={"super_rare":"Super Rare","Super_rare":"Super Rare","common":"Common","Common":"Common","uncommon":"Uncommon","Uncommon":"Uncommon","rare":"Rare","Rare":"Rare","legendary":"Legendary","Legendary":"Legendary","enchanted":"Enchanted","Enchanted":"Enchanted","epic":"Epic","Epic":"Epic","iconic":"Iconic","Iconic":"Iconic","promo":"Promo","Promo":"Promo","quest":"Quest","Quest":"Quest"};
   return m[r]||r;
 };
 // ---- site ----
@@ -1037,7 +1048,7 @@ const REVEAL_WINDOW_HOURS = 96;
 // ---- site ----
 const REVEAL_MAX_CARDS = 36;
 // ---- site ----
-const REVEAL_EXCLUDED_SETS = new Set([EXTRAS_SET_NAME]);
+const REVEAL_EXCLUDED_SETS = new Set([EXTRAS_SET_NAME, ...QUEST_SETS]);
 // ---- site ----
 const revealRotation = (rows, nowMs) => {
   const cutoff = nowMs - REVEAL_WINDOW_HOURS * 36e5;
@@ -1083,4 +1094,4 @@ const revealSetLabel = (cards) => {
   for(const [s, k] of n){ if(k > topN){ top = s; topN = k; } }
   return (top && topN * 2 > (cards || []).length) ? top : null;
 };
-export { AMAZON_ASIN_BY_SET, AMAZON_DEPT_DEFAULT, AMAZON_PUZZLE_ASINS, AMAZON_SEALED_RULES, AMAZON_TAG, CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_REGIONS, CAL_D, CAL_EST_SUFFIX, CARD_DELTA_WINDOWS, COLLECTOR_NUMBER_OVERRIDES, CONNECTING_FOILS, EXTRAS_MAP, EXTRAS_SET_NAME, GRADED_FOIL_PRINTINGS, GRADED_NONFOIL_PRINTINGS, INKS, MAINLINE_SETS, NEW_PULL_START, PRICE_STANDING_HIGH, PRICE_STANDING_LOW, PRICE_STANDING_MIN_POINTS, PRICE_STANDING_MIN_SPAN_RATIO, PRICE_STANDING_MIN_SPREAD, PRICE_STANDING_NEAR_LOW, PRICE_STANDING_WINDOWS, PRODUCT_RELEASE_DATES, PROMO_RARITY_SETS, PULL, PULL_V2, REVEAL_EXCLUDED_SETS, REVEAL_MAX_CARDS, REVEAL_WINDOW_HOURS, SC_GEO_COUNTRIES, SC_GEO_TIMEOUT_MS, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, SC_POSTAL_FORMATS, SEALED_DISPLAY_TYPE_FOR, SET_CADENCE_DAYS, SET_DISPLAY_NAMES, SET_LGS_WEEKDAY, SET_ORDER, SET_RELEASE_DATES, SET_RELEASE_LABELS, SET_RELEASE_PHASES, SET_RETAIL_LAG_DAYS, SUPPRESSED_CARD_IDS, TCG_AFFILIATE_BASE, TCG_PID_OVERRIDES, UPCOMING_SET_NAMES, _CAL_REGION_BY_CC, _amznNorm, _calKindRank, _calPhaseRank, _calSetKey, _calSetPhase, amazonForSealed, amazonSearchUrl, amazonUrl, calAddDays, calEndOf, calEstimated, calEventFullLabel, calEventSubtitle, calEventTitle, calRegionOf, calStoreEventName, calTodayYmd, calUTCToYmd, calYmdParts, calYmdToUTC, calendarEstimatedSetEntries, calendarMergeEvents, calendarProductEntries, calendarSetEntries, calendarSetEstimates, calendarSort, calendarUpcoming, cleanSealedName, computeSeriesDeltas, deriveSealedDisplayType, getPull, gradedSlotBucket, haversineMi, normalizeRarity, pick, priceStanding, rawSaleMatch, revealRotation, revealSetLabel, scLocalTime12, scNormalizePostal, scPlaceLabel, scPostalCandidates, scPostalShape, scRankPlaces, scZippo, searchNorm, seriesPricedOn, simPack, tcgSetSearchUrl, tcgUrl, wPick };
+export { AMAZON_ASIN_BY_SET, AMAZON_DEPT_DEFAULT, AMAZON_PUZZLE_ASINS, AMAZON_SEALED_RULES, AMAZON_TAG, CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_REGIONS, CAL_D, CAL_EST_SUFFIX, CARD_DELTA_WINDOWS, COLLECTOR_NUMBER_OVERRIDES, CONNECTING_FOILS, EXTRAS_MAP, EXTRAS_SET_NAME, GRADED_FOIL_PRINTINGS, GRADED_NONFOIL_PRINTINGS, INKS, MAINLINE_SETS, NEW_PULL_START, PRICE_STANDING_HIGH, PRICE_STANDING_LOW, PRICE_STANDING_MIN_POINTS, PRICE_STANDING_MIN_SPAN_RATIO, PRICE_STANDING_MIN_SPREAD, PRICE_STANDING_NEAR_LOW, PRICE_STANDING_WINDOWS, PRODUCT_RELEASE_DATES, PROMO_RARITY_SETS, PULL, PULL_V2, QUEST_SETS, REVEAL_EXCLUDED_SETS, REVEAL_MAX_CARDS, REVEAL_WINDOW_HOURS, SC_GEO_COUNTRIES, SC_GEO_TIMEOUT_MS, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, SC_POSTAL_FORMATS, SEALED_DISPLAY_TYPE_FOR, SET_CADENCE_DAYS, SET_DISPLAY_NAMES, SET_LGS_WEEKDAY, SET_ORDER, SET_RELEASE_DATES, SET_RELEASE_LABELS, SET_RELEASE_PHASES, SET_RETAIL_LAG_DAYS, SUPPRESSED_CARD_IDS, TCG_AFFILIATE_BASE, TCG_PID_OVERRIDES, UPCOMING_SET_NAMES, _CAL_REGION_BY_CC, _amznNorm, _calKindRank, _calPhaseRank, _calSetKey, _calSetPhase, amazonForSealed, amazonSearchUrl, amazonUrl, calAddDays, calEndOf, calEstimated, calEventFullLabel, calEventSubtitle, calEventTitle, calRegionOf, calStoreEventName, calTodayYmd, calUTCToYmd, calYmdParts, calYmdToUTC, calendarEstimatedSetEntries, calendarMergeEvents, calendarProductEntries, calendarSetEntries, calendarSetEstimates, calendarSort, calendarUpcoming, cleanSealedName, computeSeriesDeltas, deriveSealedDisplayType, getPull, gradedSlotBucket, haversineMi, normalizeRarity, pick, priceStanding, rawSaleMatch, revealRotation, revealSetLabel, scLocalTime12, scNormalizePostal, scPlaceLabel, scPostalCandidates, scPostalShape, scRankPlaces, scZippo, searchNorm, seriesPricedOn, simPack, tcgSetSearchUrl, tcgUrl, wPick };

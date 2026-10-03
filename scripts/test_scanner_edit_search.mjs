@@ -58,6 +58,9 @@ const moduleSrc = [
   // Dependencies that live above the search helpers.
   grabLine("const COCONUT_CARD_TYPE = "),
   grabLine("const EXTRAS_SET_NAME = "),
+  grab("const QUEST_SETS = [", NL + "];"),
+  grabLine("const QUEST_SET_SET = "),
+  grabLine("const QUEST_RARITY = "),
   grab("const MAINLINE_SETS = [", NL + "];"),
   grab("const SET_ORDER = [", NL + "];"),
   grab("const SET_PARENT = {", NL + "};"),

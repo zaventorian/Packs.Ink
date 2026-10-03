@@ -29,6 +29,7 @@ function slice(startRe, endRe, label){
 
 const parts = [
   slice(/^const EXTRAS_SET_NAME = /m, /^const EXTRAS_SET_NAME = .*$/m, "EXTRAS_SET_NAME"),
+  slice(/^const QUEST_SETS = \[/m, /^const QUEST_RARITY = .*$/m, "QUEST_SETS"),
   slice(/^const REVEAL_WINDOW_HOURS = /m, /^const REVEAL_SECS_PER_CARD = [\d.]+;$/m, "reveal logic"),
 ];
 const mod = new Function(parts.join("\n\n") + `

@@ -94,6 +94,7 @@ SET_DISPLAY_NAMES = {
     "Challenge Promo": "Lorcana Challenge Promo (C1)",
     "Lorcana Challenge Year 3": "Lorcana Challenge Promo (C2)",
     "EPCOT Festival of the Arts": "Magical Places Promos",
+    "Hunny Rescue – Illumineer's Quest": "Illumineer's Quest: The Great Hunny Rescue",
 }
 C1_SET = "Challenge Promo"
 
@@ -197,9 +198,13 @@ def tcg_url(pid, printing=None):
 
 
 def bucket_of(row):
-    """chase | promo | base | foil. A chase or promo card is one printing, so it
-    is never called a foil (the site's printingBadge rule)."""
+    """chase | promo | base | foil, or None for a card no section reports. A
+    chase or promo card is one printing, so it is never called a foil (the
+    site's printingBadge rule). An Illumineer's Quest card is a board-game
+    piece, not a card anyone plays or chases, so it is in no section."""
     rarity = row.get("rarity")
+    if rarity == "Quest":
+        return None
     if rarity in CHASE_RARITIES:
         return "chase"
     if rarity == "Promo":
@@ -240,7 +245,7 @@ def sectioned(rows, window):
             continue
         row = {**r, "pct": float(p), "usd": usd, "price": float(price)}
         key = bucket_of(r)
-        if qualifies(row, key):
+        if key and qualifies(row, key):
             out[key].append(row)
     return {k: rank(v, k) for k, v in out.items()}
 

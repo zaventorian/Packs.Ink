@@ -43,6 +43,10 @@ TCGCSV_GROUP_SET_ALIASES = {
     # singles (#1-9), the 2026 ones (#10-15), and the sealed D23 Collection
     # SKUs for both years. Lorcast calls the set "D23 Collection".
     "d23 promos": "D23 Collection",
+    # Lorcast names Q3 "Hunny Rescue – Illumineer's Quest"; TCGplayer uses the
+    # product name. Binding the group lets link_preorder_pids give the quest
+    # cards their pids as TCGplayer lists them (Q1 / Q2 match by name).
+    "illumineer's quest: the great hunny rescue": "Hunny Rescue – Illumineer's Quest",
 }
 
 

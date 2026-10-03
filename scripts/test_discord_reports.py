@@ -350,6 +350,7 @@ check(rep.bucket_of({"rarity": "Epic", "printing": "Holofoil"}) == "chase", "an 
 check(rep.bucket_of({"rarity": "Promo", "printing": "Holofoil"}) == "promo", "a promo is a promo")
 check(rep.bucket_of({"rarity": "Legendary", "printing": "Cold Foil"}) == "foil", "a base-rarity foil is a foil")
 check(rep.bucket_of({"rarity": "Legendary", "printing": "Normal"}) == "base", "a non-foil is a base card")
+check(rep.bucket_of({"rarity": "Quest", "printing": "Normal"}) is None, "an Illumineer's Quest card is in no section")
 check(abs(rep.dollar_move(110, 10) - 10.0) < 1e-9 and rep.dollar_move(5, -100) is None, "dollar_move")
 check(rep.short_standing(("low", "cheapest in 6 months")) == "6-mo low", "short standing, low")
 check(rep.short_standing(("high", "near its 12-month high")) == "near 12-mo high", "short standing, high")

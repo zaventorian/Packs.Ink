@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=513">
+<link rel="stylesheet" href="styles.css?v=514">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -575,7 +575,7 @@ const deckVersionsUnavailable = (err) => {
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v62";  // v62: Coconut leader The Black Cauldron (cn 27, the first versionless one) is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v61: two ink drop counter rows (Extras & Oddities, Hyperia City) are NEW synthetic rows baked in by transformSupabaseData, and Minnie Mouse 17/P4 gains its "Japanese Exclusive" label and moves to the Normal printing there, so a cache replay would show neither for 24h. (v60: Coconut rebalance — Snow White (Beta 1.1) + The Madrigal Family (Beta 2.1) ability text and re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording for 24h. (v59: Coconut leader Pete - Bad Guy (cn 26) is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v58: rows carry `added_at` (cards.inserted_at) for the new-card reveal reel — a replayed v57 record has no such field, so every card reads as "not new" and the reel stays dark for 24h on exactly the sessions a reveal wave is meant to reach. (v57: promo-set rework — SUPPRESSED_CARD_IDS, one placeholder row per unpriced P4/PD1 card, the P3 #63 "Japanese Exclusive" label, and the cards-count freshness probe (a v56 record has no cardCount). (v56: Coconut Beta 2 — The Vine - Towering Stalk is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v55: Elsa - Exploring the Unknown 59/P3 (JA) moved to JAPAN_ONLY_NONFOIL, so its img_* now point at the JP scan — the English frame is baked into cached rows and a replay would keep showing it for 24h. v54: Coconut Beta 1.1 — Stitch/Mufasa/Donald Duck/Robin Hood ability text + their re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording searchable for 24h. v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. v52: Coconut leader merge/suppress.))
+const CACHE_KEY = "packsink:catalog:v63";  // v63: Illumineer's Quest cards are their own sets with rarity "Quest" (no longer Promo), and Q3's set name is the display name, both baked into cached rows. (v62: Coconut leader The Black Cauldron (cn 27, the first versionless one) is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v61: two ink drop counter rows (Extras & Oddities, Hyperia City) are NEW synthetic rows baked in by transformSupabaseData, and Minnie Mouse 17/P4 gains its "Japanese Exclusive" label and moves to the Normal printing there, so a cache replay would show neither for 24h. (v60: Coconut rebalance — Snow White (Beta 1.1) + The Madrigal Family (Beta 2.1) ability text and re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording for 24h. (v59: Coconut leader Pete - Bad Guy (cn 26) is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v58: rows carry `added_at` (cards.inserted_at) for the new-card reveal reel — a replayed v57 record has no such field, so every card reads as "not new" and the reel stays dark for 24h on exactly the sessions a reveal wave is meant to reach. (v57: promo-set rework — SUPPRESSED_CARD_IDS, one placeholder row per unpriced P4/PD1 card, the P3 #63 "Japanese Exclusive" label, and the cards-count freshness probe (a v56 record has no cardCount). (v56: Coconut Beta 2 — The Vine - Towering Stalk is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v55: Elsa - Exploring the Unknown 59/P3 (JA) moved to JAPAN_ONLY_NONFOIL, so its img_* now point at the JP scan — the English frame is baked into cached rows and a replay would keep showing it for 24h. v54: Coconut Beta 1.1 — Stitch/Mufasa/Donald Duck/Robin Hood ability text + their re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording searchable for 24h. v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. v52: Coconut leader merge/suppress.))
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -1832,11 +1832,30 @@ const MAINLINE_SETS = [
   "Reign of Jafar","Fabled","Whispers in the Well","Winterspell",
   "Wilds Unknown","Attack of the Vine!","Hyperia City"
 ];
+// Illumineer's Quests: co-op board games in a box. The cards in a quest's
+// scenario deck (Ursula's, Jafar's, the Vine's) are game pieces, NOT promos,
+// so they never take the Promo rarity or sit with the promo sets (Zaven,
+// 2026-10-03). They carry the rarity "Quest" and get their own section of the
+// Collection grid. Oldest first. Q3 comes from Lorcast (see SET_DISPLAY_NAMES);
+// Q1 and Q2 Lorcast never indexed, so scripts/import_quest_cards.py loads them
+// from LorcanaJSON into hand-minted sets (migration 179). The foil promo cards
+// packed in the boxes (Mickey - Playful Sorcerer, Bolt - Superdog ...) are real
+// playable cards and stay in Extras & Oddities.
+const QUEST_SETS = [
+  "Illumineer's Quest: Deep Trouble",
+  "Illumineer's Quest: Palace Heist",
+  "Illumineer's Quest: The Great Hunny Rescue",
+];
+const QUEST_SET_SET = new Set(QUEST_SETS);
+const QUEST_RARITY = "Quest";
 // Full set ordering for catalog / Cards view / Collection grid. Includes
 // promo sets and the Extras & Oddities bucket so they're browsable and
 // trackable, even though they don't participate in EV math.
 const SET_ORDER = [
   EXTRAS_SET_NAME,
+  // Quests sit below everything else once reversed for display; the Collection
+  // grid rules them off into a section of their own.
+  ...[...QUEST_SETS].reverse(),
   // Yearly promo sets — appear below mainline sets in the Collection grid
   // (reverse() in the renderer puts them between mainlines and EXTRAS).
   "Promo Set 1","Promo Set 2","Promo Set 3",
@@ -2237,6 +2256,8 @@ const SET_DISPLAY_NAMES = {
   // Lightyear's Magical Places promos share the set and aren't EPCOT cards.
   // EPCOT is a sub-label inside it, not a set of its own.
   "EPCOT Festival of the Arts": "Magical Places Promos",
+  // Lorcast's name for Q3. Ravensburger's is the product name below.
+  "Hunny Rescue – Illumineer's Quest": "Illumineer's Quest: The Great Hunny Rescue",
 };
 
 // Per-card collector-number overrides. Keyed by Lorcast set_id + "|" +
@@ -4062,7 +4083,7 @@ const getBadgeStyle = (r,t) => { const pal = DARK_THEMES_GLOBAL.has(t)?BDGE_DARK
 
 const normalizeRarity = r => {
   if(!r) return r;
-  const m={"super_rare":"Super Rare","Super_rare":"Super Rare","common":"Common","Common":"Common","uncommon":"Uncommon","Uncommon":"Uncommon","rare":"Rare","Rare":"Rare","legendary":"Legendary","Legendary":"Legendary","enchanted":"Enchanted","Enchanted":"Enchanted","epic":"Epic","Epic":"Epic","iconic":"Iconic","Iconic":"Iconic","promo":"Promo","Promo":"Promo"};
+  const m={"super_rare":"Super Rare","Super_rare":"Super Rare","common":"Common","Common":"Common","uncommon":"Uncommon","Uncommon":"Uncommon","rare":"Rare","Rare":"Rare","legendary":"Legendary","Legendary":"Legendary","enchanted":"Enchanted","Enchanted":"Enchanted","epic":"Epic","Epic":"Epic","iconic":"Iconic","Iconic":"Iconic","promo":"Promo","Promo":"Promo","quest":"Quest","Quest":"Quest"};
   return m[r]||r;
 };
 
@@ -4373,7 +4394,8 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
       if(ov != null) c = {...c, tcgplayer_product_id: ov};
     }
     let rar = normalizeRarity(c.rarity);
-    if(!SET_ORDER.includes(setName)) rar = "Promo";
+    if(QUEST_SET_SET.has(setName)) rar = QUEST_RARITY;
+    else if(!SET_ORDER.includes(setName)) rar = "Promo";
     else if(PROMO_RARITY_SETS.has(setName)) rar = "Promo";
     const name = c.version ? c.name+" - "+c.version : c.name;
     const isChase = ["Enchanted","Iconic","Epic"].includes(rar);
@@ -4537,6 +4559,9 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
         rows.push(row);
       } else if(isChase){
         rows.push(buildRow(c, setName, rar, name, "Holofoil", null));
+      } else if(QUEST_SET_SET.has(setName)){
+        // A quest card is printed once, non-foil.
+        rows.push(buildRow(c, setName, rar, name, "Normal", null));
       } else if(isPromoSet){
         rows.push(buildRow(c, setName, rar, name, "Cold Foil", null));
       } else if(y3CanonicalNoPx === "foil"){
@@ -22358,7 +22383,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   // Promo sets get row-flow grid (1-3 row 1, 4-6 row 2, ...) instead of the
   // column-flow we use for main sets, and tighter +/- counters so the long
   // card names ("Dalmatian Puppy - Tail Wagger" etc.) actually fit.
-  const isPromoSet = NUMBERED_PROMO_SETS.has(setName);
+  const isPromoSet = NUMBERED_PROMO_SETS.has(setName) || QUEST_SET_SET.has(setName);
   // Sets that get the Non-Foil + Foil section split in the Collection set
   // detail view (top stack = non-foil, bottom stack = foil) instead of the
   // usual mixed-printing rows. Both have a meaningful price gap between the
@@ -32072,7 +32097,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       // foil / chase split. Dedupe per (card_id, printing-class) so foil-label
       // variants don't double-count; special rarities (Epic/Enchanted/Iconic/
       // Promo) roll into the "chase" bucket with their own target. Skip Extras.
-      if(r.Set !== EXTRAS_SET_NAME){
+      if(r.Set !== EXTRAS_SET_NAME && !QUEST_SET_SET.has(r.Set)){
         const dk = r.card_id+"|"+(r.tcg_printing==="Normal" ? "N" : "F");
         if(!seenBucket.has(dk)){
           seenBucket.add(dk);
@@ -32507,7 +32532,8 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         // exists as a single printing, so splitting Normal/Foil/Enchanted
         // is misleading (often 0/0 in one bucket). Render one unified row
         // labeled "Promos" so the tile reads at a glance.
-        if(UNIFIED_TILE_SETS.has(setName)){
+        if(UNIFIED_TILE_SETS.has(setName) || QUEST_SET_SET.has(setName)){
+          const isQuest = QUEST_SET_SET.has(setName);
           const total = own.normal.size + own.foil.size + own.enchanted.size + own.iconic.size + own.epic.size;
           const denom = tot.normal + tot.foil + tot.enchanted + tot.iconic + tot.epic;
           const pct = denom ? (total/denom*100) : 0;
@@ -32515,9 +32541,9 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
             role="button" tabIndex="0" onKeyDown=${keyActivate(()=>setSelectedSet(setName))}>
             <${SetHeading} set=${setName} klass="set-progress-name"/>
             <div class="set-progress-row">
-              <div class="set-progress-row-label">Promos</div>
+              <div class="set-progress-row-label">${isQuest ? "Quest cards" : "Promos"}</div>
               <div class="set-progress-row-counts">${total} / ${denom} <span class="set-progress-pct">${completionPct(total, denom)}%</span></div>
-              <div class="progress-bar"><div class="progress-fill foil" style=${{width:pct+"%"}}/></div>
+              <div class="progress-bar"><div class=${"progress-fill"+(isQuest ? "" : " foil")} style=${{width:pct+"%"}}/></div>
             </div>
           </div>`;
         }
@@ -32572,13 +32598,18 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         </div>`;
       };
       const mainSets  = setsToShow.filter(s => MAINLINE_SETS.includes(s));
-      const otherSets = setsToShow.filter(s => !MAINLINE_SETS.includes(s));
+      const otherSets = setsToShow.filter(s => !MAINLINE_SETS.includes(s) && !QUEST_SET_SET.has(s));
+      const questSets = setsToShow.filter(s => QUEST_SET_SET.has(s));
       return html`<div class="collection-sets">
         ${mainSets.map(renderSetCard)}
         ${mainSets.length > 0 && otherSets.length > 0 && html`<div class="collection-sets-divider" role="separator">
           <span>Promos & other sets</span>
         </div>`}
         ${otherSets.map(renderSetCard)}
+        ${questSets.length > 0 && html`<div class="collection-sets-divider" role="separator">
+          <span>Illumineer's Quests</span>
+        </div>`}
+        ${questSets.map(renderSetCard)}
       </div>`;
     })()}
   </div>`}
@@ -53527,7 +53558,9 @@ const REVEAL_WINDOW_HOURS = 96;
 const REVEAL_MAX_CARDS = 36;
 // Extras & Oddities is a curation bucket we backfill BY HAND (see EXTRAS_MAP) —
 // a row landing there is us catching up on an old printing, never a reveal.
-const REVEAL_EXCLUDED_SETS = new Set([EXTRAS_SET_NAME]);
+// Quest decks are board-game pieces, and one lands as 30-odd cards at once,
+// which would push a set's reveals out of a 36-card reel.
+const REVEAL_EXCLUDED_SETS = new Set([EXTRAS_SET_NAME, ...QUEST_SETS]);
 
 // One entry per card_id — a card's Normal and Foil rows are ONE reveal, not
 // two — newest first, then by collector number so a single wave reads in
