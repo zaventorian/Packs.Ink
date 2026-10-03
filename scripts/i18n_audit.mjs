@@ -82,12 +82,15 @@ export function lex(s, i, stopAtBrace) {
     if(c === "'" || c === '"') {
       const st = i; let v = ""; i++;
       while(i < s.length && s[i] !== c) {
+        if(s[i] === "\\" && s[i + 1] === "u" && /^[0-9a-fA-F]{4}$/.test(s.slice(i + 2, i + 6))) {
+          v += String.fromCharCode(parseInt(s.slice(i + 2, i + 6), 16)); i += 6; continue;
+        }
         if(s[i] === "\\") { v += unesc(s[i + 1]); i += 2; continue; }
         if(s[i] === "\n") break;
         v += s[i++];
       }
       i++;
-      toks.push({t: "str", v, pos: st});
+      toks.push({t: "str", v, pos: st, end: i, raw: s.slice(st, i)});
       continue;
     }
     if(c === "`") {
@@ -164,41 +167,44 @@ function walkTpl(s, i) {
 // ${expr} sits in: {kind:"child"} or {kind:"attr", name}.
 function walkHtml(s, i) {
   const out = {texts: [], attrs: [], slots: [], end: 0};
-  let state = "TEXT"; let text = ""; let textPos = i;
+  let state = "TEXT"; let text = ""; let runStart = i; let runFrom = "start"; let esc = false;
   let attrName = null; let lastName = ""; let quote = null; let qval = ""; let qpos = 0;
-  const flushText = () => {
+  // A text RUN is the raw source between two boundaries (a tag, a ${slot},
+  // the template's ends). Its trimmed core is the finding; the boundaries say
+  // whether it can be wrapped on its own (scripts/i18n_wrap.mjs).
+  const flushText = (to, at) => {
     const t = text.replace(/\s+/g, " ").trim();
-    if(t) out.texts.push({v: t, pos: textPos});
-    text = "";
+    if(t) out.texts.push({v: t, pos: runStart, start: runStart, end: at, from: runFrom, to,
+      prevSlot: out.slots.length - 1, esc});
+    text = ""; esc = false;
   };
   while(i < s.length) {
     const c = s[i];
-    if(c === "\\" && s[i + 1] === "`") { if(state === "TEXT") text += "`"; i += 2; continue; }
-    if(c === "\\") { if(state === "TEXT") text += s[i + 1]; else if(quote) qval += s[i + 1]; i += 2; continue; }
-    if(c === "`") { if(state === "TEXT") flushText(); out.end = i + 1; return out; }
+    if(c === "\\" && s[i + 1] === "`") { if(state === "TEXT") { text += "`"; esc = true; } i += 2; continue; }
+    if(c === "\\") { if(state === "TEXT") { text += s[i + 1]; esc = true; } else if(quote) qval += s[i + 1]; i += 2; continue; }
+    if(c === "`") { if(state === "TEXT") flushText("end", i); out.end = i + 1; return out; }
     if(c === "$" && s[i + 1] === "{") {
       let slot;
-      if(state === "TEXT") { flushText(); slot = {kind: "child"}; }
-      else if(state === "QUOTE") slot = {kind: "attr", name: attrName};
+      if(state === "TEXT") { flushText("slot", i); slot = {kind: "child"}; }
+      else if(state === "QUOTE") slot = {kind: "attr", name: attrName, inQuote: true};
       else if(state === "TAG" && attrName) { slot = {kind: "attr", name: attrName}; attrName = null; }
       else slot = {kind: "other"};
       const r = lex(s, i + 2, true);
-      out.slots.push({slot, tokens: r.tokens, pos: i});
+      out.slots.push({slot, tokens: r.tokens, pos: i, end: r.end});
       i = r.end;
-      if(state === "TEXT") textPos = i;
+      if(state === "TEXT") { runStart = i; runFrom = "slot"; }
       continue;
     }
     if(state === "TEXT") {
       if(c === "<") {
-        flushText();
-        if(s.startsWith("<!--", i)) { const e = s.indexOf("-->", i); i = e < 0 ? s.length : e + 3; textPos = i; continue; }
+        flushText("tag", i);
+        if(s.startsWith("<!--", i)) { const e = s.indexOf("-->", i); i = e < 0 ? s.length : e + 3; runStart = i; runFrom = "tag"; continue; }
         state = "TAG"; attrName = null; lastName = ""; i++; continue;
       }
-      if(!text) textPos = i;
       text += c; i++; continue;
     }
     if(state === "TAG") {
-      if(c === ">") { state = "TEXT"; textPos = i + 1; i++; continue; }
+      if(c === ">") { state = "TEXT"; runStart = i + 1; runFrom = "tag"; i++; continue; }
       if(c === "=") { attrName = lastName; i++; continue; }
       if((c === '"' || c === "'") && attrName) { state = "QUOTE"; quote = c; qval = ""; qpos = i; i++; continue; }
       if(/[A-Za-z_:@-]/.test(c) || /[0-9]/.test(c)) {
@@ -211,7 +217,8 @@ function walkHtml(s, i) {
     }
     if(state === "QUOTE") {
       if(c === quote) {
-        out.attrs.push({name: attrName, v: qval, pos: qpos});
+        out.attrs.push({name: attrName, v: qval, pos: qpos, start: qpos, end: i + 1,
+          pure: out.slots.length === 0 || out.slots[out.slots.length - 1].pos < qpos});
         state = "TAG"; attrName = null; quote = null; i++; continue;
       }
       qval += c; i++; continue;
@@ -248,45 +255,110 @@ export function slotStrings(tokens) {
     if(next && next.t === "p" && (next.v === "." || next.v === "[" || next.v === "?.")) continue;
     if(next && next.t === "id" && next.v === "in") continue;
     const v = tk.t === "str" ? tk.v : tk.v.quasis.join("{}");
-    found.push({v, pos: tk.pos});
+    found.push({v, pos: tk.pos, tok: tk, prev, next});
   }
   return found;
 }
 
 const VISIBLE_TPL = (v) => LETTERS.test(v.replace(/\{\}/g, " "));
 
-// Every finding in one script body. `base` is the script's offset in the file.
+// Slots that are pure decoration: a text run beside one of these is still a
+// whole phrase on its own ("${uiIcon('news')} News"), so it can be wrapped
+// without splitting a sentence.
+const ICON_CALLS = new Set(["uiIcon", "extIcon", "_navSvg", "_deckSvg", "LorcanaGlyph"]);
+const isIconSlot = (sl) => !!sl && sl.tokens.length > 0 && sl.tokens[0].t === "id" && ICON_CALLS.has(sl.tokens[0].v);
+// Object-literal fields whose string value is shown on screen somewhere.
+export const DATA_FIELDS = new Set(["label", "title", "text", "note", "kicker", "dateLabel", "caption", "hint",
+  "desc", "sub", "short", "heading", "dek", "lede", "tip", "subtitle", "help", "explain", "empty", "cta"]);
+const INLINE_TAGS = new Set(["b", "i", "a", "strong", "em", "code", "kbd", "u", "mark", "abbr", "sup", "sub", "small"]);
+const wrapCall = (v) => "_t(" + JSON.stringify(v) + ")";
+
+// Every finding in one script body. Each carries `fix` when it is safe to
+// wrap mechanically ({start, end, repl} in script offsets), else null - a
+// fragment of a sentence, a concatenation, a template: those need a person
+// to write one key with {placeholders}.
 export function audit(src) {
   const findings = [];
-  const add = (v, pos, kind) => {
+  const add = (v, pos, kind, fix) => {
     const t = v.replace(/\s+/g, " ").trim();
     if(!t || !VISIBLE_TPL(t)) return;
-    // htm entities like &nbsp; and bare URLs are not prose
+    // bare URLs and anchors are not prose
     if(/^(https?:|mailto:|\/|#)/.test(t)) return;
-    findings.push({v: t, pos, kind});
+    findings.push({v: t, pos, kind, fix: fix || null});
   };
+  const strFix = (tk, prev, next) => (tk.t === "str" && tk.v === tk.v.trim() && !/^[a-z.,;:)]/.test(tk.v) && !/[\n\\]/.test(tk.raw)
+      && !(prev && prev.v === "+") && !(next && next.v === "+"))
+    ? {start: tk.pos, end: tk.end, repl: wrapCall(tk.v)} : null;
   const visitTokens = (tokens) => {
     for(let k = 0; k < tokens.length; k++) {
       const tk = tokens[k];
       if(tk.t === "html") visitHtml(tk.v);
       else if(tk.t === "tpl") tk.v.exprs.forEach(visitTokens);
+      // DATA: {label: "Sets"} - a display string kept in a const and rendered
+      // elsewhere. It cannot be wrapped where it stands (some labels are also
+      // keys), so it counts as untranslated until ui.json has an entry for it.
+      if(tk.t === "id" && DATA_FIELDS.has(tk.v) && tokens[k + 1] && tokens[k + 1].v === ":"
+         && tokens[k - 1] && tokens[k - 1].t === "p" && (tokens[k - 1].v === "{" || tokens[k - 1].v === ",")) {
+        const val = tokens[k + 2]; const after = tokens[k + 3];
+        if(val && val.t === "str" && (!after || after.v === "," || after.v === "}")) add(val.v, val.pos, "data:" + tk.v, null);
+      }
+      // items: ["...", "..."] - a list of display lines (a news article's bullets)
+      if(tk.t === "id" && tk.v === "items" && tokens[k + 1] && tokens[k + 1].v === ":" && tokens[k + 2] && tokens[k + 2].v === "[") {
+        let depth = 0;
+        for(let j = k + 2; j < tokens.length; j++) {
+          const x = tokens[j];
+          if(x.t === "p" && (x.v === "[" || x.v === "{" || x.v === "(")) depth++;
+          else if(x.t === "p" && (x.v === "]" || x.v === "}" || x.v === ")")) { if(--depth === 0) break; }
+          else if(depth === 1 && x.t === "str") add(x.v, x.pos, "data:items", null);
+        }
+      }
       // flashToast("...") / flashToast(`...`)
       if(tk.t === "id" && tk.v === "flashToast" && tokens[k + 1] && tokens[k + 1].v === "(") {
         const a = tokens[k + 2];
         if(a && (a.t === "str" || a.t === "tpl")) {
           const after = tokens[k + 3];
           // "x" + y / "x" ? ... - still a literal message
-          if(!after || after.v === "," || after.v === ")" || after.v === "+") add(a.t === "str" ? a.v : a.v.quasis.join("{}"), a.pos, "toast");
+          if(!after || after.v === "," || after.v === ")" || after.v === "+")
+            add(a.t === "str" ? a.v : a.v.quasis.join("{}"), a.pos, "toast", a.t === "str" ? strFix(a, null, after) : null);
         }
       }
     }
   };
   const visitHtml = (h) => {
-    for(const t of h.texts) add(t.v, t.pos, "text");
-    for(const a of h.attrs) if(a.name && VISIBLE_ATTRS.has(a.name)) add(a.v, a.pos, "attr:" + a.name);
+    for(const t of h.texts) {
+      let fix = null;
+      const okFrom = t.from !== "slot" || isIconSlot(h.slots[t.prevSlot]);
+      const okTo = t.to !== "slot" || isIconSlot(h.slots[t.prevSlot + 1]);
+      // a run that starts lower-case or with punctuation, or sits against
+      // inline markup (<b>, <a>, <code>...), is part of a longer sentence
+      const before = t.from === "tag" ? /<\/?\s*([A-Za-z]+)[^<>]*>\s*$/.exec(src.slice(Math.max(0, t.start - 200), t.start)) : null;
+      const after = t.to === "tag" ? /^<\/?\s*([A-Za-z]+)/.exec(src.slice(t.end, t.end + 40)) : null;
+      const inline = (m) => !!m && INLINE_TAGS.has(m[1].toLowerCase());
+      const fragment = /^[a-z.,;:)\]–—-]/.test(t.v) || inline(before) || inline(after);
+      if(okFrom && okTo && !fragment && !t.esc && !/&[#\w]+;/.test(t.v) && !/[{}]/.test(t.v)) {
+        const raw = src.slice(t.start, t.end);
+        const lead = raw.length - raw.trimStart().length;
+        const trail = raw.length - raw.trimEnd().length;
+        fix = {start: t.start + lead, end: t.end - trail, repl: "${" + wrapCall(t.v) + "}"};
+      }
+      add(t.v, t.pos, "text", fix);
+    }
+    for(const a of h.attrs) if(a.name && VISIBLE_ATTRS.has(a.name)) {
+      const ok = a.pure && a.v === a.v.trim() && !/[\\{}]/.test(a.v) && !/&[#\w]+;/.test(a.v);
+      add(a.v, a.pos, "attr:" + a.name, ok ? {start: a.start, end: a.end, repl: "${" + wrapCall(a.v) + "}"} : null);
+    }
     for(const sl of h.slots) {
       if(sl.slot.kind === "child" || (sl.slot.kind === "attr" && VISIBLE_ATTRS.has(sl.slot.name))) {
-        for(const f of slotStrings(sl.tokens)) add(f.v, f.pos, sl.slot.kind === "child" ? "child" : "attr:" + sl.slot.name);
+        // RENDER: ${k.label} shows a data label - route it through _t()
+        const tt = sl.tokens;
+        const member = tt.length >= 3 && tt.length <= 5 && tt[0].t === "id" && tt.slice(1).every((x, j) => j % 2 === 0 ? (x.v === "." || x.v === "?.") : x.t === "id");
+        if(member && tt.length % 2 === 1 && DATA_FIELDS.has(tt[tt.length - 1].v)) {
+          const expr = src.slice(tt[0].pos, tt[tt.length - 1].pos + tt[tt.length - 1].v.length);
+          findings.push({v: "${" + expr + "}", pos: tt[0].pos, kind: "render", fix: {start: tt[0].pos, end: tt[0].pos + expr.length, repl: "_t(" + expr + ")"}});
+        }
+        for(const f of slotStrings(sl.tokens))
+          add(f.v, f.pos, sl.slot.kind === "child" ? "child" : "attr:" + sl.slot.name,
+            f.tok.t === "str" ? strFix(f.tok, f.prev, f.next) : null);
       }
       visitTokens(sl.tokens);
     }
@@ -336,8 +408,10 @@ export function collect(file = path.join(ROOT, "Index.html")) {
   const lineStarts = [];
   const lineOf = (pos) => html.slice(0, sc.start + pos).split("\n").length;
   const skip = loadOnPurpose();
+  // a data string is translated once ui.json has it ("" counts: deliberately English)
+  const ui = JSON.parse(fs.readFileSync(path.join(ROOT, "i18n", "src", "ui.json"), "utf8"));
   const all = audit(sc.body).map(f => ({...f, comp: compOf(f.pos)}));
-  const kept = all.filter(f => !skip(f));
+  const kept = all.filter(f => !skip(f) && !(f.kind.startsWith("data:") && f.v in ui));
   return {all, kept, lineOf};
 }
 

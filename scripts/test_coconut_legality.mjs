@@ -26,6 +26,9 @@ function slice(startRe, endRe, label){
 
 const parts = [
   `const SUPABASE_URL = "https://stub.invalid";`,
+  // the page's translation layer, as it behaves in English
+  `const _t = (s, v) => !v ? s : String(s).replace(/\\{(\\w+)\\}/g, (m, k) => (v[k] != null ? v[k] : m));`,
+  `const _term = (kind, v) => v;`,
   slice(/^const SET_PARENT = \{/m, /^\};/m, "SET_PARENT"),
   slice(/^const MAINLINE_SETS = \[/m, /^\];/m, "MAINLINE_SETS"),
   // The "formats+coconut" span below runs as far as getFormat, and the reveal

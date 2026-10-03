@@ -69,7 +69,7 @@ ok("an unpriced quest card is one Normal row",
    /else if\(QUEST_SET_SET\.has\(setName\)\)\{\n[^\n]*\n\s*rows\.push\(buildRow\(c, setName, rar, name, "Normal", null\)\);/.test(src), true);
 ok("the Collection grid keeps quests out of the promo section",
    src.includes('setsToShow.filter(s => !MAINLINE_SETS.includes(s) && !QUEST_SET_SET.has(s))'), true);
-ok("the Collection grid has an Illumineer's Quests section", src.includes("<span>Illumineer's Quests</span>"), true);
+ok("the Collection grid has an Illumineer's Quests section", (src.includes("<span>Illumineer's Quests</span>") || src.includes("<span>${_t(\"Illumineer's Quests\")}</span>")), true);
 ok("quests don't count toward the headline completion %",
    src.includes("if(r.Set !== EXTRAS_SET_NAME && !QUEST_SET_SET.has(r.Set)){"), true);
 
