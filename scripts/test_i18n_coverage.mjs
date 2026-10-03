@@ -27,6 +27,10 @@ const MUST = [
   ["component prop", 'html`<${Banner} label="Chase Movers"/>`', "Chase Movers"],
   ["toast", 'flashToast("Link copied")', "Link copied"],
   ["toast template", 'flashToast(`Saved ${n} cards`)', "Saved {} cards"],
+  ["data field", 'const KINDS = [{key: "set", label: "Sets"}];', "Sets"],
+  ["label map", 'const BANNER_LABELS = {chase: "Chase Movers"};', "Chase Movers"],
+  ["preset tuple", 'const SCREEN_PRESETS = [["all", "All cards", "Every card we track"]];', "Every card we track"],
+  ["news bullets", 'const A = [{items: ["Fri: 8 rounds Swiss"]}];', "Fri: 8 rounds Swiss"],
   ["after a regex", 'const r = /a\\/b`/; html`<p>Still found</p>`', "Still found"],
   ["after a comment with a backtick", '// a ` stray\nhtml`<p>Also found</p>`', "Also found"],
 ];

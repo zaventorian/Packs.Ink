@@ -316,6 +316,19 @@ export function audit(src) {
           else if(depth === 1 && x.t === "str" && tokens[j - 1] && tokens[j - 1].v === ":") add(x.v, x.pos, "data:map", null);
         }
       }
+      // const X_PRESETS = [["key", "Label", "Description"], ...] - tuples whose
+      // first element is an id and the rest are display strings.
+      if(tk.t === "id" && tk.v === "const" && tokens[k + 1] && tokens[k + 1].t === "id" && /_PRESETS$/.test(tokens[k + 1].v)
+         && tokens[k + 2] && tokens[k + 2].v === "=" && tokens[k + 3] && tokens[k + 3].v === "[") {
+        let depth = 0, idx = 0;
+        for(let j = k + 3; j < tokens.length; j++) {
+          const x = tokens[j];
+          if(x.t === "p" && (x.v === "[" || x.v === "{" || x.v === "(")) { depth++; if(depth === 2) idx = 0; }
+          else if(x.t === "p" && (x.v === "]" || x.v === "}" || x.v === ")")) { if(--depth === 0) break; }
+          else if(depth === 2 && x.t === "p" && x.v === ",") idx++;
+          else if(depth === 2 && x.t === "str" && idx > 0) add(x.v, x.pos, "data:preset", null);
+        }
+      }
       // items: ["...", "..."] - a list of display lines (a news article's bullets)
       if(tk.t === "id" && tk.v === "items" && tokens[k + 1] && tokens[k + 1].v === ":" && tokens[k + 2] && tokens[k + 2].v === "[") {
         let depth = 0;
