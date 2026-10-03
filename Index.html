@@ -1284,6 +1284,9 @@ const _t = (s, vars) => {
 // Official game terms (ink, rarity, card type, set, classification) — the
 // publisher's own word, from the glossary baked into the dictionary. English
 // in, English out when there is none.
+// _t, keeping **bold** spans as <strong>: a sentence that bolds a button name
+// stays ONE key, so a language can move the bold word where its grammar wants it.
+const _tRich = (s, vars) => String(_t(s, vars)).split(/\*\*(.+?)\*\*/).map((part, i) => i % 2 ? html`<strong key=${i}>${part}</strong>` : part);
 const _term = (kind, v) => {
   if(v == null || !I18N || !I18N.terms) return v;
   const m = I18N.terms[kind];
@@ -9455,9 +9458,7 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
 
   return html`<div class="graded-sales-tab">
     <div class="graded-tab-explain">
-      Every individual graded sale we've recorded from eBay — each dot is one sold slab
-      (<strong>color = grader</strong>, <strong>shape = grade</strong>). Click a chip to switch
-      grade; Ctrl/⌘-click to overlay several. Hover a dot for a peek, click it for the listing + photo.
+      ${_tRich("Every individual graded sale we've recorded from eBay — each dot is one sold slab (**color = grader**, **shape = grade**). Click a chip to switch grade; Ctrl/⌘-click to overlay several. Hover a dot for a peek, click it for the listing + photo.")}
     </div>
 
     ${!hideHeadline && focus && html`<div class="gs-headline">
@@ -9468,12 +9469,12 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
         <div class="gs-stat">
           <div class="gs-stat-lbl">${_t("Last Sold")}</div>
           <div class="gs-stat-val">${money(focus.lastSold.sale_price)}</div>
-          <div class="gs-stat-sub">${dstr(focus.lastSold.sold_date)}${focus.lastSold.listing_type==="auction"?" · auction":""}</div>
+          <div class="gs-stat-sub">${dstr(focus.lastSold.sold_date)}${focus.lastSold.listing_type==="auction"?" · " + _t("auction"):""}</div>
         </div>
         <div class="gs-stat">
-          <div class="gs-stat-lbl">Avg of Last ${focus.avg5n}</div>
+          <div class="gs-stat-lbl">${_t("Avg of last {n}", {n: focus.avg5n})}</div>
           <div class="gs-stat-val">${money(focus.avg5)}</div>
-          <div class="gs-stat-sub">${focus.count} sale${focus.count===1?"":"s"} recorded</div>
+          <div class="gs-stat-sub">${focus.count === 1 ? _t("1 sale recorded") : _t("{n} sales recorded", {n: focus.count})}</div>
         </div>
       </div>
     </div>`}
@@ -9543,19 +9544,19 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
       ${safeHttpUrl(sel.image_url) && html`<a href=${safeHttpUrl(sel.image_url)} target="_blank" rel="noopener nofollow" class="gs-sale-detail-imgwrap">
         <img src=${safeHttpUrl(sel.image_url)} alt="" class="gs-sale-detail-img"/></a>`}
       <div class="gs-sale-detail-body">
-        <div class="gs-sale-detail-title">${sel.title || "eBay graded sale"}</div>
+        <div class="gs-sale-detail-title">${sel.title || _t("eBay graded sale")}</div>
         <div class="gs-sale-detail-line">
           <span class="gs-sale-detail-grade" style=${{color: GRADER_COLOR[(sel.grader||'').toLowerCase()]||"#888"}}>
             ${(sel.grader||"").toUpperCase()} ${sel.grade||"—"}</span>
           <span class="gs-sale-detail-price">${money(sel.sale_price)}</span>
-          ${sel.shipping ? html`<span class="muted">+ ${money(sel.shipping)} ship</span>` : null}
+          ${sel.shipping ? html`<span class="muted">${_t("+ {price} ship", {price: money(sel.shipping)})}</span>` : null}
           <span class="muted">${dstr(sel.sold_date)}</span>
-          ${sel.listing_type ? html`<span class="muted">${sel.listing_type==="auction"?"auction":"fixed price"}</span>` : null}
+          ${sel.listing_type ? html`<span class="muted">${sel.listing_type==="auction"?_t("auction"):_t("fixed price")}</span>` : null}
           ${sel.printing ? html`<span class="muted">${sel.printing}</span>` : null}
         </div>
         <div class="gs-sale-detail-links">
-          ${safeHttpUrl(sel.listing_url) && html`<a href=${safeHttpUrl(sel.listing_url)} target="_blank" rel="noopener nofollow">View eBay listing ${extIcon()}</a>`}
-          ${safeHttpUrl(sel.image_url) && html`<a href=${safeHttpUrl(sel.image_url)} target="_blank" rel="noopener nofollow">Open image ${extIcon()}</a>`}
+          ${safeHttpUrl(sel.listing_url) && html`<a href=${safeHttpUrl(sel.listing_url)} target="_blank" rel="noopener nofollow">${_t("View eBay listing")} ${extIcon()}</a>`}
+          ${safeHttpUrl(sel.image_url) && html`<a href=${safeHttpUrl(sel.image_url)} target="_blank" rel="noopener nofollow">${_t("Open image")} ${extIcon()}</a>`}
           ${onReport && html`<button class="gs-report-btn" type="button"
             onClick=${()=>onReport(sel)} title=${_t("Report this sale as mislabeled or not a valid graded single")}>${_t("⚑ Report")}</button>`}
           ${canEditGraded && onEditGraded && html`<button class="gs-admin-btn" type="button"
@@ -9581,14 +9582,14 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
             <td style=${{color: GRADER_COLOR[(s.grader||'').toLowerCase()]||"inherit"}}>${(s.grader||"").toUpperCase()}</td>
             <td>${s.grade||"—"}</td>
             <td class="num">${money(s.sale_price)}</td>
-            <td class="muted">${priv?"private":s.listing_type==="auction"?"auction":s.listing_type==="fixed_price"?"fixed":"—"}</td>
+            <td class="muted">${priv?_t("private"):s.listing_type==="auction"?_t("auction"):s.listing_type==="fixed_price"?_t("fixed"):"—"}</td>
             <td>${safeHttpUrl(s.listing_url)
               ? html`<a href=${safeHttpUrl(s.listing_url)} target="_blank" rel="noopener nofollow" onClick=${e=>e.stopPropagation()} title=${_t("View on eBay")}>${extIcon()}</a>`
               : priv ? html`<span class="gs-private-tag" title=${_t("Private / manually entered sale")}>${uiIcon("edit", 12)}</span>` : ""}</td>
           </tr>`; })}
         </tbody>
       </table>
-      ${tableSales.length > 200 && html`<div class="muted gs-table-more">Showing 200 most recent of ${tableSales.length} sales.</div>`}
+      ${tableSales.length > 200 && html`<div class="muted gs-table-more">${_t("Showing 200 most recent of {n} sales.", {n: tableSales.length})}</div>`}
     </div>
     ${hoverImg && html`<img class="gs-hover-img" src=${hoverImg.src} alt="" style=${{
       left: Math.min(window.innerWidth - 230, hoverImg.x + 18) + "px",
@@ -9690,16 +9691,13 @@ const RawSalesPanel = ({raw, cardId, printings, setName, tcgNormal, tcgFoil}) =>
          the same pair twice on one screen reads as two different prices. The
          range + span is what this panel adds. */""}
     <div class="raw-sales-summary">
-      <span class="raw-sales-summary-lbl" style=${{color: focus.color}}>${focus.label ? "Raw · " + focus.label : _t("Raw eBay sales")}</span>
-      <span>${r.sale_count + (r.sale_count === 1 ? " sale" : " sales")}</span>
+      <span class="raw-sales-summary-lbl" style=${{color: focus.color}}>${focus.label ? _t("Raw") + " · " + _t(focus.label) : _t("Raw eBay sales")}</span>
+      <span>${r.sale_count === 1 ? _t("1 sale") : _t("{n} sales", {n: r.sale_count})}</span>
       ${r.sale_count > 1 && html`<span>${money(r.min_price) + " – " + money(r.max_price)}</span>`}
       <span class="muted">${r.sale_count > 1 ? dstr(r.first_sold_date) + " → " + dstr(r.last_sold_date) : dstr(r.last_sold_date)}</span>
     </div>
     <div class="graded-tab-explain">
-      Every <strong>raw (ungraded)</strong> sale of this card we've recorded from eBay sold
-      listings. Each dot is one sale. TCGplayer rarely or never lists this promo, so these
-      sales are the market; TCGplayer's Low / Market can be overlaid for reference. Click a
-      dot or a row for the listing.
+      ${_tRich("Every **raw (ungraded)** sale of this card we've recorded from eBay sold listings. Each dot is one sale. TCGplayer rarely or never lists this promo, so these sales are the market; TCGplayer's Low / Market can be overlaid for reference. Click a dot or a row for the listing.")}
     </div>
 
     ${buckets.length > 1 && html`<div class="gs-summary-wrap">
@@ -9755,17 +9753,17 @@ const RawSalesPanel = ({raw, cardId, printings, setName, tcgNormal, tcgFoil}) =>
       ${safeHttpUrl(sel.image_url) && html`<a href=${safeHttpUrl(sel.image_url)} target="_blank" rel="noopener nofollow" class="gs-sale-detail-imgwrap">
         <img src=${safeHttpUrl(sel.image_url)} alt="" class="gs-sale-detail-img"/></a>`}
       <div class="gs-sale-detail-body">
-        <div class="gs-sale-detail-title">${sel.title || "eBay raw sale"}</div>
+        <div class="gs-sale-detail-title">${sel.title || _t("eBay raw sale")}</div>
         <div class="gs-sale-detail-line">
-          <span class="gs-sale-detail-grade" style=${{color: RAW_SALE_COLOR}}>${"Raw" + (sel._bucketLabel ? " · " + sel._bucketLabel : "")}</span>
+          <span class="gs-sale-detail-grade" style=${{color: RAW_SALE_COLOR}}>${_t("Raw") + (sel._bucketLabel ? " · " + _t(sel._bucketLabel) : "")}</span>
           <span class="gs-sale-detail-price">${money(sel.sale_price)}</span>
-          ${qty(sel) > 1 ? html`<span class="muted">${"×" + qty(sel) + " sold · per-card average"}</span>` : null}
+          ${qty(sel) > 1 ? html`<span class="muted">${_t("×{n} sold · per-card average", {n: qty(sel)})}</span>` : null}
           <span class="muted">${dstr(sel.sold_date)}</span>
-          ${sel.listing_type ? html`<span class="muted">${sel.listing_type === "auction" ? "auction" : "fixed price"}</span>` : null}
+          ${sel.listing_type ? html`<span class="muted">${sel.listing_type === "auction" ? _t("auction") : _t("fixed price")}</span>` : null}
         </div>
         <div class="gs-sale-detail-links">
-          ${safeHttpUrl(sel.listing_url) && html`<a href=${safeHttpUrl(sel.listing_url)} target="_blank" rel="noopener nofollow">View eBay listing ${extIcon()}</a>`}
-          ${safeHttpUrl(sel.image_url) && html`<a href=${safeHttpUrl(sel.image_url)} target="_blank" rel="noopener nofollow">Open image ${extIcon()}</a>`}
+          ${safeHttpUrl(sel.listing_url) && html`<a href=${safeHttpUrl(sel.listing_url)} target="_blank" rel="noopener nofollow">${_t("View eBay listing")} ${extIcon()}</a>`}
+          ${safeHttpUrl(sel.image_url) && html`<a href=${safeHttpUrl(sel.image_url)} target="_blank" rel="noopener nofollow">${_t("Open image")} ${extIcon()}</a>`}
         </div>
       </div>
       <button class="gs-sale-detail-close" type="button" onClick=${() => setSel(null)} aria-label=${_t("Close detail")}>×</button>
@@ -9787,14 +9785,14 @@ const RawSalesPanel = ({raw, cardId, printings, setName, tcgNormal, tcgFoil}) =>
             ${showBucketCol && html`<td style=${{color:x._color}}>${x._bucketLabel}</td>`}
             <td class="num muted" title=${qty(x) > 1 ? _t("Several copies sold in one listing -- the price is the per-card average") : ""}>${qty(x) > 1 ? "×" + qty(x) : "1"}</td>
             <td class="num">${money(x.sale_price)}</td>
-            <td class="muted raw-col-type">${x.listing_type === "auction" ? "auction" : x.listing_type === "fixed_price" ? "fixed" : "—"}</td>
+            <td class="muted raw-col-type">${x.listing_type === "auction" ? _t("auction") : x.listing_type === "fixed_price" ? _t("fixed") : "—"}</td>
             <td>${safeHttpUrl(x.listing_url)
               ? html`<a href=${safeHttpUrl(x.listing_url)} target="_blank" rel="noopener nofollow" onClick=${e => e.stopPropagation()} title=${_t("View on eBay")}>${extIcon()}</a>`
               : ""}</td>
           </tr>`)}
         </tbody>
       </table>
-      ${tableSales.length > 200 && html`<div class="muted gs-table-more">${"Showing 200 most recent of " + tableSales.length + " sales."}</div>`}
+      ${tableSales.length > 200 && html`<div class="muted gs-table-more">${_t("Showing 200 most recent of {n} sales.", {n: tableSales.length})}</div>`}
     </div>
     ${hoverImg && html`<img class="gs-hover-img" src=${hoverImg.src} alt="" style=${{
       left: Math.min(window.innerWidth - 230, hoverImg.x + 18) + "px",
@@ -9812,7 +9810,7 @@ const GradedReportModal = ({sale, onClose}) => {
     setBusy(true);
     const {error} = await sbClient.rpc("report_graded_sale", {p_item_id: sale.item_id, p_comment: comment});
     setBusy(false);
-    if(error){ flashToast("Report failed: " + (error.message||error)); return; }
+    if(error){ flashToast(_t("Report failed: {err}", {err: (error.message||error)})); return; }
     flashToast(_t("Thanks — flagged for review"));
     onClose();
   };
@@ -9878,7 +9876,7 @@ const GradedSaleEditModal = ({sale, onClose, onChanged}) => {
       p_item_id: sale.item_id, p_grader: grader, p_grade: grade, p_card_id: cardId,
       p_sale_price: (p != null && Number.isFinite(p)) ? p : null});
     setBusy(false);
-    if(error){ flashToast("Save failed: " + (error.message||error)); return; }
+    if(error){ flashToast(_t("Save failed: {err}", {err: (error.message||error)})); return; }
     afterWrite();
     flashToast("Sale updated"); onClose();
   };
@@ -9887,7 +9885,7 @@ const GradedSaleEditModal = ({sale, onClose, onChanged}) => {
     setBusy(true);
     const {error} = await sbClient.rpc("admin_delete_graded_sale", {p_item_id: sale.item_id});
     setBusy(false);
-    if(error){ flashToast("Delete failed: " + (error.message||error)); return; }
+    if(error){ flashToast(_t("Delete failed: {err}", {err: (error.message||error)})); return; }
     afterWrite();
     flashToast("Sale deleted"); onClose();
   };
@@ -9995,7 +9993,7 @@ const GradedPrivateSaleModal = ({cardId, cardName, onClose, onAdded}) => {
       p_note: note });
     if(!error) await sbClient.rpc("admin_refresh_graded_rollup").then(()=>{}, ()=>{});
     setBusy(false);
-    if(error){ flashToast("Add failed: " + (error.message||error)); return; }
+    if(error){ flashToast(_t("Add failed: {err}", {err: (error.message||error)})); return; }
     flashToast(_t("Private sale added")); onAdded && onAdded(); onClose();
   };
   return html`<div class="card-detail-overlay" ...${backdropClose(onClose)}>
@@ -10003,7 +10001,7 @@ const GradedPrivateSaleModal = ({cardId, cardName, onClose, onAdded}) => {
       <button class="card-detail-close" onClick=${onClose} aria-label=${_t("Close")}>×</button>
       <h3 class="gs-modal-title">${_t("Add private sale")} <span class="gs-modal-admin-tag">admin</span></h3>
       <div class="gs-modal-sale">${cardName || cardId}</div>
-      <p class="gs-modal-help muted">Logs a manual sale into this card's graded history, flagged <strong>private</strong>. Counts toward Last Sold / Avg-5.</p>
+      <p class="gs-modal-help muted">${_tRich("Logs a manual sale into this card's graded history, flagged **private**. Counts toward Last Sold / Avg-5.")}</p>
       <div class="gs-modal-fields">
         <label>${_t("Grader")}<select value=${grader} onChange=${e=>setGrader(e.target.value)}>
           ${GRADED_GRADER_OPTS.map(g=>html`<option key=${g} value=${g}>${g}</option>`)}
@@ -10083,11 +10081,11 @@ const GradedPopPanel = ({group}) => {
         <div class="cd-pop-summary">
           <div class="cd-pop-stat cd-pop-stat--gem">
             <span class="cd-pop-stat-n">${st.gemRate == null ? "—" : share(st.ten) + "%"}</span>
-            <span class="cd-pop-stat-l">graded PSA 10</span>
+            <span class="cd-pop-stat-l">${_t("graded PSA 10")}</span>
           </div>
           <div class="cd-pop-stat">
             <span class="cd-pop-stat-n">${fmtInt(st.total)}</span>
-            <span class="cd-pop-stat-l">copies graded</span>
+            <span class="cd-pop-stat-l">${_t("copies graded")}</span>
           </div>
         </div>
         <table class="cd-pop-table">
@@ -10109,7 +10107,7 @@ const GradedPopPanel = ({group}) => {
       ${/* ⚠ One line, not two: htm collapses the newline between two adjacent
            expressions, so a break here renders "against75.3%". */""}
       ${pop.setGem != null && grand > 0 && rows.length > 0 && html`<span>
-        ${`${Math.round(1000 * grandTen / grand) / 10}% of this card grades 10, against ${Math.round(1000 * pop.setGem) / 10}% across ${setName}.`}
+        ${_t("{pct}% of this card grades 10, against {setPct}% across {set}.", {pct: Math.round(1000 * grandTen / grand) / 10, setPct: Math.round(1000 * pop.setGem) / 10, set: _term("set", setName)})}
       </span>`}
       <span class="muted">${_t("PSA, English printings only. Population counts every copy PSA has ever graded, so it only grows.")}</span>
     </div>
@@ -10937,7 +10935,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
               const here = e.card_id === group.card_id;
               return html`<button key=${e.card_id} class=${"cd-print-row" + (here ? " here" : "")}
                 disabled=${here} onClick=${()=>openPrinting(e)}
-                title=${here ? _t("You're looking at this printing") : "Open the " + e.set + " printing"}>
+                title=${here ? _t("You're looking at this printing") : _t("Open the {set} printing", {set: _term("set", e.set)})}>
                 <span class="cd-print-set">${_term("set", e.set)}${e.number ? " #" + String(e.number).split("/")[0] : ""}</span>
                 <span class="cd-print-rar">${e.variant || _term("rarity", e.rarity)}</span>
                 <span class="cd-print-rel">${releaseLabel(e.released)}</span>
@@ -10966,14 +10964,14 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
         </div>`}
 
         ${gradedSummary && gradedSummary.count > 0 && html`<div class=${"card-detail-graded-note "+gradedSummary.type}>
-          <div>✦ You own <strong>${gradedSummary.count}</strong> ${gradedSummary.type === "graded"
-            ? `graded ${gradedSummary.count===1?"copy":"copies"}`
-            : `${gradedSummary.count===1?"copy":"copies"} sent for grading`} of this card.</div>
+          <div>✦ ${_tRich(gradedSummary.type === "graded"
+            ? (gradedSummary.count === 1 ? "You own **{n}** graded copy of this card." : "You own **{n}** graded copies of this card.")
+            : (gradedSummary.count === 1 ? "You own **{n}** copy of this card sent for grading." : "You own **{n}** copies of this card sent for grading."), {n: gradedSummary.count})}</div>
           ${gradedCopies && gradedCopies.length > 0 && html`<div class="cd-graded-copies">
             ${gradedCopies.map((c,i) => html`<span key=${i} class=${"cd-graded-chip "+c.kind}>
               ${c.kind === "graded"
                 ? html`${(GRADER_LABEL[c.grader]||(c.grader||"").toUpperCase())} ${c.grade}${c.quantity>1?" ×"+c.quantity:""}`
-                : html`${c.grader ? (GRADER_LABEL[c.grader]||c.grader.toUpperCase())+" · " : ""}at grader${c.quantity>1?" ×"+c.quantity:""}`}
+                : html`${c.grader ? (GRADER_LABEL[c.grader]||c.grader.toUpperCase())+" · " : ""}${_t("at grader")}${c.quantity>1?" ×"+c.quantity:""}`}
             </span>`)}
           </div>`}
           <span class="muted">${_t("Counts toward set completion — not raw value or deck copies.")}</span>
@@ -10985,7 +10983,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
         ${isGradedFocus && typeof onGradedAdjust === "function" && html`<div class="card-detail-graded-owned">
           <div class="card-detail-graded-owned-head">
             <span>${(gradedOwned||[]).length > 0
-              ? html`${_t("Your graded copies")} <span class="muted">(${(gradedOwned||[]).reduce((s,it)=>s+(it.quantity||0),0)} total)</span>`
+              ? html`${_t("Your graded copies")} <span class="muted">(${_t("{n} total", {n: (gradedOwned||[]).reduce((s,it)=>s+(it.quantity||0),0)})})</span>`
               : html`${_t("No graded copies recorded for this card")}`}</span>
             ${typeof onAddGraded === "function" && html`<button class="active card-detail-graded-add-btn"
               onClick=${onAddGraded}
@@ -10993,12 +10991,10 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           </div>
           ${hasNoGradedSales && gradedRawRef != null && html`<div class="card-detail-graded-rawref muted"
             title=${_t("No graded sales recorded for this card yet — we value your graded copies at the raw market price as a placeholder until real graded sales come in.")}>
-            No graded sales yet — using <strong>~Raw $${Number(gradedRawRef).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</strong> as a placeholder value.
+            ${_tRich("No graded sales yet — using **~Raw ${price}** as a placeholder value.", {price: Number(gradedRawRef).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})})}
           </div>`}
           ${(gradedOwned||[]).length > 0 && typeof onGradedMetaUpdate === "function" && html`<div class="card-detail-graded-owned-help muted">
-            For each copy you own: <strong>${_t("Paid")}</strong> = what it cost you (used by the value chart's acquired-date gating),${" "}
-            <strong>${_t("Acquired")}</strong> = date you got it (chart credits value only from that date forward),${" "}
-            <strong>${_t("Value")}</strong> = override price per copy — leave blank to use the eBay average, fill in for cards with no graded market data or to lock in your own number.
+            ${_tRich("For each copy you own: **Paid** = what it cost you (used by the value chart's acquired-date gating), **Acquired** = date you got it (chart credits value only from that date forward), **Value** = override price per copy — leave blank to use the eBay average, fill in for cards with no graded market data or to lock in your own number.")}
           </div>`}
           ${(gradedOwned||[]).length > 0
             ? html`<div class="card-detail-graded-owned-list">
@@ -11008,11 +11004,11 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
                       <span class="card-detail-graded-owned-tag">${(it.grader||"").toUpperCase()} ${it.grade}</span>
                       <span class="card-detail-graded-owned-ctl">
                         <button class="graded-qty-btn" title=${_t("Decrement")}
-                          aria-label=${"Decrement owned " + (it.grader||"").toUpperCase() + " " + it.grade}
+                          aria-label=${_t("Decrement owned {grade}", {grade: (it.grader||"").toUpperCase() + " " + it.grade})}
                           onClick=${()=>onGradedAdjust(it.grader, it.grade, -1, it.printing||"Normal")}>−</button>
                         <span class="card-detail-graded-owned-qty">${it.quantity}</span>
                         <button class="graded-qty-btn" title=${_t("Increment")}
-                          aria-label=${"Increment owned " + (it.grader||"").toUpperCase() + " " + it.grade}
+                          aria-label=${_t("Increment owned {grade}", {grade: (it.grader||"").toUpperCase() + " " + it.grade})}
                           disabled=${it.quantity >= 99}
                           onClick=${()=>onGradedAdjust(it.grader, it.grade, +1, it.printing||"Normal")}>+</button>
                       </span>
@@ -11050,7 +11046,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
 
     ${gradedPremium && html`<div class="card-detail-rgtoggle" role="group" aria-label=${_t("Raw or graded prices")}>
       <button class=${"card-detail-tab"+(detailTab==="graded"?" active":"")}
-        onClick=${()=>setDetailTab("graded")}>Graded${gradedSales.rows.length>0?html`<span class="card-detail-tab-count">${gradedSales.rows.length}</span>`:null}</button>
+        onClick=${()=>setDetailTab("graded")}>${_t("Graded")}${gradedSales.rows.length>0?html`<span class="card-detail-tab-count">${gradedSales.rows.length}</span>`:null}</button>
       <button class=${"card-detail-tab"+(detailTab==="history"?" active":"")}
         onClick=${()=>setDetailTab("history")}>${_t("Raw")}</button>
       ${isGradedAdmin && isGradedMode && html`<button class="card-detail-tab cd-add-private" type="button"
@@ -11065,7 +11061,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
         ${variantRows.length > 0 && html`<button class="cd-variants-btn"
           onClick=${toggleVariants} disabled=${variants.loading}
           title=${_t("Show every other printing and rarity print of this card (Normal, Foil, Enchanted, Iconic, …)")}>
-          ${variants.loading ? _t("Loading…") : variants.open ? _t("− Hide variants") : "+ Show all variants (" + variantRows.length + ")"}
+          ${variants.loading ? _t("Loading…") : variants.open ? _t("− Hide variants") : _t("+ Show all variants ({n})", {n: variantRows.length})}
         </button>`}
       </div>
       <div class="cd-stat-list">
@@ -11074,10 +11070,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           productId=${r.productId} printing=${r.printing}/>`)}
       </div>
       ${statRows.some(r => r.rawSale) && html`<div class="cd-raw-note">
-        <span class="raw-star">*</span> Priced from real <b>${_t("eBay sold listings")}</b> for the
-        ungraded card. TCGplayer rarely or never lists this promo, so its Low and Market are
-        an asking price or a frozen one — they are shown underneath, smaller, for reference.
-        Every sale is listed under <b>${_t("eBay sales")}</b> below.
+        <span class="raw-star">*</span> ${_tRich("Priced from real **eBay sold listings** for the ungraded card. TCGplayer rarely or never lists this promo, so its Low and Market are an asking price or a frozen one — they are shown underneath, smaller, for reference. Every sale is listed under **eBay sales** below.")}
       </div>`}
     </div>`}
 
@@ -11090,7 +11083,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       </div>`}
       ${detailTab === "history" && isRawCard && html`<div class="raw-view-toggle seg-toggle" role="group" aria-label=${_t("Raw eBay sales or TCGplayer history")}>
         <button class=${rawView === "ebay" ? "active" : ""} onClick=${() => setRawView("ebay")}
-          title=${_t("Every raw eBay sale of this card — the real market for it")}>eBay sales<span class="card-detail-tab-count">${rawSaleCount}</span></button>
+          title=${_t("Every raw eBay sale of this card — the real market for it")}>${_t("eBay sales")}<span class="card-detail-tab-count">${rawSaleCount}</span></button>
         <button class=${rawView === "tcg" ? "active" : ""} onClick=${() => setRawView("tcg")}
           title=${_t("TCGplayer's daily Low / NM Market lines — a reference; it rarely or never lists this promo")}>${_t("TCGplayer history")}</button>
       </div>`}
@@ -15719,11 +15712,11 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
         class=${"chip coconut-deck-btn"+(coconutCard?" active":"")}
         onClick=${onPickCoconut}
         title=${coconutCard
-          ? `Coconut leader: ${coconutDisplayName(getCoconutCard(coconutCard))}. Click to change or remove.`
+          ? _t("Coconut leader: {name}. Click to change or remove.", {name: coconutDisplayName(getCoconutCard(coconutCard))})
           : _t("Build a [Format Coconut] deck — pick a leader, then build around it")}>
         ${uiIcon("coconut")} ${coconutCard ? coconutDisplayName(getCoconutCard(coconutCard)) : _t("Coconut deck")}
       </button>`}
-      <div class="cards-count" style=${{marginLeft:"auto"}}>${grouped.length.toLocaleString()} ${grouped.length === 1 ? "card" : "cards"}</div>
+      <div class="cards-count" style=${{marginLeft:"auto"}}>${grouped.length === 1 ? _t("1 card") : _t("{n} cards", {n: grouped.length.toLocaleString()})}</div>
     </div>
     ${parsedSummary.length > 0 && html`<div class="parsed-hint">
       <span class="parsed-hint-lbl">${_t("Filtering:")}</span>
@@ -15732,7 +15725,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     ${hasSelection && html`<div class="cards-bulk-slot" ref=${bulkSlotRef}
       style=${bulkDocked && bulkH ? {height: bulkH + "px"} : null}>
     <div ref=${bulkBarRef} class=${"cards-bulk-bar"+(bulkDocked?" cards-bulk-bar--docked":"")}>
-      <span class="cards-bulk-count">${selected.size} selected</span>
+      <span class="cards-bulk-count">${_t("{n} selected", {n: selected.size})}</span>
       <button class="cards-bulk-link" onClick=${selectAllVisible}
         title=${_t("Add every card matching the current filters to the selection")}>
         + Select all visible (${grouped.length.toLocaleString()})
@@ -15808,7 +15801,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
                     <span class="cards-bulk-menu-icon">▸</span>
                     <div>
                       <div class="cards-bulk-menu-title">${d.name || _t("Untitled deck")}</div>
-                      <div class="cards-bulk-menu-sub">${d.visibility || "private"}</div>
+                      <div class="cards-bulk-menu-sub">${_t(d.visibility || "private")}</div>
                     </div>
                   </button>`)}
                 </div>`}
@@ -15832,7 +15825,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     </div>
     ${visibleCount < grouped.length && html`<div ref=${gridSentinelRef}
       class="muted" style=${{textAlign:"center",padding:"14px 0 22px",fontSize:12}}>
-      Showing ${visibleCount.toLocaleString()} of ${grouped.length.toLocaleString()} cards — keep scrolling…
+      ${_t("Showing {n} of {total} cards — keep scrolling…", {n: visibleCount.toLocaleString(), total: grouped.length.toLocaleString()})}
     </div>`}
     ${grouped.length === 0 && (!raw || raw.length === 0) && html`<div class="empty-state" style=${{textAlign:"center",padding:"48px 16px",color:"var(--text-muted)"}}>
       <div style=${{fontSize:15}}>${_t("Loading cards…")}</div>
@@ -15844,8 +15837,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
       ${(deckMode && onPickCoconut && /coconut|leader/i.test(filter.search||""))
         ? html`<div class="coconut-deadend">
             <div style=${{fontSize:15,marginBottom:6}}>${_t("Coconut leaders aren't deck cards.")}</div>
-            <p>A leader sits alongside your 60 — you pick one for the deck rather than
-               adding copies of it. ${COCONUT_CARDS.length} to choose from.</p>
+            <p>${_t("A leader sits alongside your 60 — you pick one for the deck rather than adding copies of it. {n} to choose from.", {n: COCONUT_CARDS.length})}</p>
             <button class="chip active" onClick=${onPickCoconut}>${uiIcon("coconut")} ${_t("Pick a Coconut leader")}</button>
           </div>`
         : html`<div style=${{fontSize:15,marginBottom:12}}>${sealedMatches.length
@@ -15860,7 +15852,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     ${sealedMatches.length > 0 && html`<div class="cards-sealed">
       <div class="cards-sealed-head">
         <span class="cards-sealed-title">${_t("Sealed products")}</span>
-        <span class="cards-sealed-count muted">${sealedMatches.length}${sealedMatches.length === 12 ? "+" : ""} matching “${sealedQuery}”</span>
+        <span class="cards-sealed-count muted">${_t("{n} matching “{q}”", {n: sealedMatches.length + (sealedMatches.length === 12 ? "+" : ""), q: sealedQuery})}</span>
       </div>
       ${/* Its own grid, sized for BOXES. That is the point of giving sealed a
             section instead of tiles in the card grid: a booster box is roughly
@@ -15873,7 +15865,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
           const isMkt = p.market_price != null;
           return html`<button key=${"cs:"+p.tcgplayer_product_id} class="cards-sealed-tile"
             onClick=${()=>onOpenSealed(p)}
-            title=${cleanSealedName(p.name||"") + " — price & history"}>
+            title=${_t("{name} — price & history", {name: cleanSealedName(p.name||"")})}>
             <span class="cards-sealed-art">
               ${p.image_url
                 ? html`<${ProductPhoto} src=${p.image_url} glyph="box" size=${34}/>`
@@ -16079,7 +16071,7 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       openDeckById && openDeckById(deckRow.id);
     } catch(e){
       console.error("new deck from selection failed:", e);
-      flashToast("Couldn't create deck: " + (e.message || String(e)));
+      flashToast(_t("Couldn't create deck: {err}", {err: e.message || String(e)}));
     }
   }, [user, onSignIn, rowByCardId, openDeckById]);
 
@@ -16120,7 +16112,7 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       showToast(`Added ${upserts.length} card${upserts.length===1?"":"s"} to "${deckName}".`);
     } catch(e){
       console.error("add to deck failed:", e);
-      flashToast("Couldn't add to deck: " + (e.message || String(e)));
+      flashToast(_t("Couldn't add to deck: {err}", {err: e.message || String(e)}));
     }
   }, [user, rowByCardId, showToast]);
 
@@ -16532,13 +16524,13 @@ const FeedbackAdminModal = ({onClose, onSeen})=>{
   const toggleResolved = async (id, resolved)=>{
     setRows(rs => (rs||[]).map(r => r.id===id ? {...r, resolved} : r));
     const {error} = await sbClient.rpc("set_feedback_resolved", {p_id:id, p_resolved:resolved});
-    if(error){ flashToast("Update failed: " + error.message); load(); }
+    if(error){ flashToast(_t("Update failed: {err}", {err: error.message})); load(); }
   };
   const del = async (id)=>{
     setArmedDel(null);
     setRows(rs => (rs||[]).filter(r => r.id!==id));
     const {error} = await sbClient.rpc("delete_feedback", {p_id:id});
-    if(error){ flashToast("Delete failed: " + error.message); load(); }
+    if(error){ flashToast(_t("Delete failed: {err}", {err: error.message})); load(); }
   };
   const sendReply = async (row, resolve)=>{
     const body = draft.trim();
@@ -16674,11 +16666,11 @@ const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback
           ${uiIcon("chat")} ${_t("Send feedback")}${feedbackUnread > 0 && html`<span class="footer-feedback-badge"
             aria-label=${feedbackUnread === 1 ? _t("1 new reply") : _t("{n} new replies", {n: feedbackUnread})}>${feedbackUnread > 9 ? "9+" : feedbackUnread}</span>`}</button>`}
         ${onViewFeedback && html`<button class="footer-feedback-btn" onClick=${onViewFeedback}
-          title=${feedbackAdminUnread > 0 ? feedbackAdminUnread + (feedbackAdminUnread === 1 ? " conversation" : " conversations") + " with new activity" : undefined}
+          title=${feedbackAdminUnread > 0 ? _t("{n} conversation(s) with new activity", {n: feedbackAdminUnread}) : undefined}
           style=${{display:"inline-flex",alignItems:"center",gap:6,background:"none",border:"1px solid var(--btn-border)",
             color:"var(--text-muted)",borderRadius:999,padding:"5px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
-          ${uiIcon("inbox")} Feedback inbox${feedbackAdminUnread > 0 && html`<span class="footer-feedback-badge"
-            aria-label=${feedbackAdminUnread + " new"}>${feedbackAdminUnread > 9 ? "9+" : feedbackAdminUnread}</span>`}</button>`}
+          ${uiIcon("inbox")} ${_t("Feedback inbox")}${feedbackAdminUnread > 0 && html`<span class="footer-feedback-badge"
+            aria-label=${_t("{n} new", {n: feedbackAdminUnread})}>${feedbackAdminUnread > 9 ? "9+" : feedbackAdminUnread}</span>`}</button>`}
       </div>`}
       ${stale && html`<div class="footer-stale" title=${_t("Last successful price update on {date} (your local time). The daily refresh may be late or failing.", {date: lastEtlDate})}>
         ${uiIcon("warn", 12)} ${_t("Prices may be stale (last update {when})", {when: relativeTime(lastEtlDate)})}
@@ -21490,7 +21482,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       }
       traceRef.current.n.deckRows += rows.length;
       trc("user-deck", { n: rows.length, uniq: agg.size });
-      flashToast("Deck \"" + name + "\" created with " + rows.length + " card" + (rows.length === 1 ? "" : "s") + " ✓");
+      flashToast(rows.length === 1 ? _t("Deck \"{name}\" created with 1 card ✓", {name}) : _t("Deck \"{name}\" created with {n} cards ✓", {name, n: rows.length}));
       if(onOpenDeck) onOpenDeck(deckRow.id);
       else onClose && onClose();
     } catch(e){
@@ -22344,8 +22336,8 @@ const InlineCounter = ({qty, onChange, disabled}) => {
 // graded-only card no longer reads as "0". Hover spells out the rule.
 const GradedMarkBadge = ({graded}) => graded ? html`<span class=${"sd-graded-mark "+graded.type}
   title=${graded.type==="graded"
-    ? `You own ${graded.count} graded ${graded.count===1?"copy":"copies"} of this card — they check off set completion (not deck-legal copies). Value is in your Graded totals.`
-    : `${graded.count} ${graded.count===1?"copy":"copies"} sent for grading — checks off completion (not deck copies) until the slab returns.`}>✦${graded.count}</span>` : null;
+    ? _t("You own {n} graded copies of this card — they check off set completion (not deck-legal copies). Value is in your Graded totals.", {n: graded.count})
+    : _t("{n} copies sent for grading — checks off completion (not deck copies) until the slab returns.", {n: graded.count})}>✦${graded.count}</span>` : null;
 
 const SetDetailListRow = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, theme, showNormalSide, showFoilSide, subtitle, graded}) => {
   const num = (group.Number||"").split("/")[0] || "—";
@@ -22623,11 +22615,11 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     try {
       const res = await bulkUpdateCollection(bulkUndo.prior);
       if(!res || !res.ok){
-        flashToast("Undo failed: " + (res?.error || "unknown error"));
+        flashToast(_t("Undo failed: {err}", {err: (res?.error || "unknown error")}));
       } else {
         setBulkUndo(null);
       }
-    } catch(e){ flashToast("Undo failed: " + (e?.message || e)); }
+    } catch(e){ flashToast(_t("Undo failed: {err}", {err: (e?.message || e)})); }
     setBulkUndoBusy(false);
   }, [bulkUndo, bulkUpdateCollection]);
   const [search, setSearch] = useState("");
@@ -22952,7 +22944,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       <button class="setdet-back" onClick=${onBack}>${_t("← Back to Collection")}</button>
       <h2 class="title-font setdet-title">${allMode ? _t("All Cards")
         : html`<${SetHeading} set=${setName} klass="setdet-title-heading"/>`}</h2>
-      <div class="setdet-count">${visibleGroups.length} / ${groups.length} cards</div>
+      <div class="setdet-count">${_t("{n} / {total} cards", {n: visibleGroups.length, total: groups.length})}</div>
       ${!allMode && user && bulkUpdateCollection && html`<button class="setdet-bulk-add" onClick=${()=>setBulkAddOpen(true)}
         title=${_t("Bulk-add cards by rarity — e.g. a master set of Commons + Uncommons or a playset of Enchanteds")}>
         ${_t("＋ Bulk Add")}
@@ -22966,7 +22958,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       ${allMode
         ? html`<button class=${"import-csv-btn setdet-filters-btn"+(countActiveFilters(drawerFilter)>0?" has-active":"")} onClick=${()=>setDrawerOpen(true)}
             title=${_t("Open the full filter panel — ink, cost, rarity, type, keywords, classifications, stats, sets, artist…")}>
-            ${uiIcon("gear")} Filters${countActiveFilters(drawerFilter)>0 ? ` · ${countActiveFilters(drawerFilter)}` : ""}
+            ${uiIcon("gear")} ${_t("Filters")}${countActiveFilters(drawerFilter)>0 ? ` · ${countActiveFilters(drawerFilter)}` : ""}
           </button>
           <button class=${"chip"+(separateBySet?" active":"")} onClick=${()=>setSeparateBySet(v=>!v)}
             title=${_t("Group the list into per-set sections with headers")}>${_t("⊟ Separate by set")}</button>`
@@ -23038,7 +23030,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
           })}
         </div>`}
         <div class="setdet-svals">
-          <div class="setdet-sval"><span class="setdet-sval-lbl">${_t("Owned")}</span><b class="green">${money(visibleOwned.value)}</b><small>${visibleOwned.count.toLocaleString()} card${visibleOwned.count===1?'':'s'}</small></div>
+          <div class="setdet-sval"><span class="setdet-sval-lbl">${_t("Owned")}</span><b class="green">${money(visibleOwned.value)}</b><small>${visibleOwned.count === 1 ? _t("1 card") : _t("{n} cards", {n: visibleOwned.count.toLocaleString()})}</small></div>
           <div class="setdet-sval"><span class="setdet-sval-lbl">${_t("Missing")}</span><b class="red">${money(visibleMissing.value)}</b><small>${visibleMissing.count.toLocaleString()} ${goalLabel(goal) === "custom goal" ? "to reach your goal" : "to complete the " + goalLabel(goal)}${allMode ? " (all sets)" : ""}</small></div>
         </div>
         ${parts.length >= 2 && html`<div class="setdet-sbreak">
@@ -23049,12 +23041,12 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
 
     ${!allMode && visibleMissing.count > 0 && html`<a class="setdet-buy-missing"
       href=${(missingMassEntryUrl && missingMassEntryUrl[0]?.url) || tcgSetSearchUrl(setName)} target="_blank" rel="noopener nofollow sponsored">
-      <span class="setdet-buy-missing-text">Shop ${visibleMissing.count} missing card${visibleMissing.count===1?'':'s'}${searchOrFilterLabel(inkFilter,rarityFilter,search,foilMode,statusFilter,priceBand)}</span>
-      <span class="setdet-buy-missing-price">${fmt(visibleMissing.value)}<span class="setdet-buy-missing-cta">${missingMassEntryUrl && missingMassEntryUrl.length > 1 ? "Buy bulk — part 1 of " + missingMassEntryUrl.length : _t("Buy bulk on TCGplayer")}</span><span class="setdet-buy-missing-arrow">${extIcon()}</span></span>
+      <span class="setdet-buy-missing-text">${visibleMissing.count === 1 ? _t("Shop 1 missing card") : _t("Shop {n} missing cards", {n: visibleMissing.count})}${searchOrFilterLabel(inkFilter,rarityFilter,search,foilMode,statusFilter,priceBand)}</span>
+      <span class="setdet-buy-missing-price">${fmt(visibleMissing.value)}<span class="setdet-buy-missing-cta">${missingMassEntryUrl && missingMassEntryUrl.length > 1 ? _t("Buy bulk — part 1 of {n}", {n: missingMassEntryUrl.length}) : _t("Buy bulk on TCGplayer")}</span><span class="setdet-buy-missing-arrow">${extIcon()}</span></span>
     </a>`}
     ${!allMode && missingMassEntryUrl && missingMassEntryUrl.length > 1 && html`<div class="setdet-buy-parts">
       <span class="muted">${_t("Too many for one TCGplayer cart link — add each part (they all go into the same cart):")}</span>
-      ${missingMassEntryUrl.map((p, i) => html`<a key=${i} class="setdet-buy-part" href=${p.url} target="_blank" rel="noopener nofollow sponsored">Part ${i + 1} · ${p.copies} ${p.copies === 1 ? "copy" : "copies"} ${extIcon()}</a>`)}
+      ${missingMassEntryUrl.map((p, i) => html`<a key=${i} class="setdet-buy-part" href=${p.url} target="_blank" rel="noopener nofollow sponsored">${_t("Part {i} · {n} copies", {i: i + 1, n: p.copies})} ${extIcon()}</a>`)}
     </div>`}
 
     ${(() => {
@@ -23169,7 +23161,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
         </div>`)}
         ${allMode && shownGroups.length < visibleGroups.length && html`<div ref=${allSentinelRef}
           class="muted" style=${{textAlign:"center",padding:"14px 0 22px",fontSize:12}}>
-          Showing ${shownGroups.length.toLocaleString()} of ${visibleGroups.length.toLocaleString()} cards — keep scrolling…
+          ${_t("Showing {n} of {total} cards — keep scrolling…", {n: shownGroups.length.toLocaleString(), total: visibleGroups.length.toLocaleString()})}
         </div>`}
       </>`;
     })()}
@@ -23195,10 +23187,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       onClose=${()=>setBulkAddOpen(false)}/>`}
     ${bulkUndo && html`<div class="setdet-undo-toast" role="alert">
       <span>
-        Added <strong>${bulkUndo.summary.totalCopies}</strong>${" "}
-        ${bulkUndo.summary.totalCopies === 1 ? "copy" : "copies"} across${" "}
-        <strong>${bulkUndo.summary.cardsTouched}</strong>${" "}
-        slot${bulkUndo.summary.cardsTouched===1?"":"s"}.
+        ${_tRich("Added **{n}** copies across **{slots}** slots.", {n: bulkUndo.summary.totalCopies, slots: bulkUndo.summary.cardsTouched})}
       </span>
       <button class="setdet-undo-btn" disabled=${bulkUndoBusy}
         onClick=${handleBulkUndo}>${bulkUndoBusy ? _t("Undoing…") : _t("↶ Undo")}</button>
@@ -23257,7 +23246,7 @@ const GradeFromRawModal = ({group, user, collection, updateQty, onClose, onDone,
             user_id: user.id, card_id: slot.card_id, printing: slot.printing,
             grader, grade, quantity: Math.min(99, ((have && have.quantity) || 0) + 1), updated_at: new Date().toISOString(),
           }, {onConflict: "user_id,card_id,printing,grader,grade"});
-          if(error){ flashToast("Save failed: " + error.message); setBusy(false); return; }
+          if(error){ flashToast(_t("Save failed: {err}", {err: error.message})); setBusy(false); return; }
         }
       } else {
         const payload = {card_id: slot.card_id, printing: slot.printing,
@@ -23267,7 +23256,7 @@ const GradeFromRawModal = ({group, user, collection, updateQty, onClose, onDone,
           if(await onSendToQueue(payload) === false){ setBusy(false); return; }
         } else {
           const {error} = await sbClient.from("grading_submissions").insert({user_id: user.id, quantity: 1, ...payload});
-          if(error){ flashToast("Save failed: " + error.message); setBusy(false); return; }
+          if(error){ flashToast(_t("Save failed: {err}", {err: error.message})); setBusy(false); return; }
         }
       }
       // Entering the grading pipeline (graded OR sent-for-grading) means the
@@ -23279,7 +23268,7 @@ const GradeFromRawModal = ({group, user, collection, updateQty, onClose, onDone,
         ? (rawQty > 0 ? "Moved a raw copy into your graded collection." : "Graded copy added — it checks off this set.")
         : (rawQty > 0 ? "Sent a raw copy to grading — graduate it when the slab returns." : "Added to your grading queue."));
       onDone();
-    } catch(e){ flashToast("Save failed: " + (e?.message || e)); setBusy(false); }
+    } catch(e){ flashToast(_t("Save failed: {err}", {err: (e?.message || e)})); setBusy(false); }
   }, [user, group, tcg, mode, grader, grade, status, intendedGrader, submittedOn, rawQty, updateQty, onDone, onGradeOwned, onSendToQueue]);
 
   return html`<div class="gfr-overlay" onClick=${onClose}>
@@ -23341,10 +23330,10 @@ const GradeFromRawModal = ({group, user, collection, updateQty, onClose, onDone,
       <p class="gfr-note">
         ${rawQty > 0
           ? (mode === "own"
-              ? html`This <strong>${_t("moves")}</strong> 1 of your ${rawQty} raw ${sel.label||""} ${rawQty===1?"copy":"copies"} into your graded collection.`
-              : html`This <strong>${_t("moves")}</strong> 1 of your ${rawQty} raw ${sel.label||""} ${rawQty===1?"copy":"copies"} into the grading queue — it graduates to graded when the slab returns.`)
+              ? html`${_tRich("This **moves** 1 of your {n} raw {label} copies into your graded collection.", {n: rawQty, label: _t(sel.label||"")})}`
+              : html`${_tRich("This **moves** 1 of your {n} raw {label} copies into the grading queue — it graduates to graded when the slab returns.", {n: rawQty, label: _t(sel.label||"")})}`)
           : (mode === "own" ? html`${_t("Logs a graded copy you own.")}` : html`${_t("Adds this card to your grading queue.")}`)}
-        ${" "}Graded copies check off set completion but don't add raw value or count as deck-legal copies.
+        ${" "}${_t("Graded copies check off set completion but don't add raw value or count as deck-legal copies.")}
       </p>
 
       <div class="gfr-actions">
@@ -26306,7 +26295,7 @@ const SealedValueChart = ({sealedCollection, sealedPrices, rangeKey, setRangeKey
         ${rangeDelta != null && html`<span class="gvc-delta" style=${{color:deltaColor}}>
           ${rangeDelta >= 0 ? "+" : "−"}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})}
           <span style=${{opacity:0.8}}>(${rangeDeltaPct >= 0 ? "+" : ""}${rangeDeltaPct.toFixed(1)}%)</span>
-          <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>past ${rangeLabel}</span>
+          <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>${_t("past {range}", {range: rangeLabel})}</span>
         </span>`}
       </div>
       <div class="panel-range-buttons">
@@ -29057,7 +29046,7 @@ const GradedValueChart = ({items, cardById, priceByKey, knownBuckets, splitTiers
         ${rangeDelta != null && html`<span class="gvc-delta" style=${{color:deltaColor}}>
           ${rangeDelta >= 0 ? "+" : "−"}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})}
           <span style=${{opacity:0.8}}>(${rangeDeltaPct >= 0 ? "+" : ""}${rangeDeltaPct.toFixed(1)}%)</span>
-          <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>past ${rangeLabel}</span>
+          <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>${_t("past {range}", {range: rangeLabel})}</span>
         </span>`}
       </div>
       <div class="panel-range-buttons">
@@ -29089,10 +29078,9 @@ const GradedValueChart = ({items, cardById, priceByKey, knownBuckets, splitTiers
                   ? (premium
                       ? html`${_t("A line chart needs at least 2 dated snapshots. Your owned graded slots have history for one date so far — the chart will plot once another sale lands.")}`
                       : html`${_t("A line chart needs at least 2 dated snapshots. Your owned graded slots have history for a single date, and the legacy graded feed stopped updating on 30 June 2026.")}`)
-                  : html`No graded price history for your owned slots in this range.
-                    ${slots.length === 0
-                      ? " Add a graded copy to start building your portfolio."
-                      : " Try extending the range — graded sale history is sparse for many cards."}`}
+                  : html`${_t("No graded price history for your owned slots in this range.")} ${slots.length === 0
+                      ? _t("Add a graded copy to start building your portfolio.")
+                      : _t("Try extending the range — graded sale history is sparse for many cards.")}`}
               </div>`}
     </div>
   </div>`;
@@ -29331,7 +29319,7 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, splitTiers, raw, theme, o
   // Premium: show Last Sold + Avg-5 side by side (like Low / Market for raw).
   // No graded sales yet → a single "~Raw $X" placeholder (raw market price).
   const valBlock = (e)=> e.rawPlaceholder
-    ? html`<div class="gco-val gco-val-raw" title=${_t("No graded sales recorded yet — using the raw market price as a placeholder value")}>~Raw ${fmt(e.value)}</div>`
+    ? html`<div class="gco-val gco-val-raw" title=${_t("No graded sales recorded yet — using the raw market price as a placeholder value")}>~${_t("Raw")} ${fmt(e.value)}</div>`
     : (gradedPremium && e.lastSold != null)
     ? html`<div class="gco-val-pair">
         <span class="gco-vp-item"><span class="gco-vp-num">${fmt(e.lastSold)}</span><span class="gco-vp-lbl">${_t("last sold")}</span></span>
@@ -29359,7 +29347,7 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, splitTiers, raw, theme, o
   const copyGradedList = useCallback(() => {
     const text = buildGradedExportText(exportBuckets());
     if(!text){ flashToast(_t("No graded cards to export")); return; }
-    const done = () => flashToast(`Copied ${exportCount} graded card${exportCount===1?"":"s"} as text — paste it anywhere. No prices included`);
+    const done = () => flashToast(_t("Copied {n} graded cards as text — paste it anywhere. No prices included", {n: exportCount}));
     // Fallback for browsers that refuse the async clipboard: a hidden textarea
     // + execCommand still works inside the click in every engine we ship to.
     const legacy = () => {
@@ -29389,8 +29377,8 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, splitTiers, raw, theme, o
       a.download = "packs-ink-graded-" + new Date().toISOString().slice(0,10) + ".csv";
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(()=>URL.revokeObjectURL(url), 1000);
-      flashToast(`Downloaded ${exportCount} graded card${exportCount===1?"":"s"} as a CSV spreadsheet — no prices included`);
-    } catch(e){ flashToast("Couldn't build the CSV: " + (e.message || e)); }
+      flashToast(_t("Downloaded {n} graded cards as a CSV spreadsheet — no prices included", {n: exportCount}));
+    } catch(e){ flashToast(_t("Couldn't build the CSV: {err}", {err: (e.message || e)})); }
   }, [exportBuckets, exportCount]);
 
   if(!entries.length) return html`<div class="gc-empty">
@@ -29404,7 +29392,7 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, splitTiers, raw, theme, o
         value=${drawerFilter.search||""} onInput=${e=>setDrawerFilter(f=>({...f, search:e.target.value}))}/>
       <button class=${"import-csv-btn setdet-filters-btn"+(countActiveFilters(drawerFilter)>0?" has-active":"")} onClick=${()=>setDrawerOpen(true)}
         title=${_t("Open the full filter panel — ink, cost, rarity, type, keywords, classifications, stats, sets, artist…")}>
-        ${uiIcon("gear")} Filters${countActiveFilters(drawerFilter)>0 ? ` · ${countActiveFilters(drawerFilter)}` : ""}
+        ${uiIcon("gear")} ${_t("Filters")}${countActiveFilters(drawerFilter)>0 ? ` · ${countActiveFilters(drawerFilter)}` : ""}
       </button>
       <button class=${"chip"+(separateBySet?" active":"")} onClick=${()=>setSeparateBySet(v=>!v)}
         title=${_t("Group into per-set sections with headers")}>${_t("⊟ Separate by set")}</button>
@@ -29435,7 +29423,7 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, splitTiers, raw, theme, o
         ${_t("Download CSV")}
       </button>
     </div>
-    <div class="gco-summary">${visible.length} card${visible.length===1?"":"s"} · <span class="green">${fmt(totalValue)}</span></div>
+    <div class="gco-summary">${visible.length === 1 ? _t("1 card") : _t("{n} cards", {n: visible.length})} · <span class="green">${fmt(totalValue)}</span></div>
     ${buckets.map(b => html`<div class="gco-bucket" key=${b.key}>
       ${b.label && html`<div class="gco-bucket-head">${_t(b.label)}</div>`}
       ${viewMode === "grid"
@@ -29556,7 +29544,7 @@ const GradeFromCollectionModal = ({raw, collection, user, updateQty, onGradeOwne
         : `Sent ${noun(done)} to the grading queue.`)
         + (failed ? ` ${noun(failed)} couldn't be saved and stayed in your collection.` : ""));
       setSelected(new Set());
-    } catch(e){ flashToast("Bulk action failed: " + (e?.message || e)); }
+    } catch(e){ flashToast(_t("Bulk action failed: {err}", {err: (e?.message || e)})); }
     setBusy(false);
   }, [selected, groupById, bulkMode, bulkGrader, bulkGrade, bulkStage, onGradeOwned, onSendToQueue, collection, updateQty]);
 
@@ -29565,7 +29553,7 @@ const GradeFromCollectionModal = ({raw, collection, user, updateQty, onGradeOwne
     <button class="gfr-close" onClick=${onClose} aria-label=${_t("Close")}>×</button>
     <div class="gfc-panel">
     <h2 class="title-font gfc-h2">${_t("Grade from your collection")}</h2>
-    <div class="gfc-intro">Click a card to <strong>${_t("move it into graded")}</strong> or <strong>${_t("send it for grading")}</strong> — or check several and use the bulk bar below. Only graded copies count toward set completion; raw copies stay deck-legal.</div>
+    <div class="gfc-intro">${_tRich("Click a card to **move it into graded** or **send it for grading** — or check several and use the bulk bar below. Only graded copies count toward set completion; raw copies stay deck-legal.")}</div>
     <div class="gfc-toolbar">
       <input type="search" class="gfc-search" placeholder=${_t("Search your collection…")}
         value=${search} onInput=${e=>setSearch(e.target.value)}/>
@@ -29584,7 +29572,7 @@ const GradeFromCollectionModal = ({raw, collection, user, updateQty, onGradeOwne
       </div>
     </div>
     ${visible.length > 0 && html`<div class="gfc-selrow">
-      <label class="gfc-selall"><input type="checkbox" checked=${allSel} onChange=${toggleAll}/> Select all (${visible.length})</label>
+      <label class="gfc-selall"><input type="checkbox" checked=${allSel} onChange=${toggleAll}/> ${_t("Select all ({n})", {n: visible.length})}</label>
       ${selected.size > 0 && html`<button class="gfc-clearsel" onClick=${()=>setSelected(new Set())}>${_t("Clear selection")}</button>`}
     </div>`}
     ${ownedGroups.length === 0
@@ -29617,7 +29605,7 @@ const GradeFromCollectionModal = ({raw, collection, user, updateQty, onGradeOwne
           })}
         </div>`}
     ${selected.size > 0 && html`<div class="gfc-bulkbar">
-      <span class="gfc-selcount">${selected.size} selected</span>
+      <span class="gfc-selcount">${_t("{n} selected", {n: selected.size})}</span>
       <div class="seg-toggle gfc-bulkmode">
         <button class=${bulkMode==="graded"?"active":""} onClick=${()=>setBulkMode("graded")}>${_t("Mark graded")}</button>
         <button class=${bulkMode==="send"?"active":""} onClick=${()=>setBulkMode("send")}>${_t("Send for grading")}</button>
@@ -29638,7 +29626,7 @@ const GradeFromCollectionModal = ({raw, collection, user, updateQty, onGradeOwne
               ${GRADER_ORDER.map(g => html`<option key=${g} value=${g}>${g.toUpperCase()}</option>`)}
             </select>`}
       <button class="active gfc-bulkapply" disabled=${busy} onClick=${applyBulk}>
-        ${busy ? _t("Working…") : (bulkMode==="graded" ? `Mark ${selected.size} graded` : `Send ${selected.size}`)}
+        ${busy ? _t("Working…") : (bulkMode==="graded" ? _t("Mark {n} graded", {n: selected.size}) : _t("Send {n}", {n: selected.size}))}
       </button>
     </div>`}
     ${gradeTarget && html`<${GradeFromRawModal} group=${gradeTarget} user=${user}
@@ -29694,10 +29682,10 @@ const GradingQueueSection = ({submissions, cardById, onUpdate, onRemove, onGradu
         <span class="gq-count">${submissions.length}</span>
       </button>
       ${!collapsed && submissions.length > 1 && html`<button class=${"gq-gradall" + (armed === "all" ? " is-armed" : "")} disabled=${busy}
-        title=${_t("Graduate every card using the grade set on each row")} onClick=${graduateAll}>${busy ? "…" : armed === "all" ? `Tap again to graduate ${submissions.length}` : _t("Graduate all")}</button>`}
+        title=${_t("Graduate every card using the grade set on each row")} onClick=${graduateAll}>${busy ? "…" : armed === "all" ? _t("Tap again to graduate {n}", {n: submissions.length}) : _t("Graduate all")}</button>`}
     </div>
     ${!collapsed && armed === "all" && untouched > 0 && html`<div class="gq-armed-note">
-      ${untouched === submissions.length ? _t("No grades set yet") : `${untouched} row${untouched === 1 ? "" : "s"} still on the default`} — ${untouched === 1 ? "it" : "they"}'ll be recorded as the grade shown on each row.
+      ${untouched === submissions.length ? _t("No grades set yet") : _t("{n} row(s) still on the default", {n: untouched})} — ${_t("they'll be recorded as the grade shown on each row.")}
     </div>`}
     ${!collapsed && html`<div class="gq-list">
       ${submissions.map(s => {
@@ -29735,12 +29723,10 @@ const GradingQueueSection = ({submissions, cardById, onUpdate, onRemove, onGradu
           list, not recommending a brand (see the Gear rule in CLAUDE.md). */""}
     ${!collapsed && toSubmit > 0 && html`<div class="gq-supplies">
       <p class="gq-supplies-txt">
-        Packing ${toSubmit === 1 ? "it" : "them"}? PSA asks for a <strong>semi-rigid holder,
-        3 5/16″ × 4 7/8″</strong> and a clear penny sleeve — <strong>not</strong> a toploader,
-        which graders can't safely open.
+        ${_tRich("Packing them? PSA asks for a **semi-rigid holder, 3 5/16″ × 4 7/8″** and a clear penny sleeve — **not** a toploader, which graders can't safely open.")}
       </p>
       <a class="gq-supplies-link" href=${amazonSearchUrl("Card Saver 1 semi rigid card holders")}
-        target="_blank" rel="noopener nofollow sponsored">Submission supplies on Amazon ${extIcon()}</a>
+        target="_blank" rel="noopener nofollow sponsored">${_t("Submission supplies on Amazon")} ${extIcon()}</a>
       <p class="gq-supplies-note muted">
         ${_t("Affiliate link — as an Amazon Associate I earn from qualifying purchases, at no extra cost to you.")}
       </p>
@@ -30465,7 +30451,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       quantity: Math.max(1, Math.min(99, quantity || 1)),
       updated_at: new Date().toISOString()};
     const {error} = await sbClient.from("graded_collection_items").upsert(row, {onConflict: "user_id,card_id,printing,grader,grade"});
-    if(error){ flashToast("Save failed: " + error.message); return false; }
+    if(error){ flashToast(_t("Save failed: {err}", {err: error.message})); return false; }
     const merge = (prev) => {
       const ix = (prev||[]).findIndex(p => p.card_id===card_id && (p.printing||"Normal")===pr && p.grader===grader && p.grade===grade);
       if(ix >= 0){ const out = (prev||[]).slice(); out[ix] = {...out[ix], quantity: row.quantity, updated_at: row.updated_at}; return out; }
@@ -30516,7 +30502,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     const payload = [...byKey.values()];
     const {error} = await sbClient.from("graded_collection_items")
       .upsert(payload, {onConflict: "user_id,card_id,printing,grader,grade"});
-    if(error){ flashToast("Bulk save failed: " + error.message); return 0; }
+    if(error){ flashToast(_t("Bulk save failed: {err}", {err: error.message})); return 0; }
     // Optimistic local update: merge added rows into items state.
     const mergeAll = (prev) => {
       const next = (prev||[]).slice();
@@ -30539,7 +30525,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     const pr = printing || "Normal";
     const {error} = await sbClient.from("graded_collection_items").delete()
       .eq("user_id", user.id).eq("card_id", card_id).eq("printing", pr).eq("grader", grader).eq("grade", grade);
-    if(error){ flashToast("Delete failed: " + error.message); return; }
+    if(error){ flashToast(_t("Delete failed: {err}", {err: error.message})); return; }
     setItems(prev => (prev||[]).filter(p => !(p.card_id===card_id && (p.printing||"Normal")===pr && p.grader===grader && p.grade===grade)));
   }, [user]);
   // Delta-bump owned quantity for a (card_id, grader, grade) slot. Positive
@@ -30604,7 +30590,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       const {printings: _drop, ...legacy} = row;
       ({data, error} = await sbClient.from("graded_collection_goals").insert(legacy).select().single());
     }
-    if(error){ flashToast("Save failed: " + error.message); return; }
+    if(error){ flashToast(_t("Save failed: {err}", {err: error.message})); return; }
     setGoals(prev => [...(prev||[]), data]);
     // Re-adding a set goal is the user's "refresh the placeholder list"
     // path — clear removedCardIds entries that fall within this goal's
@@ -30651,7 +30637,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     if(!user) return;
     const {error} = await sbClient.from("graded_collection_goals").delete()
       .eq("user_id", user.id).eq("goal_id", goal_id);
-    if(error){ flashToast("Delete failed: " + error.message); return; }
+    if(error){ flashToast(_t("Delete failed: {err}", {err: error.message})); return; }
     setGoals(prev => (prev||[]).filter(g => g.goal_id !== goal_id));
   }, [user]);
 
@@ -30678,7 +30664,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       intended_grader: intended_grader || null, status: status || "to_submit",
       quantity: 1, submitted_on: submitted_on || null,
     });
-    if(error){ flashToast("Save failed: " + error.message); return false; }
+    if(error){ flashToast(_t("Save failed: {err}", {err: error.message})); return false; }
     await reloadSubmissions();
     return true;
   }, [user, reloadSubmissions]);
@@ -30694,7 +30680,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
         quantity: 1, submitted_on: r.submitted_on || null};
     });
     const {error} = await sbClient.from("grading_submissions").insert(payload);
-    if(error){ flashToast("Bulk send failed: " + error.message); return 0; }
+    if(error){ flashToast(_t("Bulk send failed: {err}", {err: error.message})); return 0; }
     await reloadSubmissions();
     return payload.length;
   }, [user, reloadSubmissions]);
@@ -30705,7 +30691,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     const {error} = await sbClient.from("grading_submissions")
       .update({...patch, updated_at: new Date().toISOString()})
       .eq("user_id", user.id).eq("id", id);
-    if(error){ flashToast("Update failed: " + error.message); reloadSubmissions(); }
+    if(error){ flashToast(_t("Update failed: {err}", {err: error.message})); reloadSubmissions(); }
   }, [user, reloadSubmissions]);
 
   const removeSubmission = useCallback(async (id) => {
@@ -30713,7 +30699,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     setSubmissions(prev => prev.filter(s => s.id !== id));
     const {error} = await sbClient.from("grading_submissions").delete()
       .eq("user_id", user.id).eq("id", id);
-    if(error){ flashToast("Delete failed: " + error.message); reloadSubmissions(); }
+    if(error){ flashToast(_t("Delete failed: {err}", {err: error.message})); reloadSubmissions(); }
   }, [user, reloadSubmissions]);
 
   // Graduate: a slab came back. Insert the real graded copy FIRST, then drop
@@ -30779,7 +30765,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
           ? html`<div class="muted" style=${{padding:"18px 4px",fontSize:12}}>${_t("Loading graded history…")}</div>`
           : gradedBannerMovers.length === 0
             ? html`<div class="muted" style=${{padding:"18px 4px",fontSize:12}}>
-                No ${gradedBannerWindow.toUpperCase()} movement in your graded slots. Try a different window.</div>`
+                ${_t("No {window} movement in your graded slots. Try a different window.", {window: gradedBannerWindow.toUpperCase()})}</div>`
             : html`<${AutoScrollStrip} items=${gradedBannerMovers}
                 keyFor=${(c)=>`${c.card_id}|${c.printing}|${c.grader}|${c.grade}`}
                 renderItem=${(c, key) => {
@@ -30983,7 +30969,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                       return html`<div key=${card.card_id + "::" + tilePrinting}
                           class=${"gco-tile gc-poster"+(hasOwned?"":" gc-poster-unowned")+(hidden?" gc-card-hidden":"")}
                           style=${tileBg ? {background: tileBg} : null}
-                          onClick=${openDetail} title=${(card["Product Name"]||"") + (hasOwned?"":" — tracked, not owned")}>
+                          onClick=${openDetail} title=${hasOwned ? (card["Product Name"]||"") : _t("{name} — tracked, not owned", {name: card["Product Name"]||""})}>
                         <div class="gco-img-wrap">
                           ${pImg ? html`<img src=${pImg} alt="" loading="lazy"/>` : html`<div class="gco-noimg"></div>`}
                           <div class="gc-poster-grades">
@@ -31005,11 +30991,11 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                         title=${hidden ? _t("Hidden from tracking — click ↺ to restore") : _t("Open card · graded prices")}>
                       ${hasOwned && html`<div class="gc-card-owned-check" title=${_t("In your graded collection")} aria-label=${_t("In your graded collection")} role="img">✓</div>`}
                       ${!readOnly && html`<button class="gc-card-add-btn"
-                        aria-label=${(hasOwned ? "Add another graded copy of " : "Add to graded collection: ") + (card["Product Name"]||"this card")}
+                        aria-label=${_t(hasOwned ? "Add another graded copy of {name}" : "Add to graded collection: {name}", {name: card["Product Name"]||_t("this card")})}
                         title=${hasOwned ? _t("Add another graded copy") : _t("Add this card to your graded collection")}
                         onClick=${e=>{ e.stopPropagation(); setAddPreselectCardId(card.card_id); setAddPreselectPrinting(tilePrinting); setAddOpen(true); }}>+</button>`}
                       ${!readOnly && !hasOwned && html`<button class="gc-card-remove-btn"
-                        aria-label=${"Remove " + (card["Product Name"]||"this card") + " from tracking"}
+                        aria-label=${_t("Remove {name} from tracking", {name: card["Product Name"]||_t("this card")})}
                         title=${_t("Remove this card from your tracking list. To bring it back: add it to your collection, or re-add the set goal.")}
                         onClick=${e=>{ e.stopPropagation(); removeCardFromTracking(card.card_id, tilePrinting); }}>−</button>`}
                       ${card.img_small && html`<img src=${card.img_small} alt="" class="gc-card-img"/>`}
@@ -31020,7 +31006,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                         </div>
                         <div class="gc-card-sub muted">#${(card.Number||"").split("/")[0] || "?"} · ${card.Rarity||""}${showPrintingTag ? " · " + tilePrinting : ""}</div>
                         ${(rawPx != null || (card.tcgplayer_product_id && !isCustomVariant)) && html`<div class="gc-card-raw">
-                          ${rawPx != null && html`<span class="gc-card-raw-px">Raw $${Number(rawPx).toLocaleString(undefined,{maximumFractionDigits:2})}</span>`}
+                          ${rawPx != null && html`<span class="gc-card-raw-px">${_t("Raw")} $${Number(rawPx).toLocaleString(undefined,{maximumFractionDigits:2})}</span>`}
                           ${card.tcgplayer_product_id && !isCustomVariant && html`<a class="gc-card-buy" href=${tcgUrl(card.tcgplayer_product_id, card.tcg_printing||"Normal")}
                               target="_blank" rel="noopener nofollow sponsored"
                               onClick=${e=>e.stopPropagation()}
@@ -31136,7 +31122,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                             return html`<div key=${si} class="gc-slot-meta-row">
                             <div class="gc-slot-meta-head">
                               <span class="gc-slot-meta-tag">${(s.grader||"").toUpperCase()} ${s.grade}</span>
-                              ${hasRetG && html`<span class="gc-slot-return" title=${"Now " + fmt(valNowG) + " · paid " + fmt(paidG)}
+                              ${hasRetG && html`<span class="gc-slot-return" title=${_t("Now {now} · paid {paid}", {now: fmt(valNowG), paid: fmt(paidG)})}
                                 style=${{color: retG>=0?"var(--green)":"var(--red)"}}>${retG>=0?"+":""}${fmt(retG)} (${fmtPct(retPctG)})</span>`}
                             </div>
                             <${CostDateInputs}
@@ -31186,7 +31172,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
         <div class="gc-side-body">
           ${goals && goals.length === 0
             ? html`<div class="muted" style=${{fontSize:12,padding:"12px 0",lineHeight:1.5}}>
-                No tracking goals. Add one to surface a checklist of cards you're chasing — e.g. <em>Fabled · Epic + Enchanted + Iconic</em>.
+                ${_t("No tracking goals. Add one to surface a checklist of cards you're chasing — e.g. Fabled · Epic + Enchanted + Iconic.")}
               </div>`
             : (goals||[]).map(g => {
                 // x/X math for this goal: total = cards in goal's set (or
@@ -31274,18 +31260,18 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                 const onGoalActivate = () => jumpToSection(goalTargetSid);
                 return html`<div key=${g.goal_id} class="gc-goal gc-goal-clickable"
                   role="button" tabIndex="0"
-                  title=${"View " + (targetName || "set") + " in the collection"}
+                  title=${_t("View {name} in the collection", {name: targetName || _t("set")})}
                   onClick=${onGoalActivate}
                   onKeyDown=${(e)=>{ if(e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")){ e.preventDefault(); onGoalActivate(); } }}>
                   <div class="gc-goal-name">${g.display_name || targetName || _t("Goal")}</div>
-                  <div class="gc-goal-sub muted">${targetName}${g.rarities?.length ? " · " + g.rarities.join(" · ") : " · All rarities"}${g.printings?.length ? " · " + g.printings.join("/") : ""}</div>
+                  <div class="gc-goal-sub muted">${targetName}${g.rarities?.length ? " · " + g.rarities.map(r => _term("rarity", r)).join(" · ") : " · " + _t("All rarities")}${g.printings?.length ? " · " + g.printings.join("/") : ""}</div>
                   <div class="gc-goal-progress">
                     <div class="gc-goal-progress-bar"><div class="gc-goal-progress-fill" style=${{width: pct+"%"}}></div></div>
                     <span class="gc-goal-progress-text">${ownedCount} / ${total} ${total ? `· ${pct}%` : ""}</span>
                   </div>
                   <button class="gc-goal-remove"
                     onClick=${(e)=>{ e.stopPropagation(); if(confirm("Remove this tracking goal?")) removeGoal(g.goal_id); }}
-                    aria-label=${"Remove goal: " + (g.display_name || targetName || _t("Untitled"))}
+                    aria-label=${_t("Remove goal: {name}", {name: g.display_name || targetName || _t("Untitled")})}
                     title=${_t("Remove goal")}>×</button>
                 </div>`;
               })}
@@ -31331,7 +31317,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       cardsBySetId=${cardsBySetId}
       onClose=${()=>setBulkAddOpen(false)}
       onBulkAdd=${async (rows) => { const n = await bulkAddItems(rows); setBulkAddOpen(false); return n; }}
-      onBulkSendToQueue=${async (rows) => { const n = await bulkAddSubmissions(rows); setBulkAddOpen(false); if(n) flashToast(`Sent ${n} card${n===1?"":"s"} to your grading queue.`); return n; }}/>`}
+      onBulkSendToQueue=${async (rows) => { const n = await bulkAddSubmissions(rows); setBulkAddOpen(false); if(n) flashToast(n === 1 ? _t("Sent 1 card to your grading queue.") : _t("Sent {n} cards to your grading queue.", {n})); return n; }}/>`}
     ${goalOpen && html`<${GradedCollectionGoalModal}
       setNameById=${setNameById} setIdsByName=${setIdsByName}
       extrasBucketOptions=${extrasBucketOptions}
@@ -31585,11 +31571,11 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, splitTiers, presel
             fontSize:12,marginBottom:14,lineHeight:1.5}}>
             ${hasPriceData
               ? html`<span style=${{color:"var(--accent)",fontWeight:700}}>${_t("✓ Price data available")}</span>
-                  · ${grader.toUpperCase()} ${grade} latest avg: <strong>$${Number(priceVal||0).toLocaleString(undefined,{maximumFractionDigits:2})}</strong>
+                  · ${_tRich("{grade} latest avg: **${price}**", {grade: grader.toUpperCase() + " " + grade, price: Number(priceVal||0).toLocaleString(undefined,{maximumFractionDigits:2})})}
                   ${priceNote && html`<div class="muted" style=${{fontSize:11,marginTop:4}}>${uiIcon("warn", 11)} ${priceNote}</div>`}`
               : priceBlocked
-              ? html`<span style=${{color:"var(--red)",fontWeight:700}}>${uiIcon("warn", 12)} No ${printingLabel(printing || "Normal")} sales recorded at ${grader.toUpperCase()} ${grade}</span>
-                  · This card's printings are separate markets, so we won't price it off the other one. You can still save it; portfolio value will exclude this slot until a ${printingLabel(printing || "Normal")} sale is recorded.`
+              ? html`<span style=${{color:"var(--red)",fontWeight:700}}>${uiIcon("warn", 12)} ${_t("No {printing} sales recorded at {grade}", {printing: printingLabel(printing || "Normal"), grade: grader.toUpperCase() + " " + grade})}</span>
+                  · ${_t("This card's printings are separate markets, so we won't price it off the other one. You can still save it; portfolio value will exclude this slot until a {printing} sale is recorded.", {printing: printingLabel(printing || "Normal")})}`
               : html`<span style=${{color:"var(--red)",fontWeight:700}}>${uiIcon("warn", 12)} ${_t("No price data for this grader/grade")}</span>
                   ${_t("· You can still save it; portfolio value will exclude this slot until a sale is recorded.")}`}
           </div>
@@ -31757,8 +31743,8 @@ const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClo
           ? html`<div style=${{padding:"30px 10px",textAlign:"center"}}>
               <div style=${{fontSize:48,marginBottom:8}}>✓</div>
               <div style=${{fontSize:16,fontWeight:700,marginBottom:6}}>${sendMode
-                ? html`Sent ${addedCount} card${addedCount===1?"":"s"} to your grading queue.`
-                : html`Added ${addedCount} card${addedCount===1?"":"s"} to your graded collection.`}</div>
+                ? (addedCount === 1 ? _t("Sent 1 card to your grading queue.") : _t("Sent {n} cards to your grading queue.", {n: addedCount}))
+                : (addedCount === 1 ? _t("Added 1 card to your graded collection.") : _t("Added {n} cards to your graded collection.", {n: addedCount}))}</div>
               <div class="muted" style=${{fontSize:12,marginBottom:14}}>${sendMode
                 ? _t("Graduate them from the grading queue when the slabs come back.")
                 : _t("Existing slots with the same (card, printing, grader, grade) had their quantity refreshed.")}</div>
@@ -31779,12 +31765,12 @@ const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClo
               <select value=${setName} onChange=${e=>setSetName(e.target.value)}
                 style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",
                   borderRadius:6,background:"var(--bg-solid)",color:"var(--text)",fontSize:13}}>
-                <option value="">— Pick a set —</option>
+                <option value="">${_t("— Pick a set —")}</option>
                 ${setOptions.map(s => html`<option key=${s} value=${s}>${s}</option>`)}
               </select>
             </label>
             <div style=${{marginBottom:12}}>
-              <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Rarities ${rarities.size === 0 ? html`<span style=${{color:"var(--red)"}}>${_t("· required")}</span>` : ""}</div>
+              <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>${_t("Rarities")} ${rarities.size === 0 ? html`<span style=${{color:"var(--red)"}}>${_t("· required")}</span>` : ""}</div>
               <div style=${{display:"flex",flexWrap:"wrap",gap:4}}>
                 ${GRADED_RARITY_OPTIONS.map(r => html`<button key=${r}
                   class=${"chip chip-with-icon "+(rarities.has(r)?"active":"")}
@@ -31797,7 +31783,7 @@ const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClo
               </div>
             </div>
             ${hasBaseRarity && html`<div style=${{marginBottom:12}}>
-              <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Printing ${printings.size === 0 ? html`<span style=${{color:"var(--red)"}}>${_t("· required")}</span>` : ""}</div>
+              <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>${_t("Printing")} ${printings.size === 0 ? html`<span style=${{color:"var(--red)"}}>${_t("· required")}</span>` : ""}</div>
               <div style=${{display:"flex",flexWrap:"wrap",gap:4}}>
                 ${["Non-Foil","Foil"].map(p => html`<button key=${p}
                   class=${"chip "+(printings.has(p)?"active":"")}
@@ -31836,7 +31822,7 @@ const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClo
                   ${setName ? (rarities.size === 0 ? _t("Pick at least one rarity to see cards.") : _t("No cards match the current filters.")) : _t("Pick a set above to see its cards.")}
                 </div>`
               : html`<div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                  <div class="muted" style=${{fontSize:11}}>${cards.length} card${cards.length===1?"":"s"} · ${selectedRows.length} selected</div>
+                  <div class="muted" style=${{fontSize:11}}>${cards.length === 1 ? _t("1 card") : _t("{n} cards", {n: cards.length})} · ${_t("{n} selected", {n: selectedRows.length})}</div>
                   <div style=${{display:"flex",gap:6}}>
                     <button onClick=${checkAll} style=${{fontSize:11,padding:"3px 8px"}}>${_t("Check all")}</button>
                     <button onClick=${uncheckAll} style=${{fontSize:11,padding:"3px 8px"}}>${_t("Uncheck all")}</button>
@@ -31872,7 +31858,7 @@ const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClo
             <div style=${{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
               <button onClick=${onClose}>${_t("Cancel")}</button>
               <button class="active" disabled=${!canSave} onClick=${onSubmit} style=${{padding:"7px 16px",fontSize:13}}>
-                ${busy ? _t("Saving…") : (sendMode ? `Send ${selectedRows.length} for grading` : `Add ${selectedRows.length} card${selectedRows.length===1?"":"s"}`)}
+                ${busy ? _t("Saving…") : (sendMode ? _t("Send {n} for grading", {n: selectedRows.length}) : selectedRows.length === 1 ? _t("Add 1 card") : _t("Add {n} cards", {n: selectedRows.length}))}
               </button>
             </div>
           </${React.Fragment}>`}
@@ -31933,7 +31919,7 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptio
           <select value=${setName} onChange=${e=>{ setSetName(e.target.value); setExtrasBucket(""); }}
             style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",
               borderRadius:6,background:"var(--bg-solid)",color:"var(--text)",fontSize:13}}>
-            <option value="">— Pick a set —</option>
+            <option value="">${_t("— Pick a set —")}</option>
             ${setOptions.map(s => html`<option key=${s} value=${s}>${s}</option>`)}
             ${extrasBucketOptions && extrasBucketOptions.length > 0 && html`<option value=${EXTRAS_SET_NAME}>${EXTRAS_SET_NAME}</option>`}
           </select>
@@ -31943,13 +31929,13 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptio
           <select value=${extrasBucket} onChange=${e=>setExtrasBucket(e.target.value)}
             style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",
               borderRadius:6,background:"var(--bg-solid)",color:"var(--text)",fontSize:13}}>
-            <option value="">— Pick a bucket —</option>
+            <option value="">${_t("— Pick a bucket —")}</option>
             ${(extrasBucketOptions||[]).map(b => html`<option key=${b} value=${b}>${b}</option>`)}
           </select>
           <div class="muted" style=${{fontSize:10,marginTop:4}}>${_t("Tracks every card in this Extras sub-bucket (e.g. all Palace Heist cards).")}</div>
         </label>`}
         ${!isExtras && html`<div style=${{marginBottom:12}}>
-          <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Rarities ${rarities.size === 0 ? html`<span style=${{color:"var(--red)"}}>${_t("· required")}</span>` : ""}</div>
+          <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>${_t("Rarities")} ${rarities.size === 0 ? html`<span style=${{color:"var(--red)"}}>${_t("· required")}</span>` : ""}</div>
           <div style=${{display:"flex",flexWrap:"wrap",gap:4}}>
             ${GRADED_RARITY_OPTIONS.map(r => html`<button key=${r}
               class=${"chip chip-with-icon "+(rarities.has(r)?"active":"")}
@@ -31963,7 +31949,7 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptio
           <div class="muted" style=${{fontSize:10,marginTop:4}}>${_t("Pick at least one. Most folks don't want every card auto-tracked.")}</div>
         </div>`}
         ${!isExtras && hasBaseRarity && html`<div style=${{marginBottom:12}}>
-          <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Printing ${printings.size === 0 ? html`<span style=${{color:"var(--red)"}}>${_t("· required")}</span>` : ""}</div>
+          <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>${_t("Printing")} ${printings.size === 0 ? html`<span style=${{color:"var(--red)"}}>${_t("· required")}</span>` : ""}</div>
           <div style=${{display:"flex",flexWrap:"wrap",gap:4}}>
             ${["Non-Foil","Foil"].map(p => html`<button key=${p}
               class=${"chip "+(printings.has(p)?"active":"")}
@@ -32409,7 +32395,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     if(!file) return;
     let text;
     try { text = await file.text(); }
-    catch(e){ flashToast("Couldn't read file: "+e.message); return; }
+    catch(e){ flashToast(_t("Couldn't read file: {err}", {err: e.message})); return; }
     const report = parseDreambornCsv(text, rowsByName, raw);
     if(report.error){ flashToast(report.error); return; }
     if(!report.entries.length){
@@ -32432,7 +32418,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       flashToast(out.skippedCopies > 0
         ? `Exported ${out.cards.toLocaleString()} cards (${out.skippedCopies} cop${out.skippedCopies===1?"y":"ies"} skipped — no longer in the catalog)`
         : `Exported ${out.cards.toLocaleString()} cards`);
-    } catch(e){ flashToast("Couldn't build the CSV: " + (e.message || e)); }
+    } catch(e){ flashToast(_t("Couldn't build the CSV: {err}", {err: (e.message || e)})); }
   }, [collection, raw]);
 
   const commitImport = useCallback(async () => {
@@ -44639,7 +44625,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
       ${!hideValue && rangeDelta != null && html`<div class="panel-value-delta" style=${{color:deltaColor}}>
         ${rangeDelta >= 0 ? "+" : "−"}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
         <span style=${{opacity:0.8}}>(${rangeDeltaPct >= 0 ? "+" : ""}${rangeDeltaPct.toFixed(2)}%)</span>
-        <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>past ${rangeLabel}</span>
+        <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>${_t("past {range}", {range: rangeLabel})}</span>
       </div>`}
     </div>
     ${!minimized && html`<div>
@@ -45117,7 +45103,7 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, panelNa
         return html`<li key=${deck.id} class=${"home-feed-item"+overflowClass}>
           <a href=${href} class="home-feed-link"
             onClick=${onLinkClick}
-            title=${(creator?.display_name || _t("Someone")) + " " + (isPublish?"published":"updated") + " " + (deck.name || _t("Untitled deck"))}>
+            title=${_t(isPublish ? "{who} published {deck}" : "{who} updated {deck}", {who: creator?.display_name || _t("Someone"), deck: deck.name || _t("Untitled deck")})}>
             <span class="home-feed-verb-dot ${isPublish?"pub":"upd"}" aria-hidden="true"></span>
             <span class="home-feed-main">
               <span class="home-feed-deckname-line">
@@ -45126,7 +45112,7 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, panelNa
               </span>
               <span class="home-feed-meta">
                 <span class="home-feed-creator">${creator?.display_name || _t("Someone")}</span>
-                <span> · ${isPublish ? "new" : "updated"} ${relativeTime(deck.updated_at)}</span>
+                <span> · ${_t(isPublish ? "new {when}" : "updated {when}", {when: relativeTime(deck.updated_at)})}</span>
               </span>
             </span>
             <span class="home-feed-inks">
@@ -45146,7 +45132,7 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, panelNa
     </ul>
     ${entries.length > 2 && html`<button class="home-feed-collapse-toggle home-feed-collapse-toggle--mobile-only"
       onClick=${()=>setFeedExpanded(v=>!v)}>
-      ${feedExpanded ? _t("Show fewer") : `Show ${entries.length - 2} more`}
+      ${feedExpanded ? _t("Show fewer") : _t("Show {n} more", {n: entries.length - 2})}
     </button>`}
   </aside>`;
 };
@@ -51260,7 +51246,7 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
       </div>
       ${cards && cards.length > 0 && html`<span class="movers-banner-cams" style=${{marginLeft:"auto",display:"inline-flex",gap:6,alignItems:"center"}}>
         ${[{lo:0,hi:10,lbl:"1–10"}, ...(cards.length>10 ? [{lo:10,hi:20,lbl:"11–20"}] : [])].map(seg => html`<button key=${seg.lbl}
-          class="movers-banner-cam" title=${`Copy cards ${seg.lbl} as an image`} aria-label=${`Copy cards ${seg.lbl} as an image`}
+          class="movers-banner-cam" title=${_t("Copy cards {range} as an image", {range: seg.lbl})} aria-label=${_t("Copy cards {range} as an image", {range: seg.lbl})}
           onClick=${()=>copyGradedBannerImage(cards.slice(seg.lo, seg.hi), tab === "sales" ? [] : gridWins, "Graded Market", (tab==="sales"?"Top Sales · ":"")+(GRADED_HOME_WINS.find(w=>w[0]===win)||[])[1], seg.lbl)}>
           <svg viewBox="0 0 24 24" aria-hidden="true" width="12" height="12" style=${{display:"block",stroke:"currentColor",fill:"none",strokeWidth:2,strokeLinecap:"round",strokeLinejoin:"round"}}>
             <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>
@@ -51279,9 +51265,9 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
       ${(graderF.size>0 || gradeF.size>0) && html`<button class="gh-chip gh-clear" onClick=${()=>{ setGraderF(new Set()); setGradeF(new Set()); }}>${_t("Clear")}</button>`}
     </div>
     ${cards == null
-      ? html`<div class="muted" style=${{fontSize:11,padding:"14px 4px"}}>Loading graded ${tab==="sales"?"sales":"movers"}…</div>`
+      ? html`<div class="muted" style=${{fontSize:11,padding:"14px 4px"}}>${tab==="sales" ? _t("Loading graded sales…") : _t("Loading graded movers…")}</div>`
       : cards.length === 0
-        ? html`<div class="muted" style=${{fontSize:11,padding:"14px 4px"}}>No graded ${tab==="sales"?"sales":"movement"} match this filter / window yet.</div>`
+        ? html`<div class="muted" style=${{fontSize:11,padding:"14px 4px"}}>${tab==="sales" ? _t("No graded sales match this filter / window yet.") : _t("No graded movement matches this filter / window yet.")}</div>`
         : html`<${AutoScrollStrip} items=${cards}
             keyFor=${(c,i)=>`${c.card_id}|${c.grader}|${c.grade}|${c.sold_date||c.pct}|${i}`}
             renderItem=${(c, key) => html`<button key=${key} class="gmover-tile" onClick=${()=>onCard(c)}
@@ -51298,7 +51284,7 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
                     ${gridWins.map(([l]) => html`<span key=${"h"+l} class="gmover-dh">${l}</span>`)}
                     ${gridWins.map(([l,k]) => html`<span key=${"v"+l} class="gmover-dv" style=${{color:pctColor(sanePct(c[k]))}}>${fmtPct(sanePct(c[k]))}</span>`)}
                   </div>`
-                : html`<div class="gmover-saledate">Sold ${c.sold_date}</div>`}
+                : html`<div class="gmover-saledate">${_t("Sold {date}", {date: c.sold_date})}</div>`}
             </button>`}/>`}
   </section>`;
 };
@@ -52043,8 +52029,8 @@ const GradedOwnedMoversHomePanel = ({raw, user, onCard, onTitleClick}) => {
     title=${_t("Your Graded Movers")}
     subtitle=${loading ? _t("Loading graded sales…")
       : movers.length === 0
-        ? `No ${win.toUpperCase()} movement in your slabs — try a longer window`
-        : `Your slabs — top ${movers.length} by ${win.toUpperCase()} |Δ%|`}
+        ? _t("No {window} movement in your slabs — try a longer window", {window: win.toUpperCase()})
+        : _t("Your slabs — top {n} by {window} |Δ%|", {n: movers.length, window: win.toUpperCase()})}
     controls=${html`<span class="seg-grp" role="group" aria-label=${_t("Δ% window")}>
       ${GRADED_OWNED_WINDOWS.map(([k,lbl]) => html`<button key=${k}
         class=${win===k?"active":""} onClick=${()=>setWin(k)}>${lbl}</button>`)}
@@ -52094,7 +52080,7 @@ const HomePanelModal = ({panelKey, label, node, cta, onClose, onNavAway}) => {
     // waits on a promise chain first.
     try { navigator.clipboard.writeText(url); } catch {}
     setCopied(true);
-    flashToast("Link to " + label + " copied");
+    flashToast(_t("Link to {page} copied", {page: _t(label)}));
     setTimeout(() => setCopied(false), 1600);
   };
   return html`<div class="home-panel-overlay" onClick=${onClose}>
@@ -54525,15 +54511,15 @@ const TournamentDetailView = ({tournament, results, onBack, onOpenDeck, isAdmin,
       <div style=${{fontFamily:"'Cinzel',serif",fontSize:22,fontWeight:800,color:"var(--accent)"}}>${tournament.name}</div>
       <div class="muted" style=${{fontSize:12,marginTop:4}}>
         ${tournament.event_date ? fmtIsoDate(tournament.event_date) + " · " : ""}
-        ${sorted.length} deck${sorted.length===1?"":"s"}
-        ${tournament.num_players ? ` · ${tournament.num_players} players` : ""}
+        ${sorted.length === 1 ? _t("1 deck") : _t("{n} decks", {n: sorted.length})}
+        ${tournament.num_players ? " · " + _t("{n} players", {n: tournament.num_players}) : ""}
         ${tournament.format ? " · " + (tournament.format === "core" ? _t("Core Constructed") : _t("Infinity")) : ""}
       </div>
       ${onInkClick && html`<div class="muted" style=${{fontSize:11,marginTop:6}}>
         ${_t("Tip: click an ink shield on any deck to browse every tournament deck in that ink.")}</div>`}
     </div>
     ${sorted.length === 0
-      ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0",textAlign:"center"}}>No decks linked to this tournament.${isAdmin ? html` Click <em>+ Add deck</em> above.` : ""}</div>`
+      ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0",textAlign:"center"}}>${_t("No decks linked to this tournament.")}${isAdmin ? " " + _t("Click + Add deck above.") : ""}</div>`
       : html`<div class="deck-list">
           ${sorted.map(r => html`<${TournamentDeckTile} key=${r.result_id}
             r=${r} theme=${theme} isAdmin=${isAdmin}
@@ -55927,7 +55913,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         ...prev,
         [deckId]: Math.max(0, (prev[deckId] || 0) + (wasFavorited ? 1 : -1)),
       }));
-      flashToast("Couldn't update favorite: " + (e.message || e));
+      flashToast(_t("Couldn't update favorite: {err}", {err: (e.message || e)}));
     }
   }, [user, favorites, externalDeck, refreshFavorites]);
 
@@ -55960,7 +55946,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         if(wasFollowing) next.add(creatorId); else next.delete(creatorId);
         return next;
       });
-      flashToast("Couldn't update follow: " + (e.message || e));
+      flashToast(_t("Couldn't update follow: {err}", {err: (e.message || e)}));
     }
   }, [user, userFollows, refreshFollowing]);
 
@@ -56381,10 +56367,10 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       ${s.inks.map(ink => html`<img key=${ink} src=${INK_ICONS[ink]} alt=${ink} title=${ink}/>`)}
     </div>`}
     ${(s.inkable + s.uninkable) > 0 && html`<div class="deck-card-inkable">
-      <span class="deck-ink-chip" title=${s.inkable + " inkable card" + (s.inkable===1?"":"s") + " (can be used as ink)"}>
+      <span class="deck-ink-chip" title=${s.inkable === 1 ? _t("1 inkable card (can be used as ink)") : _t("{n} inkable cards (can be used as ink)", {n: s.inkable})}>
         <${InkableHex}/><span>${s.inkable}</span>
       </span>
-      <span class="deck-ink-chip" title=${s.uninkable + " uninkable card" + (s.uninkable===1?"":"s")}>
+      <span class="deck-ink-chip" title=${s.uninkable === 1 ? _t("1 uninkable card") : _t("{n} uninkable cards", {n: s.uninkable})}>
         <${UninkableHex}/><span>${s.uninkable}</span>
       </span>
     </div>`}
@@ -56662,16 +56648,16 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         <div class="deck-card-name">${d.name || _t("Untitled deck")}</div>
         ${visibilityPill(d.visibility)}
       </div>
-      <div class="deck-card-meta">${s.total}${s.total < 60 ? " / 60" : ""} ${_t("cards")} · ${fmtUSD(s.value)} · ${completionPct(s.owned, s.total)}% owned${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>
+      <div class="deck-card-meta">${s.total}${s.total < 60 ? " / 60" : ""} ${_t("cards")} · ${fmtUSD(s.value)} · ${_t("{pct}% owned", {pct: completionPct(s.owned, s.total)})}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>
       ${renderDeckChips(s)}
-      ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>${_t("Updated {when}", {when: relativeTime(d.updated_at)})}</div>`}
+      ${d.updated_at && html`<div class="deck-card-updated" title=${_t("Last updated {when} (your local time)", {when: absoluteLocalTime(d.updated_at)})}>${_t("Updated {when}", {when: relativeTime(d.updated_at)})}</div>`}
       ${/* Two clusters: three things you COPY, then the ones that CHANGE the
             deck. The row wraps on a narrow tile, and because copy comes first
             the wrap lands on the group boundary instead of mid-thought. The
             labels shed their verb — the copy icon carries it. */""}
       <button class="deck-card-preview"
         onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, ownerDisplayName);}}
-        title=${_t("Preview the deck")} aria-label=${"Preview " + (d.name || "this deck")}>${uiIcon("eye", 24)}</button>
+        title=${_t("Preview the deck")} aria-label=${_t("Preview {name}", {name: d.name || _t("this deck")})}>${uiIcon("eye", 24)}</button>
       <div class="deck-card-actions deck-act-row">
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); copyDeckLinkToClipboard(d);}}
@@ -56735,7 +56721,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             everything a generated name used to. */""}
       ${d.name && html`<div class="deck-card-name">${d.name}</div>`}
       ${starterLeader && html`<div class="deck-card-tourney deck-card-starter"
-        title=${`Starter deck for ${coconutDisplayName(starterLeader)} — ${coconutInkLabel(starterLeader)}`}>
+        title=${_t("Starter deck for {leader} — {inks}", {leader: coconutDisplayName(starterLeader), inks: coconutInkLabel(starterLeader)})}>
         <img class="deck-coconut-slot-art" src=${coconutThumbUrl(starterLeader.cn)} crossOrigin="anonymous"
           alt="" aria-hidden="true" loading="lazy"
           onError=${(e)=>{ const t=e.target; if(t.dataset.fb) return; t.dataset.fb="1"; t.src=coconutArtUrl(starterLeader.cn); }}/>
@@ -56751,10 +56737,10 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
           <div class="deck-card-meta">${_t("by")} ${tctx.player_name || _t("Unknown player")} · ${s.total}${s.total < 60 ? " / 60" : ""} ${_t("cards")} · ${fmtUSD(s.value)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>`
         : html`<div class="deck-card-meta">${_t("by")} ${creatorName} · ${s.total}${s.total < 60 ? " / 60" : ""} ${_t("cards")} · ${fmtUSD(s.value)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>`}
       ${renderDeckChips(s)}
-      ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>${_t("Updated {when}", {when: relativeTime(d.updated_at)})}</div>`}
+      ${d.updated_at && html`<div class="deck-card-updated" title=${_t("Last updated {when} (your local time)", {when: absoluteLocalTime(d.updated_at)})}>${_t("Updated {when}", {when: relativeTime(d.updated_at)})}</div>`}
       <button class="deck-card-preview"
         onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, creatorName);}}
-        title=${_t("Preview the deck")} aria-label=${"Preview " + (d.name || "this deck")}>${uiIcon("eye", 24)}</button>
+        title=${_t("Preview the deck")} aria-label=${_t("Preview {name}", {name: d.name || _t("this deck")})}>${uiIcon("eye", 24)}</button>
       <div class="deck-card-actions deck-act-row">
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); copyDeckLinkToClipboard(d);}}
@@ -56774,7 +56760,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
           title=${_t("Remove from your favorites")}>${DECK_ICONS.star}<span>${_t("Unfavorite")}</span></button>`}
         ${opts.showUnfollowCreator && d.user_id && html`<button class="deck-act deck-act--sm deck-act--danger"
           onClick=${e=>{e.stopPropagation(); toggleFollowCreator(d.user_id);}}
-          title=${"Stop following " + (entry.creator?.display_name || "this creator")}>
+          title=${_t("Stop following {name}", {name: entry.creator?.display_name || _t("this creator")})}>
           ${DECK_ICONS.unfollow}<span>${_t("Unfollow")}</span></button>`}
       </div>
     </a>`;
@@ -56881,7 +56867,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       const {data, error} = await sbClient.from("decks")
         .insert({user_id:user.id, name: await encDeckRnd("New Deck")})
         .select("id").single();
-      if(error){ flashToast("Couldn't create deck: " + error.message); return; }
+      if(error){ flashToast(_t("Couldn't create deck: {err}", {err: error.message})); return; }
       await refreshDecks();
       openDeckInMode(data.id, "edit");
     } finally {
@@ -56896,7 +56882,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     const clean = (name || "").trim();
     if(!clean) return false;
     const {error} = await sbClient.from("decks").update({name: await encDeckRnd(clean)}).eq("id", deckId);
-    if(error){ flashToast("Rename failed: " + error.message); return false; }
+    if(error){ flashToast(_t("Rename failed: {err}", {err: error.message})); return false; }
     setDecks(ds => (ds||[]).map(d => d.id === deckId ? {...d, name: clean} : d));
     return true;
   }, []);
@@ -56927,7 +56913,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                // 1-of list then reads as a pile of illegal 4-ofs.
                coconut_card: src.coconut_card || null})
       .select("id").single();
-    if(error){ flashToast("Couldn't duplicate: " + error.message); return; }
+    if(error){ flashToast(_t("Couldn't duplicate: {err}", {err: error.message})); return; }
     const rows = (src.cards||[]).map(c => ({
       deck_id: data.id, card_id: c.card_id, printing: c.printing, quantity: c.quantity,
     }));
@@ -56935,7 +56921,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       const {error: e2} = await sbClient.from("deck_cards").insert(await encDeckCardRows(rows));
       if(e2){
         console.error("duplicate-cards failed:", e2);
-        flashToast(`Duplicated deck (header only) — cards copy failed: ${e2.message}`);
+        flashToast(_t("Duplicated deck (header only) — cards copy failed: {err}", {err: e2.message}));
       }
     }
     await refreshDecks();
@@ -56958,7 +56944,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                // 1-of list then reads as a pile of illegal 4-ofs.
                coconut_card: src.coconut_card || null})
       .select("id").single();
-    if(error){ flashToast("Couldn't duplicate: " + error.message); return; }
+    if(error){ flashToast(_t("Couldn't duplicate: {err}", {err: error.message})); return; }
     const rows = (src.cards||[]).map(c => ({
       deck_id: data.id, card_id: c.card_id, printing: c.printing, quantity: c.quantity,
     }));
@@ -56966,7 +56952,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       const {error: e2} = await sbClient.from("deck_cards").insert(await encDeckCardRows(rows));
       if(e2){
         console.error("duplicate-cards (external) failed:", e2);
-        flashToast(`Saved deck header — couldn't copy cards: ${e2.message}`);
+        flashToast(_t("Saved deck header — couldn't copy cards: {err}", {err: e2.message}));
       }
     }
     await refreshDecks();
@@ -56980,7 +56966,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     const d = (decks || []).find(x => x.id === deckId);
     if(!confirm(`Delete ${d && d.name ? `"${d.name}"` : "this deck"}? This can't be undone.`)) return;
     const {error} = await sbClient.from("decks").delete().eq("id", deckId);
-    if(error){ flashToast("Delete failed: " + error.message); return; }
+    if(error){ flashToast(_t("Delete failed: {err}", {err: error.message})); return; }
     if(selectedDeckId === deckId){
       // A deleted deck has no version history left to write.
       editSessionDeck.current = null;
@@ -57061,7 +57047,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     if(err){
       console.error("deck card update failed:", err);
       applyLocal(written !== undefined ? written : beforeQty);
-      flashToast("Couldn't save card change: " + (err.message || err));
+      flashToast(_t("Couldn't save card change: {err}", {err: (err.message || err)}));
     }
   }, [user, decks]);
   const deckWriteRef = useRef(new Map());
@@ -57113,7 +57099,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       return true;
     } catch(e){
       console.error("deck replace failed:", e);
-      flashToast("Couldn't finish replacing the deck (" + (e.message || e) + ") — showing what was saved.");
+      flashToast(_t("Couldn't finish replacing the deck ({err}) — showing what was saved.", {err: e.message || e}));
       await refreshDecks();
       return false;
     } finally {
@@ -57169,7 +57155,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     } catch(e){
       console.error("variant swap failed:", e);
       setDecks(prev);
-      flashToast("Couldn't swap variant: " + e.message);
+      flashToast(_t("Couldn't swap variant: {err}", {err: e.message}));
     } finally {
       setPending(p => Math.max(0, p - 1));
     }
@@ -57260,7 +57246,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     } catch(e){
       console.error("undo failed:", e);
       setDecks(prev);
-      flashToast("Couldn't undo changes: " + e.message);
+      flashToast(_t("Couldn't undo changes: {err}", {err: e.message}));
     } finally {
       setPending(p => Math.max(0, p - 1));
     }
@@ -57353,7 +57339,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     } catch(e){
       console.error("deck meta update failed:", e);
       setDecks(ds => (ds||[]).map(d => d.id === deckId ? {...d, ...revert} : d));
-      flashToast("Couldn't save: " + e.message);
+      flashToast(_t("Couldn't save: {err}", {err: e.message}));
     } finally {
       setPending(p => Math.max(0, p - 1));
     }
@@ -57365,7 +57351,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     const name = next.trim();
     if(!name || name === currentName) return;
     const {error} = await sbClient.from("decks").update({name: await encDeckRnd(name)}).eq("id", deckId);
-    if(error){ flashToast("Rename failed: " + error.message); return; }
+    if(error){ flashToast(_t("Rename failed: {err}", {err: error.message})); return; }
     await refreshDecks();
   }, [refreshDecks]);
 
@@ -57406,7 +57392,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
           <div class="creator-profile-eyebrow">${_t("Creator")}</div>
           <h2 class="creator-profile-name">${c.display_name || _t("Anonymous user")}</h2>
           <div class="creator-profile-meta">
-            ${creatorProfile.decks.length} public deck${creatorProfile.decks.length===1?"":"s"}
+            ${creatorProfile.decks.length === 1 ? _t("1 public deck") : _t("{n} public decks", {n: creatorProfile.decks.length})}
           </div>
         </div>
         <div class="creator-profile-actions">
@@ -57427,7 +57413,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       ${creatorProfile.decks.length === 0
         ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
             ${isMe ? _t("You haven't published any public decks yet. Set a deck's visibility to Public from its Share menu.")
-                   : (c.display_name || _t("This user")) + " hasn't published any public decks."}
+                   : _t("{name} hasn't published any public decks.", {name: c.display_name || _t("This user")})}
           </div>`
         : html`<div class="deck-list">${creatorProfile.decks.map(entry => renderExternalCard(entry, {}))}</div>`}
       ${toastEl}
@@ -57586,7 +57572,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         ? html`<div class="empty-state" style=${{padding:"32px 16px"}}>
             <h3 class="title-font" style=${{margin:"0 0 8px"}}>${_t("Sign in to build and save decks")}</h3>
             <p class="muted" style=${{fontSize:13,margin:"0 0 14px",maxWidth:480}}>
-              Your decks live in your account so you can build on any device and see your decklist value at current prices. While you're signed out, you can still browse <strong>Discover</strong> + <strong>Tournaments</strong> below.
+              ${_tRich("Your decks live in your account so you can build on any device and see your decklist value at current prices. While you're signed out, you can still browse **Discover** + **Tournaments** below.")}
             </p>
             <button class="active" onClick=${onSignIn} style=${{padding:"9px 18px",fontSize:13}}>${_t("Sign in with Google")}</button>
           </div>`
@@ -57600,11 +57586,11 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             </div>`
         : (decks?.length || 0) === 0
           ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
-              You haven't created any decks yet. Click <strong>+ New Deck</strong> to start.
+              ${_tRich("You haven't created any decks yet. Click **+ New Deck** to start.")}
             </div>`
           : yourDecksProcessed.length === 0
             ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
-                No decks match the current filters. ${filtersActive && html`<button class="settings-action link"
+                ${_t("No decks match the current filters.")} ${filtersActive && html`<button class="settings-action link"
                   onClick=${()=>{setYourDeckSearch(""); setInkFilter(new Set());}}>${_t("Clear filters")}</button>`}
               </div>`
             : html`<div class="deck-list">${yourDecksProcessed.map(renderOwnedCard)}</div>`
@@ -57620,7 +57606,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       </div>`;
       const visible = filterExternal(favoritedDecks);
       const explainer = html`<div class="deck-section-explainer">
-        Decks you've bookmarked from other creators. Click <strong>☆</strong> on any shared deck to save it here — works for both public and unlisted decks.
+        ${_tRich("Decks you've bookmarked from other creators. Click **☆** on any shared deck to save it here — works for both public and unlisted decks.")}
       </div>`;
       if(!favLoaded) return html`<div>${explainer}<div class="muted deck-feed-state">${_t("Loading your favorites…")}</div></div>`;
       if(favErr && favoritedDecks.length === 0) return html`<div>${explainer}<div class="load-fail">
@@ -57628,7 +57614,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         <button type="button" class="load-fail-retry" onClick=${refreshFavorites}>${_t("Try again")}</button>
       </div></div>`;
       if(favoritedDecks.length === 0) return html`<div>${explainer}<div class="muted" style=${{fontSize:13,padding:"12px 0"}}>
-        No favorited decks yet. When you find a shared deck you like, click <strong>☆ Favorite</strong> to save it here.
+        ${_tRich("No favorited decks yet. When you find a shared deck you like, click **☆ Favorite** to save it here.")}
       </div></div>`;
       if(visible.length === 0) return html`<div>${explainer}<div class="muted" style=${{fontSize:13,padding:"12px 0"}}>
         ${_t("No favorites match the current ink filter.")} <button class="settings-action link"
@@ -57646,7 +57632,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         <button class="active" onClick=${onSignIn} style=${{padding:"9px 18px",fontSize:13}}>${_t("Sign in with Google")}</button>
       </div>`;
       const explainer = html`<div class="deck-section-explainer">
-        A feed of recent decks from creators you follow. Click <strong>+ Follow</strong> on any creator's name (from a shared deck banner or their profile) to add them here.
+        ${_tRich("A feed of recent decks from creators you follow. Click **+ Follow** on any creator's name (from a shared deck banner or their profile) to add them here.")}
       </div>`;
       if(!followLoaded) return html`<div>${explainer}<div class="muted deck-feed-state">${_t("Loading your feed…")}</div></div>`;
       if(followErr && followingFeed.length === 0) return html`<div>${explainer}<div class="load-fail">
@@ -57654,10 +57640,10 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         <button type="button" class="load-fail-retry" onClick=${refreshFollowing}>${_t("Try again")}</button>
       </div></div>`;
       if(userFollows.size === 0) return html`<div>${explainer}<div class="muted" style=${{fontSize:13,padding:"12px 0"}}>
-        You aren't following any creators yet. When you view a shared deck, click <strong>+ Follow</strong> next to the creator's name to see their public decks here.
+        ${_tRich("You aren't following any creators yet. When you view a shared deck, click **+ Follow** next to the creator's name to see their public decks here.")}
       </div></div>`;
       if(followingFeed.length === 0) return html`<div>${explainer}<div class="muted" style=${{fontSize:13,padding:"12px 0"}}>
-        You follow ${userFollows.size} creator${userFollows.size===1?"":"s"}, but none have published a public deck yet.
+        ${_t("You follow {n} creator(s), but none have published a public deck yet.", {n: userFollows.size})}
       </div></div>`;
       const visible = filterExternal(followingFeed);
       if(visible.length === 0) return html`<div>${explainer}<div class="muted" style=${{fontSize:13,padding:"12px 0"}}>
@@ -57669,7 +57655,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
 
     ${deckSection === "discover" && html`<div>
       <div class="deck-section-explainer">
-        Public decks from across the community. Anyone can publish a deck here by setting its visibility to <strong>Public</strong> from the deck's Share menu.
+        ${_tRich("Public decks from across the community. Anyone can publish a deck here by setting its visibility to **Public** from the deck's Share menu.")}
       </div>
       <div class="discover-format-tabs">
         ${DISCOVER_FORMATS.map(([k, l]) => {
@@ -57680,9 +57666,9 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             onClick=${navHandler(()=>{ discoverFormatTouched.current = true; setDiscoverFormat(k); })}>${l}${n>0?html` <span class="deck-section-tab-count">${n}</span>`:""}</a>`;
         })}
         <span class="muted discover-format-note">
-          Sorted by ★ favorites — only decks made or edited since the newest set came out${discoverCutoff
-            ? ` (${new Date(discoverCutoff + "T00:00:00Z").toLocaleDateString(undefined, {month:"short", day:"numeric", year:"numeric", timeZone:"UTC"})})` : ""}.${discoverHasMore
-            ? ` Only the ${DISCOVER_LIMIT} most recently updated are shown.` : ""}
+          ${_t("Sorted by ★ favorites — only decks made or edited since the newest set came out")}${discoverCutoff
+            ? ` (${new Date(discoverCutoff + "T00:00:00Z").toLocaleDateString(SITE_LANG, {month:"short", day:"numeric", year:"numeric", timeZone:"UTC"})})` : ""}.${discoverHasMore
+            ? " " + _t("Only the {n} most recently updated are shown.", {n: DISCOVER_LIMIT}) : ""}
         </span>
       </div>
       ${discoverEntries.length === 0 && discoverErr && !discoverLoading
@@ -57701,19 +57687,19 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             const visible = filterExternal(byFormat);
             const fmtLabel = (DISCOVER_FORMATS.find(f => f[0] === discoverFormat) || [,""])[1];
             if(byFormat.length === 0) return html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
-              No ${fmtLabel} decks have been published in this window yet.
+              ${_t("No {format} decks have been published in this window yet.", {format: fmtLabel})}
               ${(() => {
                 const alt = DISCOVER_FORMATS.filter(([k]) => k !== discoverFormat
                   && discoverEntries.some(e => e.format === k));
                 if(!alt.length) return null;
-                return html` Try ${alt.map(([k, l], i) => html`<${React.Fragment} key=${k}>
-                  ${i > 0 ? " or " : ""}<button class="settings-action link"
+                return html` ${_t("Try")} ${alt.map(([k, l], i) => html`<${React.Fragment} key=${k}>
+                  ${i > 0 ? " " + _t("or") + " " : ""}<button class="settings-action link"
                     onClick=${()=>{ discoverFormatTouched.current = true; setDiscoverFormat(k); }}>${l}</button>
                 </>`)}.`;
               })()}
             </div>`;
             if(visible.length === 0) return html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
-              No ${fmtLabel} decks match the current ink filter. <button class="settings-action link"
+              ${_t("No {format} decks match the current ink filter.", {format: fmtLabel})} <button class="settings-action link"
                 onClick=${()=>setInkFilter(new Set())}>${_t("Clear inks")}</button>
             </div>`;
             return html`<div class="deck-list">${visible.map(entry => renderExternalCard(entry, {}))}</div>`;
@@ -57723,8 +57709,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
 
     ${deckSection === "tournaments" && html`<div>
       <div class="deck-section-explainer">
-        Decks submitted from tournament results. Each card lists the event,
-        format, and number of decks; click in to see placements + decklists.
+        ${_t("Decks submitted from tournament results. Each card lists the event, format, and number of decks; click in to see placements + decklists.")}
         ${isTournamentAdmin ? html` <strong>Admin:</strong> use <em>+ Bulk Upload</em> to import a tournament.` : ""}
       </div>
       ${isTournamentAdmin && html`<div style=${{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
@@ -57748,7 +57733,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                 if(derr) throw derr;
                 setSelectedTournamentId(null);
                 await refreshTournaments();
-              } catch(e) { flashToast("Delete failed: " + (e?.message || e)); }
+              } catch(e) { flashToast(_t("Delete failed: {err}", {err: (e?.message || e)})); }
             }}
             onAddDeck=${()=>setTournamentDeckEdit({result: null})}
             onEditDeck=${(r)=>setTournamentDeckEdit({result: r})}
@@ -57758,7 +57743,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                 const {error: derr} = await sbClient.rpc("admin_delete_tournament_deck", {p_result_id: r.result_id});
                 if(derr) throw derr;
                 await refreshTournaments();
-              } catch(e) { flashToast("Delete failed: " + (e?.message || e)); }
+              } catch(e) { flashToast(_t("Delete failed: {err}", {err: (e?.message || e)})); }
             }}
             theme=${theme}
             onCopyDecklist=${copyDeckListFromResult}
@@ -57803,7 +57788,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                   onClick=${()=>setInkFilter(new Set())}>${_t("✕ Clear inks")}</button>`}
               </div>
               <div class="muted" style=${{fontSize:12,margin:"2px 0 10px"}}>
-                ${visibleAllDecks.length} deck${visibleAllDecks.length===1?"":"s"}${allTournamentDecks.length !== visibleAllDecks.length ? ` of ${allTournamentDecks.length}` : ""}
+                ${allTournamentDecks.length !== visibleAllDecks.length ? _t("{n} of {total} decks", {n: visibleAllDecks.length, total: allTournamentDecks.length}) : visibleAllDecks.length === 1 ? _t("1 deck") : _t("{n} decks", {n: visibleAllDecks.length})}
               </div>
               ${visibleAllDecks.length === 0
                 ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0",textAlign:"center"}}>
@@ -57828,7 +57813,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             </div>`
         : tournaments.length === 0
           ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0",textAlign:"center"}}>
-              No tournaments uploaded yet.${isTournamentAdmin ? "" : " Check back as results come in."}
+              ${_t("No tournaments uploaded yet.")}${isTournamentAdmin ? "" : " " + _t("Check back as results come in.")}
             </div>`
           : html`<div>
             <div class="tournament-alldecks-bar">
@@ -57852,8 +57837,8 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                   <div class="tournament-card-name">${t.name}</div>
                   <div class="tournament-card-meta muted">
                     ${t.event_date ? fmtIsoDate(t.event_date) + " · " : ""}
-                    ${rs.length} deck${rs.length===1?"":"s"}
-                    ${t.num_players ? ` · ${t.num_players} players` : ""}
+                    ${rs.length === 1 ? _t("1 deck") : _t("{n} decks", {n: rs.length})}
+                    ${t.num_players ? " · " + _t("{n} players", {n: t.num_players}) : ""}
                     ${t.format ? " · " + (t.format === "core" ? _t("Core") : _t("Infinity")) : ""}
                   </div>
                   ${top8.length > 0 && html`<ul class="tournament-card-top8">
@@ -57885,7 +57870,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                     })}
                   </ul>`}
                   ${rs.length > 8 && html`<div class="tournament-card-more muted">
-                    +${rs.length - 8} more · click to view all
+                    ${_t("+{n} more · click to view all", {n: rs.length - 8})}
                   </div>`}
                 </a>`;
               })}
@@ -59494,7 +59479,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       setTimeout(()=>setRegenDone(false), 2200);
       flashToast(_t("New share link generated — the old link no longer works."));
     } catch(e){
-      flashToast("Couldn't regenerate: " + (e.message || e));
+      flashToast(_t("Couldn't regenerate: {err}", {err: (e.message || e)}));
     } finally {
       setRegenerating(false);
     }
@@ -60867,7 +60852,7 @@ async function startOfflineImagePack(urls, scope){
     if(!offlineImgTask.cancel){
       const saved = offlineImgTask.done - offlineImgTask.failed;
       try { localStorage.setItem("packsink:offlineImages", JSON.stringify({t: Date.now(), count: saved, scope})); } catch {}
-      flashToast(`Offline images ready — ${saved.toLocaleString()} saved`);
+      flashToast(_t("Offline images ready — {n} saved", {n: saved.toLocaleString()}));
     }
   } catch(e){
     console.warn("offline image pack failed:", e?.message || e);

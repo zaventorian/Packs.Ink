@@ -119,7 +119,7 @@ def code_keys() -> list[str]:
     with open(os.path.join(ROOT, "Index.html"), encoding="utf-8-sig") as f:
         s = f.read()
     keys = []
-    for m in re.finditer(r'_t\("((?:[^"\\]|\\.)*)"', s):
+    for m in re.finditer(r'\b_t(?:Rich)?\("((?:[^"\\]|\\.)*)"', s):
         k = json.loads('"' + m.group(1) + '"')
         if k not in keys:
             keys.append(k)
