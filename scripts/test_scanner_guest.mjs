@@ -75,7 +75,8 @@ check(/const reviewOnly = gated && qaResume && qaReviewing;/.test(HTML)
   "a returning guest reaches the review screen before the upload notice — saving opens no camera");
 
 // ---- the three copy places say the same thing -------------------------------------------
-check(/You're signed out, so <b>nothing is uploaded<\/b>/.test(HTML), "the in-scanner guest notice says nothing is uploaded");
+// The notice is translated, so the English sits in its _tRich key (**bold** = <b>).
+check(/You're signed out, so (<b>|\*\*)nothing is uploaded(<\/b>|\*\*)/.test(HTML), "the in-scanner guest notice says nothing is uploaded");
 check(/<strong>Signed out, nothing is uploaded\.<\/strong>/.test(PRIV), "privacy.html#scanner says it");
 check(/<strong>Signed out, nothing is uploaded<\/strong>/.test(HTML) && !/in one go\. Sign-in required\./.test(HTML),
   "the Help page says it, and no longer says sign-in is required to scan");

@@ -30,7 +30,7 @@
    you); the settings menu is what saves one. Keep I18N_VER in step with the
    ?v= the dictionaries were last changed under. */
 (function(){
-  var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="1", l=null;
+  var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="2", l=null;
   try{
     var q=new URLSearchParams(location.search).get("hl");
     l = (q && (OK[q]||q==="en")) ? q : localStorage.getItem("packsink:lang");
@@ -250,7 +250,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=517">
+<link rel="stylesheet" href="styles.css?v=518">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1286,7 +1286,8 @@ const _t = (s, vars) => {
 // in, English out when there is none.
 // _t, keeping **bold** spans as <strong>: a sentence that bolds a button name
 // stays ONE key, so a language can move the bold word where its grammar wants it.
-const _tRich = (s, vars) => String(_t(s, vars)).split(/\*\*(.+?)\*\*/).map((part, i) => i % 2 ? html`<strong key=${i}>${part}</strong>` : part);
+const _tRich = (s, vars) => String(_t(s, vars)).split(/(\*\*.+?\*\*|\*[^*]+?\*)/).map((part, i) => !(i % 2) ? part
+  : part.startsWith("**") ? html`<strong key=${i}>${part.slice(2, -2)}</strong>` : html`<i key=${i}>${part.slice(1, -1)}</i>`);
 const _term = (kind, v) => {
   if(v == null || !I18N || !I18N.terms) return v;
   const m = I18N.terms[kind];
@@ -8702,7 +8703,7 @@ const ImageSaverOverlay = () => {
       <button class="image-saver-close" onClick=${close} aria-label=${_t("Close")}>×</button>
       <div class="image-saver-hint">${_t("Press and hold the image to save or copy it")}</div>
       <img class="image-saver-img" src=${data.url} alt=${_t("Card image to save")}/>
-      <a class="image-saver-dl" href=${data.url} download=${data.name}>${uiIcon("save")} Download</a>
+      <a class="image-saver-dl" href=${data.url} download=${data.name}>${uiIcon("save")} ${_t("Download")}</a>
     </div>
   </div>`;
 };
@@ -8716,7 +8717,7 @@ const PriceBadge = ({row, label, klass}) => {
   return html`<a class=${"price-badge "+(klass||"")} href=${url} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>
     ${label && html`<span class="label">${label}</span>`}
     <span class="low">${low!=null?fmtUSD(low):"—"}<span class="ext">${extIcon()}</span></span>
-    ${market!=null && html`<span class="market">Mkt ${fmtUSD(market)}</span>`}
+    ${market!=null && html`<span class="market">${_t("Mkt")} ${fmtUSD(market)}</span>`}
   </a>`;
 };
 
@@ -8815,7 +8816,7 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
               alt="" class="card-row-ink-shield"/>`}
         </span>
         <span class="card-row-costshield"
-          title=${group.inkable===false?`Cost ${group.cost ?? "—"} · Uninkable`:`Cost ${group.cost ?? "—"} · Inkable`}>
+          title=${_t(group.inkable===false ? "Cost {n} · Uninkable" : "Cost {n} · Inkable", {n: group.cost ?? "—"})}>
           ${group.cost != null && html`<${CostInkShield} cost=${group.cost} inkable=${group.inkable !== false}/>`}
         </span>
         <button class="card-row-name-btn" onClick=${onExpand} title=${_t("View card details")}>
@@ -9295,8 +9296,8 @@ const ScatterChart = ({series, height=260, width=920, onSelect, selectedId, show
         <div class="scatter-tip-grade" style=${{color: hpColor}}>
           ${hp.tipLabel || ((hp.grader||"").toUpperCase() + " " + (hp.grade || "—"))}</div>
         <div class="scatter-tip-price">$${Number(hp.y).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-        <div class="scatter-tip-meta">${fmtTooltipDate(hp.x)}${hp.listing_type==="auction"?" · auction":hp.listing_type==="fixed_price"?" · fixed":""}</div>
-        <div class="scatter-tip-hint">click for links</div>
+        <div class="scatter-tip-meta">${fmtTooltipDate(hp.x)}${hp.listing_type==="auction"?" · " + _t("auction"):hp.listing_type==="fixed_price"?" · " + _t("fixed"):""}</div>
+        <div class="scatter-tip-hint">${_t("click for links")}</div>
       </div>
     </div>`}
   </div>`;
@@ -12500,7 +12501,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
         border:`1px solid ${isLightBg?"rgba(146,64,14,0.3)":"rgba(245,158,11,0.4)"}`}}>
         <div style=${{fontSize:10,fontWeight:800,letterSpacing:0.6,textTransform:"uppercase",
           color:isLightBg?"#92400e":"#f59e0b",marginBottom:3}}>
-          ${uiIcon("warn")} Not tournament legal${posterCoconut ? " — " + COCONUT_SET_NAME : ""}
+          ${uiIcon("warn")} ${_t("Not tournament legal")}${posterCoconut ? " — " + _term("set", COCONUT_SET_NAME) : ""}
         </div>
         <div style=${{fontSize:11,lineHeight:1.5,color:textColor}}>
           ${posterIssues.join(" · ")}
@@ -12724,7 +12725,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
                 beats a picture that is quietly missing four cards. */""}
           ${!catalogPending && unmatchedCards > 0 && html`<span class="poster-view-note"
             title=${_t("These cards aren't in the loaded card database, so they can't be drawn.")}>
-            ${uiIcon("warn")} ${unmatchedCards} card${unmatchedCards===1?"":"s"} not shown</span>`}
+            ${uiIcon("warn")} ${unmatchedCards === 1 ? _t("1 card not shown") : _t("{n} cards not shown", {n: unmatchedCards})}</span>`}
           <button class="deck-act" onClick=${copyImage} disabled=${!!busy || catalogPending}
             title=${_t("Copy the poster to your clipboard as a PNG")}>
             ${uiIcon("copy")}<span>${busy==="copy" ? _t("Copying…") : _t("Copy")}</span></button>
@@ -12782,7 +12783,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
             : (unmatchedCards > 0
                 ? html`<div class="deck-poster-hint">${unmatchedCards === 1
                     ? _t("1 card in this deck isn't in the loaded card database, so it's missing from the poster.")
-                    : `${unmatchedCards} cards in this deck aren't in the loaded card database, so they're missing from the poster.`}</div>`
+                    : _t("{n} cards in this deck aren't in the loaded card database, so they're missing from the poster.", {n: unmatchedCards})}</div>`
                 : html`<div class="deck-poster-hint">${_t("Copy puts the image on your clipboard; Save downloads it as a file.")}</div>`)}
           ${toast && html`<div class="poster-toast">${toast}</div>`}
           ${error && html`<div style=${{color:"var(--red)",fontSize:12}}>${error}</div>`}
@@ -12833,8 +12834,8 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
           </div>
           <div class="poster-options-group">
             <div class="poster-options-head">
-              Share
-              ${!shareUrl && html`<span class="poster-share-lockhint">deck is private</span>`}
+              ${_t("Share")}
+              ${!shareUrl && html`<span class="poster-share-lockhint">${_t("deck is private")}</span>`}
             </div>
             <div style=${{display:"flex",gap:4,flexWrap:"wrap"}}>
               ${shareUrl
@@ -14040,9 +14041,7 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
       </div>
       <div class="modal-body proxy-body">
         <p class="proxy-lede">
-          Builds a PDF at true card size — ${PROXY_PER_PAGE} per page, ready to print and cut.
-          Every card is stamped <strong>PROXY</strong>. For playtesting only: proxies aren't
-          legal in sanctioned play and must never be sold or passed off as real cards.
+          ${_tRich("Builds a PDF at true card size — {n} per page, ready to print and cut. Every card is stamped **PROXY**. For playtesting only: proxies aren't legal in sanctioned play and must never be sold or passed off as real cards.", {n: PROXY_PER_PAGE})}
         </p>
 
         <div class="proxy-opts">
@@ -14064,7 +14063,7 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
         ${ink === "bw" && face !== "lite" && html`<label class="proxy-check">
           <input type="checkbox" checked=${lighten}
             onChange=${e => { setLighten(e.target.checked); setResult(null); }}/>
-          <span>${_t("Lighten for laser/inkjet")} <span class="muted">— keeps rules text readable and uses far less toner on dark cards</span></span>
+          <span>${_t("Lighten for laser/inkjet")} <span class="muted">— ${_t("keeps rules text readable and uses far less toner on dark cards")}</span></span>
         </label>`}
 
         <div class="proxy-opt">
@@ -14093,7 +14092,7 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
             <button type="button" class="chip" onClick=${() => applyPreset("none")}
               title=${_t("Clear every count, then pick the cards you want")}>${_t("None")}</button>
             <button type="button" class="chip proxy-list-toggle" onClick=${() => setListOpen(v => !v)}>
-              ${listOpen ? "▾" : "▸"} ${printCards.length} of ${cards.length} cards
+              ${listOpen ? "▾" : "▸"} ${_t("{n} of {total} cards", {n: printCards.length, total: cards.length})}
             </button>
           </div>
         </div>
@@ -14104,21 +14103,21 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
             const n = qtyOf(c.card_id);
             return html`<div key=${c.card_id} class=${"proxy-cardrow"+(n>0?" on":"")}>
               <button type="button" class=${"proxy-cardcheck"+(n>0?" on":"")}
-                aria-pressed=${n>0} aria-label=${(n>0?"Exclude ":"Include ")+c.name}
+                aria-pressed=${n>0} aria-label=${_t(n>0 ? "Exclude {name}" : "Include {name}", {name: c.name})}
                 title=${n > 0 ? _t("Don't print this card") : _t("Print this card")}
                 onClick=${() => setQtyFor(c.card_id, n > 0 ? 0 : (c.quantity || 1))}>${n>0?"✓":""}</button>
               <span class="proxy-cardname" title=${c.name + (c.sub ? " — " + c.sub : "")}>
                 ${c.name}${c.sub && html`<span class="proxy-cardsub"> ${_t(c.sub)}</span>`}
               </span>
-              ${!c.img && face !== "lite" && html`<span class="proxy-cardwarn" title=${_t("No card image available — prints as a name card")}>no image</span>`}
+              ${!c.img && face !== "lite" && html`<span class="proxy-cardwarn" title=${_t("No card image available — prints as a name card")}>${_t("no image")}</span>`}
               <div class="proxy-cardqty" onClick=${e => e.stopPropagation()}>
                 <button type="button" onClick=${() => bumpQty(c.card_id, -1)} disabled=${n <= 0}
-                  aria-label=${"One fewer "+c.name}>−</button>
+                  aria-label=${_t("One fewer {name}", {name: c.name})}>−</button>
                 <input type="number" min="0" max=${PROXY_MAX_PER_CARD} inputMode="numeric"
-                  value=${n} aria-label=${"Copies of "+c.name}
+                  value=${n} aria-label=${_t("Copies of {name}", {name: c.name})}
                   onInput=${e => setQtyFor(c.card_id, parseInt(e.target.value, 10) || 0)}/>
                 <button type="button" onClick=${() => bumpQty(c.card_id, +1)}
-                  disabled=${n >= PROXY_MAX_PER_CARD} aria-label=${"One more "+c.name}>+</button>
+                  disabled=${n >= PROXY_MAX_PER_CARD} aria-label=${_t("One more {name}", {name: c.name})}>+</button>
               </div>
             </div>`;
           })}
@@ -14127,7 +14126,7 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
         <label class="proxy-check">
           <input type="checkbox" checked=${guides}
             onChange=${e => { setGuides(e.target.checked); setResult(null); }}/>
-          <span>${_t("Cut marks in the margins")} <span class="muted">— line a ruler up across the page to cut</span></span>
+          <span>${_t("Cut marks in the margins")} <span class="muted">— ${_t("line a ruler up across the page to cut")}</span></span>
         </label>
 
         <div class="proxy-foot">
@@ -14136,20 +14135,19 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
             ? html`<span class="muted">${_t("Nothing to print yet.")}</span>`
             : totalCards === 0
               ? html`<span class="muted">${_t("No cards selected — tick some above, or hit “One of each”.")}</span>`
-              : html`<strong>${totalCards}</strong> card${totalCards === 1 ? "" : "s"} · <strong>${pageCount}</strong> page${pageCount === 1 ? "" : "s"} · ${printCards.length} unique`}
-          ${missingArt > 0 && html`<div class="proxy-warn">${missingArt} card${missingArt === 1 ? " has" : "s have"} no card image available — ${missingArt === 1 ? "it prints" : "they print"} as a name card.</div>`}
+              : html`${_tRich("**{n}** cards · **{p}** pages · {u} unique", {n: totalCards, p: pageCount, u: printCards.length})}`}
+          ${missingArt > 0 && html`<div class="proxy-warn">${_t("{n} card(s) have no card image available — they print as a name card.", {n: missingArt})}</div>`}
         </div>
 
         <div class="proxy-print-note proxy-print-note--foot">
-          ${uiIcon("warn")} When printing, set <strong>Scale: 100%</strong> (or “Actual size”) — “Fit to page”
-          shrinks the cards and they won't match real ones.
+          ${uiIcon("warn")} ${_tRich("When printing, set **Scale: 100%** (or “Actual size”) — “Fit to page” shrinks the cards and they won't match real ones.")}
         </div>
 
         ${error && html`<div class="proxy-error">${error}</div>`}
 
         ${busy && progress && html`<div class="proxy-progress">
           <div class="proxy-progress-bar"><span style=${{width: (progress.total ? (progress.done / progress.total) * 100 : 0) + "%"}}></span></div>
-          <div class="proxy-progress-lbl">Rendering ${progress.done} / ${progress.total} cards…</div>
+          <div class="proxy-progress-lbl">${_t("Rendering {n} / {total} cards…", {n: progress.done, total: progress.total})}</div>
         </div>`}
 
         <div class="proxy-actions">
@@ -14170,20 +14168,14 @@ const ProxyPrintModal = ({deck, cardById, tournamentContext, onClose}) => {
                 }}>${uiIcon("print")} ${_t("Open & print")}</button>
                 <button onClick=${generate} disabled=${busy}>${_t("Rebuild")}</button>
                 <span class="proxy-done muted">
-                  ${result.pages} page${result.pages === 1 ? "" : "s"} · ${(result.bytes / 1048576).toFixed(1)} MB
+                  ${_t("{n} page(s)", {n: result.pages})} · ${(result.bytes / 1048576).toFixed(1)} MB
                 </span>
               </>`}
         </div>
         ${result && result.artFailed && result.artFailed.length > 0 && html`<div class="proxy-error" role="status">${
-          (result.artFailed.length === 1 ? _t("1 card's art didn't load, so it prints") : result.artFailed.length + " cards' art didn't load, so they print")
-          + " as a name card: " + result.artFailed.slice(0, 4).join(", ")
-          + (result.artFailed.length > 4 ? " and " + (result.artFailed.length - 4) + " more" : "")
-          + ". Rebuild to try again."}</div>`}
+          _t("{n} card(s) couldn't load their art, so they print as a name card: {names}. Rebuild to try again.", {n: result.artFailed.length, names: result.artFailed.slice(0, 4).join(", ") + (result.artFailed.length > 4 ? " " + _t("and {n} more", {n: result.artFailed.length - 4}) : "")})}</div>`}
         ${result && result.keptArt && result.keptArt.length > 0 && html`<div class="proxy-warn" role="status">${
-          (result.keptArt.length === 1 ? _t("1 card isn't") : result.keptArt.length + " cards aren't")
-          + " on the standard card frame, so " + (result.keptArt.length === 1 ? "it prints with its" : "they print with their") + " art: "
-          + result.keptArt.slice(0, 4).join(", ")
-          + (result.keptArt.length > 4 ? " and " + (result.keptArt.length - 4) + " more" : "") + "."}</div>`}
+          _t("{n} card(s) aren't on the standard card frame, so they print with their art: {names}.", {n: result.keptArt.length, names: result.keptArt.slice(0, 4).join(", ") + (result.keptArt.length > 4 ? " " + _t("and {n} more", {n: result.keptArt.length - 4}) : "")})}</div>`}
         </div>
       </div>
     </div>
@@ -14402,7 +14394,7 @@ const Coachmark = ({title, steps: allSteps, onClose, onAbort, onDone, progress, 
   return html`<div class="coach-root">
     <div class=${"coach-dim"+(box?"":" coach-dim--solid")} onClick=${onClose}></div>
     ${spotStyle && html`<div class="coach-spotlight" style=${spotStyle}></div>`}
-    <div class=${"coach-tip"+(arrow?(" coach-tip--"+arrow):"")} style=${tipStyle} onClick=${e=>e.stopPropagation()} role="dialog" aria-label=${(title||"")+" tour"}>
+    <div class=${"coach-tip"+(arrow?(" coach-tip--"+arrow):"")} style=${tipStyle} onClick=${e=>e.stopPropagation()} role="dialog" aria-label=${_t("{name} tour", {name: title||""})}>
       <div class="coach-tip-head">
         ${title && html`<span class="coach-tip-kicker">${_t(title)}</span>`}
         <span class="coach-tip-step">${progress ? progress+" · " : ""}${i+1} / ${steps.length}</span>
@@ -14483,20 +14475,20 @@ const InstallHelpModal = ({installEvent, clearInstallEvent, isIOS, isAndroid, on
           </div>
         </div>` : isIOS ? html`<div>
           <div style=${{fontSize:13,fontWeight:700,marginBottom:6}}>${_t("On iPhone / iPad (Safari)")}</div>
-          ${step(1, html`Tap the <strong>Share</strong> button at the bottom of Safari (the square with the up arrow).`)}
-          ${step(2, html`Scroll down and tap <strong>Add to Home Screen</strong>.`)}
-          ${step(3, html`Tap <strong>Add</strong> in the top-right. Packs.Ink will appear on your home screen.`)}
+          ${step(1, html`${_tRich("Tap the **Share** button at the bottom of Safari (the square with the up arrow).")}`)}
+          ${step(2, html`${_tRich("Scroll down and tap **Add to Home Screen**.")}`)}
+          ${step(3, html`${_tRich("Tap **Add** in the top-right. Packs.Ink will appear on your home screen.")}`)}
           <div class="muted" style=${{fontSize:11,marginTop:10,padding:"8px 10px",background:"var(--bg-surface)",borderRadius:6}}>
             ${_t("Note: only Safari supports installing on iOS. If you're in Chrome or another browser, open this page in Safari first.")}
           </div>
         </div>` : isAndroid ? html`<div>
           <div style=${{fontSize:13,fontWeight:700,marginBottom:6}}>${_t("On Android (Chrome)")}</div>
-          ${step(1, html`Tap the <strong>⋮</strong> menu in the top-right corner of Chrome.`)}
-          ${step(2, html`Tap <strong>Install app</strong> (or <strong>Add to Home screen</strong>).`)}
+          ${step(1, html`${_tRich("Tap the **⋮** menu in the top-right corner of Chrome.")}`)}
+          ${step(2, html`${_tRich("Tap **Install app** (or **Add to Home screen**).")}`)}
           ${step(3, html`${_t("Confirm. Packs.Ink will appear in your app drawer and on your home screen.")}`)}
         </div>` : html`<div>
           <div style=${{fontSize:13,fontWeight:700,marginBottom:6}}>${_t("On desktop (Chrome, Edge, Brave)")}</div>
-          ${step(1, html`Look for the <strong>install icon</strong> (a small monitor with a down arrow) on the right side of your address bar.`)}
+          ${step(1, html`${_tRich("Look for the **install icon** (a small monitor with a down arrow) on the right side of your address bar.")}`)}
           ${step(2, html`${_t("Click it and confirm. Packs.Ink will open in its own window.")}`)}
           <div class="muted" style=${{fontSize:11,marginTop:10,padding:"8px 10px",background:"var(--bg-surface)",borderRadius:6}}>
             ${_t("On mobile? Open this page on your phone in Chrome (Android) or Safari (iOS) to install.")}
@@ -14608,7 +14600,7 @@ const MulliganSimulator = ({deck, cardById, tournamentContext, onClose}) => {
       <div class="modal-body" style=${{padding:20}}>
         ${isShort
           ? html`<div class="muted" style=${{fontSize:13,padding:"20px 0",textAlign:"center"}}>
-              Need at least 7 cards in the deck to simulate (this one has ${totalCards}).
+              ${_t("Need at least 7 cards in the deck to simulate (this one has {n}).", {n: totalCards})}
             </div>`
           : html`<div>
               <div style=${{display:"flex",alignItems:"center",gap:12,marginBottom:14,flexWrap:"wrap"}}>
@@ -14618,7 +14610,7 @@ const MulliganSimulator = ({deck, cardById, tournamentContext, onClose}) => {
                 <span class="muted" style=${{fontSize:11}}>
                   ${phase === "initial"
                     ? _t("Click cards to mark for mulligan. Marked cards go to the bottom; replacements come off the top.")
-                    : `${remaining.length} ${remaining.length === 1 ? "card" : "cards"} left in deck.`}
+                    : (remaining.length === 1 ? _t("1 card left in deck.") : _t("{n} cards left in deck.", {n: remaining.length}))}
                 </span>
               </div>
               <div class="mulligan-hand">
@@ -14628,8 +14620,8 @@ const MulliganSimulator = ({deck, cardById, tournamentContext, onClose}) => {
                 ${phase === "initial"
                   ? html`<button class="active" onClick=${applyMulligan}
                       style=${{padding:"8px 18px",fontSize:13}}
-                      title=${mulliganSet.size === 0 ? _t("Keep this opening hand") : `Mulligan ${mulliganSet.size} card${mulliganSet.size===1?"":"s"}`}>
-                      ${mulliganSet.size === 0 ? _t("✓ Keep hand") : `↻ Mulligan ${mulliganSet.size}`}
+                      title=${mulliganSet.size === 0 ? _t("Keep this opening hand") : _t("Mulligan {n} card(s)", {n: mulliganSet.size})}>
+                      ${mulliganSet.size === 0 ? _t("✓ Keep hand") : _t("↻ Mulligan {n}", {n: mulliganSet.size})}
                     </button>`
                   : html`<span style=${{fontSize:12,color:"var(--green)",fontWeight:600}}>${_t("✓ Hand locked in")}</span>`}
                 <button onClick=${reshuffle} style=${{padding:"8px 16px",fontSize:13}}
@@ -14972,7 +14964,7 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
           <div style=${{display:"flex",alignItems:"baseline",gap:10,marginBottom:12}}>
             <h3 style=${{margin:0,fontSize:16}}>${picked}</h3>
             <span class="muted" style=${{fontSize:12}}>
-              ${cardsForArtist.length} card${cardsForArtist.length===1?"":"s"}
+              ${cardsForArtist.length === 1 ? _t("1 card") : _t("{n} cards", {n: cardsForArtist.length})}
             </span>
             <button class="settings-action link" style=${{marginLeft:"auto"}}
               onClick=${()=>{setPicked(null); setError(null);}}>${_t("← Pick another artist")}</button>
@@ -14998,7 +14990,7 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
                     style=${{padding:"8px 18px",fontSize:13,border:"1px solid var(--btn-border)",
                       borderRadius:6,background:"var(--bg-solid)",color:"var(--text)",
                       fontWeight:600,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif"}}
-                    title=${"Open the Cards tab filtered to "+picked}>
+                    title=${_t("Open the Cards tab filtered to {name}", {name: picked})}>
                     ${_t("Browse in Cards")}
                   </button>`}
                   <span class="muted" style=${{fontSize:11,lineHeight:1.4}}>
@@ -15687,7 +15679,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
         ${SORT_OPTIONS.map(o=>html`<option key=${o.key} value=${o.key}>${_t(o.label)}</option>`)}
       </select>
       <button onClick=${()=>setDrawerOpen(true)} class=${activeCount?"active":""}>
-        ☰ Filters${activeCount?html`<span class="filter-count-badge">${activeCount}</span>`:""}
+        ☰ ${_t("Filters")}${activeCount?html`<span class="filter-count-badge">${activeCount}</span>`:""}
       </button>
       <button onClick=${()=>setArtistAlleyOpen(true)} title=${_t("Generate a poster of every card by a chosen artist")}>
         ${_t("✦ Artist Alley")}
@@ -15728,7 +15720,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
       <span class="cards-bulk-count">${_t("{n} selected", {n: selected.size})}</span>
       <button class="cards-bulk-link" onClick=${selectAllVisible}
         title=${_t("Add every card matching the current filters to the selection")}>
-        + Select all visible (${grouped.length.toLocaleString()})
+        ${_t("+ Select all visible ({n})", {n: grouped.length.toLocaleString()})}
       </button>
       <button class="cards-bulk-link" onClick=${clearSelection}>${_t("Clear")}</button>
       <div class="cards-bulk-spacer"></div>
@@ -16394,17 +16386,17 @@ const FeedbackModal = ({user, onClose, onSeen})=>{
   const backToList = () => { setOpenId(null); setJustSent(null); setReply(""); setReplyErr(null); };
   const hasThreads = !!(threads && threads.length);
   const accountNote = user
-    ? html`Attached to your account (<strong>${user.email}</strong>)${unavailable ? " so we can follow up." : " — replies show up right here."}`
+    ? html`${_tRich(unavailable ? "Attached to your account (**{email}**) so we can follow up." : "Attached to your account (**{email}**) — replies show up right here.", {email: user.email})}`
     : unavailable
-      ? "You're not signed in — sign in first if you'd like a reply."
-      : "You're not signed in, so replies show up here on this browser only. Sign in to get them on any device.";
+      ? _t("You're not signed in — sign in first if you'd like a reply.")
+      : _t("You're not signed in, so replies show up here on this browser only. Sign in to get them on any device.");
 
   const threadView = openThread && html`<${React.Fragment}>
     <div class="modal-body" ref=${bodyRef} style=${{padding:"12px 16px 14px"}}>
       <button type="button" class="fb-back" onClick=${backToList}>${_t("← All feedback")}</button>
       ${justSent === openThread.id && html`<div class="fb-sent" role="status">${uiIcon("check", 13)} ${_t("Sent. Replies will show up right here.")}</div>`}
       <div class="fb-thread-origin">
-        Sent from <code>${openThread.page || "/"}</code> · <span title=${absoluteLocalTime(openThread.created_at)}>${relativeTime(openThread.created_at)}</span>
+        ${_t("Sent from")} <code>${openThread.page || "/"}</code> · <span title=${absoluteLocalTime(openThread.created_at)}>${relativeTime(openThread.created_at)}</span>
       </div>
       <div class="fb-thread">
         ${feedbackThreadMessages(openThread).map(m => html`<div key=${m.id} class=${"fb-msg " + (m.from_admin ? "fb-msg--theirs" : "fb-msg--mine")}>
@@ -16439,7 +16431,7 @@ const FeedbackModal = ({user, onClose, onSeen})=>{
           <textarea ref=${composeRef} class="fb-textarea" value=${text} rows=${4}
             onInput=${e=>setText(e.target.value)} onKeyDown=${feedbackModEnter(submit)}
             placeholder=${_t("What's working, what's broken, what you'd like to see…")} aria-label=${_t("Your feedback")}/>
-          <div class="fb-note">${accountNote}<br/>We'll also record which page you're on (<code>${page || "/"}</code>).</div>
+          <div class="fb-note">${accountNote}<br/>${_t("We'll also record which page you're on")} (<code>${page || "/"}</code>).</div>
           ${err && html`<div class="fb-err">${err}</div>`}
           <div class="fb-actions">
             <button type="button" onClick=${onClose} disabled=${busy}>${_t("Cancel")}</button>
@@ -16676,7 +16668,7 @@ const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback
         ${uiIcon("warn", 12)} ${_t("Prices may be stale (last update {when})", {when: relativeTime(lastEtlDate)})}
       </div>`}
       ${matviewLag && !stale && html`<div class="footer-stale"
-        title=${"Newer prices (" + lastRawPriceDate + ") are loaded but not yet published to the display layer (" + lastEtlDate + "). Ops: run refresh_card_prices_latest()."}>
+        title=${_t("Newer prices ({raw}) are loaded but not yet published to the display layer ({shown}).", {raw: lastRawPriceDate, shown: lastEtlDate}) + " Ops: run refresh_card_prices_latest()."}>
         ${uiIcon("warn", 12)} ${_t("Today's prices are still processing — showing {date}", {date: lastEtlDate})}
       </div>`}
     </div>
@@ -18278,7 +18270,7 @@ function AvgView({sets, avgs, nc, setNc, priceMode, setPriceMode, metric, setMet
                 return html`<td key=${i} title=${tip} style=${{color:tone}}>${fmt(v)}</td>`;
               })}
               ${showDiff && html`<td style=${{color: diff==null||shareMode ? "var(--text-dim)" : diff>0?"var(--green)":diff<0?"var(--red)":"inherit",fontWeight:600}}>
-                ${diff==null ? "—" : (diff>0?"+":"") + (shareMode ? diff.toFixed(1)+" pp" : fmt(diff))}
+                ${diff==null ? "—" : (diff>0?"+":"") + (shareMode ? diff.toFixed(1)+" " + _t("pp") : fmt(diff))}
               </td>`}
             </tr>`;
           })}
@@ -21617,7 +21609,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   const qaListReachable = SCANNER_QA_ONLY && qaResults.length > 0;
   if((phase === "denied" || phase === "nocam" || phase === "noindex" || phase === "error") && !(qaListReachable && qaReview)){
     const reviewBtn = qaListReachable
-      ? html`<button class="scanner-btn" onClick=${() => setQaReview(true)}>Review ${qaResults.length} scan${qaResults.length === 1 ? "" : "s"}</button>` : null;
+      ? html`<button class="scanner-btn" onClick=${() => setQaReview(true)}>${_t("Review {n} scan(s)", {n: qaResults.length})}</button>` : null;
     const onPhone = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
     const m = { denied: ["Camera blocked", "Allow camera access for packs.ink in your browser settings, then reopen the scanner."],
       nocam: ["No camera found", onPhone
@@ -21676,7 +21668,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
         ${x.status === "identifying"
           ? html`<span class="scanner-session-name scanner-qa-identifying">${_t("Identifying…")}</span>`
           : html`<span class="scanner-session-name">${qaConfChip(x.conf, x.ver)} ${x.conf === "unread" ? html`<span class="scanner-qa-unread">${x.foreign ? _t("Non-English card — not supported yet") : _t("Couldn't read — tap edit to pick")}</span>` : (x.guess || _t("(no match)"))}${guessVar ? html` <span class="scanner-qa-setname" title=${guessVar.set + (guessVar.number ? " #" + guessVar.number : "")}>${scanSetShort(guessVar.set)}${guessVar.number ? " #" + guessVar.number : ""}</span>` : null}</span>`}
-        ${x.alts && x.status !== "identifying" ? html`<span class="scanner-qa-alts">maybe: ${x.alts}</span>` : null}
+        ${x.alts && x.status !== "identifying" ? html`<span class="scanner-qa-alts">${_t("maybe: {alts}", {alts: x.alts})}</span>` : null}
         ${(x.hasFoilPair || prOnly || varChips.length) ? html`<span class="scanner-qa-segs">
           ${x.hasFoilPair ? html`<span class="scanner-qa-foilseg" title=${_t("Which printing is the physical card?")}>
               <button class=${"scanner-qa-foilbtn" + (x.printing === x.prN ? " on" : "")} onClick=${() => qaFlipRow(x.id, "N")}>${_t("Non-Foil")}</button>
@@ -21728,7 +21720,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
             <span class="scanner-qa-search-name">${cardDisplayName(r)}</span>
             <span class="scanner-qa-search-meta">${[r.Number ? "#" + String(r.Number).split("/")[0] : null, r.Set, r.Rarity].filter(Boolean).join(" · ")}</span>
           </button>`)}
-        </div>` : (qaEditQd.trim().length >= 2 ? html`<div class="scanner-qa-search-none">No card matches "${qaEditQd.trim()}"</div>` : null)}
+        </div>` : (qaEditQd.trim().length >= 2 ? html`<div class="scanner-qa-search-none">${_t("No cards match \"{q}\"", {q: qaEditQd.trim()})}</div>` : null)}
       </div>` : null}
     </div>`;
   };
@@ -21744,10 +21736,10 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
         <img class="scanner-result-img" src=${disp.thumb} alt=${lbl(disp)}/>
         <div class="scanner-result-info">
           <div class="scanner-result-name">${lbl(disp)}</div>
-          <div class="scanner-result-meta">${disp.rarity || ""}${result.confident ? "" : html` · <span class="scanner-lowconf">double-check below</span>`}</div>
+          <div class="scanner-result-meta">${disp.rarity || ""}${result.confident ? "" : html` · <span class="scanner-lowconf">${_t("double-check below")}</span>`}</div>
           ${user ? html`<div class="scanner-add-row">
-            <button class="scanner-btn primary" onClick=${() => addCopy(false)}>+ Add${nQty ? html` <span class="scanner-owned">(${nQty})</span>` : null}</button>
-            ${g && g.foil ? html`<button class="scanner-btn" onClick=${() => addCopy(true)}>+ Foil${fQty ? html` <span class="scanner-owned">(${fQty})</span>` : null}</button>` : null}
+            <button class="scanner-btn primary" onClick=${() => addCopy(false)}>${_t("+ Add")}${nQty ? html` <span class="scanner-owned">(${nQty})</span>` : null}</button>
+            ${g && g.foil ? html`<button class="scanner-btn" onClick=${() => addCopy(true)}>${_t("+ Foil")}${fQty ? html` <span class="scanner-owned">(${fQty})</span>` : null}</button>` : null}
           </div>` : html`<button class="scanner-btn primary" onClick=${onSignIn}>${_t("Sign in to add")}</button>`}
           ${addedMsg ? html`<div class="scanner-added">${addedMsg}</div>` : null}
           <div class="scanner-confirm-actions">
@@ -21785,21 +21777,21 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
           <button class=${"scanner-shutter scanner-amb-add" + (detected ? " ready" : "") + (qpv && qpv.textOk ? " locked" : "")} onClick=${snapForQA} aria-label=${_t("Snap this card")}
             title=${qpv && qpv.textOk ? _t("Log this card and move to the next") : _t("Snap — identifies in the background")}>${uiIcon("camera", 26)}</button>
         </div>
-        <span class="scanner-amb-auto scanner-qa-count">${qaResults.length} snapped</span>
+        <span class="scanner-amb-auto scanner-qa-count">${_t("{n} snapped", {n: qaResults.length})}</span>
       </div>
       ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
-      ${qaUndo ? html`<div class="scanner-saved-msg">Removed ${_t(qaUndo.label)} · <button class="scanner-link" onClick=${qaUndoDelete}>${_t("Undo")}</button></div>` : null}
-      ${qaNoteHidden ? null : html`<div class="scanner-qa-note">Point at a card — when the name is <b>✓ confirmed</b>, the shutter logs it instantly. Not confirmed yet? It still captures and identifies in the background, so you can move straight to the next card. Wrong match? Tap <b>✎</b> on its row to fix it${user && uploadsOn ? " — every fix helps train the scanner" : ""}. <b>${_t("Nothing is added anywhere until you Review & save.")}</b>
+      ${qaUndo ? html`<div class="scanner-saved-msg">${_t("Removed {name}", {name: _t(qaUndo.label)})} · <button class="scanner-link" onClick=${qaUndoDelete}>${_t("Undo")}</button></div>` : null}
+      ${qaNoteHidden ? null : html`<div class="scanner-qa-note">${_tRich(user && uploadsOn ? "Point at a card — when the name is **✓ confirmed**, the shutter logs it instantly. Not confirmed yet? It still captures and identifies in the background, so you can move straight to the next card. Wrong match? Tap **✎** on its row to fix it — every fix helps train the scanner." : "Point at a card — when the name is **✓ confirmed**, the shutter logs it instantly. Not confirmed yet? It still captures and identifies in the background, so you can move straight to the next card. Wrong match? Tap **✎** on its row to fix it.")} <b>${_t("Nothing is added anywhere until you Review & save.")}</b>
         <button type="button" class="scanner-link scanner-qa-note-hide" onClick=${hideQaNote}>${_t("Got it")}</button></div>`}
       <div class="scanner-session">
         <div class="scanner-session-head">
-          <span class="scanner-session-count">${qaResults.length} scanned</span>
+          <span class="scanner-session-count">${_t("{n} scanned", {n: qaResults.length})}</span>
           <span class="scanner-session-total">${qaResults.length ? qmoney(qaAgg.total) : ""}</span>
           ${qaResults.length ? html`<button class="scanner-save-btn" onClick=${() => setQaReview(true)}>${_t("Review & save →")}</button>` : null}
         </div>
         <div class="scanner-session-list">
           ${qaResults.length === 0
-            ? html`<div class="scanner-session-empty">Point at a card and tap the <b>shutter</b>. Hold close — one card, good light. No need to wait between snaps.</div>`
+            ? html`<div class="scanner-session-empty">${_tRich("Point at a card and tap the **shutter**. Hold close — one card, good light. No need to wait between snaps.")}</div>`
             : qaResults.map(qaRowJsx)}
         </div>
       </div>
@@ -21828,15 +21820,15 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       </div>
       <div class="scanner-session">
         <div class="scanner-session-head">
-          <span class="scanner-session-count">${sessCount} staged</span>
+          <span class="scanner-session-count">${_t("{n} staged", {n: sessCount})}</span>
           <span class="scanner-session-total">${fmtUSD(sessTotal)}</span>
           ${session.length ? html`<button class="scanner-link" onClick=${undoLast}>${_t("Undo")}</button>` : null}
-          ${session.length && user ? html`<button class="scanner-save-btn" onClick=${saveSessionToCollection}>Save ${sessCount} →</button>` : null}
+          ${session.length && user ? html`<button class="scanner-save-btn" onClick=${saveSessionToCollection}>${_t("Save {n} →", {n: sessCount})}</button>` : null}
         </div>
         ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
         <div class="scanner-session-list">
           ${session.length === 0
-            ? html`<div class="scanner-session-empty">${savedMsg ? _t("Saved. Keep scanning to stage more.") : html`Point at a card and tap <b>＋</b> to stage it. Fix any wrong matches, then <b>Save</b> — <u>nothing is added to your collection until you tap Save</u>.`}</div>`
+            ? html`<div class="scanner-session-empty">${savedMsg ? _t("Saved. Keep scanning to stage more.") : html`${_tRich("Point at a card and tap **＋** to stage it. Fix any wrong matches, then **Save** — nothing is added to your collection until you tap Save.")}`}</div>`
             : session.map(x => html`<div class=${"scanner-session-row" + (Number(x.mkt ?? x.low ?? 0) >= 20 ? " valuable" : "")} key=${x.eid}>
                 <img class="scanner-session-thumb" src=${x.thumb} loading="lazy" onClick=${() => toggleRow(x.eid)}/>
                 <span class="scanner-session-name" onClick=${() => toggleRow(x.eid)}>${x.name}${x.printing && x.printing !== "Normal" ? html` <span class="scanner-session-pr">${x.printing === "Holofoil" ? _t("Holo") : x.printing}</span>` : null}</span>
@@ -21845,7 +21837,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
                 <button class="scanner-session-rm" onClick=${() => removeRow(x.eid)} aria-label=${_t("Remove from list")}>×</button>
                 ${x.expanded && ((x.cands && x.cands.length > 1) || x.hasFoilPair) ? html`<div class="scanner-session-alts">
                   ${x.hasFoilPair ? html`<button class="scanner-session-foilbtn" onClick=${() => swapFoil(x.eid)}>
-                    ⇄ Make it ${x.printing === x.prN ? ((x.prF === "Holofoil" ? _t("Holo") : x.prF) || _t("Foil")) : _t("Non-Foil")}${(() => { const px = x.printing === x.prN ? x.pxF : x.pxN; const m = px && (px.mkt ?? px.low); return m != null ? " (" + money(m) + ")" : ""; })()}
+                    ⇄ ${_t("Make it {printing}", {printing: x.printing === x.prN ? ((x.prF === "Holofoil" ? _t("Holo") : x.prF) || _t("Foil")) : _t("Non-Foil")})}${(() => { const px = x.printing === x.prN ? x.pxF : x.pxN; const m = px && (px.mkt ?? px.low); return m != null ? " (" + money(m) + ")" : ""; })()}
                   </button>` : null}
                   ${x.cands && x.cands.length > 1 ? html`<div class="scanner-session-alts-lbl">${_t("Wrong card? Tap the right one:")}</div>
                   <div class="scanner-cand-row">
@@ -21874,21 +21866,21 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   const qaReviewPanel = !qaReviewing ? null : html`<div class="scanner-qa-review">
     <div class="scanner-qa-review-head">
       <button class="scanner-link" onClick=${() => setQaReview(false)}>${_t("← Camera")}</button>
-      <span class="scanner-session-count">${qaResults.length} scan${qaResults.length === 1 ? "" : "s"}</span>
+      <span class="scanner-session-count">${_t("{n} scan(s)", {n: qaResults.length})}</span>
       ${qaResults.length ? html`<button class=${"scanner-link scanner-qa-clear" + (qaClearArm ? " armed" : "")} onClick=${qaClearAll}>${qaClearArm ? _t("Tap again to clear all") : _t("Clear all")}</button>` : null}
       <span class="scanner-session-total">${qmoney(qaAgg.total)}</span>
     </div>
     ${qaAgg.pairs ? html`<div class="scanner-qa-review-tools">
-      <span>Foil (${qaAgg.pairs} card${qaAgg.pairs === 1 ? " has" : "s have"} both printings):</span>
+      <span>${_t("Foil ({n} card(s) have both printings):", {n: qaAgg.pairs})}</span>
       <button class="scanner-qa-flipall" onClick=${() => qaFlipAll("N")}>${_t("All Non-Foil")}</button>
       <button class="scanner-qa-flipall" onClick=${() => qaFlipAll("F")}>${_t("All Foil")}</button>
     </div>` : null}
     ${user ? html`<label class="scanner-qa-privacy">
       <input type="checkbox" checked=${uploadsOn} onChange=${e => setUploadPref(e.target.checked)}/>
-      <span>Upload my scan photos to help improve the scanner${uploadsOn ? "" : " — off, your scans stay on this device"}</span>
+      <span>${uploadsOn ? _t("Upload my scan photos to help improve the scanner") : _t("Upload my scan photos to help improve the scanner — off, your scans stay on this device")}</span>
     </label>` : html`<div class="scanner-qa-privacy scanner-qa-guest">${_t("You're signed out, so nothing was uploaded — these scans are only on this device. Sign in to save them; the list comes with you.")}</div>`}
     ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
-    ${qaUndo ? html`<div class="scanner-saved-msg">Removed ${_t(qaUndo.label)} · <button class="scanner-link" onClick=${qaUndoDelete}>${_t("Undo")}</button></div>` : null}
+    ${qaUndo ? html`<div class="scanner-saved-msg">${_t("Removed {name}", {name: _t(qaUndo.label)})} · <button class="scanner-link" onClick=${qaUndoDelete}>${_t("Undo")}</button></div>` : null}
     <div class="scanner-session-list scanner-qa-review-list">
       ${qaResults.length === 0
         ? html`<div class="scanner-session-empty">${_t("Nothing scanned yet — go back to the camera and snap some cards.")}</div>`
@@ -21896,15 +21888,15 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     </div>
     <div class="scanner-qa-review-actions">
       <button class="scanner-btn primary" disabled=${!qaAgg.unsaved || qaSaving} onClick=${qaSaveToCollection}>
-        ${qaSaving ? _t("Saving…") : qaAgg.unsaved ? (user ? "+ Add " : "Sign in to add ") + qaAgg.unsaved + " to collection" : (qaAgg.savable ? _t("Added to collection ✓") : _t("+ Add to collection"))}
+        ${qaSaving ? _t("Saving…") : qaAgg.unsaved ? _t(user ? "+ Add {n} to collection" : "Sign in to add {n} to collection", {n: qaAgg.unsaved}) : (qaAgg.savable ? _t("Added to collection ✓") : _t("+ Add to collection"))}
       </button>
       <button class="scanner-btn" disabled=${!qaAgg.savable || qaDeckBusy} onClick=${qaCreateDeck}>${qaDeckBusy ? _t("Creating deck…") : (user ? _t("New deck") : _t("Sign in for a deck"))}</button>
     </div>
     ${(qaAgg.pending || qaAgg.unmatched || qaAgg.unpriceable) ? html`<div class="scanner-qa-note">${[
-      qaAgg.pending ? qaAgg.pending + " still identifying" : null,
-      qaAgg.unmatched ? qaAgg.unmatched + " with no match (edit to fix)" : null,
-      qaAgg.unpriceable ? qaAgg.unpriceable + " not in the price catalog" : null,
-    ].filter(Boolean).join(" · ")} — these won't be added.</div>` : null}
+      qaAgg.pending ? _t("{n} still identifying", {n: qaAgg.pending}) : null,
+      qaAgg.unmatched ? _t("{n} with no match (edit to fix)", {n: qaAgg.unmatched}) : null,
+      qaAgg.unpriceable ? _t("{n} not in the price catalog", {n: qaAgg.unpriceable}) : null,
+    ].filter(Boolean).join(" · ")} — ${_t("these won't be added.")}</div>` : null}
   </div>`;
   // QA mode: the 📸 BUTTON is the only shutter (7/18 field: tap-anywhere fired
   // on incidental touches — adjusting grip, tapping to focus — and read as the
@@ -21915,23 +21907,19 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   // Signed out: nothing is uploaded, so the notice is a different promise —
   // and the one place the only reason to sign in (saving) is said up front.
   const guestPanel = html`<div class="scanner-consent">
-    <h3 class="scanner-consent-title title-font">${_t("Card scanner")} <span class="scanner-consent-beta">beta</span></h3>
+    <h3 class="scanner-consent-title title-font">${_t("Card scanner")} <span class="scanner-consent-beta">${_t("beta")}</span></h3>
     <p class="scanner-consent-lead">
-      Identification happens <b>entirely on your phone</b> — your camera is matched
-      against a card index your browser already downloaded. No photo is sent anywhere
-      to be read.
+      ${_tRich("Identification happens **entirely on your phone** — your camera is matched against a card index your browser already downloaded. No photo is sent anywhere to be read.")}
     </p>
     <p class="scanner-consent-lead">
-      You're signed out, so <b>nothing is uploaded</b>: no photos, no scans. Your list
-      stays on this device.
+      ${_tRich("You're signed out, so **nothing is uploaded**: no photos, no scans. Your list stays on this device.")}
     </p>
     <p class="scanner-consent-lead">
-      Scan as much as you like. Sign in when you want to <b>add the cards to your
-      collection or a deck</b> — your list comes with you.
+      ${_tRich("Scan as much as you like. Sign in when you want to **add the cards to your collection or a deck** — your list comes with you.")}
     </p>
     <p class="scanner-consent-note">
-      It's a beta: it <i>will</i> misread cards, so check the list before you save anything.
-      Details on our <a href="/privacy#scanner" target="_blank" rel="noopener">privacy page</a>.
+      ${_tRich("It's a beta: it *will* misread cards, so check the list before you save anything.")}
+      <a href="/privacy#scanner" target="_blank" rel="noopener">${_t("Details on our privacy page")}</a>.
     </p>
     <div class="scanner-consent-actions">
       <button class="scanner-btn" onClick=${onClose}>${_t("Not now")}</button>
@@ -21942,18 +21930,15 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   // Beta notice — the gate, not a banner. Everything the user needs to decide
   // is on this one screen; the privacy page is the long form, not the disclosure.
   const consentPanel = !user ? guestPanel : html`<div class="scanner-consent">
-    <h3 class="scanner-consent-title title-font">${_t("Card scanner")} <span class="scanner-consent-beta">beta</span></h3>
+    <h3 class="scanner-consent-title title-font">${_t("Card scanner")} <span class="scanner-consent-beta">${_t("beta")}</span></h3>
     <p class="scanner-consent-lead">
-      Identification happens <b>entirely on your phone</b> — your camera is matched
-      against a card index your browser already downloaded. No photo is sent anywhere
-      to be read.
+      ${_tRich("Identification happens **entirely on your phone** — your camera is matched against a card index your browser already downloaded. No photo is sent anywhere to be read.")}
     </p>
     <p class="scanner-consent-lead">
-      While the scanner is in beta, we also <b>upload a photo of each scan</b> so we
-      can see where it gets cards wrong and fix them.
+      ${_tRich("While the scanner is in beta, we also **upload a photo of each scan** so we can see where it gets cards wrong and fix them.")}
     </p>
     <ul class="scanner-consent-list">
-      <li>It's the <b>whole camera frame</b>, a crop of the card, and a strip of the <b>few frames just before you tap</b> — whatever else is in shot goes with them.</li>
+      <li>${_tRich("It's the **whole camera frame**, a crop of the card, and a strip of the **few frames just before you tap** — whatever else is in shot goes with them.")}</li>
       <li>${_t("Stored privately against your account. Nobody but us can open it.")}</li>
       <li>${_t("Used only to develop and improve the scanner. Never sold, shared, or published.")}</li>
       <li>${_t("No face detection or recognition is ever run on it, and no location data is attached.")}</li>
@@ -21961,11 +21946,11 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     </ul>
     <label class="scanner-consent-toggle">
       <input type="checkbox" checked=${uploadsOn} onChange=${e => setUploadPref(e.target.checked)}/>
-      <span>Upload my scans to help improve the scanner. <b>You can switch this off and still use the scanner</b> — it identifies cards exactly the same either way.</span>
+      <span>${_tRich("Upload my scans to help improve the scanner. **You can switch this off and still use the scanner** — it identifies cards exactly the same either way.")}</span>
     </label>
     <p class="scanner-consent-note">
-      It's a beta: it <i>will</i> misread cards, so check the list before you save anything.
-      Details on our <a href="/privacy#scanner" target="_blank" rel="noopener">privacy page</a>.
+      ${_tRich("It's a beta: it *will* misread cards, so check the list before you save anything.")}
+      <a href="/privacy#scanner" target="_blank" rel="noopener">${_t("Details on our privacy page")}</a>.
     </p>
     <div class="scanner-consent-actions">
       <button class="scanner-btn" onClick=${onClose}>${_t("Not now")}</button>
@@ -21981,7 +21966,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
 
   return html`<div class="scanner-overlay" role="dialog" aria-modal="true" aria-label=${_t("Card scanner")} ref=${scanRootRef}>
     <div class="scanner-head">
-      <span class="scanner-title">${SCANNER_QA_ONLY ? "Scan a card · Beta · " + SCANNER_BUILD : _t("Scan a card")}</span>
+      <span class="scanner-title">${SCANNER_QA_ONLY ? _t("Scan a card · Beta · {build}", {build: SCANNER_BUILD}) : _t("Scan a card")}</span>
       ${phase === "scanning" && !SCANNER_QA_ONLY ? html`<div class="scanner-mode-seg" role="tablist">
         <button class=${"scanner-mode-btn" + (mode === "ambient" ? " active" : "")} onClick=${() => switchMode("ambient")}>${_t("Stack scan")}</button>
         <button class=${"scanner-mode-btn" + (mode === "single" ? " active" : "")} onClick=${() => switchMode("single")}>${_t("Single")}</button>
@@ -21994,7 +21979,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       <video ref=${videoRef} class="scanner-video" playsInline muted autoplay></video>
       <canvas ref=${overlayRef} class="scanner-overlay-cv"></canvas>
       ${!result && !detected ? html`<div class="scanner-softframe" aria-hidden="true"></div>` : null}
-      ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? (SCANNER_QA_ONLY ? _t("Tap to snap") : (mode === "ambient" ? "tap to stage" : "card detected")) : (workerReady ? "point at a card" : (workerFailed ? "tap to snap" : "loading detector…"))}</div>` : null}
+      ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? (SCANNER_QA_ONLY ? _t("Tap to snap") : (mode === "ambient" ? _t("tap to stage") : _t("card detected"))) : (workerReady ? _t("point at a card") : (workerFailed ? _t("tap to snap") : _t("loading detector…")))}</div>` : null}
       ${!result && mode === "ambient" && frameHint ? html`<div class="scanner-coach">${frameHint}</div>` : null}
       ${flash ? html`<div class="scanner-flash" aria-hidden="true"></div>` : null}
       ${busy ? html`<div class="scanner-busy">${_t("Reading card…")}</div>` : null}
@@ -23031,7 +23016,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
         </div>`}
         <div class="setdet-svals">
           <div class="setdet-sval"><span class="setdet-sval-lbl">${_t("Owned")}</span><b class="green">${money(visibleOwned.value)}</b><small>${visibleOwned.count === 1 ? _t("1 card") : _t("{n} cards", {n: visibleOwned.count.toLocaleString()})}</small></div>
-          <div class="setdet-sval"><span class="setdet-sval-lbl">${_t("Missing")}</span><b class="red">${money(visibleMissing.value)}</b><small>${visibleMissing.count.toLocaleString()} ${goalLabel(goal) === "custom goal" ? "to reach your goal" : "to complete the " + goalLabel(goal)}${allMode ? " (all sets)" : ""}</small></div>
+          <div class="setdet-sval"><span class="setdet-sval-lbl">${_t("Missing")}</span><b class="red">${money(visibleMissing.value)}</b><small>${_t(goalLabel(goal) === "custom goal" ? "{n} to reach your goal" : goalLabel(goal) === "playset" ? "{n} to complete the playset" : "{n} to complete the master set", {n: visibleMissing.count.toLocaleString()})}${allMode ? " " + _t("(all sets)") : ""}</small></div>
         </div>
         ${parts.length >= 2 && html`<div class="setdet-sbreak">
           ${parts.map(([k,label]) => html`<span key=${k}>${label} ${fmt(mb[k].value)} <span class="muted">(${mb[k].count})</span></span>`)}
@@ -23424,7 +23409,7 @@ const BulkAddByRarityModal = ({groups, setRarities, collection, bulkUpdateCollec
       </div>
       <div class="modal-body" style=${{padding:18}}>
         <p class="muted" style=${{fontSize:12,margin:"0 0 14px",lineHeight:1.5}}>
-          Adds copies for every card matching the chosen rarities in this set. <strong>${_t("Set quantity")}</strong> brings each slot up to the chosen count (won't touch slots that already have more). <strong>${_t("Add on top")}</strong> increments existing quantities. Chase rarities (Enchanted / Iconic / Epic) and any card that exists in only one printing are added as that printing — the foil toggle only chooses between cards that come both ways.
+          ${_tRich("Adds copies for every card matching the chosen rarities in this set. **Set quantity** brings each slot up to the chosen count (won't touch slots that already have more). **Add on top** increments existing quantities. Chase rarities (Enchanted / Iconic / Epic) and any card that exists in only one printing are added as that printing — the foil toggle only chooses between cards that come both ways.")}
         </p>
         <div style=${{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
           <div>
@@ -23465,22 +23450,21 @@ const BulkAddByRarityModal = ({groups, setRarities, collection, bulkUpdateCollec
           <div class="seg-toggle">
             <button class=${mode==="set"?"active":""} onClick=${()=>setMode("set")}
               title=${_t("Bring each matching slot UP TO the chosen count. Slots that already have more are left alone.")}>
-              Set to ×${copyCount}
+              ${_t("Set to ×{n}", {n: copyCount})}
             </button>
             <button class=${mode==="add"?"active":""} onClick=${()=>setMode("add")}
               title=${_t("Add the chosen count on TOP of whatever the user already has.")}>
-              Add ×${copyCount}
+              ${_t("Add ×{n}", {n: copyCount})}
             </button>
           </div>
         </div>
         <div style=${{padding:"10px 12px",background:"var(--accent-glow)",border:"1px solid var(--border-accent)",
           borderRadius:6,fontSize:12,marginBottom:14,lineHeight:1.5,color:"var(--accent)"}}>
-          <strong>Plan:</strong> ${picked.size === 0
+          <strong>${_t("Plan:")}</strong> ${picked.size === 0
             ? html`<span style=${{color:"var(--text-muted)"}}>${_t("Pick at least one rarity above.")}</span>`
             : plan.cardsTouched === 0
             ? html`<span style=${{color:"var(--text-muted)"}}>${_t("No changes — every matching slot already meets the target.")}</span>`
-            : html`Update <strong>${plan.cardsTouched}</strong> slot${plan.cardsTouched===1?"":"s"} ·
-                  <strong>+${plan.totalCopies}</strong> ${plan.totalCopies===1?"copy":"copies"} to your collection.`}
+            : html`${_tRich("Update **{slots}** slots · **+{n}** copies to your collection.", {slots: plan.cardsTouched, n: plan.totalCopies})}`}
         </div>
         ${error && html`<div style=${{padding:"8px 0",color:"var(--red)",fontSize:12}}>${error}</div>`}
         <div style=${{display:"flex",gap:8,justifyContent:"flex-end"}}>
@@ -25141,7 +25125,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
       const filtersButton = html`<button class=${"history-picker-filters-btn"+(histActiveCount>0?" active":"")}
         onClick=${()=>setHistoryFilterOpen(true)}
         title=${_t("Filter by ink, cost, rarity, type, set, classification, keyword...")}>
-        ☰ Filters${histActiveCount > 0 ? html` <span class="filter-count-badge">${histActiveCount}</span>` : ""}
+        ☰ ${_t("Filters")}${histActiveCount > 0 ? html` <span class="filter-count-badge">${histActiveCount}</span>` : ""}
       </button>`;
 
       const pickerJsx = mode === "card"
@@ -25300,7 +25284,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                       ${/* Shown to everyone — and on an ordinary network failure,
                             not only a missing table — so it speaks to a reader,
                             not an admin; the SQL hint lives in the console. */""}
-                      Market indices couldn't be loaded right now.${" "}
+                      ${_t("Market indices couldn't be loaded right now.")}${" "}
                       <button class="cal-linkish" onClick=${() => setIndexCatalog(undefined)}>${_t("Try again")}</button>
                     </div>`
                   : indexPickerGroups.length === 0
@@ -25593,7 +25577,7 @@ function DisplayNameEditor({profile, onSave}){
   if(!editing){
     return html`<button class="settings-action" onClick=${start}
       title=${_t("Your public display name on shared decks")}>
-      ${profile?.display_name ? `Change display name` : `Set display name`}
+      ${profile?.display_name ? _t("Change display name") : _t("Set display name")}
     </button>`;
   }
   return html`<div class="display-name-edit">
@@ -25675,8 +25659,7 @@ function CollectionSharingPanel({profile, onChange, onRegenerate}){
   };
   return html`<div class="collection-sharing">
     <div class="collection-sharing-hint">
-      Choose who can see each section. <b>${_t("Private")}</b> = only you · <b>${_t("Unlisted")}</b> = anyone with the link ·
-      <b>${_t("Public")}</b> = visible from your profile to anyone.
+      ${_tRich("Choose who can see each section. **Private** = only you · **Unlisted** = anyone with the link · **Public** = visible from your profile to anyone.")}
     </div>
     ${sections.map(s => html`
       <label key=${s.key} class="collection-sharing-row">
@@ -25888,7 +25871,7 @@ function AvatarPicker({raw, onPick, onClose}){
         </button>`)}
       </div>`}
       ${q.trim().length >= 2 && suggestions.length === 0 && html`<div class="muted" style=${{padding:"12px 4px",fontSize:12}}>
-        No cards match "${q}".</div>`}
+        ${_t("No cards match \"{q}\"", {q})}.</div>`}
       ${q.trim().length < 2 && html`<div class="muted" style=${{padding:"12px 4px",fontSize:11}}>
         ${_t("Start typing a card name to see suggestions.")}</div>`}
     </div>
@@ -26798,7 +26781,7 @@ const SealedAbout = ({info}) => {
       ${facts.map(([k, v]) => html`<div key=${k} class="sealed-about-fact"><dt>${k}</dt><dd>${v}</dd></div>`)}
     </dl>`}
     ${info.more && html`<p class="sealed-about-more">${info.more}</p>`}
-    ${info.src && info.src.length > 0 && html`<div class="sealed-about-src">Sources: ${info.src.map((u, i) => {
+    ${info.src && info.src.length > 0 && html`<div class="sealed-about-src">${_t("Sources:")} ${info.src.map((u, i) => {
       const href = safeHttpUrl(u);
       let host = u; try { host = new URL(u).hostname.replace(/^www\./, ""); } catch {}
       return href ? html`<${React.Fragment} key=${u}>${i > 0 ? ", " : ""}<a href=${href} target="_blank" rel="noopener nofollow">${host}</a><//>` : null;
@@ -26917,8 +26900,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
                 <span class="collectible-source-val">${product.collectible_source}</span>
               </div>
               <span class="muted" style=${{fontSize:"12.5px",lineHeight:1.4}}>
-                ${kind}s aren't sold by Ravensburger — they come from event kits and prize walls,
-                so there's no market price to track here.</span>
+                ${_t("{kind}s aren't sold by Ravensburger — they come from event kits and prize walls, so there's no market price to track here.", {kind: _t(kind)})}</span>
             </div>
             ${!readOnly && html`<div class="sealed-detail-owncounter">
               <span class="sealed-detail-owncounter-lbl">${_t("Owned")}</span>
@@ -26954,13 +26936,13 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
           <div class="sealed-detail-info">
             <h2 class="sealed-detail-name">${product.name}</h2>
             <div class="sealed-detail-meta muted">
-              <span>${product.exclusive_retailer} exclusive</span>
+              <span>${_t("{shop} exclusive", {shop: product.exclusive_retailer})}</span>
               <span class="sealed-detail-sep">·</span><span>${product.exclusive_date}</span>
             </div>
             ${product.exclusive_contents && html`<div class="sealed-detail-meta muted">${product.exclusive_contents}</div>`}
             <div class="sealed-detail-prices">
               <span class="muted" style=${{fontSize:"12.5px",lineHeight:1.4}}>${_t("Retailer exclusive — not listed on TCGplayer, so no market price is tracked.")}</span>
-              ${product.buy_url && html`<a class="sealed-detail-buy" href=${product.buy_url} target="_blank" rel="noopener nofollow sponsored">Buy ${extIcon()}</a>`}
+              ${product.buy_url && html`<a class="sealed-detail-buy" href=${product.buy_url} target="_blank" rel="noopener nofollow sponsored">${_t("Buy")} ${extIcon()}</a>`}
               <${AmazonBuyLink} product=${product}/>
             </div>
             ${!readOnly && html`<div class="sealed-detail-owncounter">
@@ -26996,12 +26978,12 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
           <div class="sealed-detail-info">
             <h2 class="sealed-detail-name">${product.name}</h2>
             <div class="sealed-detail-meta muted">
-              <span>${_t("Puzzle")}</span><span class="sealed-detail-sep">·</span><span>${product.puzzle_pieces} pieces</span>
+              <span>${_t("Puzzle")}</span><span class="sealed-detail-sep">·</span><span>${_t("{n} pieces", {n: product.puzzle_pieces})}</span>
               ${product.puzzle_exclusive ? html`<span class="sealed-detail-sep">·</span><span>${_t("Disney Store exclusive")}</span>` : ""}
             </div>
             <div class="sealed-detail-prices">
               <span class="muted" style=${{fontSize:"12.5px",lineHeight:1.4}}>${_t("Ravensburger puzzle — not sold on TCGplayer, so no market price is tracked.")}</span>
-              ${product.buy_url && html`<a class="sealed-detail-buy" href=${product.buy_url} target="_blank" rel="noopener nofollow" title=${_t("View on Ravensburger")}>View on Ravensburger ${extIcon()}</a>`}
+              ${product.buy_url && html`<a class="sealed-detail-buy" href=${product.buy_url} target="_blank" rel="noopener nofollow" title=${_t("View on Ravensburger")}>${_t("View on Ravensburger")} ${extIcon()}</a>`}
               <${AmazonBuyLink} product=${product}/>
             </div>
             ${!readOnly && html`<div class="sealed-detail-owncounter">
@@ -27109,7 +27091,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
               try { useMkt = localStorage.getItem(mat ? PLAYMAT_MODE_KEY : "packsink:sealedColl:priceMode") === "market"; } catch {}
               const unit = useMkt ? (marketToday ?? lowToday) : (lowToday ?? marketToday);
               return html`<span class="sealed-detail-owned-value muted">
-                Value at ${useMkt ? _t("NM Market") : _t("Low")}: <strong>${fmt((unit || 0) * qty)}</strong>
+                ${_tRich("Value at {basis}: **{value}**", {basis: useMkt ? _t("NM Market") : _t("Low"), value: fmt((unit || 0) * qty)})}
               </span>`;
             })()}
           </div>`}
@@ -27164,7 +27146,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
             padding=${{top:8,right:12,bottom:24,left:60}}/>`;
         })()}
         ${recordGap && !historyState.loading && html`<div class="sealed-detail-gapnote muted">
-          Gap in our price record: ${_pmDate(recordGap.from)} – ${_pmDate(recordGap.to)}.</div>`}
+          ${_t("Gap in our price record: {from} – {to}.", {from: _pmDate(recordGap.from), to: _pmDate(recordGap.to)})}</div>`}
       </div>
     </div>
   </div>`;
@@ -27416,11 +27398,11 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
       <div class="graded-collection-totals">
         <div class="gc-stat"><div class="gc-stat-val">${totals.units.toLocaleString()}</div><div class="gc-stat-lbl">${_t("Units owned")}</div></div>
         <div class="gc-stat"><div class="gc-stat-val">${totals.distinct.toLocaleString()}</div><div class="gc-stat-lbl">${_t("Distinct SKUs")}</div></div>
-        <div class="gc-stat"><div class="gc-stat-val green">${fmt(totals.value)}</div><div class="gc-stat-lbl">Est. value (${useMarket?_t("NM Market"):_t("Low")})</div>
-          ${totals.matValue > 0 && html`<div class="gc-stat-sub">incl. ${onOpenPlaymats
+        <div class="gc-stat"><div class="gc-stat-val green">${fmt(totals.value)}</div><div class="gc-stat-lbl">${_t("Est. value ({basis})", {basis: useMarket?_t("NM Market"):_t("Low")})}</div>
+          ${totals.matValue > 0 && html`<div class="gc-stat-sub">${_t("incl.")} ${onOpenPlaymats
             ? html`<a href=${playmatsHref || collectionSectionHref("playmats", null)} onClick=${navHandler(onOpenPlaymats)}
-                title=${_t("Your playmats count toward sealed value")}>${fmt(totals.matValue)} in playmats</a>`
-            : html`${fmt(totals.matValue)} in playmats`}</div>`}
+                title=${_t("Your playmats count toward sealed value")}>${_t("{value} in playmats", {value: fmt(totals.matValue)})}</a>`
+            : html`${_t("{value} in playmats", {value: fmt(totals.matValue)})}`}</div>`}
         </div>
       </div>
       <div class="graded-collection-header-actions">
@@ -27456,7 +27438,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
       </div>
     </div>
 
-    ${onOpenPins && html`<p class="sealed-coll-pins-note">Pins and lore counters have their own tab now:${" "}<a href=${pinsHref || collectionSectionHref("pins", null)} onClick=${navHandler(onOpenPins)}>Pins & Counters →</a></p>`}
+    ${onOpenPins && html`<p class="sealed-coll-pins-note">${_t("Pins and lore counters have their own tab now:")}${" "}<a href=${pinsHref || collectionSectionHref("pins", null)} onClick=${navHandler(onOpenPins)}>${_t("Pins & Counters")} →</a></p>`}
     ${!readOnly && html`<${SealedValueChart} sealedCollection=${sealedCollection} sealedPrices=${sealedPrices}
       rangeKey=${chartRange} setRangeKey=${setChartRange}/>`}
 
@@ -27475,7 +27457,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
           : grouped.length === 0
           ? html`<div class="muted" style=${{padding:"40px 12px",textAlign:"center",fontSize:13,lineHeight:1.5}}>
               ${hideUnowned
-                ? "No owned sealed products yet — uncheck \"Only owned\" to browse the catalog."
+                ? _t("No owned sealed products yet — uncheck \"Only owned\" to browse the catalog.")
                 : _t("No sealed products match your filters.")}
             </div>`
           : grouped.map(section => {
@@ -27554,15 +27536,15 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
                         <div class="gc-card-sub muted">${item.is_collectible ? item.collectible_source : dtype}${(() => {
                           const inf = SEALED_PRODUCT_INFO[item.tcgplayer_product_id];
                           return inf && inf.ex === "exclusive" && inf.retail && inf.retail[0]
-                            ? html` · <span class="gc-card-excl" title=${inf.note || ""}>${inf.retail[0]} exclusive</span>` : null;
+                            ? html` · <span class="gc-card-excl" title=${_t(inf.note || "")}>${_t("{shop} exclusive", {shop: inf.retail[0]})}</span>` : null;
                         })()}</div>
                         <div class="gc-card-raw">
                           ${item.is_collectible
                             ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${item.collectible_date}</span>`
                             : item.is_puzzle
-                            ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${item.puzzle_pieces} pcs${item.puzzle_exclusive ? " · Disney Store excl." : ""}</span>`
+                            ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${_t("{n} pcs", {n: item.puzzle_pieces})}${item.puzzle_exclusive ? " · " + _t("Disney Store excl.") : ""}</span>`
                             : item.is_exclusive
-                            ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${item.exclusive_retailer} exclusive · ${item.exclusive_date}</span>`
+                            ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${_t("{shop} exclusive", {shop: item.exclusive_retailer})} · ${item.exclusive_date}</span>`
                             : showBoth
                             ? html`<span class="gc-card-raw-px"><span class="gc-card-raw-px-lbl">${_t("Low")}</span> ${fmt(lowPx)}</span>
                                    <span class="gc-card-raw-px gc-card-raw-px-secondary"><span class="gc-card-raw-px-lbl">${_t("Mkt")}</span> ${fmt(mktPx)}</span>`
@@ -27597,7 +27579,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
                                   ${[1,2,3].map(i => html`<button key=${i} type="button"
                                     class=${"gc-pack-art-dot"+(ownedArts[i]?" on":"")}
                                     aria-pressed=${!!ownedArts[i]}
-                                    title=${(ownedArts[i]?_t("Owned"):_t("Not owned"))+" — art "+i+" (click to toggle)"}
+                                    title=${_t("{state} — art {i} (click to toggle)", {state: ownedArts[i]?_t("Owned"):_t("Not owned"), i})}
                                     onClick=${e=>{ e.stopPropagation();
                                       const willOwn = !ownedArts[i];
                                       updatePackArt(item.tcgplayer_product_id, i, willOwn);
@@ -27612,7 +27594,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
                                 </span>`
                               : html`
                                 ${qty > 0 && !isUnpricedSealed(item) && html`<span class="gc-card-foot-val" title=${_t("Owned value")}>${fmt((price || 0) * qty)}</span>`}
-                                ${hasRetSealed && html`<span class="gc-card-foot-ret" title=${"Now " + fmt(ownedValSealed) + " · paid " + fmt(paidNum)}
+                                ${hasRetSealed && html`<span class="gc-card-foot-ret" title=${_t("Now {now} · paid {paid}", {now: fmt(ownedValSealed), paid: fmt(paidNum)})}
                                   style=${{color: retSealed>=0?"var(--green)":"var(--red)"}}>${retSealed>=0?"+":""}${fmt(retSealed)} (${fmtPct(retPctSealed)})</span>`}`}
                           </div>
                           ${readOnly
@@ -28275,19 +28257,19 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
 
   const stat = (label, have, total) => html`<div class="cb-stat">
     <div class="cb-stat-top"><span>${label}</span><span><b>${have}</b> / ${total}</span></div>
-    <div class="cb-bar" role="progressbar" aria-label=${label + " owned"} aria-valuemin="0"
+    <div class="cb-bar" role="progressbar" aria-label=${_t("{name} owned", {name: _t(label)})} aria-valuemin="0"
       aria-valuemax=${total} aria-valuenow=${have}><i style=${{width: (total ? (have / total) * 100 : 0) + "%"}}></i></div>
   </div>`;
   const boardToolbar = (kind, b) => html`<div class="cb-toolbar">
     <div class="cb-swatches" role="group" aria-label=${_t("Board background")}>
       ${COLLECTIBLE_BOARD_BGS.map(bg => html`<button key=${bg.key} type="button"
         class=${"cb-swatch cb-bg-" + bg.key + (b.bg === bg.key ? " active" : "")}
-        aria-pressed=${b.bg === bg.key} aria-label=${bg.label + " background"} title=${_t(bg.label)}
+        aria-pressed=${b.bg === bg.key} aria-label=${_t("{name} background", {name: _t(bg.label)})} title=${_t(bg.label)}
         onClick=${() => commitBoard(kind, {...b, bg: bg.key})}></button>`)}
     </div>
     ${kind === "pins" && html`<div class="seg-toggle" role="group" aria-label=${_t("Pin size")}>
       ${PIN_BOARD_SCALES.map((s, i) => html`<button key=${s} type="button"
-        class=${(b.scale || 1) === s ? "active" : ""} title=${["Small", "Medium", "Large"][i] + " pins"}
+        class=${(b.scale || 1) === s ? "active" : ""} title=${_t(["Small pins", "Medium pins", "Large pins"][i])}
         onClick=${() => commitBoard("pins", {...b, scale: s})}>${["S", "M", "L"][i]}</button>`)}
     </div>`}
     <button type="button" class="cb-tool-btn"
@@ -28363,7 +28345,7 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
     const r = rowOf(kind, selected.n);
     if(!r) return null;
     const k = selected.n;
-    return html`<div class="cb-selbar" role="toolbar" aria-label=${"Selected: " + r.name}>
+    return html`<div class="cb-selbar" role="toolbar" aria-label=${_t("Selected: {name}", {name: r.name})}>
       <div class="cb-selbar-meta">
         <span class="cb-selbar-name">${r.name}</span>
         <span class="cb-selbar-src">${r.collectible_source} · ${r.collectible_date}</span>
@@ -28388,7 +28370,7 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
     const noun = kind === "pins" ? (off.length === 1 ? "pin" : "pins") : (off.length === 1 ? "counter" : "counters");
     return html`<div class="cb-tray">
       <div class="cb-tray-head">
-        <span>${off.length} ${noun} not on the board · drag one up, or tap it to place it</span>
+        <span>${_t("{n} {what} not on the board · drag one up, or tap it to place it", {n: off.length, what: _t(noun)})}</span>
         <button type="button" class="cb-tool-btn" onClick=${() => placeAll(kind)}>${_t("Place all")}</button>
       </div>
       <div class="cb-tray-list">
@@ -28399,14 +28381,14 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
           // pointerdown straight to beginDrag.
           return html`<div key=${k} class="cb-tray-slot">
             <button type="button" class="cb-tray-item"
-              title=${r.name} aria-label=${"Place " + r.name + " on the board"}
+              title=${r.name} aria-label=${_t("Place {name} on the board", {name: r.name})}
               onPointerDown=${e => beginDrag(e, kind, k, true)}
               onKeyDown=${e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); placeFromTray(kind, k); } }}>
               ${r.image_url ? html`<img src=${r.image_url} alt="" draggable="false"/>` : collectiblePh(r)}
             </button>
             <button type="button" class=${"cb-tray-rm" + (armed ? " armed" : "")}
               title=${armed ? _t("Tap again to remove it from your collection") : _t("I don't have this one")}
-              aria-label=${(armed ? "Confirm removing " : "Remove ") + r.name + " from your collection"}
+              aria-label=${_t(armed ? "Confirm removing {name} from your collection" : "Remove {name} from your collection", {name: r.name})}
               onClick=${() => removeOwned(kind, r)}>×</button>
           </div>`;
         })}
@@ -28418,7 +28400,7 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
     const missing = (kind === "pins" ? pinRows : counterRows).filter(r => qtyOf(r) <= 0);
     if(!missing.length) return null;
     return html`<details class="cb-add">
-      <summary>+ Add ${kind === "pins" ? "pins" : "lore counters"} you own <span class="muted" style=${{fontWeight: 400}}>${missing.length} missing</span></summary>
+      <summary>${kind === "pins" ? _t("+ Add pins you own") : _t("+ Add lore counters you own")} <span class="muted" style=${{fontWeight: 400}}>${_t("{n} missing", {n: missing.length})}</span></summary>
       <div class="cb-add-list">
         ${missing.map(r => html`<div key=${r.tcgplayer_product_id} class="cb-add-item">
           ${r.image_url ? html`<img src=${r.image_url} alt="" loading="lazy"/>` : collectiblePh(r)}
@@ -28458,7 +28440,7 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
           return !q || searchNorm((r.name + " " + r.collectible_source + " " + r.collectible_date).toLowerCase()).includes(q);
         });
         return html`<div key=${k} class="cb-list-group">
-          <div class="cb-list-group-title">${label}<span class="muted" style=${{fontFamily: "inherit", fontSize: 11, fontWeight: 400}}>${have} of ${rows.length} owned</span></div>
+          <div class="cb-list-group-title">${_t(label)}<span class="muted" style=${{fontFamily: "inherit", fontSize: 11, fontWeight: 400}}>${_t("{n} of {total} owned", {n: have, total: rows.length})}</span></div>
           ${shown.length === 0
             ? html`<div class="muted" style=${{fontSize: 12, padding: "6px 4px"}}>${(listFilter === "missing" && !q) ? _t("Nothing missing here — you have every one.") : _t("Nothing matches.")}</div>`
             : shown.map(r => {
@@ -28477,9 +28459,9 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
                     ${readOnly
                       ? (qty > 1 ? html`<span class="sealed-coll-counter-qty has">×${qty}</span>` : null)
                       : html`<div class="sealed-coll-counter">
-                          <button type="button" onClick=${() => bumpQty(r, -1)} disabled=${qty <= 0} aria-label=${"One fewer " + r.name}>−</button>
+                          <button type="button" onClick=${() => bumpQty(r, -1)} disabled=${qty <= 0} aria-label=${_t("One fewer {name}", {name: r.name})}>−</button>
                           <span class=${"sealed-coll-counter-qty" + (qty > 0 ? " has" : "")}>${qty}</span>
-                          <button type="button" onClick=${() => bumpQty(r, 1)} disabled=${qty >= 99} aria-label=${"One more " + r.name}>+</button>
+                          <button type="button" onClick=${() => bumpQty(r, 1)} disabled=${qty >= 99} aria-label=${_t("One more {name}", {name: r.name})}>+</button>
                         </div>`}
                   </div>
                 </div>`;
@@ -28821,7 +28803,7 @@ const PlaymatsView = ({user, sealedCollection, sealedMeta, updateSealedQty, upda
             onClick=${e => e.stopPropagation()} title=${_t("Buy on TCGplayer (affiliate link)")}>TCGplayer ${extIcon()}</a>`}
         </div>
         ${stale && html`<div class="playmat-stale muted"
-          title=${_t("The newest price we hold for this mat. TCGplayer has shown none since, or it falls in a gap in our record.")}>Price as of ${_pmDate(r.price_date)}</div>`}
+          title=${_t("The newest price we hold for this mat. TCGplayer has shown none since, or it falls in a gap in our record.")}>${_t("Price as of {date}", {date: _pmDate(r.price_date)})}</div>`}
         <div class="gc-card-foot">
           <div class="gc-card-foot-meta">
             ${qty > 0 && px != null && html`<span class="gc-card-foot-val" title=${_t("Owned value")}>${fmt(px * qty)}</span>`}
@@ -28830,9 +28812,9 @@ const PlaymatsView = ({user, sealedCollection, sealedMeta, updateSealedQty, upda
             ? (qty > 0 && html`<div class="sealed-coll-counter sealed-coll-counter-readonly">
                 <span class="sealed-coll-counter-qty has">×${qty}</span></div>`)
             : canEdit && html`<div class="sealed-coll-counter" onClick=${e => e.stopPropagation()}>
-                <button type="button" onClick=${e => { e.stopPropagation(); bump(-1); }} disabled=${qty <= 0} aria-label=${"One fewer " + r.name}>−</button>
+                <button type="button" onClick=${e => { e.stopPropagation(); bump(-1); }} disabled=${qty <= 0} aria-label=${_t("One fewer {name}", {name: r.name})}>−</button>
                 <span class=${"sealed-coll-counter-qty" + (qty > 0 ? " has" : "")}>${qty}</span>
-                <button type="button" onClick=${e => { e.stopPropagation(); bump(+1); }} disabled=${qty >= 99} aria-label=${"One more " + r.name}>+</button>
+                <button type="button" onClick=${e => { e.stopPropagation(); bump(+1); }} disabled=${qty >= 99} aria-label=${_t("One more {name}", {name: r.name})}>+</button>
               </div>`}
         </div>
         ${canEdit && trackCosts && qty > 0 && html`<div onClick=${e => e.stopPropagation()}><${CostDateInputs}
@@ -28896,7 +28878,7 @@ const PlaymatsView = ({user, sealedCollection, sealedMeta, updateSealedQty, upda
       <div class="graded-collection-totals">
         <div class="gc-stat"><div class="gc-stat-val">${totals.owned} <span class="playmat-of">/ ${totals.total}</span></div><div class="gc-stat-lbl">${_t("Playmats owned")}</div></div>
         ${totals.units !== totals.owned && html`<div class="gc-stat"><div class="gc-stat-val">${totals.units}</div><div class="gc-stat-lbl">${_t("Total copies")}</div></div>`}
-        <div class="gc-stat"><div class="gc-stat-val green">${fmt(totals.value)}<span class="playmat-ast" aria-hidden="true">*</span></div><div class="gc-stat-lbl">Est. value (${priceMode === "market" ? _t("NM Market") : _t("Low")})</div></div>
+        <div class="gc-stat"><div class="gc-stat-val green">${fmt(totals.value)}<span class="playmat-ast" aria-hidden="true">*</span></div><div class="gc-stat-lbl">${_t("Est. value ({basis})", {basis: priceMode === "market" ? _t("NM Market") : _t("Low")})}</div></div>
       </div>
       <div class="graded-collection-header-actions">
         <div class="seg-toggle" role="group" aria-label=${_t("Show")}>
@@ -30861,7 +30843,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
             else { setGoalOpen(true); }
           }}
           title=${_t("Jump to set-tracking goals (mobile shortcut)")}>
-          Goals${goals && goals.length ? ` (${goals.length})` : ""}
+          ${_t("Goals")}${goals && goals.length ? ` (${goals.length})` : ""}
         </button>`}
         ${!readOnly && gradedPremium && html`<button class="gc-caps-cta gc-add-cta-desktop"
           onClick=${()=>setCollGradeOpen(true)}
@@ -32510,7 +32492,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
 
   return html`<div>
     ${demoMode && html`<div class="collection-demo-banner">
-      ${uiIcon("sparkle", 13)} Showing an <strong>${_t("example collection")}</strong> for the tour — it disappears when the tour ends, and everything here works the same on your real cards.
+      ${uiIcon("sparkle", 13)} ${_tRich("Showing an **example collection** for the tour — it disappears when the tour ends, and everything here works the same on your real cards.")}
     </div>`}
     ${isViewerMode && (() => {
       const p = viewerContext.data?.profile || {};
@@ -32535,7 +32517,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           : html`<span class="collection-viewer-avatar collection-viewer-avatar-fallback"
               onClick=${openProfile} title=${_t("View profile")}>${initial}</span>`}
         <button class="collection-viewer-name" onClick=${openProfile}
-          title="View ${p.display_name || "user"}'s profile">
+          title=${_t("View {name}'s profile", {name: p.display_name || _t("user")})}>
           ${p.display_name || _t("Anonymous user")}
         </button>
         ${canCompare && html`<label class="collection-viewer-compare" title=${_t("Filter by what you own vs what they own")}>
@@ -32680,15 +32662,13 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       <div class="import-modal" onClick=${e=>e.stopPropagation()}>
         <h3 class="title-font" style=${{margin:"0 0 10px",fontSize:18}}>${_t("Import Collection CSV")}</h3>
         <div class="import-summary">
-          <div><strong>${importState.report.matchedCards.toLocaleString()}</strong> cards matched
-            (<strong>${importState.report.totalNormal.toLocaleString()}</strong> normal +
-             <strong>${importState.report.totalFoil.toLocaleString()}</strong> ${_t("foil)")}</div>
+          <div>${_tRich("**{n}** cards matched (**{normal}** normal + **{foil}** foil)", {n: importState.report.matchedCards.toLocaleString(), normal: importState.report.totalNormal.toLocaleString(), foil: importState.report.totalFoil.toLocaleString()})}</div>
           ${importState.report.unmatched.length > 0 && html`<div class="import-unmatched">
-            <strong>${importState.report.unmatched.length.toLocaleString()}</strong> rows couldn't be matched
+            ${_tRich("**{n}** rows couldn't be matched", {n: importState.report.unmatched.length.toLocaleString()})}
             ${importState.report.unmatched.length <= 8
               ? html`<ul>${importState.report.unmatched.map((u,i)=>html`<li key=${i}>${u.name}${u.reason ? html` <span class="muted">— ${u.reason}</span>` : ""}</li>`)}</ul>`
               : html`<ul>${importState.report.unmatched.slice(0,6).map((u,i)=>html`<li key=${i}>${u.name}${u.reason ? html` <span class="muted">— ${u.reason}</span>` : ""}</li>`)}
-                  <li>…and ${(importState.report.unmatched.length-6).toLocaleString()} more</li></ul>`}
+                  <li>…${_t("and {n} more", {n: (importState.report.unmatched.length-6).toLocaleString()})}</li></ul>`}
           </div>`}
         </div>
         <div class="import-mode">
@@ -32717,19 +32697,18 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         <button class="active" onClick=${()=>openView && openView("cards")}>${_t("Browse Cards")}</button>
         <button onClick=${()=>openView && openView("screener")}>${_t("Open the Screener")}</button>
       </div>
-      <p class="muted" style=${{fontSize:12,marginTop:10}}>Tap the +/− on any card to track copies —
-        or bulk-load everything at once with <strong>${_t("Import CSV")}</strong> ${_t("in the toolbar above.")}</p>
+      <p class="muted" style=${{fontSize:12,marginTop:10}}>${_tRich("Tap the +/− on any card to track copies — or bulk-load everything at once with **Import CSV** in the toolbar above.")}</p>
     </div>`}
     <div class="collection-stats">
       <div class="stat-card">
         <div class="stat-card-lbl">${_t("Owned Value")}</div>
         <div class="stat-card-val green">$${totalValue.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-        <div class="stat-card-sub">${totalCards.toLocaleString()} ${totalCards === 1 ? "card" : "cards"} · ${totalUnique.toLocaleString()} unique</div>
+        <div class="stat-card-sub">${totalCards === 1 ? _t("1 card") : _t("{n} cards", {n: totalCards.toLocaleString()})} · ${_t("{n} unique", {n: totalUnique.toLocaleString()})}</div>
       </div>
       <div class="stat-card">
         <div class="stat-card-lbl"><${Tip} text=${"Completion toward a "+goalLabel(goal)+" — how many of the copies you're targeting you already own (graded/pending copies count). Change the target with the Master / Play / Custom control above."}>${goalTitle(goal)} <span class="tip-info-glyph" aria-hidden="true">ⓘ</span><//></div>
         <div class="stat-card-val">${masterPct.toFixed(1)}%</div>
-        <div class="stat-card-sub">${totalOwnedTowardNeed.toLocaleString()} / ${totalNeeded.toLocaleString()} needed</div>
+        <div class="stat-card-sub">${_t("{n} / {total} needed", {n: totalOwnedTowardNeed.toLocaleString(), total: totalNeeded.toLocaleString()})}</div>
         ${(() => {
           // Split the completion % across non-foil / foil / chase.
           const parts = [["nonfoil","Non-foil"],["foil","Foil"],["chase","Chase"]].filter(([b])=>neededByBucket[b]>0);
@@ -32822,7 +32801,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           role="button" tabIndex="0" onKeyDown=${keyActivate(()=>setSelectedSet(setName))}>
           <div class="set-progress-head">
             <${SetHeading} set=${setName} klass="set-progress-name"/>
-            ${setNo >= 0 && html`<span class="set-progress-num">Set ${setNo + 1}</span>`}
+            ${setNo >= 0 && html`<span class="set-progress-num">${_t("Set {n}", {n: setNo + 1})}</span>`}
           </div>
           <div class="set-progress-row">
             <div class="set-progress-row-label">${_t("Non-Foil")}</div>
@@ -37520,10 +37499,10 @@ const AlertsModal = ({alerts, alertEvents, alertOps, watchlists, cardNameFor, un
         : html`<${React.Fragment}>
         <div class="seg-toggle" style=${{marginBottom:12}}>
           <button class=${tab==="inbox"?"active":""} onClick=${()=>setTab("inbox")}>
-            Inbox${unread.length ? ` (${unread.length})` : ""}
+            ${_t("Inbox")}${unread.length ? ` (${unread.length})` : ""}
           </button>
           <button class=${tab==="rules"?"active":""} onClick=${()=>setTab("rules")}>
-            Rules${(alerts||[]).length ? ` (${alerts.length})` : ""}
+            ${_t("Rules")}${(alerts||[]).length ? ` (${alerts.length})` : ""}
           </button>
         </div>
 
@@ -37540,7 +37519,7 @@ const AlertsModal = ({alerts, alertEvents, alertOps, watchlists, cardNameFor, un
                   <div class="alert-event-main">
                     <button class="alert-event-name" onClick=${()=>onOpenCard && onOpenCard(e.card_id)}
                       title=${_t("Open this card")}>${cardNameFor(e.card_id) || e.card_id}</button>
-                    <span class="alert-event-rule">${a ? describeAlert(a, watchlists, cardNameFor(a.card_id)) : "rule deleted"}</span>
+                    <span class="alert-event-rule">${a ? describeAlert(a, watchlists, cardNameFor(a.card_id)) : _t("rule deleted")}</span>
                   </div>
                   <div class="alert-event-meta">
                     ${e.observed != null && html`<b>${a && (a.kind==="above"||a.kind==="below")
@@ -37575,7 +37554,7 @@ const AlertsModal = ({alerts, alertEvents, alertOps, watchlists, cardNameFor, un
                     value=${draft.threshold} onInput=${e=>setDraft(d=>({...d, threshold: e.target.value}))}/>
                   <span class="muted">${isPct ? "%" : "$"}</span>
                   ${isPct && html`<select value=${draft.window_key} onChange=${e=>setDraft(d=>({...d, window_key: e.target.value}))}>
-                    ${Object.entries(ALERT_WINDOW_LABELS).map(([k,l]) => html`<option key=${k} value=${k}>over ${l}</option>`)}
+                    ${Object.entries(ALERT_WINDOW_LABELS).map(([k,l]) => html`<option key=${k} value=${k}>${_t("over {window}", {window: _t(l)})}</option>`)}
                   </select>`}
                 </div>
                 <div class="alert-new-row">
@@ -37587,7 +37566,7 @@ const AlertsModal = ({alerts, alertEvents, alertOps, watchlists, cardNameFor, un
                   <label style=${{marginLeft:10}}>${_t("Then wait")}</label>
                   <select value=${String(draft.cooldown_days)} onChange=${e=>setDraft(d=>({...d, cooldown_days: +e.target.value}))}
                     title=${_t("How long to stay quiet after firing. Without this, a card parked above its threshold alerts every single day.")}>
-                    <option value="0">no delay</option>
+                    <option value="0">${_t("no delay")}</option>
                     <option value="1">${_t("1 day")}</option>
                     <option value="7">${_t("7 days")}</option>
                     <option value="30">${_t("30 days")}</option>
@@ -39816,7 +39795,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         title=${_t("This card's {window} Δ% minus {group} over the same window, in percentage points. Positive means it outpaced its comparison group. {note} A dash means that group has no index — usually too few cards to make one.", {window: vsMktLbl, group: _t(vsBasis[1]).toLowerCase(), note: _t(vsBasis[2])})}
         >${_t("vs")} ${vsMktBasis === "all" ? _t("Mkt") : vsMktBasis === "set" ? _t("Set") : vsMktBasis === "rarity" ? _t("Rar") : _t("Peers")}</th>`,
       td:(r)=>{ const v = vsMarket(r, vsMktWin);
-        return html`<td key="vsmkt" class=${"td-num "+pctCls(v)}>${v == null ? "—" : (v > 0 ? "+" : "") + v.toFixed(1) + "pp"}</td>`; }};
+        return html`<td key="vsmkt" class=${"td-num "+pctCls(v)}>${v == null ? "—" : (v > 0 ? "+" : "") + v.toFixed(1) + _t("pp")}</td>`; }};
     const signalsCol = {key:"signals", label:"Signals",
       th:()=>html`<th key="signals">${_t("Signals")}</th>`,
       td:(r)=>html`<td key="signals">${priceDbSignals(r).map(([sk,icon,title])=>html`<${Tip} key=${sk} text=${title}>
@@ -40358,7 +40337,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         ${!showSealed && !showGraded && html`<label class="checkbox-group price-db-adv-atstart"
           title=${_t("Apply the price bounds to the price when the mover window began, not today's — the rule the home movers banners use, so a card that crashed from $20 to $3 still counts as a $5+ mover.")}>
           <input type="checkbox" checked=${floorAtStart} onChange=${e => setFloorAtStart(e.target.checked)}/>
-          at start of window
+          ${_t("at start of window")}
         </label>`}
       </div>
       <div class="price-db-adv-row">
@@ -43822,8 +43801,8 @@ const MoversBanner =({title, subtitle, controls, cards, onTileClick, activeWindo
           {lo:0, hi:10, lbl:"1–10"},
           ...(cards.length > 10 ? [{lo:10, hi:20, lbl:"11–20"}] : []),
         ].map(seg => html`<button key=${seg.lbl} class="movers-banner-cam"
-          title=${`Copy cards ${seg.lbl} as a formatted image`}
-          aria-label=${`Copy cards ${seg.lbl} as an image`}
+          title=${_t("Copy cards {range} as a formatted image", {range: seg.lbl})}
+          aria-label=${_t("Copy cards {range} as an image", {range: seg.lbl})}
           onClick=${()=>copyMoverBannerImage(cards.slice(seg.lo, seg.hi), activeWindow, title || "Movers", seg.lbl)}>
           <svg viewBox="0 0 24 24" aria-hidden="true" width="12" height="12"
             style=${{display:"block",stroke:"currentColor",fill:"none",strokeWidth:2,strokeLinecap:"round",strokeLinejoin:"round"}}>
@@ -44638,12 +44617,12 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
       <label title=${_t("Show Card collection value on the chart")}>
         <input type="checkbox" checked=${showCards} onChange=${e=>setShowCards(e.target.checked)}/>
         <span class="panel-toggle-swatch" style=${{background:"var(--accent)"}}/>
-        <span>Cards <em>${hideValue ? "-----" : fmt(cardLatestValue)}</em></span>
+        <span>${_t("Cards")} <em>${hideValue ? "-----" : fmt(cardLatestValue)}</em></span>
       </label>
       <label title=${_t("Show Sealed-product value on the chart")}>
         <input type="checkbox" checked=${showSealed} onChange=${e=>setShowSealed(e.target.checked)}/>
         <span class="panel-toggle-swatch" style=${{background:"#7e54c4"}}/>
-        <span>Sealed <em>${hideValue ? "-----" : fmt(sealedLatestValue)}</em></span>
+        <span>${_t("Sealed")} <em>${hideValue ? "-----" : fmt(sealedLatestValue)}</em></span>
       </label>
       <label title=${_t("Show Graded card value on the chart")}>
         <input type="checkbox" checked=${showGraded} onChange=${e=>setShowGraded(e.target.checked)}/>
@@ -44651,7 +44630,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
         ${/* "$0.00" beside slabs you own read as "worth nothing": the series is
               only fetched while the line is on (and the terms accepted), so
               until then there is no number to show — say so. */""}
-        <span>Graded <em>${hideValue ? "-----"
+        <span>${_t("Graded")} <em>${hideValue ? "-----"
           : (gradedValueSeries && gradedValueSeries.length) ? fmt(gradedLatestValue)
           : gradedSlots.length ? "—" : fmt(0)}</em></span>
       </label>
@@ -44784,12 +44763,12 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav
             </span>
           </div>
           <div class="home-ev-meter" role="img"
-            aria-label=${diff == null ? _t("No box price to compare") : `EV ${fmt(ev)} against a ${fmt(box.price)} box`}>
+            aria-label=${diff == null ? _t("No box price to compare") : _t("EV {ev} against a {box} box", {ev: fmt(ev), box: fmt(box.price)})}>
             ${diff != null && html`<span class="home-ev-fill" style=${{width: fillPct.toFixed(1) + "%"}}></span>`}
             ${tickPct != null && html`<span class="home-ev-tick" style=${{left: tickPct.toFixed(1) + "%"}}></span>`}
           </div>
           <div class="home-ev-foot">
-            <span class="home-ev-ev" title=${ev ? `${fmt(ev/24)} per pack` : ""}>
+            <span class="home-ev-ev" title=${ev ? _t("{price} per pack", {price: fmt(ev/24)}) : ""}>
               <span class="home-ev-lbl">${_t("EV")}</span>${fmt(ev)}
             </span>
             <span class="home-ev-buy">
@@ -51112,7 +51091,7 @@ const GhMultiSelect = ({label, options, selected, onToggle, onClear}) => {
   return html`<span class="gh-multi" ref=${ref}>
     <button class=${"gh-chip gh-multi-btn"+(n?" active":"")} onClick=${()=>setOpen(o=>!o)}
       aria-expanded=${open} aria-haspopup="true"
-      title=${n ? label+": "+[...selected].join(", ") : "Filter by "+label.toLowerCase()}>
+      title=${n ? _t(label) + ": " + [...selected].join(", ") : _t("Filter by {name}", {name: _t(label).toLowerCase()})}>
       ${label}${n ? " · "+n : ""}<span class="gh-multi-caret" aria-hidden="true">▾</span>
     </button>
     ${open && html`<div class="gh-multi-pop" role="group" aria-label=${label}>
@@ -51838,10 +51817,7 @@ function GearView({sealedPrices, setsMeta}){
     <header class="gear-hero">
       <h1 class="gear-page-h1">${_t("Lorcana on Amazon")}</h1>
       <p class="gear-page-lede">
-        ${count} Lorcana products and accessories, kept by hand — sealed boxes and gift sets
-        beside TCGplayer rather than instead of it, and the sleeves, binders, deck boxes and
-        grading supplies TCGplayer barely stocks. A Lorcana card is 63×88mm, the same as Magic
-        and Pokémon, so anything sold as <em>${_t("standard size")}</em> fits.
+        ${_tRich("{n} Lorcana products and accessories, kept by hand — sealed boxes and gift sets beside TCGplayer rather than instead of it, and the sleeves, binders, deck boxes and grading supplies TCGplayer barely stocks. A Lorcana card is 63×88mm, the same as Magic and Pokémon, so anything sold as *standard size* fits.", {n: count})}
       </p>
       <nav class="gear-jump" aria-label=${_t("Jump to a section")}>
         ${sections.map(sec => html`<button key=${sec.title} type="button" class="gear-jump-chip"
@@ -53186,7 +53162,7 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
               : (() => {
                   const newestBanner = NEWEST_SET && html`<${MoversBanner}
                     title=${_t("{set} · MOST VALUABLE", {set: _term("set", NEWEST_SET).toUpperCase()})}
-                    subtitle=${html`${PRERELEASE_SETS.has(NEWEST_SET) ? html`<span style=${{display:"inline-block",background:"var(--accent)",color:"#17110a",fontWeight:800,fontSize:9,letterSpacing:0.5,padding:"1px 6px",borderRadius:4,marginRight:6,verticalAlign:"middle"}}>${_t("PRE SALE")}</span>` : null}Top 20 ${valuableMode==="chase"?"chase":"non-chase"} by Low price${(!PRERELEASE_SETS.has(NEWEST_SET) && newestSetIsHot)?" · release week":""}`}
+                    subtitle=${html`${PRERELEASE_SETS.has(NEWEST_SET) ? html`<span style=${{display:"inline-block",background:"var(--accent)",color:"#17110a",fontWeight:800,fontSize:9,letterSpacing:0.5,padding:"1px 6px",borderRadius:4,marginRight:6,verticalAlign:"middle"}}>${_t("PRE SALE")}</span>` : null}${_t(valuableMode==="chase" ? "Top 20 chase by Low price" : "Top 20 non-chase by Low price")}${(!PRERELEASE_SETS.has(NEWEST_SET) && newestSetIsHot)?" · " + _t("release week"):""}`}
                     controls=${valuableControls}
                     cards=${valuableCards}
                     activeWindow=${""}
@@ -54055,7 +54031,7 @@ const RevealStrip = ({cards, variant, setLabel, onOpen, onOpenSet}) => {
             the little preview in the same tick — it sits above the page but
             must never be left floating over that overlay. */""}
       onClick=${() => { setHover(null); onOpen && onOpen(c.row); }}
-      title=${c.name} aria-label=${"Enlarge " + c.name}
+      title=${c.name} aria-label=${_t("Enlarge {name}", {name: c.name})}
       ${/* The second pass is a visual duplicate: a screen reader must not read
             36 cards twice, and Tab must not walk through a copy of the reel. */""}
       aria-hidden=${pass === "b" ? "true" : null}
@@ -54075,7 +54051,7 @@ const RevealStrip = ({cards, variant, setLabel, onOpen, onOpenSet}) => {
     onBlur=${e => { if(!e.currentTarget.contains(e.relatedTarget)) paused.current.focus = false; }}>
     <a class="reveal-head" href=${setLabel ? "/cards?set=" + encodeURIComponent(setLabel) : "/cards"}
       onClick=${navHandler(() => onOpenSet && onOpenSet(setLabel))}
-      title=${title + " — open the Cards tab"}>
+      title=${_t("{title} — open the Cards tab", {title})}>
       <span class="reveal-kicker">${uiIcon("sparkle", 12)} ${_t("Just revealed")}</span>
       <span class="reveal-title">${title}</span>
       ${/* ⚠ Deliberately NOT a count. The reel is capped at REVEAL_MAX_CARDS, so
@@ -54405,7 +54381,7 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
     ${inks.map(ink => INK_ICONS[ink]
       ? (onInkClick
           ? html`<button key=${ink} type="button" class="deck-card-ink-btn"
-              title=${"Show all tournament decks in " + ink}
+              title=${_t("Show all tournament decks in {ink}", {ink: _term("ink", ink)})}
               onClick=${e=>{e.stopPropagation(); e.preventDefault(); onInkClick(ink);}}>
               <img src=${INK_ICONS[ink]} alt=${ink}/>
             </button>`
@@ -54418,7 +54394,7 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
         style=${bg ? {background: bg, cursor: hasDeck ? "pointer" : "default"} : {cursor: hasDeck ? "pointer" : "default"}}
         onClickCapture=${navCapture}
         onClick=${navHandler((e)=>hasDeck && onOpenDeck && onOpenDeck(r.deck_id, r.deck_share_token))}>
-      <span class="tdc-place" title=${"Placed " + (r.place || "—")}>${uiIcon("trophy", 12)} ${r.place || "—"}</span>
+      <span class="tdc-place" title=${_t("Placed {place}", {place: localizePlace(r.place) || "—"})}>${uiIcon("trophy", 12)} ${r.place || "—"}</span>
       ${inks.length > 0 && inkShields("tdc-inks")}
       ${titleText && html`<span class="tdc-title">${titleText}</span>`}
       <span class="tdc-by muted">${playerName}</span>
@@ -54453,10 +54429,10 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
     ${showEvent && event && html`<div class="deck-card-event" title=${event.name}>
       ${event.name}${event.event_date ? " · " + fmtIsoDate(event.event_date) : ""}
     </div>`}
-    <div class="deck-card-tourney" title=${"Placed " + (r.place || "—")}>
+    <div class="deck-card-tourney" title=${_t("Placed {place}", {place: localizePlace(r.place) || "—"})}>
       <span class="dct-trophy">${uiIcon("trophy", 13)}</span>
       <span class="dct-place">${r.place || "—"}</span>
-      <span class="dct-name">by ${playerName}</span>
+      <span class="dct-name">${_t("by {name}", {name: playerName})}</span>
     </div>
     ${inks.length > 0 && html`<div class="deck-card-chips">
       ${inkShields("deck-card-inks")}
@@ -58168,7 +58144,7 @@ function DeckImageImport({raw, onUseText}){
   if(phase === "review") return html`<div class="deckimg">
     <div class="deckimg-reviewbar">
       <div>
-        <strong>${rows.length}</strong> card${rows.length === 1 ? "" : "s"} found ·${" "}
+        ${_tRich("**{n}** cards found", {n: rows.length})} ·${" "}
         <span class=${total === 60 ? "deckimg-total ok" : "deckimg-total"}>${total} / 60</span>
       </div>
       <div class="deckimg-reviewbar-actions">
@@ -58186,7 +58162,7 @@ function DeckImageImport({raw, onUseText}){
       ${rows.map(r => html`<div class=${"deckimg-cell" + (r.qty ? "" : " out")} key=${r.key}>
         ${r.thumb ? html`<img class="deckimg-thumb" src=${r.thumb} alt=""/>` : html`<div class="deckimg-thumb"></div>`}
         <div class="deckimg-name" title=${r.name}>${r.name}</div>
-        ${!r.inCatalog && html`<div class="deckimg-warn">not in your catalog</div>`}
+        ${!r.inCatalog && html`<div class="deckimg-warn">${_t("not in your catalog")}</div>`}
         <div class="deckimg-qty">
           <button onClick=${()=>setQty(r.key,-1)} aria-label=${_t("One fewer")}>−</button>
           <button class=${r.qtyRead ? "deckimg-n" : "deckimg-n guessed"}
@@ -58540,8 +58516,8 @@ const DeckCostChart = ({costByInk, cardCountLabel, uniqueCount}) => {
   }
   const getFill = (inkKey) => fillCache[inkKey] || "var(--text-muted)";
   return html`<div class="deck-chart">
-    <div class="deck-chart-title">Cost curve
-      ${cardCountLabel != null && html`<span class="deck-chart-count">Cards: ${cardCountLabel}${uniqueCount != null ? html` · Unique: ${uniqueCount}` : ""}</span>`}
+    <div class="deck-chart-title">${_t("Cost curve")}
+      ${cardCountLabel != null && html`<span class="deck-chart-count">${_t("Cards: {n}", {n: cardCountLabel})}${uniqueCount != null ? html` · ${_t("Unique: {n}", {n: uniqueCount})}` : ""}</span>`}
     </div>
     <svg viewBox="0 0 ${W} ${H}" width="100%" height=${H} preserveAspectRatio="none">
       <defs>${defsList}</defs>
@@ -58711,10 +58687,7 @@ const CoconutLeaderPicker = ({current, onPick, onClose}) => {
       <button class="card-detail-close" onClick=${onClose} aria-label=${_t("Close")}>✕</button>
       <h3 class="title-font">${_t("Choose a Coconut leader")}</h3>
       <p class="coconut-picker-blurb">
-        Picking a leader makes this a <strong>${COCONUT_SET_NAME}</strong> deck: you get a third
-        ink (one must match the leader's), up to 4 copies of the leader's own card and${" "}
-        <strong>1 of everything else</strong>, and the game runs to ${COCONUT_LORE_GOAL} lore with 3-4 players.
-        Nothing is blocked — an illegal list still saves, it just gets flagged.
+        ${_tRich("Picking a leader makes this a **{format}** deck: you get a third ink (one must match the leader's), up to 4 copies of the leader's own card and **1 of everything else**, and the game runs to {lore} lore with 3-4 players. Nothing is blocked — an illegal list still saves, it just gets flagged.", {format: _term("set", COCONUT_SET_NAME), lore: COCONUT_LORE_GOAL})}
       </p>
       ${COCONUT_INK_ORDER.map(ink => html`
         <div key=${ink} class="coconut-picker-inkgroup">
@@ -58862,18 +58835,18 @@ const DeckHistoryModal = ({deck, cardById, isOwner, shareToken, refreshNonce, on
   return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal deck-history-modal" onClick=${e=>e.stopPropagation()}>
       <div class="modal-header">
-        <h2 class="title-font" style=${{margin:0,fontSize:18}}>\ud83d\udd52 Version history</h2>
+        <h2 class="title-font" style=${{margin:0,fontSize:18}}>${uiIcon("clock", 16)} ${_t("Version history")}</h2>
         <button onClick=${onClose} class="theme-toggle" title=${_t("Close")}>\u00d7</button>
       </div>
       <div class="modal-body deck-history-body">
         ${rows == null
-          ? html`<div class="muted" style=${{padding:"24px 4px",fontSize:13}}>Loading history\u2026</div>`
+          ? html`<div class="muted" style=${{padding:"24px 4px",fontSize:13}}>${_t("Loading history…")}</div>`
           : err
             ? html`<div class="muted" style=${{padding:"18px 4px",fontSize:13}}>${err}</div>`
             : html`<${React.Fragment}>
               <p class="dv-lede">
-                A version is saved each time you finish an editing session that changed something.
-                ${rows.length === 0 ? " Nothing yet \u2014 edit this deck and the version before your changes lands here." : ""}
+                ${_t("A version is saved each time you finish an editing session that changed something.")}
+                ${rows.length === 0 ? " " + _t("Nothing yet — edit this deck and the version before your changes lands here.") : ""}
               </p>
               <div class="dv-cols">
                 <ol class="dv-list">
@@ -58889,16 +58862,16 @@ const DeckHistoryModal = ({deck, cardById, isOwner, shareToken, refreshNonce, on
                   ${!older
                     ? html`<div class="muted" style=${{fontSize:13}}>
                         ${timeline.length > 1
-                          ? "This is the oldest version we have \u2014 nothing before it to compare against."
+                          ? _t("This is the oldest version we have — nothing before it to compare against.")
                           : _t("Only the live deck exists so far.")}
                       </div>`
                     : html`<${React.Fragment}>
                       <div class="dv-detail-head">
                         <strong>${_t(older.label)}</strong> \u2192 <strong>${_t(newer.label)}</strong>
-                        <span class="muted dv-detail-count">${diff.fromCount} \u2192 ${diff.toCount} cards</span>
+                        <span class="muted dv-detail-count">${_t("{from} → {to} cards", {from: diff.fromCount, to: diff.toCount})}</span>
                       </div>
                       ${(older.name || "") !== (newer.name || "") && html`<div class="dv-meta">
-                        Renamed \u201c${older.name}\u201d \u2192 \u201c${newer.name}\u201d</div>`}
+                        ${_t("Renamed “{from}” → “{to}”", {from: older.name, to: newer.name})}</div>`}
                       ${(older.coconut_card || null) !== (newer.coconut_card || null) && html`<div class="dv-meta">
                         ${_t("Coconut leader changed")}</div>`}
                       ${diff.isEmpty
@@ -59016,7 +58989,7 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard, defaultInk
       ${open && matches != null && html`<div class="deck-quickadd-results" ref=${listRef}>
         ${matches.length === 0
           ? html`<div class="deck-quickadd-empty">
-              No ${inks.size ? INKS.filter(i => inks.has(i)).join(" / ") + " " : ""}cards match "${query}"
+              ${inks.size ? _t("No {inks} cards match \"{q}\"", {inks: INKS.filter(i => inks.has(i)).map(i => _term("ink", i)).join(" / "), q: query}) : _t("No cards match \"{q}\"", {q: query})}
               ${inks.size > 0 && html` · <button type="button" class="deck-quickadd-allinks"
                 onClick=${() => setInks(new Set())}>${_t("search every ink")}</button>`}
             </div>`
@@ -59031,8 +59004,8 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard, defaultInk
               return html`<div key=${g.card_id + "::" + (g.Printing || "")}
                 class=${"deck-quickadd-row" + (i === cursor ? " on" : "") + (qty > 0 ? " in-deck" : "") + (full ? " full" : "")}
                 role="button" tabIndex=${-1}
-                title=${full ? (g["Product Name"] || "card") + " — already at the limit of " + max
-                             : "Add " + (g["Product Name"] || "card") + " to the deck"}
+                title=${full ? _t("{name} — already at the limit of {n}", {name: g["Product Name"] || _t("card"), n: max})
+                             : _t("Add {name} to the deck", {name: g["Product Name"] || _t("card")})}
                 onPointerEnter=${mouseHoverOnly((e) => { setCursor(i); hover(e); })}
                 onPointerMove=${mouseHoverOnly(hover)}
                 onPointerLeave=${() => onHoverCard && onHoverCard(null)}
@@ -59052,10 +59025,10 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard, defaultInk
                 </span>
                 ${/* The row itself adds, so these must not double-fire through it. */""}
                 <span class="deck-quickadd-counter" onClick=${e => e.stopPropagation()}>
-                  <button type="button" aria-label=${"Remove one " + (g["Product Name"] || "card")}
+                  <button type="button" aria-label=${_t("Remove one {name}", {name: g["Product Name"] || _t("card")})}
                     onClick=${(e) => { e.stopPropagation(); bump(g, -1); }} disabled=${qty <= 0}>−</button>
                   <span class="deck-quickadd-qty" aria-live="polite">${qty}</span>
-                  <button type="button" aria-label=${"Add one " + (g["Product Name"] || "card")}
+                  <button type="button" aria-label=${_t("Add one {name}", {name: g["Product Name"] || _t("card")})}
                     onClick=${(e) => { e.stopPropagation(); bump(g, 1); }} disabled=${full}>+</button>
                 </span>
               </div>`;
@@ -59080,7 +59053,7 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard, defaultInk
             return html`<button key=${ink} type="button"
               class=${"chip ink ink-icon-chip" + (on ? " active" : "")}
               aria-pressed=${on} aria-label=${ink}
-              title=${on ? `${ink} is in the ink filter — click to remove it` : `Add ${ink} to the ink filter`}
+              title=${on ? _t("{ink} is in the ink filter — click to remove it", {ink: _term("ink", ink)}) : _t("Add {ink} to the ink filter", {ink: _term("ink", ink)})}
               onClick=${() => toggleInk(ink)}>
               <img src=${INK_ICONS[ink]} alt=""/>
             </button>`;
@@ -59088,8 +59061,8 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard, defaultInk
         </div>
         <span class="deck-quickadd-hint">
           ${matches && matches.length
-            ? html`click a row to add · <kbd>↵</kbd> add · <kbd>⇧↵</kbd> remove · <kbd>↑↓</kbd> pick`
-            : html`<kbd>/</kbd> jumps here`}
+            ? html`${_t("click a row to add")} · <kbd>↵</kbd> ${_t("add")} · <kbd>⇧↵</kbd> ${_t("remove")} · <kbd>↑↓</kbd> ${_t("pick")}`
+            : html`<kbd>/</kbd> ${_t("jumps here")}`}
         </span>
       </div>
     </div>
@@ -59851,7 +59824,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                     title=${_t("View this tournament")}>${tournamentContext.tournament_name}</button>`
                 : html`<span>${tournamentContext.tournament_name}</span>`}
               ${tournamentContext.place ? html`<span> · ${localizePlace(tournamentContext.place)}</span>` : null}
-              ${tournamentContext.num_players ? html`<span class="muted"> · ${tournamentContext.num_players} players</span>` : null}`
+              ${tournamentContext.num_players ? html`<span class="muted"> · ${_t("{n} players", {n: tournamentContext.num_players})}</span>` : null}`
             : _t("Viewing shared deck")}
         </div>
         <div class="deck-readonly-by">
@@ -59862,7 +59835,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
               ? html`<button class="deck-creator-link" onClick=${onOpenCreator}
                   title=${_t("View this creator's public decks")}>${creator.display_name}</button>`
               : html`<span>${creator?.display_name
-                  || (isStarterDeck(deck) ? "Packs.Ink" : "an anonymous user")}</span>`)}
+                  || (isStarterDeck(deck) ? "Packs.Ink" : _t("an anonymous user"))}</span>`)}
           ${!tournamentContext && onToggleFollowCreator && creatorId && html`<button class=${"deck-creator-follow"+(isFollowingCreator?" on":"")}
             onClick=${canAct ? onToggleFollowCreator : (onSignIn || (()=>{}))}
             title=${canAct
@@ -59906,7 +59879,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       <span class=${"deck-legal-badge "+legality.format+(legality.format==="coconut" && !legality.legal ? " warn" : "")}
         title=${legality.format === "coconut"
                   ? (legality.legal
-                      ? `Legal ${COCONUT_SET_NAME} deck — ${coconutDisplayName(legality.coconut)}, first to ${COCONUT_LORE_GOAL} lore.`
+                      ? _t("Legal {format} deck — {leader}, first to {lore} lore.", {format: _term("set", COCONUT_SET_NAME), leader: coconutDisplayName(legality.coconut), lore: COCONUT_LORE_GOAL})
                       : legality.issues.join(" • "))
                 : legality.format === "invalid" ? legality.issues.join(" • ") :
                 legality.format === "core" ? _t("Legal in both Core Constructed and Infinity.") :
@@ -59937,7 +59910,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         <button class=${"deck-coconut-slot"+(legality.coconut?" set":"")}
           onClick=${()=>setCoconutPickerOpen(true)}
           title=${legality.coconut
-            ? `${coconutDisplayName(legality.coconut)} — ${coconutInkLabel(legality.coconut)}. Click to change or remove.`
+            ? _t("{leader} — {inks}. Click to change or remove.", {leader: coconutDisplayName(legality.coconut), inks: coconutInkLabel(legality.coconut)})
             : _t("Build a [Format Coconut] deck: pick a leader, get a 3rd ink, 1-of everything else, race to 25 lore.")}>
           ${legality.coconut
             ? html`<img class="deck-coconut-slot-art" src=${coconutThumbUrl(legality.coconut.cn)}
@@ -59951,11 +59924,11 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         ${pending>0 ? _t("Saving…") : _t("Saved ✓")}
       </span>`}
       ${deck.updated_at && html`<span class="deck-updated"
-        title=${"Last updated " + absoluteLocalTime(deck.updated_at) + " (your local time)"}>
+        title=${_t("Last updated {when} (your local time)", {when: absoluteLocalTime(deck.updated_at)})}>
         ${_t("Updated {when}", {when: relativeTime(deck.updated_at)})}
       </span>`}
       ${favoriteCount > 0 && html`<span class="deck-fav-count"
-        title=${favoriteCount + " user" + (favoriteCount===1?"":"s") + " favorited this deck"}>
+        title=${_t("{n} user(s) favorited this deck", {n: favoriteCount})}>
         ★ ${favoriteCount}
       </span>`}
       ${/* Five groups, hairline-separated: EDIT what it is — SHARE it — PLAY
@@ -60036,7 +60009,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                 onClick=${copyShareUrl}>${copied?_t("Copied ✓"):_t("Copy")}</button>
             </div>
             ${visibility === "private" && html`<div class="deck-share-note">
-              This deck is currently <strong>${_t("private")}</strong>. The link above won't work for anyone but you — switch to Unlisted or Public to share.
+              ${_tRich("This deck is currently **private**. The link above won't work for anyone but you — switch to Unlisted or Public to share.")}
             </div>`}
             ${visibility === "unlisted" && html`<div class="deck-share-regen-row">
               <button class="settings-action link" onClick=${regenerateShareToken}
@@ -60045,7 +60018,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                 ${regenerating ? _t("Regenerating…") : (regenDone ? _t("✓ New link ready") : _t("↻ Regenerate share link"))}
               </button>
               <div class="deck-share-note" style=${{marginTop:6}}>
-                Switching back to <strong>Private</strong> also rotates the link automatically.
+                ${_tRich("Switching back to **Private** also rotates the link automatically.")}
               </div>
             </div>`}
           </div>`}
@@ -60121,7 +60094,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       // the art doesn't shove the working list down.
       const coconutShowcase = (compact) => coconutCard ? html`<div
         class=${"deck-coconut-showcase"+(compact?" deck-coconut-showcase--compact":"")}>
-        <span class="deck-coconut-showcase-tag">${COCONUT_SET_NAME} deck</span>
+        <span class="deck-coconut-showcase-tag">${_t("{format} deck", {format: _term("set", COCONUT_SET_NAME)})}</span>
         ${/* The bonus card sits BEHIND the leader, angled, so it reads as an
               extra that comes with it rather than a second leader. */""}
         <div class=${"deck-coconut-stack"+(coconutBonus?" has-bonus":"")}>
@@ -60137,7 +60110,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         </div>
         ${coconutBonus && html`<span class="deck-coconut-bonus-note"
           title=${coconutBonusNote(coconutCard)}>
-          ＋ ${coconutCard.bonus} · free, outside your 60
+          ＋ ${_t("{card} · free, outside your 60", {card: coconutCard.bonus})}
         </span>`}
       </div>` : null;
 
@@ -60145,7 +60118,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         <div class="deck-stat">
           <div class="deck-stat-lbl">${_t("Total value")}</div>
           <div class="deck-stat-val green">${fmtUSD(totalValue)}</div>
-          <div class="deck-stat-sub">full deck</div>
+          <div class="deck-stat-sub">${_t("full deck")}</div>
         </div>
         ${user
           ? html`<div class="deck-stat">
@@ -60157,7 +60130,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
               title=${_t("Sign in to see which of these cards you already own")}>
               <div class="deck-stat-lbl">${_t("Owned")}</div>
               <div class="deck-stat-val">${_t("Sign in")}</div>
-              <div class="deck-stat-sub">to check your collection</div>
+              <div class="deck-stat-sub">${_t("to check your collection")}</div>
             </button>`}
         ${massEntryUrl
           ? html`<a class="deck-stat shop-cta" href=${massEntryUrl} target="_blank" rel="noopener nofollow sponsored"
@@ -60170,7 +60143,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           : html`<div class="deck-stat">
               <div class="deck-stat-lbl">${user ? _t("Missing") : _t("Buy the deck")}</div>
               <div class="deck-stat-val red">${fmtUSD(missingValue)}</div>
-              <div class="deck-stat-sub">${user ? "to complete" : "at today's prices"}</div>
+              <div class="deck-stat-sub">${user ? _t("to complete") : _t("at today's prices")}</div>
             </div>`}
       </div>
       ${totalCount > 0 && html`<div class="deck-charts">
@@ -60217,9 +60190,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       const reprintBlock = reprintNotes.length === 0 ? null : html`<div class="deck-reprints">
         <div class="deck-reprints-head">
           <span class="deck-reprints-star" aria-hidden="true">*</span>
-          <span><strong>Reprints</strong> \u2014 ${reprintNotes.length}${" "}
-            ${reprintNotes.length === 1 ? "card in this deck is" : "cards in this deck are"}${" "}
-            printed in more than one booster set. Any printing is legal \u2014 check the sets you already own.</span>
+          <span>${_tRich(reprintNotes.length === 1 ? "**Reprints** — 1 card in this deck is printed in more than one booster set. Any printing is legal — check the sets you already own." : "**Reprints** — {n} cards in this deck are printed in more than one booster set. Any printing is legal — check the sets you already own.", {n: reprintNotes.length})}</span>
         </div>
         <ul class="deck-reprints-list">
           ${reprintNotes.map(n => html`<li key=${n.name} class="deck-reprints-row">
@@ -60280,8 +60251,8 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         return html`<button type="button"
           class=${"deck-variant-btn"+(extraClass?" "+extraClass:"")}
           onClick=${openPicker}
-          aria-label=${"Change version (" + variantCount + " available)"}
-          title=${"Change version (" + variantCount + " available)"}>
+          aria-label=${_t("Change version ({n} available)", {n: variantCount})}
+          title=${_t("Change version ({n} available)", {n: variantCount})}>
           <span aria-hidden="true">▾</span>
         </button>`;
       };
@@ -60332,7 +60303,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
               : html`<div style=${{aspectRatio:lscape?"7/5":"5/7",background:"var(--bg-surface)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"var(--text-muted)",padding:6,textAlign:"center"}}>${meta["Product Name"]||_t("(unknown)")}</div>`}
             ${(!coconutCard || item.quantity > 1 || gridOverLimit) && html`
               <span class=${"deck-grid-tile-qty"+(gridOverLimit?" over":"")}
-                title=${gridOverLimit ? `${item.quantity} copies — ${COCONUT_SET_NAME} allows ${gridCocoLimit === Infinity ? "any number" : gridCocoLimit}` : null}>
+                title=${gridOverLimit ? _t("{n} copies — {format} allows {max}", {n: item.quantity, format: _term("set", COCONUT_SET_NAME), max: gridCocoLimit === Infinity ? _t("any number") : gridCocoLimit}) : null}>
                 ${gridOverLimit ? html`${uiIcon("warn", 11)} ` : ""}${item.quantity}×
               </span>`}
             ${buildVariantChevron(item, meta, "deck-variant-btn--tile")}
@@ -60404,10 +60375,10 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           onPointerEnter=${mouseHoverOnly(onRowEnter)} onPointerMove=${mouseHoverOnly(onRowMove)}
           onPointerLeave=${onRowLeave}>
           <span class=${"deck-row-qty"+(overLimit?" over":"")}
-            title=${overLimit ? `${item.quantity} copies — ${COCONUT_SET_NAME} allows ${cocoLimit === Infinity ? "any number" : cocoLimit}` : null}>
+            title=${overLimit ? _t("{n} copies — {format} allows {max}", {n: item.quantity, format: _term("set", COCONUT_SET_NAME), max: cocoLimit === Infinity ? _t("any number") : cocoLimit}) : null}>
             ${overLimit ? html`<span class="coconut-over-flag" aria-label=${_t("Over the Coconut copy limit")}>${uiIcon("warn", 11)}</span>` : ""}${qtyText}
           </span>
-          <span class="deck-row-costshield" title=${meta.inkable===false?`Cost ${meta.cost ?? "—"} · Uninkable`:`Cost ${meta.cost ?? "—"} · Inkable`}>
+          <span class="deck-row-costshield" title=${_t(meta.inkable===false ? "Cost {n} · Uninkable" : "Cost {n} · Inkable", {n: meta.cost ?? "—"})}>
             <${CostInkShield} cost=${meta.cost} inkable=${meta.inkable !== false}/>
           </span>
           <span class="deck-row-name" title=${cardDisplayName(meta)}
@@ -60434,18 +60405,18 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           <span class="dot"></span>${_t("HIGHLIGHT MISSING")}
         </button>`}
         <div style=${{marginLeft:"auto",marginRight:"2px",display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"3px"}}>
-          <span class="deck-count-tag" title=${`${totalCount} cards · ${uniqueCount} unique — Lorcana decks need at least 60`}
+          <span class="deck-count-tag" title=${_t("{n} cards · {u} unique — Lorcana decks need at least 60", {n: totalCount, u: uniqueCount})}
             style=${{fontSize:"13px",fontWeight:800,whiteSpace:"nowrap",letterSpacing:"0.2px",
               display:"flex",alignItems:"baseline",gap:"5px",
               color: totalCount>=60 ? "var(--accent)" : "var(--text-muted)"}}>
             ${cardCountLabel}
-            <span style=${{color:"var(--text-muted)",fontWeight:600,fontSize:"11px"}}>· ${uniqueCount} unique</span>
+            <span style=${{color:"var(--text-muted)",fontWeight:600,fontSize:"11px"}}>· ${_t("{n} unique", {n: uniqueCount})}</span>
           </span>
           ${(aggregates.inkable + aggregates.nonInkable) > 0 && html`<div class="deck-card-inkable">
-            <span class="deck-ink-chip" title=${aggregates.inkable + " inkable card" + (aggregates.inkable===1?"":"s") + " (can be used as ink)"}>
+            <span class="deck-ink-chip" title=${aggregates.inkable === 1 ? _t("1 inkable card (can be used as ink)") : _t("{n} inkable cards (can be used as ink)", {n: aggregates.inkable})}>
               <${InkableHex}/><span>${aggregates.inkable}</span>
             </span>
-            <span class="deck-ink-chip" title=${aggregates.nonInkable + " uninkable card" + (aggregates.nonInkable===1?"":"s")}>
+            <span class="deck-ink-chip" title=${aggregates.nonInkable === 1 ? _t("1 uninkable card") : _t("{n} uninkable cards", {n: aggregates.nonInkable})}>
               <${UninkableHex}/><span>${aggregates.nonInkable}</span>
             </span>
           </div>`}
@@ -60492,8 +60463,8 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       ${sectioned.length === 0
         ? html`<div class="muted" style=${{fontSize:12,padding:"20px 4px",textAlign:"center"}}>
             ${readOnly ? _t("This deck is empty.")
-              : focusMode ? html`Deck is empty. Search in the bar at the bottom of the page, then hit <strong>+</strong> to add cards.`
-              : html`Deck is empty. Click <strong>+</strong> on any card in the browser to add it.`}</div>`
+              : focusMode ? html`${_tRich("Deck is empty. Search in the bar at the bottom of the page, then hit **+** to add cards.")}`
+              : html`${_tRich("Deck is empty. Click **+** on any card in the browser to add it.")}`}</div>`
         : sectioned.map(section => html`<div key=${section.key} class="deck-section">
             <div class="deck-section-title">${_t(section.label)} <span class="muted">${section.items.reduce((s,i)=>s+i.quantity,0)}</span></div>
             ${viewLayout === "grid"
@@ -60602,8 +60573,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           ${deckTextModal === "import" && html`<${DeckImageImport} raw=${raw}
             onUseText=${(t)=>{ setDeckTextValue(t); handleImportApply(t); }}/>`}
           ${deckTextModal === "import" && html`<p class="muted" style=${{fontSize:12,margin:"0 0 10px",lineHeight:1.5}}>
-            …or paste one card per line: <code>4 Cinderella - Stouthearted</code>. Importing${" "}
-            <strong>replaces</strong> this deck's current contents.
+            ${_t("…or paste one card per line:")} <code>4 Cinderella - Stouthearted</code>. ${_tRich("Importing **replaces** this deck's current contents.")}
           </p>`}
           ${deckTextModal === "export" && html`<p class="muted" style=${{fontSize:12,margin:"0 0 10px",lineHeight:1.5}}>
             ${_t("Select all to copy, or use the button below. Format works in Dreamborn and most other Lorcana tools.")}
@@ -60914,16 +60884,16 @@ function OfflineImagesPanel({raw, collection, user}){
       </div>`
     : html`<div class="offline-img-actions">
         ${user && collUrls.length > 0 && html`<button class="settings-action"
-          title=${"Save your collection's card images to this device (~" + est(collUrls.length) + ")"}
-          onClick=${() => startOfflineImagePack(collUrls, "collection")}>My collection · ${est(collUrls.length)}</button>`}
+          title=${_t("Save your collection's card images to this device (~{size})", {size: est(collUrls.length)})}
+          onClick=${() => startOfflineImagePack(collUrls, "collection")}>${_t("My collection · {size}", {size: est(collUrls.length)})}</button>`}
         ${allUrls.length > 0 && html`<button class="settings-action"
-          title=${"Save every card image to this device (~" + est(allUrls.length) + ") — Wi-Fi recommended"}
-          onClick=${() => startOfflineImagePack(allUrls, "all")}>All cards · ${est(allUrls.length)}</button>`}
+          title=${_t("Save every card image to this device (~{size}) — Wi-Fi recommended", {size: est(allUrls.length)})}
+          onClick=${() => startOfflineImagePack(allUrls, "all")}>${_t("All cards · {size}", {size: est(allUrls.length)})}</button>`}
         <div class="offline-img-meta muted">
           ${last
-            ? `Saved ${new Date(last.t).toLocaleDateString()} — ${(last.count || 0).toLocaleString()} images${last.scope === "all" ? " (all cards)" : ""}.`
+            ? _t(last.scope === "all" ? "Saved {date} — {n} images (all cards)." : "Saved {date} — {n} images.", {date: new Date(last.t).toLocaleDateString(SITE_LANG), n: (last.count || 0).toLocaleString()})
             : _t("Art you browse is saved automatically; this pre-saves the rest for offline.")}
-          ${usage != null ? ` Storage used: ~${Math.round(usage / 1024 / 1024).toLocaleString()} MB.` : ""}
+          ${usage != null ? " " + _t("Storage used: ~{n} MB.", {n: Math.round(usage / 1024 / 1024).toLocaleString()}) : ""}
           <button class="settings-action link" onClick=${async () => {
             try { await caches.delete(IMG_PACK_CACHE); } catch {}
             try { localStorage.removeItem("packsink:offlineImages"); } catch {}
