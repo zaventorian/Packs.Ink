@@ -46,7 +46,7 @@ const ON_PURPOSE = path.join(ROOT, "i18n", "src", "english_on_purpose.json");
 export const VISIBLE_ATTRS = new Set([
   "title", "placeholder", "aria-label", "alt",
   "label", "emptyText", "titleHint", "hint", "subtitle", "doneLabel", "skipLabel",
-  "confirmLabel", "heading", "caption", "lede", "sub",
+  "confirmLabel", "heading", "caption", "lede", "sub", "ariaLabel", "noun",
 ]);
 const LETTERS = /[A-Za-z]{2,}/;
 
@@ -269,7 +269,9 @@ const ICON_CALLS = new Set(["uiIcon", "extIcon", "_navSvg", "_deckSvg", "Lorcana
 const isIconSlot = (sl) => !!sl && sl.tokens.length > 0 && sl.tokens[0].t === "id" && ICON_CALLS.has(sl.tokens[0].v);
 // Object-literal fields whose string value is shown on screen somewhere.
 export const DATA_FIELDS = new Set(["label", "title", "text", "note", "kicker", "dateLabel", "caption", "hint",
-  "desc", "sub", "short", "heading", "dek", "lede", "tip", "subtitle", "help", "explain", "empty", "cta"]);
+  "desc", "sub", "short", "long", "lbl", "heading", "dek", "lede", "tip", "subtitle", "help", "explain", "empty", "cta"]);
+// Lookup tables of display strings: HOME_BANNER_LABELS, SC_KIND_PLURAL, CAL_KIND_SHORT...
+export const LABEL_MAP_RE = /^[A-Z][A-Z0-9_]*_(LABELS?|SHORT|PLURAL|LANES|LONG|BADGE|TITLES?|NAMES|NOUNS?)$/;
 const INLINE_TAGS = new Set(["b", "i", "a", "strong", "em", "code", "kbd", "u", "mark", "abbr", "sup", "sub", "small"]);
 const wrapCall = (v) => "_t(" + JSON.stringify(v) + ")";
 
@@ -301,6 +303,18 @@ export function audit(src) {
          && tokens[k - 1] && tokens[k - 1].t === "p" && (tokens[k - 1].v === "{" || tokens[k - 1].v === ",")) {
         const val = tokens[k + 2]; const after = tokens[k + 3];
         if(val && val.t === "str" && (!after || after.v === "," || after.v === "}")) add(val.v, val.pos, "data:" + tk.v, null);
+      }
+      // const X_LABELS = {chase: "Chase Movers", ...} - a lookup table of display
+      // strings keyed by something internal; every value is data.
+      if(tk.t === "id" && tk.v === "const" && tokens[k + 1] && tokens[k + 1].t === "id" && LABEL_MAP_RE.test(tokens[k + 1].v)
+         && tokens[k + 2] && tokens[k + 2].v === "=" && tokens[k + 3] && tokens[k + 3].v === "{") {
+        let depth = 0;
+        for(let j = k + 3; j < tokens.length; j++) {
+          const x = tokens[j];
+          if(x.t === "p" && (x.v === "[" || x.v === "{" || x.v === "(")) depth++;
+          else if(x.t === "p" && (x.v === "]" || x.v === "}" || x.v === ")")) { if(--depth === 0) break; }
+          else if(depth === 1 && x.t === "str" && tokens[j - 1] && tokens[j - 1].v === ":") add(x.v, x.pos, "data:map", null);
+        }
       }
       // items: ["...", "..."] - a list of display lines (a news article's bullets)
       if(tk.t === "id" && tk.v === "items" && tokens[k + 1] && tokens[k + 1].v === ":" && tokens[k + 2] && tokens[k + 2].v === "[") {

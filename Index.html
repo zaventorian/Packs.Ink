@@ -635,7 +635,7 @@ const PRINTING_VARIANT_LABEL = {"Foil": "Top Prize", "Non-Foil": "Prize Wall"};
 // suppressed from the version slot.
 const VARIANT_BADGE_HIDE = new Set(["", "Normal", "Unknown", "Holofoil", "Cold Foil"]);
 // The variant badge label for a printing value, or null if it shouldn't be badged.
-const variantBadge = (p) => (p && !VARIANT_BADGE_HIDE.has(p)) ? (PRINTING_VARIANT_LABEL[p] || p) : null;
+const variantBadge = (p) => (p && !VARIANT_BADGE_HIDE.has(p)) ? _t(PRINTING_VARIANT_LABEL[p] || p) : null;
 // Normalize any printing string into one of two foil buckets, for the
 // Normal/Foil version tabs on ordinary (non-version-split) x/204 cards. Any
 // foil/cold-foil/holo finish → "Foil"; everything else (incl. untagged) → "Non-Foil".
@@ -8584,7 +8584,7 @@ const copyCurrentPageLink = async () => {
   try {
     if(navigator.clipboard && navigator.clipboard.writeText){
       await navigator.clipboard.writeText(url);
-      flashToast("Link to " + what + " copied");
+      flashToast(_t("Link to {page} copied", {page: what.split(" \u00b7 ").map(p => _t(p)).join(" · ")}));
       return;
     }
   } catch {/* fall through */}
@@ -10144,9 +10144,7 @@ const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, 
         title=${_t("Priced from real eBay sales, not TCGplayer — see the note below.")}>*</span>` : null}</span>
       ${sub ? html`<span class="cd-stat-sub">${sub}</span>` : null}
       ${standing && !rawSale && html`<span class=${"price-standing price-standing--" + standing.tone}
-        title=${"Today's NM Market price sits in the " + Math.round(standing.pct * 100)
-          + "th percentile of the last " + standing.window.replace("-", " ") + " ("
-          + standing.n + " daily prices). Market, not Low — Low is a published aggregate that a single listing can move."}>
+        title=${_t("Today's NM Market price sits in the {pct}th percentile of the last {window} ({n} daily prices). Market, not Low — Low is a published aggregate that a single listing can move.", {pct: Math.round(standing.pct * 100), window: _t(standing.window.replace("-", " ")), n: standing.n})}>
         ${_t(standing.label)}</span>`}
       ${buyUrl && html`<a class="cd-stat-buy" href=${buyUrl} target="_blank" rel="noopener nofollow sponsored"
         onClick=${e=>e.stopPropagation()} title=${_t("Buy this printing on TCGplayer (affiliate link)")}>
@@ -10154,7 +10152,7 @@ const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, 
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>
       </a>`}
       ${!rawSale && html`
-        <span class="cd-stat-px">Low <b>${fmt(low.now)}</b><span class="cd-stat-pxsep"> · </span>Mkt <b>${fmt(market.now)}</b></span>
+        <span class="cd-stat-px">${_t("Low")} <b>${fmt(low.now)}</b><span class="cd-stat-pxsep"> · </span>${_t("Mkt")} <b>${fmt(market.now)}</b></span>
       `}
     </div>
     ${/* A raw-priced row leads with the eBay numbers, graded-style: Last Sold
@@ -10172,13 +10170,13 @@ const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, 
         <span class="cd-raw-stat-sub">${fmtTooltipDate(Date.parse(rawSale.last_sold_date + "T00:00:00Z"))}</span>
       </div>
       <div class="cd-raw-stat">
-        <span class="cd-raw-stat-lbl">${"Avg of last " + (rawSale.last_5_count || 1)}</span>
+        <span class="cd-raw-stat-lbl">${_t("Avg of last {n}", {n: rawSale.last_5_count || 1})}</span>
         <span class="cd-raw-stat-val">${fmt(rawSale.avg_last_5)}</span>
-        <span class="cd-raw-stat-sub">${rawSale.sale_count + (rawSale.sale_count === 1 ? " eBay sale" : " eBay sales") + " recorded"}</span>
+        <span class="cd-raw-stat-sub">${rawSale.sale_count === 1 ? _t("1 eBay sale recorded") : _t("{n} eBay sales recorded", {n: rawSale.sale_count})}</span>
       </div>
     </div>
     <div class="cd-raw-tcg">
-      <span>TCGplayer Low <b>${fmt(low.now)}</b><span class="cd-stat-pxsep"> · </span>Mkt <b>${fmt(market.now)}</b></span>
+      <span>TCGplayer ${_t("Low")} <b>${fmt(low.now)}</b><span class="cd-stat-pxsep"> · </span>${_t("Mkt")} <b>${fmt(market.now)}</b></span>
       <button type="button" class="cd-raw-tcg-toggle" aria-expanded=${showTcgGrid}
         onClick=${() => setShowTcgGrid(v => !v)}>${showTcgGrid ? _t("Hide TCGplayer changes ▴") : _t("TCGplayer changes ▾")}</button>
     </div>`}
@@ -10923,7 +10921,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           <${Badge} rarity=${group.Rarity} foil=${false} theme=${theme}/>
           <span class="card-detail-set">${_term("set", group.Set)}${group.Number?" #"+group.Number.split("/")[0]:""}</span>
           ${group.variant_label && html`<span class="card-detail-variant-tag"
-            title=${group.localized_exclusive ? _t("Region-locked printing — no U.S. TCGplayer market") : ""}>${group.variant_label}</span>`}
+            title=${group.localized_exclusive ? _t("Region-locked printing — no U.S. TCGplayer market") : ""}>${_t(group.variant_label)}</span>`}
         </div>
 
         ${reprintInfo && html`<div class=${"cd-reprint cd-reprint--" + reprintInfo.kind}>
@@ -11297,7 +11295,7 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
         <div class="cards-chipgroup">
           ${COST_BUCKETS.map(c => html`<button key=${c} class=${"chip cost cost-hex-chip "+(filter.costs.has(c)?"active":"")}
             onClick=${()=>setFilter(f=>({...f,costs:toggleSet(f.costs,c)}))}
-            title=${c===9?_t("Cost 9+"):"Cost "+c} aria-label=${c===9?_t("Cost 9+"):"Cost "+c}>
+            title=${c===9?_t("Cost 9+"):_t("Cost {n}", {n: c})} aria-label=${c===9?_t("Cost 9+"):_t("Cost {n}", {n: c})}>
             <${CostHex} n=${c}/>
           </button>`)}
         </div>
@@ -11307,7 +11305,7 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
         <div class="cards-chipgroup">
           ${STRENGTH_BUCKETS.map(n => html`<button key=${n} class=${"chip "+(filter.strengths.has(n)?"active":"")}
             onClick=${()=>setFilter(f=>({...f,strengths:toggleSet(f.strengths,n)}))}
-            title=${n===9?_t("Strength 9+"):"Strength "+n}>${n===9?"9+":n}</button>`)}
+            title=${n===9?_t("Strength 9+"):_t("Strength {n}", {n})}>${n===9?"9+":n}</button>`)}
         </div>
       </div>
       <div class="drawer-section">
@@ -11315,7 +11313,7 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
         <div class="cards-chipgroup">
           ${WILLPOWER_BUCKETS.map(n => html`<button key=${n} class=${"chip "+(filter.willpowers.has(n)?"active":"")}
             onClick=${()=>setFilter(f=>({...f,willpowers:toggleSet(f.willpowers,n)}))}
-            title=${n===9?_t("Willpower 9+"):"Willpower "+n}>${n===9?"9+":n}</button>`)}
+            title=${n===9?_t("Willpower 9+"):_t("Willpower {n}", {n})}>${n===9?"9+":n}</button>`)}
         </div>
       </div>
       <div class="drawer-section">
@@ -11323,7 +11321,7 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
         <div class="cards-chipgroup">
           ${LORE_BUCKETS.map(n => html`<button key=${n} class=${"chip "+(filter.lores.has(n)?"active":"")}
             onClick=${()=>setFilter(f=>({...f,lores:toggleSet(f.lores,n)}))}
-            title=${"Lore "+n}>${n}</button>`)}
+            title=${_t("Lore {n}", {n})}>${n}</button>`)}
         </div>
       </div>
       <div class="drawer-section">
@@ -11347,8 +11345,8 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
             title=${_t("Core Constructed — only cards legal in the current rotation")}
             onClick=${()=>setFilter(f=>({...f,legality:f.legality==="core"?null:"core"}))}>${_t("Core")}</button>
           ${CORE_NEXT_SET && html`<button class=${"chip "+(filter.legality==="corenext"?"active":"")}
-            title=${"Core as it will stand once " + CORE_NEXT_SET + " releases — today's Core plus " + CORE_NEXT_SET + ", with any rotation it brings"}
-            onClick=${()=>setFilter(f=>({...f,legality:f.legality==="corenext"?null:"corenext"}))}>Core: ${CORE_NEXT_SET}</button>`}
+            title=${_t("Core as it will stand once {set} releases — today's Core plus {set}, with any rotation it brings", {set: _term("set", CORE_NEXT_SET)})}
+            onClick=${()=>setFilter(f=>({...f,legality:f.legality==="corenext"?null:"corenext"}))}>${_t("Core: {set}", {set: _term("set", CORE_NEXT_SET)})}</button>`}
           <button class=${"chip "+(filter.legality==="infinity"?"active":"")}
             title=${_t("Infinity — every mainline-legal card")}
             onClick=${()=>setFilter(f=>({...f,legality:f.legality==="infinity"?null:"infinity"}))}>${_t("Infinity")}</button>
@@ -15660,7 +15658,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
         <div class="cards-quickfilter-sub">
           ${COST_BUCKETS.map(c => html`<button key=${c} class=${"chip cost cost-hex-chip "+(filter.costs.has(c)?"active":"")}
             onClick=${()=>setFilter(f=>({...f,costs:toggleSet(f.costs,c)}))}
-            title=${c===9?_t("Cost 9+"):"Cost "+c} aria-label=${c===9?_t("Cost 9+"):"Cost "+c}>
+            title=${c===9?_t("Cost 9+"):_t("Cost {n}", {n: c})} aria-label=${c===9?_t("Cost 9+"):_t("Cost {n}", {n: c})}>
             <${CostHex} n=${c}/>
           </button>`)}
         </div>
@@ -15678,8 +15676,8 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
             title=${_t("Core Constructed — only cards legal in the current rotation")}
             onClick=${()=>setFilter(f=>({...f,legality:f.legality==="core"?null:"core"}))}>${_t("Core")}</button>
           ${CORE_NEXT_SET && html`<button class=${"chip "+(filter.legality==="corenext"?"active":"")}
-            title=${"Core as it will stand once " + CORE_NEXT_SET + " releases — today's Core plus " + CORE_NEXT_SET + ", with any rotation it brings"}
-            onClick=${()=>setFilter(f=>({...f,legality:f.legality==="corenext"?null:"corenext"}))}>Core: ${CORE_NEXT_SET}</button>`}
+            title=${_t("Core as it will stand once {set} releases — today's Core plus {set}, with any rotation it brings", {set: _term("set", CORE_NEXT_SET)})}
+            onClick=${()=>setFilter(f=>({...f,legality:f.legality==="corenext"?null:"corenext"}))}>${_t("Core: {set}", {set: _term("set", CORE_NEXT_SET)})}</button>`}
           <button class=${"chip "+(filter.legality==="infinity"?"active":"")}
             title=${_t("Infinity — every mainline-legal card")}
             onClick=${()=>setFilter(f=>({...f,legality:f.legality==="infinity"?null:"infinity"}))}>${_t("Infinity")}</button>
@@ -16670,11 +16668,11 @@ const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback
       </div>
       ${(onFeedback || onViewFeedback) && html`<div class="footer-feedback-row" style=${{marginTop:8,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
         ${onFeedback && html`<button class="footer-feedback-btn" onClick=${onFeedback}
-          title=${feedbackUnread > 0 ? feedbackUnread + " new " + replyWord(feedbackUnread) + " to your feedback" : undefined}
+          title=${feedbackUnread > 0 ? (feedbackUnread === 1 ? _t("1 new reply to your feedback") : _t("{n} new replies to your feedback", {n: feedbackUnread})) : undefined}
           style=${{display:"inline-flex",alignItems:"center",gap:6,background:"var(--btn-bg)",border:"1px solid var(--btn-border)",
             color:"var(--btn-text)",borderRadius:999,padding:"5px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
           ${uiIcon("chat")} ${_t("Send feedback")}${feedbackUnread > 0 && html`<span class="footer-feedback-badge"
-            aria-label=${feedbackUnread + " new " + replyWord(feedbackUnread)}>${feedbackUnread > 9 ? "9+" : feedbackUnread}</span>`}</button>`}
+            aria-label=${feedbackUnread === 1 ? _t("1 new reply") : _t("{n} new replies", {n: feedbackUnread})}>${feedbackUnread > 9 ? "9+" : feedbackUnread}</span>`}</button>`}
         ${onViewFeedback && html`<button class="footer-feedback-btn" onClick=${onViewFeedback}
           title=${feedbackAdminUnread > 0 ? feedbackAdminUnread + (feedbackAdminUnread === 1 ? " conversation" : " conversations") + " with new activity" : undefined}
           style=${{display:"inline-flex",alignItems:"center",gap:6,background:"none",border:"1px solid var(--btn-border)",
@@ -16682,12 +16680,12 @@ const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback
           ${uiIcon("inbox")} Feedback inbox${feedbackAdminUnread > 0 && html`<span class="footer-feedback-badge"
             aria-label=${feedbackAdminUnread + " new"}>${feedbackAdminUnread > 9 ? "9+" : feedbackAdminUnread}</span>`}</button>`}
       </div>`}
-      ${stale && html`<div class="footer-stale" title=${"Last successful price update on " + lastEtlDate + " (your local time). The daily refresh may be late or failing."}>
-        ${uiIcon("warn", 12)} Prices may be stale (last update ${relativeTime(lastEtlDate)})
+      ${stale && html`<div class="footer-stale" title=${_t("Last successful price update on {date} (your local time). The daily refresh may be late or failing.", {date: lastEtlDate})}>
+        ${uiIcon("warn", 12)} ${_t("Prices may be stale (last update {when})", {when: relativeTime(lastEtlDate)})}
       </div>`}
       ${matviewLag && !stale && html`<div class="footer-stale"
         title=${"Newer prices (" + lastRawPriceDate + ") are loaded but not yet published to the display layer (" + lastEtlDate + "). Ops: run refresh_card_prices_latest()."}>
-        ${uiIcon("warn", 12)} Today's prices are still processing — showing ${lastEtlDate}
+        ${uiIcon("warn", 12)} ${_t("Today's prices are still processing — showing {date}", {date: lastEtlDate})}
       </div>`}
     </div>
     <div class="footer-logos">
@@ -17659,10 +17657,10 @@ function amazonSealedMatches(sealedPrices, setNameById){
       key: "amz:" + row.tcgplayer_product_id,
       name: cleanSealedName(row.name),
       sub: row.is_puzzle
-        ? "Puzzle · " + row.puzzle_pieces + " pcs"
+        ? _t("Puzzle · {n} pcs", {n: row.puzzle_pieces})
         : row.is_exclusive
-          ? row.exclusive_retailer + " exclusive"
-          : [setName, AMAZON_SEALED_TYPE_LABEL[type]].filter(Boolean).join(" · "),
+          ? _t("{shop} exclusive", {shop: row.exclusive_retailer})
+          : [setName && _term("set", setName), AMAZON_SEALED_TYPE_LABEL[type] && _t(AMAZON_SEALED_TYPE_LABEL[type])].filter(Boolean).join(" · "),
       type, setName,
       setRank: setName ? MAINLINE_SETS.indexOf(setName) : -1,
       img: tcgImgSized(row.image_url),
@@ -25166,18 +25164,18 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                 onInput=${e=>setCardQuery(e.target.value)}/>
               ${filtersButton}
             </div>
-            <div class="history-picker-hint">Click any card to add or remove it from the graph. Up to ${COMPARE_MAX}.</div>
+            <div class="history-picker-hint">${_t("Click any card to add or remove it from the graph. Up to {n}.", {n: COMPARE_MAX})}</div>
             <div class="history-picker-list">
               ${(!raw || raw.length === 0)
                 ? html`<div class="history-picker-empty">${_t("Loading cards…")}</div>`
                 : flatMatches != null ? (flatMatches.length === 0
-                ? html`<div class="history-picker-empty">No cards match "${cardQuery}"</div>`
+                ? html`<div class="history-picker-empty">${_t("No cards match \"{q}\"", {q: cardQuery})}</div>`
                 : flatMatches.map(c => {
                     const sel = isCardInCompare(c.card_id);
                     return html`<button key=${c.card_id}
                       class=${"history-picker-item picker-multi "+(sel?"active":"")}
                       disabled=${!sel && isFull}
-                      title=${!sel && isFull ? `Graph full (${COMPARE_MAX} max) — remove one to add more` : ""}
+                      title=${!sel && isFull ? _t("Graph full ({n} max) — remove one to add more", {n: COMPARE_MAX}) : ""}
                       onClick=${()=>toggleCard(c)}>
                       <span class=${"picker-check "+(sel?"checked":"")}>${sel?"✓":""}</span>
                       <span class="picker-text">
@@ -25193,7 +25191,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                       return html`<button key=${c.card_id}
                         class=${"history-picker-item picker-multi "+(sel?"active":"")}
                         disabled=${!sel && isFull}
-                        title=${!sel && isFull ? `Graph full (${COMPARE_MAX} max) — remove one to add more` : ""}
+                        title=${!sel && isFull ? _t("Graph full ({n} max) — remove one to add more", {n: COMPARE_MAX}) : ""}
                         onClick=${()=>toggleCard(c)}>
                         <span class=${"picker-check "+(sel?"checked":"")}>${sel?"✓":""}</span>
                         <span class="picker-text">
@@ -25211,11 +25209,11 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
               <input type="search" placeholder=${_t("Search sealed product...")}
                 value=${sealedSearch} onInput=${e=>setSealedSearch(e.target.value)}/>
             </div>
-            <div class="history-picker-hint">Click any product to add or remove it from the graph. Up to ${COMPARE_MAX}.</div>
+            <div class="history-picker-hint">${_t("Click any product to add or remove it from the graph. Up to {n}.", {n: COMPARE_MAX})}</div>
             <div class="history-picker-list">
               ${sealedPickerData.length === 0
                 ? html`<div class="history-picker-empty">${sealedPrices && sealedPrices.length
-                    ? `No products match "${sealedSearch}"`
+                    ? _t("No products match \"{q}\"", {q: sealedSearch})
                     : _t("Sealed price data isn't available right now — check back after the next daily update.")}</div>`
                 : sealedPickerData.map(({type, items}) => html`<div key=${type} class="history-picker-group">
                     <div class="history-picker-group-head">${type}</div>
@@ -25225,7 +25223,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                       return html`<button key=${item.tcgplayer_product_id}
                         class=${"history-picker-item picker-multi "+(sel?"active":"")}
                         disabled=${!sel && isFull}
-                        title=${!sel && isFull ? `Graph full (${COMPARE_MAX} max) — remove one to add more` : ""}
+                        title=${!sel && isFull ? _t("Graph full ({n} max) — remove one to add more", {n: COMPARE_MAX}) : ""}
                         onClick=${()=>toggleSealed(item)}>
                         <span class=${"picker-check "+(sel?"checked":"")}>${sel?"✓":""}</span>
                         <span class="picker-text">
@@ -25263,14 +25261,14 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                   onClick=${()=>setGradedGradeFilter(new Set())}>${_t("Clear")}</button>`}
               </div>
             </div>
-            <div class="history-picker-hint">Click any graded sale tier to add or remove it from the graph. Up to ${COMPARE_MAX}.</div>
+            <div class="history-picker-hint">${_t("Click any graded sale tier to add or remove it from the graph. Up to {n}.", {n: COMPARE_MAX})}</div>
             <div class="history-picker-list">
               ${gradedOptions == null
                 ? html`<div class="history-picker-empty">${_t("Loading graded sales…")}</div>`
                 : gradedFiltered.length === 0
                   ? html`<div class="history-picker-empty">${gradedOptions.length === 0
                       ? _t("No graded sales recorded yet.")
-                      : `No matches for "${gradedSearch}"`}</div>`
+                      : _t("No matches for \"{q}\"", {q: gradedSearch})}</div>`
                   : gradedFiltered.map(g => {
                       const gid = gradedCompareId(g);
                       const sel = isCardInCompare(gid);
@@ -25281,7 +25279,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                       return html`<button key=${gid}
                         class=${"history-picker-item picker-multi "+(sel?"active":"")}
                         disabled=${!sel && isFull}
-                        title=${!sel && isFull ? `Graph full (${COMPARE_MAX} max) — remove one to add more` : ""}
+                        title=${!sel && isFull ? _t("Graph full ({n} max) — remove one to add more", {n: COMPARE_MAX}) : ""}
                         onClick=${()=>toggleGraded(g)}>
                         <span class=${"picker-check "+(sel?"checked":"")}>${sel?"✓":""}</span>
                         <span class="picker-text">
@@ -25291,7 +25289,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                             ${variant ? " " + variant : ""}
                             ${m.Set ? " · " + m.Set : ""}
                             ${px != null ? " · $" + Number(px).toLocaleString(undefined,{maximumFractionDigits:0}) : ""}
-                            ${" · " + n + (n === 1 ? " sale" : " sales")}
+                            ${" · " + (n === 1 ? _t("1 sale") : _t("{n} sales", {n}))}
                           </span>
                         </span>
                       </button>`;
@@ -25304,7 +25302,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
               <input type="search" placeholder=${_t("Search indices — 'enchanted', 'booster box', a set name...")}
                 value=${indexSearch} onInput=${e=>setIndexSearch(e.target.value)}/>
             </div>
-            <div class="history-picker-hint">Click any index to add or remove it from the graph. Up to ${COMPARE_MAX}.</div>
+            <div class="history-picker-hint">${_t("Click any index to add or remove it from the graph. Up to {n}.", {n: COMPARE_MAX})}</div>
             <div class="history-picker-list">
               ${indexCatalog === undefined
                 ? html`<div class="history-picker-empty">${_t("Loading indices…")}</div>`
@@ -25318,7 +25316,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                     </div>`
                   : indexPickerGroups.length === 0
                     ? html`<div class="history-picker-empty">${(indexCatalog||[]).length
-                        ? `No index matches "${indexSearch}"`
+                        ? _t("No index matches \"{q}\"", {q: indexSearch})
                         : _t("No market indices are available yet.")}</div>`
                     : indexPickerGroups.map(g => html`<div key=${g.label} class="history-picker-group">
                         <div class="history-picker-group-head">${_t(g.label)}</div>
@@ -25329,7 +25327,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                           return html`<button key=${item.card_id}
                             class=${"history-picker-item picker-multi "+(sel?"active":"")}
                             disabled=${!sel && isFull}
-                            title=${!sel && isFull ? `Graph full (${COMPARE_MAX} max) — remove one to add more` : ""}
+                            title=${!sel && isFull ? _t("Graph full ({n} max) — remove one to add more", {n: COMPARE_MAX}) : ""}
                             onClick=${()=>toggleIndexItem(item)}>
                             <span class=${"picker-check "+(sel?"checked":"")}>${sel?"✓":""}</span>
                             <span class="picker-text">
@@ -25350,10 +25348,10 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                 value=${setSearch} onInput=${e=>setSetSearch(e.target.value)}/>
               ${filtersButton}
             </div>
-            <div class="history-picker-hint">Click any set to add or remove its EV-per-Box line from the graph. Up to ${COMPARE_MAX}.</div>
+            <div class="history-picker-hint">${_t("Click any set to add or remove its EV-per-Box line from the graph. Up to {n}.", {n: COMPARE_MAX})}</div>
             <div class="history-picker-list">
               ${filteredSetList.length === 0
-                ? html`<div class="history-picker-empty">No sets match "${setSearch}"</div>`
+                ? html`<div class="history-picker-empty">${_t("No sets match \"{q}\"", {q: setSearch})}</div>`
                 : filteredSetList.map(s => {
                     const sid = setIdByName[s];
                     const key = sid ? "set-" + sid : null;
@@ -25362,12 +25360,12 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                     return html`<button key=${s}
                       class=${"history-picker-item picker-multi "+(sel?"active":"")}
                       disabled=${!sid || (!sel && isFull)}
-                      title=${!sid ? _t("No set_id on file for this set") : (!sel && isFull ? `Graph full (${COMPARE_MAX} max) — remove one to add more` : "")}
+                      title=${!sid ? _t("No set_id on file for this set") : (!sel && isFull ? _t("Graph full ({n} max) — remove one to add more", {n: COMPARE_MAX}) : "")}
                       onClick=${()=>toggleSetItem(s)}>
                       <span class=${"picker-check "+(sel?"checked":"")}>${sel?"✓":""}</span>
                       <span class="picker-text">
                         <span class="hpi-name">${s}${setDataPartial(s)?"*":""}</span>
-                        <span class="hpi-sub">${dates ? "Retail " + fmtIsoDate(dates.retail) : _t("No release date on file")}</span>
+                        <span class="hpi-sub">${dates ? _t("Retail {date}", {date: fmtIsoDate(dates.retail)}) : _t("No release date on file")}</span>
                       </span>
                     </button>`;
                   })}
@@ -25381,7 +25379,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
             <div class="compare-summary">
               ${compareCards.length === 0
                 ? html`<span class="muted" style=${{fontSize:12}}>${mode === "card" ? _t("Check off cards in the list to start graphing.") : mode === "sealed" ? _t("Check off sealed products in the list to start graphing.") : mode === "graded" ? _t("Check off graded sale tiers in the list to graph their eBay history.") : _t("Check off sets in the list to graph their EV per box.")}</span>`
-                : html`<span style=${{fontSize:12,fontWeight:600}}>${compareCards.length} product${compareCards.length===1?"":"s"} on the graph</span>
+                : html`<span style=${{fontSize:12,fontWeight:600}}>${compareCards.length === 1 ? _t("1 product on the graph") : _t("{n} products on the graph", {n: compareCards.length})}</span>
                        <span class="muted" style=${{fontSize:11,marginLeft:8}}>· ${priceLabel} · ${rangeLabel}</span>`}
             </div>
             ${compareCards.length > 0 && html`<div class="compare-export-group">
@@ -25403,7 +25401,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                     <div class="history-preview-name">${previewItem.name}</div>
                     <div class="history-preview-meta">${previewItem.sub || ""}</div>
                     ${tcgUrl(previewItem.productId) && html`<div class="history-preview-type">
-                      <a href=${tcgUrl(previewItem.productId)} target="_blank" rel="noopener nofollow sponsored">View on TCGplayer ${extIcon()}</a>
+                      <a href=${tcgUrl(previewItem.productId)} target="_blank" rel="noopener nofollow sponsored">${_t("View on TCGplayer")} ${extIcon()}</a>
                       ${previewAmazon && html`<span class="history-preview-sep" aria-hidden="true"> · </span><a href=${previewAmazon.url} target="_blank" rel="noopener nofollow sponsored"
                         title=${previewAmazon.exact ? _t("Buy this on Amazon (affiliate link)") : _t("Search Amazon for this (affiliate link)")}>${previewAmazon.exact ? _t("Buy on Amazon") : _t("Find on Amazon")} ${extIcon()}</a>`}
                     </div>`}
@@ -25491,13 +25489,12 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                     : (c.kind === "graded" && !gradedPremium) ? false : !compareSeries[c.card_id])
                   ? html`<div class="chart-empty large">${_t("Loading history…")}</div>`
                   : renderSeries.length === 0
-                    ? html`<div class="chart-empty large">No price history yet for the selected product${compareCards.length>1?"s":""}.</div>`
+                    ? html`<div class="chart-empty large">${_t("No price history yet for the selected products.")}</div>`
                     : html`<${LineChart} series=${renderSeries} width=920 height=320
                         logScale=${chartScale === "log"}
                         valueFmt=${(indexed || pointsOnly) ? fmtIndexTick : null}/>`}
                 ${mixedIndex && renderSeries.length > 0 && html`<div class="muted compare-mixed-note">
-                  Indices are measured in points, not dollars, so they only line up with prices once
-                  everything is indexed to 100.${" "}
+                  ${_t("Indices are measured in points, not dollars, so they only line up with prices once everything is indexed to 100.")}${" "}
                   <button class="cal-linkish" onClick=${() => setChartScale("indexed")}>${_t("Switch to Indexed")}</button>
                 </div>`}
                 <table class="compare-stats-table">
@@ -26805,7 +26802,7 @@ const SealedAbout = ({info}) => {
   return html`<section class="sealed-about" aria-label=${_t("About this product")}>
     <div class="sealed-about-head">
       <span class="sealed-about-title">${_t("About this product")}</span>
-      ${(info.ex === "exclusive" || info.ex === "limited") && html`<span class=${"sealed-about-badge sealed-about-badge--" + info.ex}>${SEALED_EX_LABEL[info.ex]}</span>`}
+      ${(info.ex === "exclusive" || info.ex === "limited") && html`<span class=${"sealed-about-badge sealed-about-badge--" + info.ex}>${_t(SEALED_EX_LABEL[info.ex])}</span>`}
     </div>
     ${info.note && html`<p class="sealed-about-note">${_t(info.note)}</p>`}
     ${facts.length > 0 && html`<dl class="sealed-about-facts">
@@ -27092,11 +27089,9 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
               <span class="sealed-detail-price-val">${fmt(marketToday)}</span>
             </div>`}
             ${standing && html`<span class=${"price-standing price-standing--" + standing.tone}
-              title=${"Today's NM Market price sits in the " + Math.round(standing.pct * 100)
-                + "th percentile of the last " + standing.window.replace("-", " ") + " ("
-                + standing.n + " daily prices)."}>${_t(standing.label)}</span>`}
+              title=${_t("Today's NM Market price sits in the {pct}th percentile of the last {window} ({n} daily prices).", {pct: Math.round(standing.pct * 100), window: _t(standing.window.replace("-", " ")), n: standing.n})}>${_t(standing.label)}</span>`}
             ${url && html`<a class="sealed-detail-buy" href=${url} target="_blank"
-              rel="noopener nofollow sponsored" title=${_t("Buy on TCGplayer (affiliate link)")}>Buy on TCGplayer ${extIcon()}</a>`}
+              rel="noopener nofollow sponsored" title=${_t("Buy on TCGplayer (affiliate link)")}>${_t("Buy on TCGplayer")} ${extIcon()}</a>`}
             ${mat
               // A prize mat is not sold anywhere new, and an Amazon search for
               // one lands on resellers' lots — so only a plain retail mat gets
@@ -31471,7 +31466,7 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, splitTiers, presel
   // thousands of dollars.
   const printingLabel = (p) => (picked && SPLIT_BY_PRINTING_SETS_GLOBAL.has(picked.Set))
     ? (gradedVariantLabel(gradedSlotBucket(p), picked.Set) || p)
-    : (PRINTING_VARIANT_LABEL[p] || p);
+    : _t(PRINTING_VARIANT_LABEL[p] || p);
 
   return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:560}}>
@@ -39788,7 +39783,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       td:(r)=>html`<td key=${key} class=${"td-num"+(muted?" muted":"")}>${fmtMoney(r[field])}</td>`});
     const salesCol = {key:"sales", label:"Sales", defaultHidden:true,
       th:()=>html`<th key="sales" class="sortable th-num" title=${_t("Number of recorded eBay sales — shift-click to use as a tiebreaker")} onClick=${(e)=>onSort("sale_count", e)}>${_t("Sales")}${arrow("sale_count")}</th>`,
-      td:(r)=>html`<td key="sales" class="td-num" title=${r.last_sold_date?"Last sold "+r.last_sold_date:""}>${r.sale_count!=null?r.sale_count:"—"}</td>`};
+      td:(r)=>html`<td key="sales" class="td-num" title=${r.last_sold_date?_t("Last sold {date}", {date: r.last_sold_date}):""}>${r.sale_count!=null?r.sale_count:"—"}</td>`};
     // How recently this grader/grade last sold on eBay. Value + sort key already
     // live on the row (last_sold_date, from graded_sales_rollup). Recent sales
     // (<=14d) render in accent so fresh comps pop; >90d dims to muted.
@@ -39815,7 +39810,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       key:"d_"+lk, label: gearLbl || (lbl+" Δ%"), defaultHidden: !DEFAULT_WIN.has(lk),
       th:()=>{ const k=priceMode==="market"?mk:lk; return html`<th key=${"d_"+lk}
           class=${"sortable th-num"+(isSortCol(k)?" sort-active":"")}
-          title=${tip || ("Δ% over "+lbl+(premiumGraded?"":" ("+(priceMode==="market"?_t("NM Market"):_t("Low"))+")"))} onClick=${(e)=>onSort(k, e)}>${lbl}${arrow(k)}</th>`; },
+          title=${tip || (premiumGraded ? _t("Δ% over {window}", {window: lbl}) : _t("Δ% over {window} ({basis})", {window: lbl, basis: priceMode==="market"?_t("NM Market"):_t("Low")}))} onClick=${(e)=>onSort(k, e)}>${lbl}${arrow(k)}</th>`; },
       td:(r)=>{ const k=priceMode==="market"?mk:lk; const v=priceMode==="market"?r[mk]:r[lk];
         return html`<td key=${"d_"+lk} class=${"td-num "+pctCls(v)+(isSortCol(k)?" sort-active":"")}>${fmtPct(v)}</td>`; },
     }));
@@ -39832,8 +39827,8 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     const vsBasis = VS_MKT_BASES.find(b => b[0] === vsMktBasis) || VS_MKT_BASES[0];
     const vsMktCol = {key:"vsmkt", label:"vs Market", defaultHidden:true,
       th:()=>html`<th key="vsmkt" class="th-num"
-        title=${`This card's ${vsMktLbl} Δ% minus ${vsBasis[1].toLowerCase()} over the same window, in percentage points. Positive means it outpaced its comparison group. ${vsBasis[2]} A dash means that group has no index — usually too few cards to make one.`}
-        >vs ${vsMktBasis === "all" ? _t("Mkt") : vsMktBasis === "set" ? _t("Set") : vsMktBasis === "rarity" ? _t("Rar") : _t("Peers")}</th>`,
+        title=${_t("This card's {window} Δ% minus {group} over the same window, in percentage points. Positive means it outpaced its comparison group. {note} A dash means that group has no index — usually too few cards to make one.", {window: vsMktLbl, group: _t(vsBasis[1]).toLowerCase(), note: _t(vsBasis[2])})}
+        >${_t("vs")} ${vsMktBasis === "all" ? _t("Mkt") : vsMktBasis === "set" ? _t("Set") : vsMktBasis === "rarity" ? _t("Rar") : _t("Peers")}</th>`,
       td:(r)=>{ const v = vsMarket(r, vsMktWin);
         return html`<td key="vsmkt" class=${"td-num "+pctCls(v)}>${v == null ? "—" : (v > 0 ? "+" : "") + v.toFixed(1) + "pp"}</td>`; }};
     const signalsCol = {key:"signals", label:"Signals",
@@ -39882,7 +39877,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       th:()=>html`<th key="low" class="sortable th-num" title=${_t("TCGplayer's published Low Price. A clock mark flags a Low that hasn't changed in over 3 days.")} onClick=${(e)=>onSort("low", e)}>${_t("Low")}${arrow("low")}</th>`,
       td:(r)=>{ const sd = lowStaleDays(r);
         return html`<td key="low" class="td-num">${fmtMoney(r.low_today)}${sd != null ? html`<span class="td-low-stale"
-          title=${"Low unchanged for "+sd+" days — not fresh signal"}>${uiIcon("clock", 11)}</span>` : null}</td>`; }};
+          title=${_t("Low unchanged for {n} days — not fresh signal", {n: sd})}>${uiIcon("clock", 11)}</span>` : null}</td>`; }};
     // Raw mode's graded PRICE columns (RAW_GRADED_COL_KEYS): one pair, whose
     // grader + grade the gear picks, PSA 10 by default. Both headers name the
     // tier, so a CGC 9.5 column can never be read as PSA 10's. The tooltip says
@@ -39902,7 +39897,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         : html`${g && g.note ? html`<span class="td-gr-approx" aria-hidden="true">≈</span>` : null}${fmtMoney(v)}`}</td>`;
     };
     const grCol = (key, head, gearLbl, what, tip) => ({key, label: grTier.label + " " + gearLbl, defaultHidden: true,
-      th:()=>html`<th key=${key} class="sortable th-num" title=${tip + " Pick another grader or grade in the Columns menu."}
+      th:()=>html`<th key=${key} class="sortable th-num" title=${tip + " " + _t("Pick another grader or grade in the Columns menu.")}
         onClick=${(e)=>onSort(key, e)}>${_t(grTier.label)} ${head}${arrow(key)}</th>`,
       td: grCell(key, what)});
     const rawGradedCols = (showGraded || showSealed) ? [] : [
@@ -40022,14 +40017,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       ${(watchlists || []).map(w => html`<button key=${w.id}
         class=${"price-db-watchchip"+(w.id === activeWatchlist ? " active" : "")}
         title=${w.id === activeWatchlist
-          ? `${w.items.length} item${w.items.length===1?"":"s"} — the star column adds to this list`
+          ? _t(w.items.length === 1 ? "{n} item — the star column adds to this list" : "{n} items — the star column adds to this list", {n: w.items.length})
           : _t("Switch the star column to this list")}
         onClick=${()=>setActiveWatchlist(w.id)}>
         ${w.name}<span class="price-db-watchcount">${w.items.length}</span>
       </button>`)}
       <button class="price-db-advbtn" title=${_t("Create a new watchlist")}
         onClick=${async ()=>{
-          const n = prompt("Name this watchlist (e.g. 'Spec targets', 'Trade binder'):");
+          const n = prompt(_t("Name this watchlist (e.g. 'Spec targets', 'Trade binder'):"));
           if(!n || !n.trim()) return;
           const id = await watchlistOps.create(n);
           if(id) setActiveWatchlist(id);
@@ -40043,12 +40038,12 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           ${watchOnly ? _t("✓ On this list") : _t("Filter to list")}
         </button>
         <button class="price-db-advbtn" title=${activeList.items.length
-            ? `Graph all ${Math.min(activeList.items.length, COMPARE_MAX)} on one chart in Price Graphing`
+            ? _t("Graph all {n} on one chart in Price Graphing", {n: Math.min(activeList.items.length, COMPARE_MAX)})
             : _t("Star some rows first")}
           disabled=${!activeList.items.length}
           onClick=${()=>graphWatchlist(activeList)}>
-          ${uiIcon("chart")} Graph list
-          ${activeList.items.length > COMPARE_MAX && html`<span class="muted" style=${{fontSize:10,marginLeft:3}}>(first ${COMPARE_MAX})</span>`}
+          ${uiIcon("chart")} ${_t("Graph list")}
+          ${activeList.items.length > COMPARE_MAX && html`<span class="muted" style=${{fontSize:10,marginLeft:3}}>${_t("(first {n})", {n: COMPARE_MAX})}</span>`}
         </button>
         <button class="price-db-advbtn" title=${_t("Rename this watchlist")}
           onClick=${()=>{ const n = prompt("Rename watchlist:", activeList.name); if(n && n.trim()) watchlistOps.rename(activeList.id, n); }}>${_t("Rename")}</button>
@@ -40106,7 +40101,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         ${[["buy","BUY"],["crash","CRSH"],["disc","DISC"],["prem","PREM"],["trend","TRND"]].map(([k,l]) => html`<button key=${k}
           class=${"price-db-sigchip sig-"+k+(sigFilter.has(k)?" active":"")}
           onClick=${()=>setSigFilter(prev=>{ const n=new Set(prev); n.has(k)?n.delete(k):n.add(k); return n; })}
-          title=${"Toggle: show only cards with the "+l+" signal"}>${l}</button>`)}
+          title=${_t("Toggle: show only cards with the {signal} signal", {signal: l})}>${l}</button>`)}
         ${sigFilter.size > 0 && html`<button class="price-db-multiclear"
           onClick=${()=>setSigFilter(new Set())} style=${{marginLeft:4}}>${_t("Clear signals")}</button>`}
       </div>`}
@@ -40155,7 +40150,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       ${showSealed && html`<div class="price-db-typechips" role="group" aria-label=${_t("Sealed product type filter")}>
         ${SEALED_DISPLAY_TYPE_ORDER.map(t => html`<button key=${t}
           class=${"price-db-collchip"+(filterSealedTypes.has(t)?" active":"")}
-          title=${"Filter to "+t}
+          title=${_t("Filter to {name}", {name: _t(t)})}
           onClick=${()=>setFilterSealedTypes(prev=>{ const n=new Set(prev); n.has(t)?n.delete(t):n.add(t); return n; })}>${t}</button>`)}
         ${filterSealedTypes.size > 0 && html`<button class="price-db-collchip price-db-collchip-clear"
           onClick=${()=>setFilterSealedTypes(new Set())}>${_t("Clear")}</button>`}
@@ -40255,10 +40250,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
               <span>${_t("Sold")}</span>
               <select value=${SOLD_CUSTOM_MODES.has(soldFilter.mode) ? soldFilter.mode : "on"}
                 onChange=${e=>setSoldFilter(f=>({...f, mode:e.target.value}))}>
-                <option value="on">on</option>
-                <option value="before">before</option>
-                <option value="after">after</option>
-                <option value="between">between</option>
+                <option value="on">${_t("on")}</option>
+                <option value="before">${_t("before")}</option>
+                <option value="after">${_t("after")}</option>
+                <option value="between">${_t("between")}</option>
               </select>
             </label>
             <label class="price-db-soldrow">
@@ -40283,11 +40278,11 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           <span class="muted">${_t("Sort")}</span>
           <b>${sortKeyLabel(sortKey)}${sortDesc ? " ▼" : " ▲"}</b>
           ${sortKey2 && sortKey2 !== sortKey
-            ? html`<span class="muted">then</span><b>${sortKeyLabel(sortKey2)}${sortDesc2 ? " ▼" : " ▲"}</b>`
+            ? html`<span class="muted">${_t("then")}</span><b>${sortKeyLabel(sortKey2)}${sortDesc2 ? " ▼" : " ▲"}</b>`
             : null} ▾
         </button>
         ${sortMenuOpen && html`<div class="price-db-multimenu price-db-sortmenu">
-          <div class="price-db-soldhint muted">Then sort by (breaks ties within ${sortKeyLabel(sortKey)}):</div>
+          <div class="price-db-soldhint muted">${_t("Then sort by (breaks ties within {key}):", {key: sortKeyLabel(sortKey)})}</div>
           ${secondarySortOptions.filter(([k])=>k !== sortKey).map(([k,label])=>html`<button key=${k}
             class=${"price-db-multiitem" + (sortKey2 === k ? " active" : "")}
             onClick=${()=>{ if(sortKey2 === k) setSortDesc2(d=>!d); else { setSortKey2(k); setSortDesc2(true); } }}>
@@ -40311,9 +40306,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       </button>
       ${benchmarkReady && !showSealed && !colHidden.has("vsmkt") && html`<label class="checkbox-group price-db-vsbasis"
         title=${_t("What the vs column measures each card against.")}>
-        <span class="muted">vs</span>
+        <span class="muted">${_t("vs")}</span>
         <select value=${vsMktBasis} onChange=${e=>setVsMktBasis(e.target.value)}>
-          ${VS_MKT_BASES.map(([k,l]) => html`<option key=${k} value=${k}>${l}</option>`)}
+          ${VS_MKT_BASES.map(([k,l]) => html`<option key=${k} value=${k}>${_t(l)}</option>`)}
         </select>
       </label>`}
       ${!showGraded && html`<div class="market-sim-kind" role="group"
@@ -40326,7 +40321,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     ${hiddenFilterChips.length > 0 && html`<div class="price-db-hiddenfilters">
       <span class="price-db-hiddenfilters-lbl">${_t("Also filtering")}</span>
       ${hiddenFilterChips.map(c => html`<button key=${c.key} class="price-db-hiddenchip"
-        title=${`Remove this filter (${c.label})`} onClick=${c.clear}>${_t(c.label)} <span aria-hidden="true">✕</span></button>`)}
+        title=${_t("Remove this filter ({name})", {name: _t(c.label)})} onClick=${c.clear}>${_t(c.label)} <span aria-hidden="true">✕</span></button>`)}
       ${hiddenFilterChips.length > 1 && html`<button class="price-db-hiddenchip price-db-hiddenchip-all"
         title=${_t("Remove every filter in the Filter panel")} onClick=${clearHiddenFilters}>${_t("Clear all")}</button>`}
     </div>`}
@@ -40368,7 +40363,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         </div>
       </div>`}
       <div class="price-db-adv-row">
-        <label>${priceMode === "market" ? _t("NM Market") : _t("Low")} price</label>
+        <label>${priceMode === "market" ? _t("NM Market price") : _t("Low price")}</label>
         <input type="number" min="0" step="0.5" placeholder=${_t("Min $")}
           value=${minPrice} onInput=${e => setMinPrice(e.target.value)}/>
         <span class="muted">–</span>
@@ -40404,7 +40399,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           ${COST_BUCKETS.map(c => html`<button key=${c}
             class=${"chip cost cost-hex-chip "+(filterCosts.has(c)?"active":"")}
             onClick=${()=>setFilterCosts(prev=>{ const n=new Set(prev); n.has(c)?n.delete(c):n.add(c); return n; })}
-            title=${c===9?_t("Cost 9+"):"Cost "+c}><${CostHex} n=${c}/></button>`)}
+            title=${c===9?_t("Cost 9+"):_t("Cost {n}", {n: c})}><${CostHex} n=${c}/></button>`)}
           ${filterCosts.size > 0 && html`<button class="price-db-advbtn"
             onClick=${()=>setFilterCosts(new Set())}>${_t("Clear")}</button>`}
         </div>
@@ -40437,7 +40432,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             title=${_t("Core Constructed — current rotation")}>${_t("Core")}</button>
           ${CORE_NEXT_SET && html`<button class=${"chip "+(filterLegality==="corenext"?"active":"")}
             onClick=${()=>setFilterLegality(v=>v==="corenext"?"":"corenext")}
-            title=${"Core as it will stand once " + CORE_NEXT_SET + " releases"}>Core: ${CORE_NEXT_SET}</button>`}
+            title=${_t("Core as it will stand once {set} releases", {set: _term("set", CORE_NEXT_SET)})}>${_t("Core: {set}", {set: _term("set", CORE_NEXT_SET)})}</button>`}
           <button class=${"chip "+(filterLegality==="infinity"?"active":"")}
             onClick=${()=>setFilterLegality(v=>v==="infinity"?"":"infinity")}
             title=${_t("Infinity — any legally-built deck")}>${_t("Infinity")}</button>
@@ -40452,7 +40447,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           ${STRENGTH_BUCKETS.map(n => html`<button key=${n}
             class=${"chip "+(filterStrengths.has(n)?"active":"")}
             onClick=${()=>setFilterStrengths(prev=>{ const m=new Set(prev); m.has(n)?m.delete(n):m.add(n); return m; })}
-            title=${n===9?_t("Strength 9+"):"Strength "+n}>${n===9?"9+":n}</button>`)}
+            title=${n===9?_t("Strength 9+"):_t("Strength {n}", {n})}>${n===9?"9+":n}</button>`)}
         </div>
       </div>
       <div class="price-db-adv-row">
@@ -40461,7 +40456,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           ${WILLPOWER_BUCKETS.map(n => html`<button key=${n}
             class=${"chip "+(filterWillpowers.has(n)?"active":"")}
             onClick=${()=>setFilterWillpowers(prev=>{ const m=new Set(prev); m.has(n)?m.delete(n):m.add(n); return m; })}
-            title=${n===9?_t("Willpower 9+"):"Willpower "+n}>${n===9?"9+":n}</button>`)}
+            title=${n===9?_t("Willpower 9+"):_t("Willpower {n}", {n})}>${n===9?"9+":n}</button>`)}
         </div>
       </div>
       <div class="price-db-adv-row">
@@ -40470,7 +40465,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           ${LORE_BUCKETS.map(n => html`<button key=${n}
             class=${"chip "+(filterLores.has(n)?"active":"")}
             onClick=${()=>setFilterLores(prev=>{ const m=new Set(prev); m.has(n)?m.delete(n):m.add(n); return m; })}
-            title=${"Lore "+n}>${n}</button>`)}
+            title=${_t("Lore {n}", {n})}>${n}</button>`)}
         </div>
       </div>
       <div class="price-db-adv-row">
@@ -40506,7 +40501,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                 ${visibleIllustrators.map(n => html`<button key=${n}
                   class=${"chip "+(filterIllustrators.has(n)?"active":"")}
                   onClick=${()=>setFilterIllustrators(prev=>{ const m=new Set(prev); m.has(n)?m.delete(n):m.add(n); return m; })}>${n}</button>`)}
-                ${visibleIllustrators.length === 0 && html`<span class="muted" style=${{fontSize:11}}>No artist matches "${illQuery}"</span>`}
+                ${visibleIllustrators.length === 0 && html`<span class="muted" style=${{fontSize:11}}>${_t("No artist matches \"{q}\"", {q: illQuery})}</span>`}
               </div>
               ${filterIllustrators.size > 0 && html`<button class="price-db-advbtn" style=${{marginTop:6}}
                 onClick=${()=>setFilterIllustrators(new Set())}>${_t("Clear artists")}</button>`}
@@ -40521,7 +40516,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       </>`}
     </div>`}
     ${selected.size > 0 && html`<div class="price-db-batchbar">
-      <span class="price-db-batchcount"><strong>${selected.size}</strong> selected</span>
+      <span class="price-db-batchcount">${_t("{n} selected", {n: selected.size})}</span>
       <button onClick=${clearSelected} class="price-db-advbtn">${_t("Clear")}</button>
       <div ref=${batchRef} style=${{position:"relative",display:"inline-flex",marginLeft:"auto"}}>
         <button class="price-db-batchbtn" onClick=${()=>setBatchOpen(o=>!o)}>${_t("Actions ▾")}</button>
@@ -40537,11 +40532,11 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
               ? html`<a class="price-db-batchitem" href=${buyParts[0]?.url || "#"} target="_blank"
                   rel="noopener nofollow sponsored"
                   onClick=${(e) => { if(!buyParts.length) e.preventDefault(); setBatchOpen(false); }}>
-                  ${uiIcon("cart")} Buy on TCGplayer (affiliate cart)
+                  ${uiIcon("cart")} ${_t("Buy on TCGplayer (affiliate cart)")}
                 </a>`
               : buyParts.map((p, i) => html`<a key=${"buy" + i} class="price-db-batchitem" href=${p.url} target="_blank"
                   rel="noopener nofollow sponsored" onClick=${() => setBatchOpen(false)}>
-                  ${uiIcon("cart")} Buy on TCGplayer — part ${i + 1} of ${buyParts.length} (${p.copies})
+                  ${uiIcon("cart")} ${_t("Buy on TCGplayer — part {i} of {n} ({copies})", {i: i + 1, n: buyParts.length, copies: p.copies})}
                 </a>`)}
             ${user && !watchlistsUnavailable && !showGraded && html`<button class="price-db-batchitem"
               onClick=${async () => {
@@ -40581,8 +40576,8 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                 setBatchOpen(false);
                 if(onCompareCards) onCompareCards(cards);
               }}>
-              ${uiIcon("chart")} Add to Price Graphing
-              ${selRows.length > COMPARE_MAX && html`<span class="muted" style=${{fontSize:10,marginLeft:4}}>(first ${COMPARE_MAX} of ${selRows.length})</span>`}
+              ${uiIcon("chart")} ${_t("Add to Price Graphing")}
+              ${selRows.length > COMPARE_MAX && html`<span class="muted" style=${{fontSize:10,marginLeft:4}}>${_t("(first {n} of {total})", {n: COMPARE_MAX, total: selRows.length})}</span>`}
             </button>`;
           })()}
         </div>`}
@@ -40599,18 +40594,18 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return total != null && total > filtered.length
         ? `${filtered.length.toLocaleString()} of ${total.toLocaleString()}`
         : `${filtered.length.toLocaleString()}`;
-    })()} ${showSealed ? "products" : "cards"}${selected.size>0 ? ` · ${selected.size} selected` : ""}</div>
+    })()} ${showSealed ? _t("products") : _t("cards")}${selected.size>0 ? " · " + _t("{n} selected", {n: selected.size}) : ""}</div>
     ${filtered.length === 0 && raw && raw.length > 0 && ((showSealed && sealedHistory == null) || (premiumGraded && gradedRollup == null))
       ? html`<div class="empty-state" style=${{textAlign:"center",padding:"26px 12px",color:"var(--text-muted)",fontSize:13}}>
           ${(showSealed ? sealedHistoryErr : gradedRollupErr)
-            ? html`<div>Couldn't load ${showSealed ? "sealed" : "graded"} prices.${" "}
+            ? html`<div>${showSealed ? _t("Couldn't load sealed prices.") : _t("Couldn't load graded prices.")}${" "}
                 <button class="price-db-advbtn" onClick=${() => { if(showSealed) setSealedHistoryErr(false); else setGradedRollupErr(false); }}>${_t("Try again")}</button></div>`
-            : html`<div>Loading ${showSealed ? "sealed" : "graded"} prices…</div>`}
+            : html`<div>${showSealed ? _t("Loading sealed prices…") : _t("Loading graded prices…")}</div>`}
         </div>`
       : filtered.length === 0 && raw && raw.length > 0 && html`<div class="empty-state" style=${{textAlign:"center",padding:"26px 12px",color:"var(--text-muted)",fontSize:13}}>
       <div>${_t("No cards match the current filters — try clearing a chip or two, or switch the preset back to \"All\".")}</div>
       ${hiddenFilterChips.length > 0 && html`<div style=${{marginTop:10}}>
-        The Filter panel is also narrowing this view: <b>${hiddenFilterChips.map(c=>c.label).join(" · ")}</b>.
+        ${_t("The Filter panel is also narrowing this view:")} <b>${hiddenFilterChips.map(c=>_t(c.label)).join(" · ")}</b>.
         <div style=${{marginTop:8}}>
           <button class="price-db-advbtn" onClick=${clearHiddenFilters}>${_t("Clear those filters")}</button>
         </div>
@@ -40618,7 +40613,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     </div>`}
     ${rawGradedWanted && !gradedPremium && html`<${GradedTosGate} compact=${true}/>`}
     ${rawGradedWanted && gradedPremium && gradedRollupErr && html`<div class="price-db-grnote muted">
-      Couldn't load graded prices.${" "}<button class="price-db-advbtn" onClick=${() => setGradedRollupErr(false)}>${_t("Try again")}</button></div>`}
+      ${_t("Couldn't load graded prices.")}${" "}<button class="price-db-advbtn" onClick=${() => setGradedRollupErr(false)}>${_t("Try again")}</button></div>`}
     <div class="price-db-tablebox" ref=${setTableBoxEl}>
       <div class="price-db-stickyhead">
       <div class="price-db-tableinner" style=${gripGeom.tableW ? {width: gripGeom.tableW + "px"} : null}>
@@ -40667,8 +40662,8 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                 return html`<td class="td-watch">
                   <button class=${"price-db-star"+(on?" on":elsewhere?" elsewhere":"")}
                     aria-pressed=${on ? "true" : "false"}
-                    title=${on ? `On "${activeList ? activeList.name : "your list"}" — click to remove`
-                      : elsewhere ? `Already on another watchlist — click to add to "${activeList ? activeList.name : "this list"}" too`
+                    title=${on ? _t("On \"{list}\" — click to remove", {list: activeList ? activeList.name : _t("your list")})
+                      : elsewhere ? _t("Already on another watchlist — click to add to \"{list}\" too", {list: activeList ? activeList.name : _t("this list")})
                       : _t("Add to watchlist")}
                     onClick=${()=>toggleWatch(r)}>${on ? "★" : "☆"}</button>
                 </td>`;
@@ -40705,9 +40700,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         </tbody>
       </table>
       ${filtered.length > visibleRows && html`<div ref=${rowSentinelRef} class="price-db-more muted">
-        Showing ${visibleRows.toLocaleString()} of ${filtered.length.toLocaleString()} — keep scrolling to load more.
+        ${_t("Showing {n} of {total} — keep scrolling to load more.", {n: visibleRows.toLocaleString(), total: filtered.length.toLocaleString()})}
         <button class="price-db-advbtn" onClick=${()=>setVisibleRows(filtered.length)}>${_t("Show all")}</button>
-        <button class="price-db-advbtn" onClick=${exportCsv}>⇩ CSV (all ${filtered.length.toLocaleString()})</button>
+        <button class="price-db-advbtn" onClick=${exportCsv}>${_t("⇩ CSV (all {n})", {n: filtered.length.toLocaleString()})}</button>
       </div>`}
     </div>
       <div class="price-db-hscroll" aria-hidden="true"><div class="price-db-hscroll-in"></div></div>
@@ -43582,13 +43577,13 @@ const MoverChipGroup = ({ariaLabel, order, labels, selected, onToggle, noun, ico
   html`<div class="seg-grp" role="group" aria-label=${ariaLabel} style=${{padding:2}}>
     ${order.map(k => {
       const on = selected.includes(k);
-      const label = labels ? labels[k] : k;
+      const label = _t(labels ? labels[k] : k);
       const ico = iconOf ? iconOf(k) : null;
       return html`<button key=${k} class=${on?"active":""} aria-pressed=${on}
         onClick=${()=>onToggle(k)}
         title=${(on && selected.length === 1)
-          ? `Showing ${label} ${noun} only — turn another on before hiding this one`
-          : `${on?"Hide":"Show"} ${label} ${noun}`}
+          ? _t("Showing {what} only — turn another on before hiding this one", {what: label + " " + _t(noun)})
+          : _t(on ? "Hide {what}" : "Show {what}", {what: label + " " + _t(noun)})}
         style=${{fontSize:11,padding:"3px 8px"}}>${ico}${label}</button>`;
     })}
   </div>`;
@@ -43673,14 +43668,14 @@ const MoversPicker = ({keys, pick, onPick, setLogo}) => {
         ${/* The icon chips have no text node at all, so the accessible name has
               to come from here — and the FULL label, not the short one, since
               there is no width pressure on a screen reader. */""}
-        aria-label=${HOME_BANNER_LABELS[k] || k}
+        aria-label=${_t(HOME_BANNER_LABELS[k] || k)}
         class=${"home-movers-chip" + (rars ? " home-movers-chip--rar" : "") + (logo ? " home-movers-chip--logo" : "") + (k === pick ? " on" : "")}
-        title=${HOME_BANNER_LABELS[k] || k}
+        title=${_t(HOME_BANNER_LABELS[k] || k)}
         onClick=${() => onPick(k)}>${rars
           ? rars.map(r => html`<${RarityTag} key=${r} rarity=${r} hideText=${true}/>`)
           : logo
             ? html`<${SetLogo} set=${logo} klass="home-movers-logo" eager=${true}/>`
-            : (HOME_BANNER_SHORT[k] || HOME_BANNER_LABELS[k] || k)}</button>`;
+            : _t(HOME_BANNER_SHORT[k] || HOME_BANNER_LABELS[k] || k)}</button>`;
     })}
   </div>`;
 };
@@ -43849,7 +43844,7 @@ const MoversBanner =({title, subtitle, controls, cards, onTileClick, activeWindo
             <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
             <circle cx="12" cy="13" r="4"/>
           </svg>
-          <span style=${{fontSize:10,fontWeight:700,letterSpacing:0.2}}>${seg.lbl}</span>
+          <span style=${{fontSize:10,fontWeight:700,letterSpacing:0.2}}>${_t(seg.lbl)}</span>
         </button>`)}
       </span>`}
     </div>` : null}
@@ -48822,7 +48817,7 @@ const CalendarFilterChips = ({kinds, onToggle, counts, compact}) => html`<div cl
       class=${"cal-chip-filter" + (on ? " on" : "") + (compact ? " compact" : "")}
       style=${on ? {borderColor: k.hue, "--chip-hue": k.hue} : null}
       aria-pressed=${on ? "true" : "false"}
-      title=${last ? _t("At least one type has to stay on") : CALENDAR_KIND_LONG[k.key]}
+      title=${last ? _t("At least one type has to stay on") : _t(CALENDAR_KIND_LONG[k.key])}
       onClick=${() => { if(!last) onToggle(k.key); }}>
       ${uiIcon(k.icon, 13)}<span>${_t(k.label)}</span>
       ${counts && counts[k.key] != null && html`<span class="cal-chip-n">${counts[k.key]}</span>`}
@@ -49685,7 +49680,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
                       return html`<button key=${k.key} type="button"
                         class=${"cal-kind-chip" + (isOn ? " on" : "")}
                         aria-pressed=${isOn ? "true" : "false"}
-                        title=${last ? _t("Keep at least one, or unfollow the store with ×") : k.long}
+                        title=${last ? _t("Keep at least one, or unfollow the store with ×") : _t(k.long)}
                         onClick=${() => { if(last) return;
                           subs.updateMeta("store", st.ref, {kinds: isOn
                             ? on.filter(x => x !== k.key)
@@ -49785,7 +49780,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
                   return html`<button key=${k.key} type="button"
                     class=${"cal-map-kind" + (on ? " on" : "")}
                     aria-pressed=${on}
-                    title=${last ? _t("Keep at least one — turn another on first") : k.long}
+                    title=${last ? _t("Keep at least one — turn another on first") : _t(k.long)}
                     onClick=${() => { if(last) return;
                       setMapStoreKinds(p => p.includes(k.key)
                         ? p.filter(x => x !== k.key)
@@ -50451,7 +50446,7 @@ const ScCalendarButton = ({series, subs}) => {
           return html`<button key=${k.key} type="button"
             class=${"cal-add-item cal-add-check" + (isOn ? " on" : "") + (last ? " last" : "")}
             aria-pressed=${isOn ? "true" : "false"}
-            title=${last ? _t("Keep at least one, or use Unfollow above") : k.long}
+            title=${last ? _t("Keep at least one, or use Unfollow above") : _t(k.long)}
             onClick=${() => { if(last) return;
               subs.updateMeta("store", storeId, {kinds: isOn
                 ? storeKinds.filter(x => x !== k.key)
@@ -50857,7 +50852,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
           const last = on && kinds.length === 1;
           return html`<button key=${k.key} type="button"
             class=${"sc-mode-btn sc-mode-kind"+(on?" active":"")+(last?" last":"")}
-            aria-pressed=${on} title=${last ? _t("Keep at least one — press All to show everything") : k.long}
+            aria-pressed=${on} title=${last ? _t("Keep at least one — press All to show everything") : _t(k.long)}
             onClick=${()=>{ if(!last) toggleKind(k.key); }}>
             ${uiIcon(on ? "checkboxOn" : "checkbox", 12)} ${_t(k.label)}</button>`;
         })}
@@ -51270,7 +51265,7 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
           <svg viewBox="0 0 24 24" aria-hidden="true" width="12" height="12" style=${{display:"block",stroke:"currentColor",fill:"none",strokeWidth:2,strokeLinecap:"round",strokeLinejoin:"round"}}>
             <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>
           </svg>
-          <span style=${{fontSize:10,fontWeight:700,letterSpacing:0.2}}>${seg.lbl}</span>
+          <span style=${{fontSize:10,fontWeight:700,letterSpacing:0.2}}>${_t(seg.lbl)}</span>
         </button>`)}
       </span>`}
     </div>
@@ -52647,18 +52642,18 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
 
   // CHASE_RAR_ORDER holds canonical rarity names, so RarityTag resolves each
   // one straight off RARITY_ICONS — the same accessor the picker's chips use.
-  const chaseControls = html`<${MoverChipGroup} ariaLabel="Chase rarities"
-    order=${CHASE_RAR_ORDER} selected=${chaseRars} onToggle=${toggleChaseRar} noun="movers"
+  const chaseControls = html`<${MoverChipGroup} ariaLabel=${_t("Chase rarities")}
+    order=${CHASE_RAR_ORDER} selected=${chaseRars} onToggle=${toggleChaseRar} noun=${_t("movers")}
     iconOf=${r => html`<${RarityTag} rarity=${r} hideText=${true}/>`}/>`;
   const chaseLabel = CHASE_RAR_ORDER.filter(r => chaseRars.includes(r)).join(" · ");
 
-  const rareLegControls = html`<${MoverChipGroup} ariaLabel="Rare–Legendary printing"
+  const rareLegControls = html`<${MoverChipGroup} ariaLabel=${_t("Rare–Legendary printing")}
     order=${RL_PRINTING_ORDER} labels=${RL_PRINTING_LABELS} selected=${rlPrintings}
-    onToggle=${toggleRlPrinting} noun="printings"/>`;
+    onToggle=${toggleRlPrinting} noun=${_t("printings")}/>`;
   // Both printings on is the default, so only call it out when one is hidden.
   const rareLegLabel = "Rare · Super Rare · Legendary"
     + (rlPrintings.length === RL_PRINTING_ORDER.length ? ""
-       : ` · ${RL_PRINTING_LABELS[rlPrintings[0]]} only`);
+       : " · " + _t("{name} only", {name: _t(RL_PRINTING_LABELS[rlPrintings[0]])}));
 
   // "News" tile: the newest set while it's still pre-release (reveal season).
   // Counts distinct cards we have live for that set, updating as more arrive,
@@ -53024,12 +53019,12 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
         ${!meta.fixed && html`<${React.Fragment}>
           <button class="home-edit-btn2" disabled=${!p.on || pos <= 0}
             onClick=${()=>homeEdit.move(p.key, -1)} title=${_t("Move up within this column")}
-            aria-label=${"Move "+meta.label+" up"}>▲</button>
+            aria-label=${_t("Move {name} up", {name: _t(meta.label)})}>▲</button>
           <button class="home-edit-btn2" disabled=${!p.on || pos < 0 || pos >= sameCol.length-1}
             onClick=${()=>homeEdit.move(p.key, 1)} title=${_t("Move down within this column")}
-            aria-label=${"Move "+meta.label+" down"}>▼</button>
+            aria-label=${_t("Move {name} down", {name: _t(meta.label)})}>▼</button>
         <//>`}
-        ${!meta.fixed && !p.pair && html`<select class="home-edit-col" value=${p.col} aria-label=${meta.label+" column"}
+        ${!meta.fixed && !p.pair && html`<select class="home-edit-col" value=${p.col} aria-label=${_t("{name} column", {name: _t(meta.label)})}
           title=${_t("Which part of the page this section sits in")}
           onChange=${e=>homeEdit.setCol(p.key, e.target.value)}>
           ${HOME_COLUMNS.map(c => html`<option key=${c.key} value=${c.key}>${_t(c.label)}</option>`)}
@@ -53037,14 +53032,14 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
         ${/* Pairing replaces the column outright: a paired panel sits beside
               its banner, so asking which rail it lives in is meaningless. */""}
         ${HOME_PAIRABLE_KEYS.has(p.key) && html`<${React.Fragment}>
-          <select class="home-edit-col" value=${p.pair || ""} aria-label=${meta.label+" pairing"}
+          <select class="home-edit-col" value=${p.pair || ""} aria-label=${_t("{name} pairing", {name: _t(meta.label)})}
             title=${_t("Sit this box beside a movers banner instead of in a rail")}
             onChange=${e=>homeEdit.setPair(p.key, e.target.value || null, p.pairSide)}>
             <option value="">${_t("In a column")}</option>
-            ${HOME_BANNER_KEYS.map(k => html`<option key=${k} value=${k}>Beside ${HOME_BANNER_LABELS[k] || k}</option>`)}
+            ${HOME_BANNER_KEYS.map(k => html`<option key=${k} value=${k}>${_t("Beside {name}", {name: _t(HOME_BANNER_LABELS[k] || k)})}</option>`)}
           </select>
           ${p.pair && html`<select class="home-edit-col" value=${p.pairSide || "right"}
-            aria-label=${meta.label+" side"} title=${_t("Which side of the banner")}
+            aria-label=${_t("{name} side", {name: _t(meta.label)})} title=${_t("Which side of the banner")}
             onChange=${e=>homeEdit.setPair(p.key, p.pair, e.target.value)}>
             <option value="right">${_t("on the right")}</option>
             <option value="left">${_t("on the left")}</option>
@@ -53252,10 +53247,10 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
                   // on the way it says so, rather than claiming nothing moved.
                   const sealedBanner = sealedPidsKey ? html`<${MoversBanner}
                       title=${_t("Sealed Movers")}
-                      subtitle=${`${SEALED_MOVER_KIND_ORDER.filter(k => sealedKinds.includes(k)).map(k => SEALED_MOVER_KIND_LABELS[k]).join(" · ")} — top 20 by ${winLabel} ${directionLabel}`}
-                      controls=${html`<${MoverChipGroup} ariaLabel="Sealed product types"
+                      subtitle=${_t("{kinds} — top 20 by {window} {direction}", {kinds: SEALED_MOVER_KIND_ORDER.filter(k => sealedKinds.includes(k)).map(k => _t(SEALED_MOVER_KIND_LABELS[k])).join(" · "), window: winLabel, direction: directionLabel})}
+                      controls=${html`<${MoverChipGroup} ariaLabel=${_t("Sealed product types")}
                         order=${SEALED_MOVER_KIND_ORDER} labels=${SEALED_MOVER_KIND_LABELS}
-                        selected=${sealedKinds} onToggle=${toggleSealedKind} noun="movers"/>`}
+                        selected=${sealedKinds} onToggle=${toggleSealedKind} noun=${_t("movers")}/>`}
                       cards=${sealedMovers || []}
                       emptyText=${sealedMovers == null ? _t("Loading sealed prices…")
                         : (sealedHist && sealedHist.error) ? _t("Couldn't load sealed prices right now — try again in a moment.")
@@ -53406,14 +53401,14 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
                     const vi = visibleBannerKeys.indexOf(k);
                     if(editing){
                       stack.push(html`<div key=${"bbar-"+k} class="home-edit-card home-edit-card--banner">
-                        <span class="home-edit-name">${HOME_BANNER_LABELS[k] || k}</span>
+                        <span class="home-edit-name">${_t(HOME_BANNER_LABELS[k] || k)}</span>
                         <div class="home-edit-ctls">
                           <button class="home-edit-btn2" disabled=${vi <= 0}
                             onClick=${()=>homeEdit.moveBanner(k, -1, defaultOrder, visibleBannerKeys)}
-                            title=${_t("Move this banner up")} aria-label=${"Move "+(HOME_BANNER_LABELS[k]||k)+" up"}>▲</button>
+                            title=${_t("Move this banner up")} aria-label=${_t("Move {name} up", {name: _t(HOME_BANNER_LABELS[k]||k)})}>▲</button>
                           <button class="home-edit-btn2" disabled=${vi >= visibleBannerKeys.length-1}
                             onClick=${()=>homeEdit.moveBanner(k, 1, defaultOrder, visibleBannerKeys)}
-                            title=${_t("Move this banner down")} aria-label=${"Move "+(HOME_BANNER_LABELS[k]||k)+" down"}>▼</button>
+                            title=${_t("Move this banner down")} aria-label=${_t("Move {name} down", {name: _t(HOME_BANNER_LABELS[k]||k)})}>▼</button>
                         </div>
                       </div>`);
                     }
@@ -64179,7 +64174,7 @@ function App(){
     ${feedbackNoticeVisible(feedbackUnread, feedbackNoticeDismissed) && !feedbackOpen && html`<div class="feedback-reply-notice" role="status">
       <button type="button" class="feedback-reply-notice-open" onClick=${()=>setFeedbackOpen(true)}>
         ${uiIcon("chat", 15)}
-        <span class="feedback-reply-notice-text">${feedbackUnread.unread > 1 ? feedbackUnread.unread + " new replies to your feedback" : _t("New reply to your feedback")}</span>
+        <span class="feedback-reply-notice-text">${feedbackUnread.unread > 1 ? _t("{n} new replies to your feedback", {n: feedbackUnread.unread}) : _t("New reply to your feedback")}</span>
         <span class="feedback-reply-notice-cta">${_t("View")}</span>
       </button>
       <button type="button" class="feedback-reply-notice-x" onClick=${dismissFeedbackNotice} title=${_t("Dismiss")} aria-label=${_t("Dismiss")}>${uiIcon("close", 13)}</button>
@@ -64194,7 +64189,7 @@ function App(){
       <div class="tabs tabs-grid">
         <div class="tabs-row">${TABS_TOP.map(renderTab)}</div>
         <div class="tabs-row">${TABS_BOTTOM.map(renderTab)}</div>
-        ${err && !bootFailed && html`<span style=${{fontSize:11,color:"var(--red)",marginLeft:8,alignSelf:"center"}}>${err} <button onClick=${()=>loadFromSupabase({force:true})} style=${{fontSize:11,padding:"2px 8px",marginLeft:6}}>retry</button></span>`}
+        ${err && !bootFailed && html`<span style=${{fontSize:11,color:"var(--red)",marginLeft:8,alignSelf:"center"}}>${err} <button onClick=${()=>loadFromSupabase({force:true})} style=${{fontSize:11,padding:"2px 8px",marginLeft:6}}>${_t("retry")}</button></span>`}
       </div>
       ${/* The reveal reel rides the empty middle of the nav — the slack between
             the tab grid and the right cluster, which on a wide desktop is ~900px
@@ -64232,7 +64227,7 @@ function App(){
                   ${unreadAlerts > 0 && html`<span class="profile-alert-badge"
                     aria-hidden="true">${unreadAlerts > 9 ? "9+" : unreadAlerts}</span>`}
                 </span>
-                <span class="profile-btn-name">${profile?.display_name || "you"}</span>
+                <span class="profile-btn-name">${profile?.display_name || _t("you")}</span>
               </button>`
             : html`<button class="signin-btn" onClick=${()=>setSettingsOpen(o=>!o)}
                 title=${_t("Sign in & settings")} aria-expanded=${settingsOpen}>
@@ -64331,7 +64326,7 @@ function App(){
                     <span class="theme-picker-swatch" style=${{background:t.swatch}}>
                       <span class="theme-picker-swatch-inner" style=${{background:t.swatchCard}}></span>
                     </span>
-                    <span class="theme-picker-lbl">${t.lbl}</span>
+                    <span class="theme-picker-lbl">${_t(t.lbl)}</span>
                   </button>`)}
                 </div>
                 <div class="theme-picker-section-lbl">${_t("Dark theme")}</div>
@@ -64350,7 +64345,7 @@ function App(){
                     <span class="theme-picker-swatch" style=${{background:t.swatch}}>
                       <span class="theme-picker-swatch-inner" style=${{background:t.swatchCard}}></span>
                     </span>
-                    <span class="theme-picker-lbl">${t.lbl}</span>
+                    <span class="theme-picker-lbl">${_t(t.lbl)}</span>
                   </button>`)}
                 </div>
               </div>
@@ -64389,7 +64384,7 @@ function App(){
             ${user && html`<button class="settings-action"
               onClick=${()=>{ setSettingsOpen(false); setAlertsOpen(true); }}
               title=${_t("Price alerts on your watchlists")}>
-              ${uiIcon("warn")} Price alerts${unreadAlerts > 0 ? ` (${unreadAlerts} new)` : ""}
+              ${uiIcon("warn")} ${unreadAlerts > 0 ? _t("Price alerts ({n} new)", {n: unreadAlerts}) : _t("Price alerts")}
             </button>`}
             <div class="settings-row settings-row--block">
               <span class="settings-row-label">${_t("Home page layout")}</span>
@@ -64445,7 +64440,7 @@ function App(){
     ${scanReviewOpen && isGradedAdmin && html`<${ScanReviewModal}
       raw=${raw} onClose=${()=>setScanReviewOpen(false)}/>`}
     ${loading && html`<div class="loading-status">
-      ${loaded ? "Refreshing data\u2026" : (loadProgress.current || "Loading\u2026")}
+      ${loaded ? _t("Refreshing data…") : (loadProgress.current || _t("Loading…"))}
     </div>`}
     ${avatarPickerOpen && html`<${AvatarPicker} raw=${raw}
       onPick=${cid=>{ setAvatarCardId(cid); setAvatarPickerOpen(false);
@@ -64470,15 +64465,15 @@ function App(){
       onGo=${(v)=>{ closeTour(); onTabClick(v); }}
       onStartWalk=${startSiteTour}/>`}
     ${activeTour && !siteTour && COACH_TOURS[activeTour] && html`<${Coachmark}
-      title=${COACH_TOURS[activeTour].title} steps=${COACH_TOURS[activeTour].steps}
+      title=${_t(COACH_TOURS[activeTour].title)} steps=${COACH_TOURS[activeTour].steps}
       onClose=${closeSectionTour} onAbort=${()=>setActiveTour(null)}/>`}
     ${siteTour && siteTourShow && COACH_TOURS[siteTour.stops[siteTour.i]] && html`<${Coachmark}
       key=${"walk-"+siteTour.i+"-"+siteTourAttempt}
       title=${COACH_TOURS[siteTour.stops[siteTour.i]].title}
       steps=${COACH_TOURS[siteTour.stops[siteTour.i]].steps}
-      progress=${"Site tour "+(siteTour.i+1)+"/"+siteTour.stops.length}
+      progress=${_t("Site tour {i}/{n}", {i: siteTour.i+1, n: siteTour.stops.length})}
       doneLabel=${siteTour.i+1 < siteTour.stops.length
-        ? "Next: "+COACH_TOURS[siteTour.stops[siteTour.i+1]].title+" →"
+        ? _t("Next: {name} →", {name: _t(COACH_TOURS[siteTour.stops[siteTour.i+1]].title)})
         : _t("Finish tour")}
       skipLabel=${_t("End tour")}
       onDone=${advanceSiteTour}
@@ -64489,7 +64484,7 @@ function App(){
       && (() => { try { return localStorage.getItem("packsink:sectionTourSeen:"+view) !== "1"; } catch { return true; } })()
       && html`<button class="section-tour-btn"
       onClick=${()=>setActiveTour(view)}
-      title=${"Take a guided tour of the "+COACH_TOURS[view].title+" page"}>${uiIcon("compass")} ${_t("Tour")}</button>`}
+      title=${_t("Take a guided tour of the {name} page", {name: _t(COACH_TOURS[view].title)})}>${uiIcon("compass")} ${_t("Tour")}</button>`}
     ${indyArtistPick && html`<${ArtistAlleyModal}
       allIllustrators=${indyAllIllustrators} raw=${raw}
       initialArtist=${indyArtistPick}
@@ -64511,8 +64506,7 @@ function App(){
       <img src="Logos/packs-ink-logo-sm.png?v=5" alt="" class="boot-error-logo"/>
       <div class="boot-loading-spinner" aria-hidden="true"></div>
       <h2 class="title-font">${_t("Loading the card database…")}</h2>
-      <p class="muted">${loadProgress.current || _t("Fetching the latest prices")} — the first visit
-        takes a few seconds; after that it's instant.</p>
+      <p class="muted">${loadProgress.current || _t("Fetching the latest prices")} — ${_t("the first visit takes a few seconds; after that it's instant.")}</p>
     </div>`}
     <${ErrorBoundary} key=${"view:" + view} scope="view" onHome=${view === "home" ? null : ()=>onTabClick("home")}>
     ${viewsReady&&view==="home"&&html`<${HomeView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme} priceEpoch=${priceEpoch}
