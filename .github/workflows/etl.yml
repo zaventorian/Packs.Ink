@@ -64,6 +64,7 @@ jobs:
   prices:
     name: TCGCSV daily prices
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Fires on the daily safety-net cron OR manual dispatch (which is also how
     # cron-job.org triggers us — every external ping is a workflow_dispatch).
     if: |
@@ -90,6 +91,7 @@ jobs:
   smooth:
     name: Smooth phantom Low spikes
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: prices
     # Runs after the daily TCGCSV ETL succeeds, walking the trailing 60 days
     # of prices_daily and writing low_price_smoothed for any (pid, printing,
@@ -129,6 +131,7 @@ jobs:
   sealed:
     name: Load sealed products (new boxes/packs/troves)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: prices
     # Keeps the sealed collection catalog current: every new set adds booster
     # boxes/packs, troves, starter decks, gift sets, etc. on TCGPlayer, and this
@@ -179,6 +182,7 @@ jobs:
   link:
     name: Link pre-order pids
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: prices
     # Fills tcgplayer_product_id on cards Lorcast has indexed but not yet linked
     # to a TCGPlayer SKU (every new set: Lorcast publishes card metadata weeks
@@ -236,6 +240,7 @@ jobs:
   metadata:
     name: Lorcast metadata refresh
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Daily (21:00 UTC) or an explicit metadata dispatch. Bumped weekly→daily so
     # a set in its pre-order window fills in within a day of each Lorcast spoiler
     # instead of waiting for Sunday. Deliberately NOT triggered by job=='both' —
@@ -294,6 +299,7 @@ jobs:
   selfheal:
     name: Matview self-heal
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Fires on the daily safety-net selfheal cron OR manual dispatch (the path
     # cron-job.org's self-heal pings come in on). Always a no-op when matview
     # is current; calls refresh_* when prices_daily has newer rows than

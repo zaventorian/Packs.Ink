@@ -1,6 +1,6 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v513';
+const CACHE_VERSION = 'packsink-v517';
 // Card art + other images live in their own cache that is NOT wiped on
 // deploys. Before this existed, every CACHE_VERSION bump threw away every
 // runtime-cached card image, so devices never accumulated art for offline
@@ -23,15 +23,18 @@ const IMG_CACHE = 'packsink-img-v1';
 const SCAN_CACHE = 'packsink-scan-v1';
 const SCAN_ASSET_RE = /^\/(scanner\/|vendor\/ort\/|vendor\/opencv\/)/;
 const CORE_ASSETS = [
+  // '/' only. '/Index.html' used to be listed too, and on Cloudflare that is a
+  // second URL answering with the same 1 MB shell, so every install (every
+  // CACHE_VERSION bump) downloaded it twice. The navigation handler below still
+  // writes and reads the '/Index.html' key, and falls back to '/'.
   '/',
-  '/Index.html',
   // Vendored core libs (formerly unpkg). Precached so the app boots offline and
   // can never be left half-loaded by a CDN outage. ?v= busts on a re-vendor.
   '/vendor/react.production.min.js?v=254',
   '/vendor/react-dom.production.min.js?v=254',
   '/vendor/htm.js?v=254',
   '/vendor/supabase.js?v=254',
-  '/styles.css?v=513',
+  '/styles.css?v=517',
   '/logo.js?v=348',
   // scanner*.js intentionally NOT precached: the scanner is a modal most
   // visits never open — it runtime-caches on first use instead of costing

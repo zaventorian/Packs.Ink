@@ -484,5 +484,65 @@ check("collect_findings reports only the released set's pid-less card",
       pidless, ["Old Set|2"])
 
 
+# ── Hand-refreshed feeds going quiet, and "new since the last run" ───────────
+# The watch was red for a week with the same twelve findings, so a thirteenth
+# would have looked exactly like the twelve. new_since() is what tells them
+# apart; stale_feed_finding() is pop_stale's shape for the scrapes that run on
+# a laptop and that nothing in CI would otherwise miss.
+_feed = rc.STALE_FEEDS[0]
+check("a feed loaded yesterday is quiet",
+      rc.stale_feed_finding(_feed, "2026-09-29T17:12:00Z", "2026-09-30"), None)
+check("a feed just inside its limit is quiet",
+      rc.stale_feed_finding(_feed, "2026-09-28", "2026-09-30"), None)
+_sf = rc.stale_feed_finding(_feed, "2026-09-25T10:00:00+00:00", "2026-09-30") or {}
+check("a feed past its limit reports", _sf.get("kind"), "scrape_stale")
+check("its key carries the date, so an ack cannot mute it forever",
+      _sf.get("key"), "graded:2026-09-25")
+check("an unreadable table is silent", rc.stale_feed_finding(_feed, None, "2026-09-30"), None)
+check("an empty table speaks up",
+      (rc.stale_feed_finding(_feed, "", "2026-09-30") or {}).get("key"), "graded:never")
+check("every stale feed names its command or skill",
+      all(f["hint"] and f["max_age_days"] > 0 for f in rc.STALE_FEEDS), True)
+check("scrape_stale has a label", "scrape_stale" in KIND_LABEL, True)
+check("feed keys are distinct", len({f["key"] for f in rc.STALE_FEEDS}), len(rc.STALE_FEEDS))
+
+
+class _FeedSb:
+    def __init__(self, by_table):
+        self.by_table = by_table
+
+    def select(self, table, **kw):
+        v = self.by_table[table]
+        if isinstance(v, Exception):
+            raise v
+        return v
+
+
+_got = rc.stale_feed_findings(_FeedSb({
+    "graded_sales": [{"scraped_at": "2026-09-20T00:00:00Z"}],
+    "tournaments": RuntimeError("42P01"),
+}), "2026-09-30")
+check("one feed failing to read does not hide another's finding",
+      [f["key"] for f in _got], ["graded:2026-09-20"])
+
+_fresh = [{"kind": "missing_single", "key": "1", "name": "a", "detail": "d"},
+          {"kind": "pop_stale", "key": "psa:2026-09-22", "name": "b", "detail": "d"}]
+check("no previous report: nothing is called new", rc.new_since(None, _fresh), [])
+check("an identical previous report: nothing is new",
+      rc.new_since({"missing_single:1", "pop_stale:psa:2026-09-22"}, _fresh), [])
+check("only the finding the previous run lacked is new",
+      [f["key"] for f in rc.new_since({"missing_single:1"}, _fresh)], ["psa:2026-09-22"])
+check("an EMPTY previous report makes everything new",
+      len(rc.new_since(set(), _fresh)), 2)
+check("a missing previous file reads as no report", rc.load_prev_keys("/no/such/file.json"), None)
+_md = rc.watch_markdown(_fresh, _fresh[1:], 7, "2026-09-30")
+check("the issue body lists new findings first",
+      _md.index("pop_stale:psa") < _md.index("missing_single:1"), True)
+check("and marks them", "| NEW | `pop_stale:psa:2026-09-22`" in _md, True)
+check("a pipe in a name cannot break the table",
+      "a\\|b" in rc.watch_markdown([{"kind": "missing_single", "key": "2", "name": "a|b",
+                                     "detail": "d"}], [], 0, "2026-09-30"), True)
+
+
 print(f"\n{failed} FAILED" if failed else "\nall passed")
 raise SystemExit(1 if failed else 0)

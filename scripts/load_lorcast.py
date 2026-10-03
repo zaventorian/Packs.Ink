@@ -51,6 +51,15 @@ def _normalize_rarity(r: str | None) -> str | None:
     return _RARITY_CANONICAL.get(str(r).lower(), r)
 
 
+# An Illumineer's Quest (set codes Q1, Q2, Q3 ...) is a co-op board game in a
+# box; its cards are scenario components, not promos. Lorcast files them as
+# Promo, which put them in every promo list on the site. Their rarity is
+# "Quest" (migration 179), and this keeps the daily load from reverting it.
+def _is_quest_code(code: str | None) -> bool:
+    c = (code or "").strip().upper()
+    return len(c) > 1 and c[0] == "Q" and c[1:].isdigit()
+
+
 def get_json(url: str) -> Any:
     last_err: Exception | None = None
     for attempt in range(3):
@@ -78,7 +87,7 @@ def transform_set(s: dict) -> dict:
     }
 
 
-def transform_card(c: dict, set_id: str) -> dict:
+def transform_card(c: dict, set_id: str, set_code: str | None = None) -> dict:
     imgs = (c.get("image_uris") or {}).get("digital") or {}
     raw_type = c.get("type")
     if isinstance(raw_type, list):
@@ -116,7 +125,7 @@ def transform_card(c: dict, set_id: str) -> dict:
         "name": c["name"],
         "version": c.get("version"),
         "collector_number": c.get("collector_number"),
-        "rarity": _normalize_rarity(c.get("rarity")),
+        "rarity": "Quest" if _is_quest_code(set_code) else _normalize_rarity(c.get("rarity")),
         "ink": primary_ink,
         "inks": inks,
         "cost": c.get("cost"),
@@ -196,7 +205,7 @@ def main() -> None:
         cards = cards_resp.get("results") if isinstance(cards_resp, dict) and "results" in cards_resp else cards_resp
         print(f"  {len(cards)} cards")
         for c in cards:
-            row = transform_card(c, sid)
+            row = transform_card(c, sid, s.get("code"))
             if row["tcgplayer_product_id"] is None:
                 missing_tcg += 1
             all_card_rows.append(row)

@@ -49,6 +49,14 @@ CARDS = [
     ("tfc163",  "Let It Go", None, "163", "Rare", "The First Chapter"),
     ("p1_3",    "Elsa", "Snow Queen", "3",  "Promo", "Promo Set 1"),
     ("tfc41",   "Elsa", "Snow Queen", "41", "Rare",  "The First Chapter"),
+    # The Challenge foils added 2026-09-30, each beside its non-foil twin in
+    # the SAME set and the booster card they both reprint.
+    ("c2_11",   "Stand Out", None, "11", "Promo", "Lorcana Challenge Year 3"),
+    ("c2_15",   "Stand Out", None, "15", "Promo", "Lorcana Challenge Year 3"),
+    ("fab94",   "Stand Out", None, "94", "Rare",  "Fabled"),
+    ("c3_13",   "Mother Knows Best", None, "13", "Promo", "Lorcana Challenge Promo (C3)"),
+    ("c3_1",    "Mother Knows Best", None, "1",  "Promo", "Lorcana Challenge Promo (C3)"),
+    ("fab99",   "Mother Knows Best", None, "99", "Uncommon", "Fabled"),
 ]
 
 
@@ -102,6 +110,22 @@ CASES = [
      "off-watchlist", "P3 #5 is the twin and is not on the watchlist"),
     ("Disney Lorcana Maleficent Monstrous Dragon 5/P1 D23 Expo Promo",
      None, "D23 separates P1 #5 from the Cruise Line P3 #5"),
+    # The Challenge foils: the twin is the NON-FOIL of the same name in the same
+    # set, at a thirtieth of the price.
+    ("Disney Lorcana Stand Out 11/C2 Challenge Top 8 Promo Foil NM",
+     None, "the foil's own printed number"),
+    ("Disney Lorcana Stand Out 15/C2 Challenge Promo NM",
+     "off-watchlist", "15/C2 is the non-foil; TCGplayer prices it"),
+    ("Disney Lorcana Mother Knows Best 13/C3 CCQ Promo NM",
+     None, "13/C3 is the foil even when the title never says foil"),
+    ("Disney Lorcana Mother Knows Best 1/C3 CCQ Promo Card (Non-foil)",
+     "off-watchlist", "1/C3 is the non-foil"),
+    ("Disney Lorcana Mother Knows Best Foil Top 32 CCQ Season 3 Exclusive Promo",
+     None, "no number, says foil: the same-set twin rule makes it the foil"),
+    ("Mother Knows Best - Disney Lorcana CCQ Promo Card (Non-foil)",
+     "twin", "no number, says non-foil: never counted as the foil, whichever twin the tie lands on"),
+    ("Lorcana St. Augustine 2026 CCQ - Mother Knows Best 13/C3 NON-Foil Promo Card",
+     "twin", "a real listing: the foil's number on the $100 non-foil. 'Non-foil' is a veto"),
 
     # ---- pins and merch wear the card's name ----
     ("Disney D23 Expo 2022 Lorcana Mickey Mouse Brave Little Tailor 1/P1 Promo Pin",

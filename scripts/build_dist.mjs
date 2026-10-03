@@ -17,9 +17,11 @@
 //   sw-native-images.js          — native-only image SW (web uses sw.js)
 //   _redirects                   — Cloudflare ignores it; worker/index.js
 //                                  owns routing (see the comment there)
-import { cpSync, mkdirSync, rmSync, readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { stripIndexHtml, stripCssComments } from "./strip_comments.mjs";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const out = join(repo, "dist");
@@ -84,7 +86,9 @@ const FILES = [
 const DIRS = [
   // "Logo on Black.png" is the old footer wordmark: nothing has referenced it
   // since the footer logo was removed (2026-08-21), and it is 941 KB.
-  ["Logos", { excludeExt: [".ai", ".pdf"], exclude: ["Logo on Black.png"] }],
+  // "logo transparent.png" is a byte-identical copy of packs-ink-logo.png (888 KB)
+  // that only scripts/convert_logo.py reads.
+  ["Logos", { excludeExt: [".ai", ".pdf"], exclude: ["Logo on Black.png", "logo transparent.png"] }],
   ["vendor", {}],   // react/react-dom/htm/supabase/html2canvas + ort WASM + opencv
   ["scanner", {}],  // ONNX weights + card indexes (sw.js keeps both in SCAN_CACHE)
   ["i18n", {}],     // UI dictionaries, loaded by the pre-paint boot only for a non-English language
@@ -131,6 +135,22 @@ for (const [dir, opts] of DIRS) {
       !excl.some((e) => src === e || src.startsWith(e + "\\") || src.startsWith(e + "/")) &&
       !exclExt.some((e) => src.toLowerCase().endsWith(e)),
   });
+}
+
+// Comments are ~28% of Index.html and ~30% of styles.css, and only a reader of
+// the source needs them. The deploy copy drops them (line numbers preserved, so
+// Sentry traces still match the source). A strip that fails its own token check
+// ships the file as it is: a bigger download, never a broken one.
+for (const [file, strip] of [["index.html", stripIndexHtml], ["styles.css", stripCssComments]]) {
+  const p = join(out, file);
+  const src = readFileSync(p, "utf8");
+  try {
+    const slim = strip(src);
+    writeFileSync(p, slim);
+    console.log(`build_dist: ${file} comments stripped, ${(src.length / 1024).toFixed(0)} KB -> ${(slim.length / 1024).toFixed(0)} KB`);
+  } catch (e) {
+    console.log(`::warning::build_dist: could not strip comments from ${file} (${e.message}) - shipping it unstripped.`);
+  }
 }
 
 let bytes = 0, count = 0, biggest = { size: 0, path: "" };

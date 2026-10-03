@@ -18,11 +18,13 @@ name: Discord digest
 # fork or a not-yet-configured repo does not sit permanently red.
 
 on:
-  schedule:
-    # 21:15 UTC — TCGCSV publishes ~20:00 and the primary ETL fires 20:30, so
-    # this lands after the snapshot is in and the matviews are refreshed. If the
-    # ETL is late the freshness gate skips the day rather than posting stale.
-    - cron: "15 21 * * *"
+  # NO SCHEDULE since 2026-09-30. It ran every day for three weeks and never
+  # once posted: the DISCORD_WEBHOOK_URL secret was never created, and the
+  # Discord bot's channel reports (discord_reports.yml, which import this
+  # module's data and standing maths) are what actually reach a channel. To
+  # use a plain webhook after all: create the secret, then restore
+  #   schedule: [{cron: "15 21 * * *"}]
+  # The freshness gate in the script still makes a duplicate post impossible.
   workflow_dispatch:
     inputs:
       window:
@@ -50,6 +52,7 @@ jobs:
   digest:
     name: Post the movers digest
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

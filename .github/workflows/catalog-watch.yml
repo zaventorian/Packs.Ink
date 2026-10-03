@@ -35,6 +35,7 @@ on:
 permissions:
   contents: write       # only for the "Open PR" step's branch push — the rest
   pull-requests: write  # of the job (sweep + calendar watch) only ever reads
+  issues: write         # the tracking issue (see "Update the tracking issue")
 
 concurrency:
   group: catalog-watch
@@ -44,6 +45,7 @@ jobs:
   watch:
     name: Catalog watch
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -52,6 +54,12 @@ jobs:
           cache: pip
           cache-dependency-path: scripts/requirements.txt
       - run: pip install -r scripts/requirements.txt
+      - name: Restore the previous run's report
+        uses: actions/cache/restore@v4
+        with:
+          path: .watch/report.json
+          key: catalog-watch-report-${{ github.run_id }}
+          restore-keys: catalog-watch-report-
       # Runs first and needs no network: a malformed ack file (bad regex, an
       # entry with no reason, a kindless rule that swallows everything) would
       # otherwise fail silently by making the sweep pass.
@@ -65,22 +73,55 @@ jobs:
           # GitHub's own failure email, which is the delivery path that matters.
           RECONCILE_ALERT_WEBHOOK: ${{ secrets.RECONCILE_ALERT_WEBHOOK }}
         run: |
+          mkdir -p .watch
           python scripts/reconcile_catalog.py --watch \
+            --prev .watch/report.json --json .watch/report.json --issue-json .watch/issue.json \
             ${{ (github.event_name == 'workflow_dispatch' && !inputs.fail_on_new) && '--no-fail' || '' }}
 
-      # The curated calendar is the one surface nothing refreshes on its own, so
-      # it gets the same treatment as the catalog: a daily sweep that is red only
-      # when something is announced that we don't have.
-      #
-      # `if: always()` so a red catalog sweep doesn't hide a calendar finding —
-      # being skipped quietly is the bug this whole workflow exists to avoid.
-      # It NEVER writes to the calendar: publishing an event stays a person's call.
-      - name: Watch for newly announced events
+      # A run that is already red cannot get redder: this watch sat red for a
+      # week in September 2026 on the same twelve findings, and a thirteenth
+      # would have produced the identical failure email. So the open list lives
+      # in ONE issue whose body is rewritten every run, and a finding that was
+      # not in the previous run's report gets a COMMENT - which GitHub emails
+      # with the finding's own name in it. Yesterday's report rides the cache.
+      - name: Save this run's report for tomorrow's comparison
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .watch/report.json
+          key: catalog-watch-report-${{ github.run_id }}
+      - name: Update the tracking issue
         if: always()
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: python scripts/watch_calendar_sources.py
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          test -f .watch/issue.json || { echo "no report written, skipping"; exit 0; }
+          python - <<'PY'
+          import json, os, subprocess
+          d = json.load(open(".watch/issue.json", encoding="utf-8"))
+          title = "Catalog watch: open findings"
+          body = d["markdown"] + f"\n\n[Latest run]({os.environ['RUN_URL']}) has the steps for each finding.\n"
+          def gh(*a, **kw):
+              return subprocess.run(["gh", *a], check=True, text=True, capture_output=True, **kw).stdout
+          found = json.loads(gh("issue", "list", "--state", "open", "--search", f'"{title}" in:title',
+                                "--json", "number,title"))
+          num = next((i["number"] for i in found if i["title"] == title), None)
+          open(".watch/body.md", "w", encoding="utf-8").write(body)
+          if num is None:
+              if not d["open"]:
+                  raise SystemExit(0)
+              url = gh("issue", "create", "--title", title, "--body-file", ".watch/body.md").strip()
+              num = int(url.rsplit("/", 1)[1])
+          else:
+              gh("issue", "edit", str(num), "--body-file", ".watch/body.md")
+          new = d["new_since_last_run"]
+          if new:
+              text = "New since the last run:\n\n" + "\n".join(f"- `{n}`" for n in new)
+              open(".watch/comment.md", "w", encoding="utf-8").write(text)
+              gh("issue", "comment", str(num), "--body-file", ".watch/comment.md")
+          print(f"issue #{num}: {d['open']} open, {len(new)} new")
+          PY
 
       # A finding sitting acknowledged with a decided `resolution` used to just
       # sit there — see apply_catalog_resolutions.py's header for how long the
@@ -126,3 +167,52 @@ jobs:
           add-paths: |
             scripts/catalog_watch.json
             scripts/patch_pid_overrides.py
+
+  # The curated calendar is the one surface nothing refreshes on its own, so it
+  # gets the same treatment as the catalog: a daily sweep that is red only when
+  # something is announced that we don't have. It NEVER writes to the calendar:
+  # publishing an event stays a person's call.
+  #
+  # Its OWN job (it was a step of the job above until 2026-09-30): inside an
+  # already-red catalog job its own red added nothing anyone could see.
+  calendar:
+    name: Calendar watch
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+      - run: pip install -r scripts/requirements.txt
+      - name: Watch for newly announced events
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/watch_calendar_sources.py
+
+  # The third thing nothing else can see: the sites we RESEARCH from. TCGCSV
+  # covers what TCGplayer sells and discovery covers events, but nobody sells a
+  # pin and no feed publishes a spoiler. Those lived on a 90-day reminder saying
+  # "go look at this site", which cannot tell you whether anything changed. This
+  # reads those sites (lorcanaplayer's sitemaps, Takara Tomy's card search, the
+  # official gallery, duels.ink's card API) and diffs each against the committed
+  # baseline in scripts/source_watch.json.
+  #
+  # Needs NO secrets: every source is a public page, and the comparison is
+  # against Index.html's own lists.
+  sources:
+    name: Source watch
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Test the watcher
+        run: python scripts/test_watch_sources.py
+      - name: Watch the sites we research from
+        run: python scripts/watch_sources.py

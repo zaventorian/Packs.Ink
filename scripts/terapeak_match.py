@@ -193,6 +193,11 @@ def set_hint(title: str):
     # Lorcana Challenge promos. C2 (Year 3) is a separate set from C1; detect it
     # first. Titles use the community number ("N/C1") not the card's Lorcast #, and
     # "Top Prize" (foil) / "Prize Wall" (non-foil) are Challenge-exclusive terms.
+    # C3 is the 2026-27 season. Sellers call its qualifier prize "CCQ Promo" far
+    # more often than "C3", so that word is a hint too. When a C4 season exists,
+    # "ccq" alone stops being decisive and has to go.
+    if re.search(r"\bc3\b|/\s*c3|\bccq\b", t):
+        return "Lorcana Challenge Promo (C3)"
     if re.search(r"\bc2\b|/\s*c2|year\s*3", t):
         return "Lorcana Challenge Year 3"
     if re.search(r"\bc1\b|/\s*c1|top\s*prize|prize\s*wall", t) or "challenge" in t:

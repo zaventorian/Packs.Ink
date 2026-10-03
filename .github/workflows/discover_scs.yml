@@ -102,6 +102,7 @@ jobs:
       # need of it, and re-running it there is what pushes the job into its
       # timeout before the step you actually dispatched for gets to run.
       - name: Discover & upsert Lorcana events
+        id: discover
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_discover != 'true' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -257,3 +258,11 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
           python scripts/scan_ccq_candidates.py --apply
+
+      # A short event pull writes what it found and skips the prune, and used to
+      # end green. Everything above still ran; this only makes it visible.
+      - name: The event pull came back short
+        if: ${{ !cancelled() && steps.discover.outputs.partial_pull == 'true' }}
+        run: |
+          echo "::error::RPH returned far fewer upcoming events than are on file. Rows pulled were saved; nothing was pruned. If this repeats, RPH's feed or paging changed."
+          exit 1

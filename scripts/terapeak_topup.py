@@ -21,9 +21,12 @@ CRITICAL: Do NOT do a full page.goto mid-scrape — eBay resets marketplace=ALL
 to EBAY-US on every cold load. Only SPA pagination (clicking Next / native
 <select> change) holds All-sites.
 """
+import os
 import sys, time, re, json, random
 from datetime import datetime, date, timedelta
-sys.path.insert(0, r"C:\Users\zaven\OneDrive\Desktop\Packs.Ink\scripts")
+# Its own folder, not a fixed path: a hardcoded checkout made a worktree run the
+# MAIN checkout's raw_watchlist, so searches added on a branch were never asked.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from playwright.sync_api import sync_playwright
 import terapeak_scrape as ts
 

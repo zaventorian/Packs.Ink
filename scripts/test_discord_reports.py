@@ -272,7 +272,12 @@ check("-#" not in dtext and "-#" not in wtext, "no -# small text inside an embed
 for label, text in (("daily", dtext), ("weekly", wtext)):
     links = re.findall(r"\]\((https?://[^)]+)\)", text)
     check(links, f"{label} links its cards")
-    check(all(u.startswith(rep.TCG_AFFILIATE_BASE + "?u=") for u in links), f"{label}: every card link is the affiliate link")
+    # The calendar section links to the site's own calendar; everything else is a card.
+    cal = rep.digest.SITE + "/calendar"
+    check(all(u.startswith(rep.TCG_AFFILIATE_BASE + "?u=") or u.startswith(cal) for u in links),
+          f"{label}: every card link is the affiliate link")
+    check(not any("tcgplayer.com" in u and not u.startswith(rep.TCG_AFFILIATE_BASE) for u in links),
+          f"{label}: no bare TCGplayer link")
 foot = d_emb[-1].get("footer", {}).get("text", "")
 check(foot == "packs.ink · /reports", f"the footer is just the brand and /reports ({foot})")
 check(rep.tcg_url(649228, "Cold Foil") == rep.TCG_AFFILIATE_BASE + "?u=https%3A%2F%2Fwww.tcgplayer.com%2Fproduct%2F649228%2F%3FLanguage%3DEnglish%26Printing%3DCold%2520Foil",
@@ -350,6 +355,7 @@ check(rep.bucket_of({"rarity": "Epic", "printing": "Holofoil"}) == "chase", "an 
 check(rep.bucket_of({"rarity": "Promo", "printing": "Holofoil"}) == "promo", "a promo is a promo")
 check(rep.bucket_of({"rarity": "Legendary", "printing": "Cold Foil"}) == "foil", "a base-rarity foil is a foil")
 check(rep.bucket_of({"rarity": "Legendary", "printing": "Normal"}) == "base", "a non-foil is a base card")
+check(rep.bucket_of({"rarity": "Quest", "printing": "Normal"}) is None, "an Illumineer's Quest card is in no section")
 check(abs(rep.dollar_move(110, 10) - 10.0) < 1e-9 and rep.dollar_move(5, -100) is None, "dollar_move")
 check(rep.short_standing(("low", "cheapest in 6 months")) == "6-mo low", "short standing, low")
 check(rep.short_standing(("high", "near its 12-month high")) == "near 12-mo high", "short standing, high")
@@ -468,6 +474,63 @@ check(not sb13.upserts, "a dry run keeps nothing")
 
 _, out14 = run(FakeSb([]), FakeStorage())
 check("migration 175" in out14, "before migration 175 it says so and carries on")
+
+# ── the two extra sections: new cards, and the week ahead ──
+NOW = dt.datetime(2026, 9, 28, 22, 0, tzinfo=dt.timezone.utc)
+
+
+class ExtraSb:
+    def __init__(self, cards=(), events=(), boom=False):
+        self.cards, self.events, self.boom = list(cards), list(events), boom
+
+    def select(self, table, columns="*", limit=None, filters=None, page_size=1000, order=None):
+        if self.boom:
+            raise RuntimeError("down")
+        return [dict(r) for r in (self.cards if table == "cards" else self.events if table == "calendar_events" else [])]
+
+
+CARDS = [
+    {"id": "a", "name": "Old Card", "version": "Here Already", "set_id": "s1", "inserted_at": "2026-08-01T00:00:00+00:00"},
+    {"id": "b", "name": "Old Card", "version": "Here Already", "set_id": "s2", "inserted_at": "2026-09-28T10:00:00+00:00"},
+    {"id": "c", "name": "Fresh", "version": "Today", "set_id": "s1", "inserted_at": "2026-09-28T12:00:00+00:00"},
+    {"id": "d", "name": "Fresh", "version": "This Week", "set_id": "s1", "inserted_at": "2026-09-24T12:00:00+00:00"},
+    {"id": "e", "name": "Song", "version": None, "set_id": "s1", "inserted_at": "2026-09-28T13:00:00+00:00"},
+]
+sets_x = {"s1": "Hyperia City", "s2": "Lorcana Challenge Year 3"}
+day = rep.new_reveals(ExtraSb(CARDS), NOW, 1, sets_x)
+check(day == [("Hyperia City", ["Song", "Fresh - Today"])], f"daily reveals: only names first seen in the last day ({day})")
+week = rep.new_reveals(ExtraSb(CARDS), NOW, 7, sets_x)
+check(sum(len(c) for _, c in week) == 3, "weekly reveals reach back seven days")
+check(not any("Old Card" in " ".join(c) for _, c in week), "a new printing of an existing card is not a reveal")
+check(rep.reveals_embed([], False) is None, "no reveals, no embed")
+big = rep.reveals_embed([("Hyperia City", [f"Card {i}" for i in range(20)])], True)
+check("and 14 more" in big["description"] and "20 added this week" in big["author"]["name"], "a long list is cut and counted")
+
+EVENTS = [
+    {"id": "u1", "kind": "ccq", "title": "Game Grid Open CCQ", "subtitle": "Challenge Championship Qualifier",
+     "starts_on": "2026-10-03", "ends_on": None, "location": "Expo Center · Sandy, UT"},
+    {"id": "u2", "kind": "set", "title": "Hyperia City", "subtitle": "LGS release", "starts_on": "2026-10-02", "ends_on": None, "location": None},
+]
+DERIVED = [
+    {"kind": "set", "title": "Hyperia City", "subtitle": "LGS release", "starts_on": "2026-10-01"},
+    {"kind": "product", "title": "Quest Box", "subtitle": None, "starts_on": "2026-10-02"},
+    {"kind": "product", "title": "Far Off", "subtitle": None, "starts_on": "2026-12-01"},
+]
+ahead = rep.week_ahead(ExtraSb(events=EVENTS), TODAY, derived=DERIVED)
+check([r["title"] for r in ahead] == ["Hyperia City", "Quest Box", "Game Grid Open CCQ"],
+      f"the week ahead: a curated set date replaces the derived one, far dates stay out ({[r['title'] for r in ahead]})")
+cal_e = rep.calendar_embed(ahead)
+check("?ce=u1" in cal_e["description"] and "Sandy, UT" in cal_e["description"] and "Hyperia City LGS release" in cal_e["description"],
+      "calendar lines link the event, name the place and the phase")
+check(rep.calendar_embed([]) is None, "an empty week, no embed")
+real = rep.derived_releases()
+check(any(r["title"] == "Hyperia City" and r["subtitle"] == "Retail release" for r in real) and any(r["kind"] == "product" for r in real),
+      "the release consts still parse out of Index.html")
+check(rep.extra_embeds(ExtraSb(boom=True), TODAY, "7d", sets_x, now=NOW) == [], "a failed read costs the section, never the report")
+both = rep.extra_embeds(ExtraSb(CARDS, EVENTS), TODAY, "7d", sets_x, now=NOW)
+check(len(both) == 2 and all(e.get("_keep") for e in both), "weekly carries both sections, and trimming never touches them")
+check(len(rep.extra_embeds(ExtraSb(CARDS, EVENTS), TODAY, "1d", sets_x, now=NOW)) == 1, "the daily carries reveals only")
+check(all(rep.embed_chars(e) < 1500 for e in both), "the extra sections stay short")
 
 print("FAILS:", FAILS)
 sys.exit(1 if FAILS else 0)

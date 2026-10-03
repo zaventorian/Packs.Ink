@@ -425,6 +425,85 @@ def pop_findings(sb: Supabase, today: str) -> list[dict]:
     return [f] if f else []
 
 
+# Feeds that are refreshed from Zaven's own machine, so nothing in CI notices
+# when they stop: the daily Terapeak scrape is a scheduled task on a laptop
+# (it loaded 90-240 rows every single day of the fortnight this was written),
+# and tournaments arrive through a browser import. Same shape as pop_stale,
+# and for the same reason the KEY carries the date: an ack can only ever
+# snooze the staleness in front of you.
+STALE_FEEDS = [
+    {"kind": "scrape_stale", "key": "graded", "table": "graded_sales", "column": "scraped_at",
+     "max_age_days": 3, "what": "Graded eBay sales",
+     "hint": "The daily graded scrape has not loaded anything. It is the `graded-scrape` "
+             "scheduled task on the desktop (Claude app -> Scheduled), which needs the machine "
+             "on and the burner Chrome signed in to eBay.\n"
+             "Run it by hand:  powershell -File scripts/graded_run.ps1"},
+    {"kind": "scrape_stale", "key": "tournaments", "table": "tournaments", "column": "event_date",
+     "max_age_days": 14, "what": "Tournament results",
+     "hint": "No tournament newer than two weeks is on the site. Ask Claude to "
+             "\"import the tournaments\" (the inkdecks-import skill; it needs the browser)."},
+]
+
+
+def stale_feed_finding(feed: dict, last: str | None, today: str) -> dict | None:
+    """One hand-refreshed feed has gone quiet. None when fresh, or when `last`
+    is None (table missing or unreadable - silence, as pop_findings does)."""
+    if last is None:
+        return None
+    if not last:
+        return {"kind": feed["kind"], "key": f"{feed['key']}:never",
+                "name": f"{feed['what']}: nothing has ever been loaded",
+                "detail": f"{feed['table']} is empty", "hint": feed["hint"]}
+    age = (date.fromisoformat(today) - date.fromisoformat(last[:10])).days
+    if age < feed["max_age_days"]:
+        return None
+    return {"kind": feed["kind"], "key": f"{feed['key']}:{last[:10]}",
+            "name": f"{feed['what']}: newest row is {age} days old",
+            "detail": f"last {last[:10]} · want it under {feed['max_age_days']} days",
+            "hint": feed["hint"]}
+
+
+def stale_feed_findings(sb: Supabase, today: str) -> list[dict]:
+    out = []
+    for feed in STALE_FEEDS:
+        try:
+            rows = sb.select(feed["table"], columns=feed["column"],
+                             order=f"{feed['column']}.desc.nullslast", limit=1)
+        except Exception as e:
+            print(f"  ({feed['what']} staleness check skipped, non-fatal: {e})")
+            continue
+        last = (rows[0].get(feed["column"]) or "") if rows else ""
+        f = stale_feed_finding(feed, str(last), today)
+        if f:
+            out.append(f)
+    return out
+
+
+def new_since(prev_keys: set[str] | None, fresh: list[dict]) -> list[dict]:
+    """The findings that were NOT in the previous run's report.
+
+    A run that is already red cannot get redder, so without this a finding that
+    appears on day five of a standing backlog looks exactly like day four.
+    `prev_keys` None means "no previous report" (first run, or the cache was
+    evicted): nothing is called new then, because everything would be.
+    """
+    if prev_keys is None:
+        return []
+    return [f for f in fresh if f"{f['kind']}:{f['key']}" not in prev_keys]
+
+
+def load_prev_keys(path: str | None) -> set[str] | None:
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return {f"{x['kind']}:{x['key']}" for x in data.get("new", [])}
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"  (previous report unreadable, treating as none: {e})")
+        return None
+
+
 def due_reviews(ack: dict, today: str) -> list[dict]:
     """Scheduled reviews whose due date has arrived.
 
@@ -698,6 +777,7 @@ def collect_findings(sb: Supabase, ack: dict | None = None, today: str | None = 
         print(f"  (Lorcast set check skipped, non-fatal: {e})")
 
     out.extend(pop_findings(sb, today or date.today().isoformat()))
+    out.extend(stale_feed_findings(sb, today or date.today().isoformat()))
 
     if ack is not None:
         out.extend(due_reviews(ack, today or date.today().isoformat()))
@@ -715,11 +795,15 @@ KIND_LABEL = {
     "missing_set":    "Lorcast set we don't have",
     "review_due":     "Scheduled review (no feed watches this — a person has to look)",
     "pop_stale":      "PSA population data is stale (needs a signed-in Chrome — see the steps)",
+    "scrape_stale":   "A hand-refreshed feed has gone quiet",
 }
 
 
-def run_watch(sb: Supabase, fail: bool, json_path: str | None) -> int:
+def run_watch(sb: Supabase, fail: bool, json_path: str | None,
+              prev_path: str | None = None, issue_path: str | None = None) -> int:
     today = date.today().isoformat()
+    # Read BEFORE anything is written: --prev and --json may name the same file.
+    prev_keys = load_prev_keys(prev_path)
     ack = load_ack(ACK_PATH)
     findings = collect_findings(sb, ack, today)
     fresh = [f for f in findings
@@ -727,9 +811,21 @@ def run_watch(sb: Supabase, fail: bool, json_path: str | None) -> int:
              or ack_reason(ack, f["kind"], f["key"], f["name"], today) is None]
     known = len(findings) - len(fresh)
 
+    newly = new_since(prev_keys, fresh)
+
     print(f"\n{'='*72}")
-    print(f"CATALOG WATCH — {len(fresh)} new, {known} acknowledged")
+    print(f"CATALOG WATCH — {len(fresh)} open, {known} acknowledged"
+          + (f", {len(newly)} NEW since the last run" if prev_keys is not None else ""))
     print("=" * 72)
+    if newly:
+        print("\n★ NEW since the last run:")
+        for f in newly:
+            print(f"    {f['kind']}:{f['key']}  —  {f['name']}   [{f['detail']}]")
+    if issue_path:
+        with open(issue_path, "w", encoding="utf-8") as fh:
+            json.dump({"open": len(fresh),
+                       "new_since_last_run": [f"{f['kind']}:{f['key']}  {f['name']}" for f in newly],
+                       "markdown": watch_markdown(fresh, newly, known, today)}, fh, indent=2)
 
     if not fresh:
         print("\n✅ Nothing new. Every gap in the catalog is one we've already ruled on.")
@@ -739,7 +835,7 @@ def run_watch(sb: Supabase, fail: bool, json_path: str | None) -> int:
             by_kind.setdefault(f["kind"], []).append(f)
         for kind, items in by_kind.items():
             print(f"\n▶ {KIND_LABEL.get(kind, kind)}  ({len(items)})")
-            if kind in ("review_due", "pop_stale"):
+            if kind in ("review_due", "pop_stale", "scrape_stale"):
                 # The whole value of these is that the steps travel with the
                 # alert — nobody is going to go dig up how to do it.
                 for f in items:
@@ -763,7 +859,7 @@ def run_watch(sb: Supabase, fail: bool, json_path: str | None) -> int:
             print(f"    python scripts/reconcile_catalog.py --ack {gap['kind']}:{gap['key']} "
                   f'--why "why this is fine" [--until YYYY-MM-DD]')
 
-    _write_watch_summary(fresh, known)
+    _write_watch_summary(fresh, known, newly)
     _send_watch_webhook(fresh)
     if json_path:
         with open(json_path, "w", encoding="utf-8") as f:
@@ -776,18 +872,36 @@ def run_watch(sb: Supabase, fail: bool, json_path: str | None) -> int:
     return 0
 
 
-def _write_watch_summary(fresh: list[dict], known: int) -> None:
+def _md_cell(v) -> str:
+    return str(v).replace("|", "\\|").replace("\n", " ")
+
+
+def watch_markdown(fresh: list[dict], newly: list[dict], known: int, today: str) -> str:
+    """The open list as markdown, new-since-last-run first. The Step Summary
+    and the tracking issue's body are both this."""
+    if not fresh:
+        return f"Nothing open as of {today}. {known} known gap(s) already acknowledged.\n"
+    new_keys = {(f["kind"], f["key"]) for f in newly}
+    rows = sorted(fresh, key=lambda f: ((f["kind"], f["key"]) not in new_keys, f["kind"], f["name"]))
+    lines = [f"**{len(fresh)} open finding(s)** as of {today}"
+             + (f", **{len(newly)} new since the last run**" if newly else "")
+             + f"; {known} acknowledged.\n\n",
+             "| | key | what | where |\n|--|--|--|--|\n"]
+    for f in rows:
+        mark = "NEW" if (f["kind"], f["key"]) in new_keys else ""
+        lines.append(f"| {mark} | `{f['kind']}:{_md_cell(f['key'])}` | {_md_cell(f['name'])} "
+                     f"| {_md_cell(f['detail'])} |\n")
+    lines.append("\nRule on one with `python scripts/reconcile_catalog.py --ack KIND:ID --why \"...\" "
+                 "[--until YYYY-MM-DD]`, or fix it. The run's log carries the steps for each.\n")
+    return "".join(lines)
+
+
+def _write_watch_summary(fresh: list[dict], known: int, newly: list[dict] | None = None) -> None:
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not path:
         return
-    lines = ["## Catalog watch\n\n"]
-    if not fresh:
-        lines.append(f"✅ Nothing new. {known} known gap(s) already acknowledged.\n")
-    else:
-        lines.append(f"**{len(fresh)} new finding(s)**, {known} acknowledged.\n\n")
-        lines.append("| key | what | where |\n|--|--|--|\n")
-        for f in fresh:
-            lines.append(f"| `{f['kind']}:{f['key']}` | {f['name']} | {f['detail']} |\n")
+    lines = ["## Catalog watch\n\n",
+             watch_markdown(fresh, newly or [], known, date.today().isoformat())]
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.writelines(lines)
@@ -909,6 +1023,12 @@ def main() -> int:
                     help="Widened sweep (unpriced products, unbound groups, null pids, new "
                          "Lorcast sets) filtered through catalog_watch.json. Exits 1 on "
                          "anything unacknowledged — this is what CI runs.")
+    ap.add_argument("--prev", dest="prev_path", default=None,
+                    help="With --watch: the previous run's --json report. Findings not in it "
+                         "are called out as NEW since the last run.")
+    ap.add_argument("--issue-json", dest="issue_path", default=None,
+                    help="With --watch: write {open, new_since_last_run, markdown} here, for "
+                         "the workflow's tracking issue.")
     ap.add_argument("--no-fail", action="store_true",
                     help="With --watch: print the report but always exit 0.")
     ap.add_argument("--ack", default=None, metavar="KIND:ID",
@@ -942,7 +1062,8 @@ def main() -> int:
     sb = Supabase()
 
     if args.watch:
-        return run_watch(sb, fail=not args.no_fail, json_path=args.json_path)
+        return run_watch(sb, fail=not args.no_fail, json_path=args.json_path,
+                         prev_path=args.prev_path, issue_path=args.issue_path)
 
     if args.pid:
         pids = []
