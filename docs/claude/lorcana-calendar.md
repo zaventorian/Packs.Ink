@@ -110,7 +110,7 @@ one set with a published date answers half the question it exists for.
   `scripts/scan_ccq_candidates.py` (daily, in `discover_scs.yml`,
   `continue-on-error`) **proposes rows at `confirmed=false`** and a person rules
   on them in the editor — the `catalog_watch.json` ack shape. **Never let a script
-  flip `confirmed`** except `scan_ccq_candidates.py`'s auto-publish gates (2026-10-02: title names a CCQ, no hedge/side/national word, capacity >= 128, geocoded, not started; source `ccq-scan-auto`; nothing unpublishes a later cancellation): a wrong date beside a tournament somebody would travel for
+  flip `confirmed`** except `scan_ccq_candidates.py`'s auto-publish gates (2026-10-02: title names a CCQ, no hedge/side/national word, capacity >= 128, geocoded, not started; source `ccq-scan-auto`; nothing unpublishes a later cancellation) and the daily intake routine, which confirms rows that check out against a live listing (Zaven, 2026-10-03 - he will not approve rows by hand; a listing that changes is removed after the fact; see docs/automation.md): a wrong date beside a tournament somebody would travel for
   is the most expensive mistake this calendar can make. Titles that hedge
   ("possible CCQ") are kept but flagged in the note.
 - **The personal layer is localStorage first, Supabase when signed in**
