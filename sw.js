@@ -1,6 +1,6 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v519';
+const CACHE_VERSION = 'packsink-v520';
 // Card art + other images live in their own cache that is NOT wiped on
 // deploys. Before this existed, every CACHE_VERSION bump threw away every
 // runtime-cached card image, so devices never accumulated art for offline
@@ -34,7 +34,7 @@ const CORE_ASSETS = [
   '/vendor/react-dom.production.min.js?v=254',
   '/vendor/htm.js?v=254',
   '/vendor/supabase.js?v=254',
-  '/styles.css?v=519',
+  '/styles.css?v=520',
   '/logo.js?v=348',
   // scanner*.js intentionally NOT precached: the scanner is a modal most
   // visits never open — it runtime-caches on first use instead of costing
@@ -93,6 +93,27 @@ const SW_IMAGE_HOSTS = [
   'tile.openstreetmap.org',
 ];
 const swImageHost = (host) => SW_IMAGE_HOSTS.some((h) => (h.startsWith('*.') ? host.endsWith(h.slice(1)) : host === h));
+
+// Every other cross-origin request the SW may re-fetch: exactly the page's
+// connect-src hosts (scripts/test_csp_headers.mjs holds this list and _headers
+// to each other). A request to any other host is not ours - Chrome's own
+// Translate stylesheets on www.gstatic.com, an extension's assets - and is left
+// to the browser. Re-fetched from here it hits connect-src and fails, which
+// broke page translation and filed JAVASCRIPT-1N (2026-10-02).
+const SW_CONNECT_HOSTS = [
+  'static.cloudflareinsights.com',
+  'api.zippopotam.us',
+  'tcg.ravensburgerplay.com',
+  'api.ravensburgerplay.com',
+  'cdn.jsdelivr.net',
+  'js.sentry-cdn.com',
+  'browser.sentry-cdn.com',
+  '*.ingest.sentry.io',
+  '*.sentry.io',
+  'fonts.googleapis.com',
+  'fonts.gstatic.com',
+];
+const swConnectHost = (host) => SW_CONNECT_HOSTS.some((h) => (h.startsWith('*.') ? host.endsWith(h.slice(1)) : host === h));
 
 // Fetch strategy:
 //   - Navigation requests (HTML): network-first, fall back to cached Index.html offline.
@@ -265,6 +286,8 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Cross-origin non-image (Google Fonts CSS, etc.): stale-while-revalidate.
+  // Someone else's request: see SW_CONNECT_HOSTS.
+  if (!swConnectHost(url.hostname)) return;
   event.respondWith(
     caches.match(req).then((cached) => {
       const fetchPromise = fetch(req)

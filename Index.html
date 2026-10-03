@@ -250,7 +250,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=519">
+<link rel="stylesheet" href="styles.css?v=520">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -283,6 +283,29 @@
      party can republish them — so SRI is unnecessary; the ?v= key busts the cache
      on a re-vendor. To bump a version: re-download the pinned UMD build into
      /vendor/ and bump the ?v=. Load order matters: react → react-dom → htm. -->
+<!-- Browser page translation (Chrome / Edge "Translate this page") swaps React's
+     text nodes for <font> wrappers, so React's next insertBefore / removeChild
+     names a node that is no longer a child and throws: the view crashed to its
+     error screen for a German Edge visitor on /decks (Sentry JAVASCRIPT-1P,
+     2026-10-02). These two shims only act on that exact mismatch and are
+     otherwise the browser's own methods. -->
+<script>
+(function(){
+  if (typeof Node !== "function" || !Node.prototype) return;
+  var rm = Node.prototype.removeChild, ins = Node.prototype.insertBefore;
+  Node.prototype.removeChild = function(child){
+    if (child && child.parentNode !== this) {
+      if (child.parentNode) child.parentNode.removeChild(child);
+      return child;
+    }
+    return rm.apply(this, arguments);
+  };
+  Node.prototype.insertBefore = function(node, ref){
+    if (ref && ref.parentNode !== this) return ins.call(this, node, null);
+    return ins.apply(this, arguments);
+  };
+})();
+</script>
 <script src="/vendor/react.production.min.js?v=254"></script>
 <script src="/vendor/react-dom.production.min.js?v=254"></script>
 <script src="/vendor/htm.js?v=254"></script>

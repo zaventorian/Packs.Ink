@@ -108,6 +108,33 @@ for (const [i, policy] of pagePolicies.entries()) {
       check(swImageHost(host) === want, `swImageHost(${host}) is ${want}`);
     }
   }
+  // SW_CONNECT_HOSTS: the cross-origin hosts the SW may re-fetch for anything
+  // that is not an image. It must equal the page's connect-src (minus the data
+  // APIs the SW skips outright): a host missing here is never cached; a host
+  // here but not in connect-src breaks on every request (JAVASCRIPT-1N).
+  const cm = sw.match(/const SW_CONNECT_HOSTS = \[([\s\S]*?)\];/);
+  check(!!cm, "sw.js declares SW_CONNECT_HOSTS");
+  const clist = cm ? [...cm[1].matchAll(/'([^']+)'/g)].map((x) => x[1]) : [];
+  const SW_SKIPS = (h) => /(^|\.)supabase\.co$|(^|\.)tcgcsv\.com$|(^|\.)qrserver\.com$/.test(h) || list.includes(h);
+  for (const [i, policy] of pagePolicies.entries()) {
+    const connect = hosts(directive(policy, "connect-src")).filter((h) => h.startsWith("https://")).map((h) => h.replace(/^https:\/\//, ""));
+    for (const h of clist) check(connect.includes(h), `policy ${i + 1}: SW connect host ${h} is in connect-src`);
+    for (const h of connect) {
+      if (SW_SKIPS(h)) continue;
+      check(clist.includes(h), `policy ${i + 1}: connect-src host ${h} is in SW_CONNECT_HOSTS`, "add it to SW_CONNECT_HOSTS in sw.js.");
+    }
+  }
+  const cfn = sw.match(/const swConnectHost = [^\n]*\n/);
+  check(!!cfn, "sw.js declares swConnectHost");
+  if (cfn) {
+    const swConnectHost = new Function("SW_CONNECT_HOSTS", cfn[0] + "return swConnectHost;")(clist);
+    for (const [host, want] of [["fonts.gstatic.com", true], ["www.gstatic.com", false], ["o4511390961303552.ingest.us.sentry.io", true], ["translate.googleapis.com", false]])
+      check(swConnectHost(host) === want, `swConnectHost(${host}) is ${want}`);
+  }
+  const cGuard = sw.indexOf("if (!swConnectHost(url.hostname)) return;");
+  const swr = sw.indexOf("// Cross-origin non-image (Google Fonts CSS, etc.)");
+  const sameOrigin = sw.indexOf("if (url.origin === self.location.origin) {\n    event.respondWith(\n      caches.match(req)");
+  check(cGuard > swr && swr > sameOrigin && sameOrigin > 0, "the connect-host guard sits on the final cross-origin branch, after the same-origin one");
   const early = sw.indexOf("!swImageHost(url.hostname)) return;");
   const branch = sw.indexOf("if (req.destination === 'image' || url.hostname.endsWith('lorcast.io'))");
   check(early > 0 && branch > early, "sw.js leaves a foreign image host to the browser BEFORE its image branch",
