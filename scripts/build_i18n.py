@@ -105,8 +105,24 @@ def code_keys() -> list[str]:
     return keys
 
 
+def write_ui_canonical() -> None:
+    """ui.json one entry per line, so a review diff shows one changed string
+    as one changed line."""
+    ui = load("ui.json")
+    items = list(ui.items())
+    lines = ["{"] + [" " + json.dumps(k, ensure_ascii=False) + ": " + json.dumps(v, ensure_ascii=False)
+                     + ("," if i < len(items) - 1 else "") for i, (k, v) in enumerate(items)] + ["}"]
+    text = "\n".join(lines) + "\n"
+    p = os.path.join(SRC, "ui.json")
+    if open(p, encoding="utf8").read() != text:
+        with open(p, "w", encoding="utf8", newline="\n") as f:
+            f.write(text)
+
+
 def main() -> int:
     check = "--check" in sys.argv
+    if not check:
+        write_ui_canonical()
     files = build()
     stale = []
     for lang, text in files.items():
