@@ -932,12 +932,15 @@ const lorcastToProxy = (url) => {
 // still showing the old language. It is also why the dictionary can be read
 // at module scope: it is loaded before this script runs, and never changes.
 // See docs/i18n.md for the source survey and what is left to translate.
+// `offer` is the one-time suggestion shown to a visitor whose browser asks for
+// that language (LanguageSuggest), written IN that language: the dictionary is
+// not loaded yet when it is needed, so it lives here.
 const SITE_LANGS = [
   {k: "en", label: "English",  html: "en"},
-  {k: "ja", label: "日本語",    html: "ja"},
-  {k: "de", label: "Deutsch",  html: "de"},
-  {k: "fr", label: "Français", html: "fr"},
-  {k: "it", label: "Italiano", html: "it"},
+  {k: "ja", label: "日本語",    html: "ja", offer: {q: "Packs.Inkを日本語で表示しますか？カードも日本語版で表示されます。", yes: "日本語で見る", no: "英語のまま"}},
+  {k: "de", label: "Deutsch",  html: "de", offer: {q: "Packs.Ink auf Deutsch anzeigen? Karten erscheinen dann in der deutschen Ausgabe.", yes: "Auf Deutsch", no: "Englisch behalten"}},
+  {k: "fr", label: "Français", html: "fr", offer: {q: "Afficher Packs.Ink en français ? Les cartes apparaîtront dans leur version française.", yes: "En français", no: "Garder l'anglais"}},
+  {k: "it", label: "Italiano", html: "it", offer: {q: "Vuoi Packs.Ink in italiano? Le carte appariranno nella versione italiana.", yes: "In italiano", no: "Resta in inglese"}},
 ];
 const SITE_LANG_KEY = "packsink:lang";
 const CARD_LANG_KEY = "packsink:cardLang";
@@ -972,11 +975,11 @@ const CARD_LANG = (() => {
 })();
 // Set the language and reload. `null` = back to English. The ?hl= a shared link
 // may carry is dropped on the way, so the choice made HERE is what sticks.
+// "en" is STORED rather than removed: an explicit English choice must be told
+// apart from "never chose", or signing in on this device would adopt the
+// account's language over the one picked here (see the prefs hydration).
 const setSiteLanguage = (lang) => {
-  try {
-    if(!lang || lang === "en") localStorage.removeItem(SITE_LANG_KEY);
-    else localStorage.setItem(SITE_LANG_KEY, lang);
-  } catch {}
+  try { localStorage.setItem(SITE_LANG_KEY, SITE_LANGS.some(l => l.k === lang) ? lang : "en"); } catch {}
   const u = new URL(window.location.href);
   u.searchParams.delete("hl");
   window.location.replace(u.toString());
@@ -987,6 +990,33 @@ const setCardLanguage = (lang) => {
     else localStorage.setItem(CARD_LANG_KEY, lang);
   } catch {}
   window.location.reload();
+};
+
+// One-time offer for a visitor whose browser prefers a language we have, on an
+// English page they never chose. Either answer is remembered (choosing English
+// stores "en"; the ✕ stores a dismissal), so it is asked once per device.
+const LANG_SUGGEST_DISMISSED_KEY = "packsink:langSuggestDismissed";
+const suggestedSiteLang = () => {
+  if(SITE_LANG !== "en") return null;
+  try {
+    if(localStorage.getItem(SITE_LANG_KEY) || localStorage.getItem(LANG_SUGGEST_DISMISSED_KEY)) return null;
+    if(new URLSearchParams(window.location.search).has("hl")) return null;
+  } catch { return null; }
+  const prefs = (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language || ""]);
+  const first = String(prefs[0] || "").toLowerCase().split("-")[0];
+  const hit = SITE_LANGS.find(l => l.k === first && l.offer);
+  return hit || null;
+};
+const LanguageSuggest = () => {
+  const [lang, setLang] = useState(() => suggestedSiteLang());
+  if(!lang) return null;
+  const dismiss = () => { try { localStorage.setItem(LANG_SUGGEST_DISMISSED_KEY, "1"); } catch {} setLang(null); };
+  return html`<div class="lang-suggest" role="dialog" aria-label=${lang.label} lang=${lang.html}>
+    <span class="lang-suggest-q">${uiIcon("globe", 15)} ${lang.offer.q}</span>
+    <button type="button" class="lang-suggest-yes" onClick=${() => setSiteLanguage(lang.k)}>${lang.offer.yes}</button>
+    <button type="button" class="lang-suggest-no" onClick=${() => { try { localStorage.setItem(SITE_LANG_KEY, "en"); } catch {} setLang(null); }}>${lang.offer.no}</button>
+    <button type="button" class="lang-suggest-x" onClick=${dismiss} aria-label="Dismiss">${uiIcon("close", 13)}</button>
+  </div>`;
 };
 const AUX_VERSION_KEY   = "packsink:auxCacheVersion";
 // Price-derived auxiliary caches: cheaply rebuildable from Supabase, safe to
@@ -25422,11 +25452,10 @@ function AvatarPicker({raw, onPick, onClose}){
     const nQ = searchNorm(sLow);  // diacritic/apostrophe-tolerant so "te ka" ranks "Te Kā" and "andys room" ranks "Andy's Room" at the top
     for(const r of byName.values()){
       const name = (r["Product Name"] || "").toLowerCase();
-      const nName = searchNorm(name);
-      let rank;
-      if(nName.startsWith(nQ))      rank = 0;
-      else if(nName.includes(nQ))   rank = 1;
-      else                          rank = 2;
+      // Rank on whichever name the query is written in: the English one, or
+      // the card language's (localizeCatalog).
+      const rankOf = (n) => { const nn = searchNorm(n); return nn.startsWith(nQ) ? 0 : nn.includes(nQ) ? 1 : 2; };
+      const rank = Math.min(rankOf(name), r.loc_name ? rankOf(r.loc_name.toLowerCase()) : 2);
       scored.push({r, rank, name});
     }
     scored.sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name));
@@ -44993,11 +45022,10 @@ const HomeQuickSearch = ({raw, sealedPrices, openCardsWithSearch, onOpenSealed})
     const nQ = searchNorm(sLow);  // diacritic/apostrophe-tolerant so "te ka" ranks "Te Kā" and "andys room" ranks "Andy's Room" at the top
     for(const r of byName.values()){
       const name = (r["Product Name"] || "").toLowerCase();
-      const nName = searchNorm(name);
-      let rank;
-      if(nName.startsWith(nQ))      rank = 0;
-      else if(nName.includes(nQ))   rank = 1;
-      else                          rank = 2;
+      // Rank on whichever name the query is written in: the English one, or
+      // the card language's (localizeCatalog).
+      const rankOf = (n) => { const nn = searchNorm(n); return nn.startsWith(nQ) ? 0 : nn.includes(nQ) ? 1 : 2; };
+      const rank = Math.min(rankOf(name), r.loc_name ? rankOf(r.loc_name.toLowerCase()) : 2);
       scored.push({r, rank, name});
     }
     scored.sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name));
@@ -60002,7 +60030,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
             onKeyDown=${keyActivate(()=>openCardModal(item.card_id))}
             style=${{cursor:"pointer"}}>
             ${inkSwatch}
-            <span class="deck-row-name-text">${meta["Product Name"] || "(unknown card)"}</span>
+            <span class="deck-row-name-text">${(meta["Product Name"] ? cardDisplayName(meta) : null) || "(unknown card)"}</span>
             ${buildVariantChevron(item, meta, "deck-variant-btn--row")}
           </span>
           ${price!=null && aff
@@ -62458,6 +62486,19 @@ function App(){
     else if(owner && owner !== user.id) setAvatarCardId(null);
     try { localStorage.setItem("packsink:avatarOwner", user.id); } catch {}
     if(meta.collectionGoal && typeof meta.collectionGoal === "object") setCollectionGoal(normalizeGoal(meta.collectionGoal));
+    // Site language follows the ACCOUNT the way the theme does, with one rule:
+    // a choice made on THIS device wins (it is newer than anything stored),
+    // and a device that never chose adopts the account's. Adopting reloads,
+    // once, because the dictionary loads before the app (SITE_LANGS).
+    let localLang = null;
+    try { localLang = localStorage.getItem(SITE_LANG_KEY); } catch {}
+    const metaLang = SITE_LANGS.some(l => l.k === meta.siteLang) ? meta.siteLang : null;
+    let hlPreview = false;
+    try { hlPreview = new URLSearchParams(window.location.search).has("hl"); } catch {}
+    if(!localLang && !hlPreview && metaLang && metaLang !== SITE_LANG){ setSiteLanguage(metaLang); return; }
+    if(localLang && localLang !== meta.siteLang){
+      sbClient.auth.updateUser({data: {siteLang: localLang}}).catch(() => {});
+    }
   }, [user]);
 
   // After hydration, write any change back to user_metadata. Debounced to a
@@ -63715,6 +63756,7 @@ function App(){
   return html`<${TipsContext.Provider} value=${tipsEnabled}><${CatalogContext.Provider} value=${raw}><${GradedPremiumContext.Provider} value=${canViewGradedPremium && gradedTosOk}><${GradedAdminContext.Provider} value=${isGradedAdmin}><${ScoutContext.Provider} value=${canScout}><div>
     <${EnlargedCardOverlay}/>
     <${ImageSaverOverlay}/>
+    <${LanguageSuggest}/>
     ${!isOnline && html`<div class="offline-pill" role="status">${uiIcon("offline", 13)} Offline — showing saved data</div>`}
     ${feedbackNoticeVisible(feedbackUnread, feedbackNoticeDismissed) && !feedbackOpen && html`<div class="feedback-reply-notice" role="status">
       <button type="button" class="feedback-reply-notice-open" onClick=${()=>setFeedbackOpen(true)}>
