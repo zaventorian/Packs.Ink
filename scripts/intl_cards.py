@@ -279,10 +279,12 @@ def slug_score(slug: str, ours: str) -> float:
 
 def tt_text(raw: str | None) -> str | None:
     """Takara's rules text: \\ABILITY\\ names (kept, no case to change in
-    Japanese), '%' paragraph breaks."""
+    Japanese), <keyword> markers (the brackets dropped, as the gallery's are),
+    '%' paragraph breaks."""
     if not raw or raw == "-":
         return None
     t = raw.replace("\\", "").replace("%", "\n")
+    t = re.sub(r"<([^<>\n]{1,20})>", r"\1", t)
     t = re.sub(r"[ \t　]+\n", "\n", t)
     return t.strip() or None
 

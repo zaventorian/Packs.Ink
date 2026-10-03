@@ -147,6 +147,7 @@ rows, st = ic.match_tt(jp, cat)
 by = {x["source_id"]: x for x in rows}
 check(by.get("1", {}).get("card_id") == "c_woody", "JP by number + slug")
 check(by["1"]["text"] == "つかまれ！ 効果\n次", "JP rules text markup stripped")
+check(ic.tt_text("<変身>6（６ {I}）%次") == "変身6（６ {I}）\n次", "JP keyword brackets dropped, symbols kept")
 check(by["1"]["classifications"] == ["ストーリーボーン"], "JP classifications flattened")
 check(by.get("2", {}).get("card_id") == "c_smee", "JP printed number used when the file index differs")
 check(by.get("4", {}).get("card_id") == "c_donald" and by["4"]["match_how"] == "character", "working-title file accepted on number + rarity + character")

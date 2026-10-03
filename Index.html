@@ -1596,7 +1596,7 @@ async function writeCache(rows, latestDate, cardCount){
 // A missing table (pre-179) or any failure resolves to an EMPTY map — the site
 // then simply stays English, which is what it would have shown anyway.
 const CARD_LOC_TTL_MS = 24 * 60 * 60 * 1000;
-const CARD_LOC_IDB_VER = 1;
+const CARD_LOC_IDB_VER = 2;  // 2: + flavor_text
 // Module scope, set by App, for the surfaces whose rows do not come from the
 // catalog (price_movers tiles, graded rollups...): `cardLocOf(card_id)`.
 let CARD_LOC = null;
@@ -1631,7 +1631,7 @@ async function fetchCardLocalizations(lang){
   if(fresh) return toMap(cached.rows);
   try {
     const rows = await sbFetchAll("card_localizations", {
-      select: "card_id,name,version,text,classifications,image_url,match_how",
+      select: "card_id,name,version,text,flavor_text,classifications,image_url,match_how",
       lang: "eq." + lang, order: "card_id.asc",
     });
     if(Array.isArray(rows) && rows.length){
@@ -1652,7 +1652,7 @@ function localizeCatalog(rows, loc){
   return rows.map(r => {
     const e = loc.get(r.card_id);
     if(!e) return r;
-    const out = {...r, loc_name: locFullName(e), loc_text: e.text || null, loc_classes: e.classifications || null};
+    const out = {...r, loc_name: locFullName(e), loc_text: e.text || null, loc_flavor: e.flavor_text || null, loc_classes: e.classifications || null};
     if(e.image_url){
       out.loc_art = true;
       out.img_small_en = r.img_small; out.img_normal_en = r.img_normal; out.img_large_en = r.img_large;
@@ -2167,7 +2167,8 @@ let _setCodeById = new Map();
 // and letting it drift into the viewer's zone renames a set's month west of it.
 const releaseLabel = (d) => {
   if(!d) return "";
-  try { return new Date(d + "T00:00:00Z").toLocaleDateString(undefined, {year:"numeric", month:"short", timeZone:"UTC"}); }
+  const loc = (typeof SITE_LANG !== "undefined" && SITE_LANG !== "en") ? SITE_LANG : undefined;
+  try { return new Date(d + "T00:00:00Z").toLocaleDateString(loc, {year:"numeric", month:"short", timeZone:"UTC"}); }
   catch { return String(d).slice(0, 7); }
 };
 const setSetReleaseDates = (rows) => {
@@ -2339,14 +2340,18 @@ const reprintVerdict = (printings, curSetId) => {
       // rather than turned into a sentence nobody reads.
       text: "First printed in " + earlier[0]
         + (later.length ? " · reprinted again in " + phrase(later) : ""),
+      t: later.length ? ["First printed in {first} · reprinted again in {sets}", {first: earlier[0], sets: later}]
+        : ["First printed in {first}", {first: earlier[0]}],
     };
     if(later.length) return {
       kind: "original", icon: "pennant", label: "Original print",
       text: "Reprinted in " + phrase(later),
+      t: ["Reprinted in {sets}", {sets: later}],
     };
     if(beside.length) return {
       kind: "alt", icon: "reprint", label: "Alt printing",
       text: "Also printed in " + phrase(beside),
+      t: ["Also printed in {sets}", {sets: beside}],
     };
   }
 
@@ -2360,13 +2365,30 @@ const reprintVerdict = (printings, curSetId) => {
       kind: "promo", icon: "reprint", label: "Promo printing",
       text: home.length ? "Promo of the " + home[0] + " card"
         : (promoSets.length ? "Also printed in " + phrase(promoSets) : "Promo printing"),
+      t: home.length ? ["Promo of the {first} card", {first: home[0]}]
+        : (promoSets.length ? ["Also printed in {sets}", {sets: promoSets}] : ["Promo printing", {}]),
     };
   }
   if(promoSets.length) return {
     kind: "promo", icon: "reprint", label: "Has promos",
     text: "Also printed as a promo in " + phrase(promoSets),
+    t: ["Also printed as a promo in {sets}", {sets: promoSets}],
   };
   return null;
+};
+// The verdict's sentence in the site language. `text` stays the English (it is
+// what test_reprints pins); `t` is the template + the set names, which go
+// through the glossary so "Fabled" reads "Mythen" on a German page.
+const reprintText = (v) => {
+  if(!v || !v.t || SITE_LANG === "en") return v ? v.text : "";
+  const [key, vars] = v.t;
+  const names = (list) => {
+    const n = list.map(x => _term("set", x));
+    return n.length <= 2 ? n.join(_t(" and ")) : _t("{a}, {b} +{n} more", {a: n[0], b: n[1], n: n.length - 2});
+  };
+  const out = {};
+  for(const [k, x] of Object.entries(vars || {})) out[k] = Array.isArray(x) ? names(x) : _term("set", x);
+  return _t(key, out);
 };
 // The extra set a card should ALSO be filterable under, if any: an explicit
 // child->parent (SET_PARENT, e.g. AotV Promos) OR a promo folded under its base
@@ -10596,7 +10618,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   // The card language's rules text when this card has one (localizeCatalog);
   // the English stays one tap away in the printing's own TCGplayer listing.
   const rulesText = group.loc_text || cardLocOf(group.card_id)?.text || extras?.text || meta?.text || group.text || null;
-  const flavor = extras?.flavor_text;
+  const flavor = group.loc_flavor || cardLocOf(group.card_id)?.flavor_text || extras?.flavor_text;
   const cost = meta?.cost;
   const inkable = meta?.inkable;
   const cardType = meta?.card_type;
@@ -10882,8 +10904,8 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           <button class="cd-reprint-head" onClick=${togglePrintings}
             aria-expanded=${printingsOpen}
             title=${printingsOpen ? "Hide the full printing list" : "Show every set this card was printed in"}>
-            <span class="cd-reprint-badge">${uiIcon(reprintInfo.icon, 13)}${reprintInfo.label}</span>
-            <span class="cd-reprint-text">${reprintInfo.text}</span>
+            <span class="cd-reprint-badge">${uiIcon(reprintInfo.icon, 13)}${_t(reprintInfo.label)}</span>
+            <span class="cd-reprint-text">${reprintText(reprintInfo)}</span>
             <span class="cd-reprint-chev">${printingsOpen ? "▾" : "▸"}</span>
           </button>
           ${printingsOpen && html`<div class="cd-reprint-list">
@@ -10892,8 +10914,8 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
               return html`<button key=${e.card_id} class=${"cd-print-row" + (here ? " here" : "")}
                 disabled=${here} onClick=${()=>openPrinting(e)}
                 title=${here ? "You're looking at this printing" : "Open the " + e.set + " printing"}>
-                <span class="cd-print-set">${e.set}${e.number ? " #" + String(e.number).split("/")[0] : ""}</span>
-                <span class="cd-print-rar">${e.variant || e.rarity}</span>
+                <span class="cd-print-set">${_term("set", e.set)}${e.number ? " #" + String(e.number).split("/")[0] : ""}</span>
+                <span class="cd-print-rar">${e.variant || _term("rarity", e.rarity)}</span>
                 <span class="cd-print-rel">${releaseLabel(e.released)}</span>
                 <span class="cd-print-px">${e.price != null ? fmtUSD(e.price) : "—"}</span>
               </button>`;
