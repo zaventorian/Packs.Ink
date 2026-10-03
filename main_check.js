@@ -13865,18 +13865,18 @@ const WelcomeTourModal = ({onClose, onGo, onStartWalk}) => {
     <div class="welcome-tour" onClick=${e=>e.stopPropagation()} role="dialog" aria-label="Welcome">
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <div class="welcome-tour-emoji" aria-hidden="true">${uiIcon("sparkle", 34)}</div>
-      <h3 class="welcome-tour-title title-font">Welcome to Packs.Ink</h3>
-      <p class="welcome-tour-body">Daily TCGplayer prices for every Lorcana card — and the tools to put them to work.</p>
+      <h3 class="welcome-tour-title title-font">${_t("Welcome to Packs.Ink")}</h3>
+      <p class="welcome-tour-body">${_t("Daily TCGplayer prices for every Lorcana card — and the tools to put them to work.")}</p>
       <div class="welcome-feats">
         ${WELCOME_FEATURES.map(f => html`<button key=${f.view} class="welcome-feat"
           onClick=${()=>onGo && onGo(f.view)}>
           <span class="welcome-feat-ico" aria-hidden="true">${NAV_ICONS[f.view]}</span>
-          <span class="welcome-feat-txt"><strong>${f.name}</strong> — ${f.body}</span>
+          <span class="welcome-feat-txt"><strong>${_t(f.name)}</strong> — ${_t(f.body)}</span>
         </button>`)}
       </div>
       ${onStartWalk && html`<button class="welcome-tour-cta welcome-tour-cta--walk"
-        onClick=${onStartWalk}>${uiIcon("compass", 16)} Show me around <span class="welcome-walk-sub">a 2-minute guided tour</span></button>`}
-      <button class="welcome-tour-skip" onClick=${onClose}>I'll explore on my own</button>
+        onClick=${onStartWalk}>${uiIcon("compass", 16)} ${_t("Show me around")} <span class="welcome-walk-sub">${_t("a 2-minute guided tour")}</span></button>`}
+      <button class="welcome-tour-skip" onClick=${onClose}>${_t("I'll explore on my own")}</button>
     </div>
   </div>`;
 };
@@ -14033,16 +14033,16 @@ const Coachmark = ({title, steps: allSteps, onClose, onAbort, onDone, progress, 
     ${spotStyle && html`<div class="coach-spotlight" style=${spotStyle}></div>`}
     <div class=${"coach-tip"+(arrow?(" coach-tip--"+arrow):"")} style=${tipStyle} onClick=${e=>e.stopPropagation()} role="dialog" aria-label=${(title||"")+" tour"}>
       <div class="coach-tip-head">
-        ${title && html`<span class="coach-tip-kicker">${title}</span>`}
+        ${title && html`<span class="coach-tip-kicker">${_t(title)}</span>`}
         <span class="coach-tip-step">${progress ? progress+" · " : ""}${i+1} / ${steps.length}</span>
       </div>
-      <h3 class="coach-tip-title title-font">${step.title}</h3>
-      <p class="coach-tip-body">${step.body}</p>
+      <h3 class="coach-tip-title title-font">${_t(step.title)}</h3>
+      <p class="coach-tip-body">${_t(step.body)}</p>
       <div class="coach-tip-nav">
-        <button class="coach-skip" onClick=${onClose}>${skipLabel || (last ? "Done" : "Skip")}</button>
+        <button class="coach-skip" onClick=${onClose}>${_t(skipLabel || (last ? "Done" : "Skip"))}</button>
         <div class="coach-nav-right">
-          ${i > 0 && html`<button class="coach-back" onClick=${()=>setI(i-1)}>Back</button>`}
-          <button class="coach-next" onClick=${()=> last ? (onDone || onClose)() : setI(i+1)}>${last ? (doneLabel || "Done") : "Next"}</button>
+          ${i > 0 && html`<button class="coach-back" onClick=${()=>setI(i-1)}>${_t("Back")}</button>`}
+          <button class="coach-next" onClick=${()=> last ? (onDone || onClose)() : setI(i+1)}>${_t(last ? (doneLabel || "Done") : "Next")}</button>
         </div>
       </div>
     </div>
