@@ -72,6 +72,30 @@ Android/iOS shell around the SAME zero-build web app. **Read `native/README.md` 
 - **Never register the service worker in native builds** — registration is guarded AND sw.js is excluded from the bundle.
 - `node_modules/` + `native/www/` gitignored; the `android/` project IS committed. Icons/splashes regenerate via `npm run app:assets` from `native/assets/logo.png`.
 
+## Languages (i18n) — localized cards + site language (2026-10-03)
+
+Full write-up: **`docs/i18n.md`** (source survey, matching rules, roadmap). Invariants:
+
+- **`card_localizations` (migration 179, APPLIED)** holds every card printed in ja / de / fr / it:
+  name, version, rules text, classifications, and the art URL. Filled daily by
+  `scripts/sync_intl_cards.py` (`.github/workflows/intl-cards.yml`) from **Takara Tomy** (ja) and
+  **Ravensburger's gallery** (de/fr/it). Lorcast and duels.ink are English-only. Art is a 600px WebP in
+  `card-art/intl/<lang>/<source key>.webp`, keyed on the SOURCE id so a retired stand-in never orphans it.
+- **Matching refuses rather than guesses** — set + collector number confirmed by name; a number hit with
+  a different name is dropped. `match_how='name'` rows borrow a NAME for other printings and **never
+  carry art**. `python scripts/test_intl_cards.py` pins both directions.
+- **`"Product Name"` stays English.** Language is a display layer: `localizeCatalog` (App) swaps `img_*`
+  and adds `loc_name` / `loc_text` / `loc_classes`; render sites use `cardDisplayName(row)`. Never key
+  anything on a localized name.
+- **UI text:** `_t("English string", vars)` / `_term(kind, value)`; dictionaries `i18n/<lang>.js` are
+  BAKED by `python scripts/build_i18n.py` from `i18n/src/*.json` (edit the sources, never the .js; bump
+  `I18N_VER` in the head boot script). Loaded pre-paint, only for a non-English language, so English
+  visitors pay nothing. **Changing language reloads the page** — by design.
+- **Wrapping a string changes the source text a guard test may anchor on** (`test_calendar`,
+  `test_event_search`, `test_sealed_search` were taught both forms). Run the guard suite after a wrap.
+- Chinese prints are archived LOCALLY only (`scripts/archive_zh_cards.py`, unofficial source) — publishing
+  them is Zaven's call.
+
 ## Card scanner — PUBLIC BETA 2026-08-04
 
 Camera → identify → review → save. **Identification is 100% on-device**: `scanner.js` (the matcher) + OpenCV in `scanner-worker.js` (detect, rectify, and the ORB version check) + PP-OCRv3 ONNX in `scanner-ocr-worker.js`, matched against index files the browser downloads once. (`scanner-cv.js` was a dead main-thread copy of the worker's job and is gone, 2026-09-27.) No frame is ever sent anywhere to be read — say this plainly in any user-facing copy, it's the feature's best property and it's true.
