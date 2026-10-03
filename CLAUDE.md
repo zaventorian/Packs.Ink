@@ -2850,8 +2850,9 @@ Discord movers report. Guarded by `node scripts/test_quest_cards.mjs` and
 
 - **Q3 The Great Hunny Rescue** is Lorcast's (`Hunny Rescue – Illumineer's Quest`,
   mapped in `SET_DISPLAY_NAMES`). Lorcast files it as Promo; `load_lorcast.py`
-  writes "Quest" for any set code `Q<n>`. No TCGplayer singles yet (group 24734
-  holds only the box); link pids through `TCG_PID_OVERRIDES` once listed.
+  writes "Quest" for any set code `Q<n>`. TCGplayer is listing its singles in
+  waves (group 24734); `TCGCSV_GROUP_SET_ALIASES` binds that group to the set,
+  so `link_preorder_pids.py` links each one as it appears, every ETL run.
 - **Q1 Deep Trouble (31) and Q2 Palace Heist (35)** Lorcast never indexed.
   `python scripts/import_quest_cards.py [--commit]` loads them from LorcanaJSON
   into hand-minted sets `set_quest_q1` / `set_quest_q2` (migration 179, codes
@@ -2859,8 +2860,12 @@ Discord movers report. Guarded by `node scripts/test_quest_cards.mjs` and
   `crd_quest_<q>_<n>`, official art copied to `card-art/quests/`. TCGplayer sells
   them (groups 23528 / 24257, already priced as sealed "Promo Single" rows), so
   the pid gives them a price.
-- **Not loaded:** the oversized boss cards and double-sided battlegrounds
-  (TCGplayer lists them; no collector numbers).
+- **Oversized cards** (boss card, Reforged Crown, double-sided battlegrounds)
+  come from TCGplayer's listing via the same script: `crd_quest_<q>_os<k>`
+  (numbered by product id, so stable), no collector number, "(Oversized)" in the
+  version. Q3 has none listed yet; re-run the script when it does.
+- The three Quest BOXES now file under their quest set in the Sealed tab (the
+  ETL's group→set mapping matches them by name), not "Other / Promo".
 - The foil promo cards packed in the boxes (Mickey - Playful Sorcerer, Bolt -
   Superdog ...) are playable cards and stay in Extras & Oddities.
 

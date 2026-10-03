@@ -52,6 +52,26 @@ song = Q.build_row({**card, "type": "Action", "subtypes": ["Song"], "abilities":
                     "fullText": "Sing it."}, "set_quest_q2", None)
 ok("a song is filed the Lorcast way", (song["card_type"], song["classifications"]), ("Action - Song", None))
 
+ok("boss card split", Q.split_oversized("Ursula - Ruler of Lorcana (Oversized)"), ("Ursula", "Ruler of Lorcana (Oversized)"))
+ok("item with no version", Q.split_oversized("The Reforged Crown (Oversized)"), ("The Reforged Crown", "Oversized"))
+ok("battleground keeps its // name", Q.split_oversized("The Lair // Infinite Wrath - Battleground (Oversized)"),
+   ("The Lair // Infinite Wrath", "Battleground (Oversized)"))
+prods = [
+    {"productId": 552745, "name": "The Lair // Infinite Wrath - Battleground (Oversized)",
+     "extendedData": [{"name": "Description", "value": "Difficulty: Hard\r\n<br>Ursula draws 1 more card each turn."}]},
+    {"productId": 552741, "name": "Ursula - Ruler of Lorcana (Oversized)", "extendedData": []},
+    {"productId": 552746, "name": "Anna - Ensnared Sister", "extendedData": [{"name": "Number", "value": "1/31"}]},
+]
+over = Q.oversized_rows("Q1", prods, lambda q, slot, pid: f"img/{q}/{slot}/{pid}")
+ok("only the oversized products", [r["tcgplayer_product_id"] for r in over], [552741, 552745])
+ok("numbered os1.. in product-id order", [r["id"] for r in over], ["crd_quest_q1_os1", "crd_quest_q1_os2"])
+ok("no collector number on an oversized card", over[0]["collector_number"], None)
+ok("boss is a Character, battleground a Battleground", [r["card_type"] for r in over], ["Character", "Battleground"])
+ok("rarity Quest", {r["rarity"] for r in over}, {"Quest"})
+ok("description becomes text", over[1]["text"], "Difficulty: Hard\nUrsula draws 1 more card each turn.")
+ok("art slot", over[0]["image_normal"], "img/Q1/os1/552741")
+ok("Q3 oversized go to Lorcast's Q3 set", Q.OVERSIZED_GROUPS["Q3"][1], "set_5a55ed51fe9144248bc9d1b5656bc6b4")
+
 ok("Q3 is a quest code", L._is_quest_code("Q3"), True)
 ok("Q12 is a quest code", L._is_quest_code("q12"), True)
 ok("bare Q is not", L._is_quest_code("Q"), False)
