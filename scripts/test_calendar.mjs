@@ -116,6 +116,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const calEndOf = (e) => {", NL + "};"),
   grab("const calendarUpcoming = (events, fromYmd, limit) => {", NL + "};"),
   grabLine("const CAL_MONTHS = "),   // one line — a block grab here runs on and swallows calShortDay
+  grabLine("const CAL_MONTHS_SHORT = "),
   grab("const calShortDay = (ymd) => {", NL + "};"),
   grab("const calendarPanelWindow = (pool, todayYmd, size, page) => {", NL + "};"),
   grab("const calChipLabel = (ev) => (ev && ev.kind === \"store\")", ": calEventTitle(ev);"),
@@ -1936,7 +1937,7 @@ ok("the graded tile isolates its version badge",
   // ⚠ Anchored on the chip's own markup, not on the words: the header
   // carries a COMMENT saying "SCs near me" too, and matching that one makes the
   // gap test below meaningless.
-  const near = view.indexOf("<span>SCs near me</span>");
+  const near = view.indexOf('<span>${_t("SCs near me")}</span>');
   const follow = view.indexOf("cal-follow-add");
   ok("the button is rendered on the page", follow > 0);
   ok("immediately after the near chip, not in some other row",

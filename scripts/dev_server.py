@@ -27,7 +27,7 @@ import urllib.request
 # supabase/ and .github/ used to be listed here as well. Removing them did NOT
 # stop scripts/.env being served (an existing file is served regardless, see
 # do_GET) — the dot-segment deny at the top of do_GET is what does that.
-PASSTHROUGH_FOLDERS = ("Logos", "vendor", "scanner")
+PASSTHROUGH_FOLDERS = ("Logos", "vendor", "scanner", "i18n")
 
 
 class SPAHandler(http.server.SimpleHTTPRequestHandler):

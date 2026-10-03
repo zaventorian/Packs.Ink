@@ -278,7 +278,8 @@ eq((SRC.match(/class="sc-zip-input"/g) || []).length, 2,
 // three must promise the same thing — a box that says ZIP and then accepts a
 // town is the confusion the universal resolver was built to end. Bump this with
 // a fourth only after checking the new one uses the resolver too.
-eq((SRC.match(/placeholder="Postal code or town"/g) || []).length, 3,
+// (The placeholder may be translated: placeholder=${_t("Postal code or town")}.)
+eq((SRC.match(/placeholder=(?:"Postal code or town"|\$\{_t\("Postal code or town"\)\})/g) || []).length, 3,
    "every place box takes a postal code or a town");
 eq((SRC.match(/scResolveOrigin\s*\(/g) || []).length >= 3, true,
    "and every one of them resolves through scResolveOrigin");

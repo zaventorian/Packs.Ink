@@ -86,6 +86,42 @@ Android/iOS shell around the SAME zero-build web app. **Read `native/README.md` 
 - **Never register the service worker in native builds** — registration is guarded AND sw.js is excluded from the bundle.
 - `node_modules/` + `native/www/` gitignored; the `android/` project IS committed. Icons/splashes regenerate via `npm run app:assets` from `native/assets/logo.png`.
 
+## Languages (i18n) — localized cards + site language (2026-10-03)
+
+Full write-up: **`docs/i18n.md`** (source survey, matching rules, roadmap). Invariants:
+
+- **`card_localizations` (migration 179, APPLIED)** holds every card printed in ja / de / fr / it:
+  name, version, rules text, classifications, and the art URL. Filled daily by
+  `scripts/sync_intl_cards.py` (`.github/workflows/intl-cards.yml`) from **Takara Tomy** (ja) and
+  **Ravensburger's gallery** (de/fr/it). Lorcast and duels.ink are English-only. Art is a 600px WebP in
+  `card-art/intl/<lang>/<source key>.webp`, keyed on the SOURCE id so a retired stand-in never orphans it.
+- **Matching refuses rather than guesses** — set + collector number confirmed by name; a number hit with
+  a different name is dropped. `match_how='name'` rows borrow a NAME for other printings and **never
+  carry art**. `python scripts/test_intl_cards.py` pins both directions.
+- **`"Product Name"` stays English.** Language is a display layer: `localizeCatalog` (App) swaps `img_*`
+  and adds `loc_name` / `loc_text` / `loc_classes`; render sites use `cardDisplayName(row)`. Never key
+  anything on a localized name.
+- **UI text:** `_t("English string", vars)` / `_term(kind, value)`; dictionaries `i18n/<lang>.js` are
+  BAKED by `python scripts/build_i18n.py` from `i18n/src/*.json` (edit the sources, never the .js; bump
+  `I18N_VER` in the head boot script). Loaded pre-paint, only for a non-English language, so English
+  visitors pay nothing. **Changing language reloads the page** — by design.
+- **Wrapping a string changes the source text a guard test may anchor on** (`test_calendar`,
+  `test_event_search`, `test_sealed_search` were taught both forms). Run the guard suite after a wrap.
+- **Nobody is prompted to switch** (Zaven, 2026-10-03). A language is chosen in ⚙ Preferences or the
+  footer's language dropdown. A first-visit "switch to Japanese?" banner was built and removed the same
+  day — don't reintroduce one without asking.
+- **A card never printed in the card language still shows**: English art, plus an UNOFFICIAL
+  translation of its rules text (`i18n/cards_mt/<lang>.json` → `scripts/load_mt_card_text.py`,
+  `match_how='machine'`, `source='packs-ink-mt'`, name/art NULL, labelled in the card modal). The official
+  text always wins; a translation of an older English text (`en_hash`) is deleted, and the daily run's
+  artifact lists what needs (re)translating. The sync's pruning never touches these rows.
+- **How it works** is translated whole: `i18n/src/faq/<lang>.html` (from `python scripts/faq_source.py`,
+  first line `<!-- en:<hash> -->`) baked into the dictionary as `faqHtml`. It is injected as HTML, so the
+  guard checks every translation keeps the English page's exact tags. **The Amazon Associates sentence
+  stays English verbatim** in every language, FAQ included. The Elo pages are English on purpose.
+- Chinese prints are archived LOCALLY only (`scripts/archive_zh_cards.py`, unofficial source) — publishing
+  them is Zaven's call.
+
 ## Card scanner — PUBLIC BETA 2026-08-04
 
 Full notes: `docs/claude/card-scanner.md` (27 KB). **Read it before changing this area.**

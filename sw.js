@@ -1,6 +1,6 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v516';
+const CACHE_VERSION = 'packsink-v517';
 // Card art + other images live in their own cache that is NOT wiped on
 // deploys. Before this existed, every CACHE_VERSION bump threw away every
 // runtime-cached card image, so devices never accumulated art for offline
@@ -34,7 +34,7 @@ const CORE_ASSETS = [
   '/vendor/react-dom.production.min.js?v=254',
   '/vendor/htm.js?v=254',
   '/vendor/supabase.js?v=254',
-  '/styles.css?v=516',
+  '/styles.css?v=517',
   '/logo.js?v=348',
   // scanner*.js intentionally NOT precached: the scanner is a modal most
   // visits never open — it runtime-caches on first use instead of costing
@@ -223,12 +223,13 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // App-shell styles/scripts (styles.css, logo.js): network-first, same as the
+  // App-shell styles/scripts (styles.css, logo.js, the i18n dictionaries):
+  // network-first, same as the
   // HTML — so a freshly-served (network-first) Index.html is NEVER paired with
   // a STALE cache-first stylesheet. That skew is what rendered the home page's
   // mover tiles at giant natural-image size after a deploy until the visitor
   // hard-refreshed. Falls back to cache only when the network is unreachable.
-  if (url.origin === self.location.origin && /\/(styles\.css|logo\.js|scanner\.js|scanner-worker\.js|scanner-ocr-worker\.js)$/.test(url.pathname)) {
+  if (url.origin === self.location.origin && /\/(styles\.css|logo\.js|scanner\.js|scanner-worker\.js|scanner-ocr-worker\.js|i18n\/[a-z]{2}\.js)$/.test(url.pathname)) {
     event.respondWith(
       fetch(req)
         .then((res) => {
