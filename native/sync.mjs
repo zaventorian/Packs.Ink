@@ -45,7 +45,7 @@ const DIRS = [
   // vendor/opencv still works: the worker falls back to jsDelivr's copy.
   ["vendor", {}],
   ["scanner", {}],
-  ["i18n", {}],     // UI dictionaries (see SITE_LANGS in Index.html)
+  ["i18n", { exclude: ["src", "cards_mt"] }],  // UI dictionaries (see SITE_LANGS in Index.html); src/ + cards_mt/ are build inputs
   ["Logos", {}],
 ];
 

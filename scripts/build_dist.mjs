@@ -91,7 +91,10 @@ const DIRS = [
   ["Logos", { excludeExt: [".ai", ".pdf"], exclude: ["Logo on Black.png", "logo transparent.png"] }],
   ["vendor", {}],   // react/react-dom/htm/supabase/html2canvas + ort WASM + opencv
   ["scanner", {}],  // ONNX weights + card indexes (sw.js keeps both in SCAN_CACHE)
-  ["i18n", {}],     // UI dictionaries, loaded by the pre-paint boot only for a non-English language
+  // UI dictionaries, loaded by the pre-paint boot only for a non-English language.
+  // src/ and cards_mt/ are build inputs (ui.json, the FAQ sources, unofficial card text
+  // that reaches the site through the database), not files the site loads.
+  ["i18n", { exclude: ["src", "cards_mt"] }],
 ];
 
 // Guard: the worker's proxy routes and the paths baked into Index.html + sw.js
