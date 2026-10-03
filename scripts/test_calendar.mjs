@@ -27,6 +27,11 @@ const grabLine = (p) => {
 };
 
 const mod = await import("data:text/javascript," + encodeURIComponent([
+  // The page's translation layer, as it behaves in English: a lookup that
+  // misses and fills {placeholders}. The helpers below route display text
+  // through it, and English is what these cases pin.
+  "const _t = (s, v) => !v ? s : String(s).replace(/\\{(\\w+)\\}/g, (m, k) => (v[k] != null ? v[k] : m));",
+  "const _term = (kind, v) => v;",
   grabLine("const CAL_D = "),
   grab("const calYmdParts = (s) => {", NL + "};"),
   grabLine("const calYmdToUTC = "),

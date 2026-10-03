@@ -447,12 +447,15 @@ section("15. kinds — a multi-select, not one-of-N");
   // declaration that is also an end marker — `slice` includes its end marker, so
   // "…to scKindOf" and "scKindOf to…" both contain that line.
   const kindSrc = slice("const SC_KINDS = CAL_STORE_KINDS;",
-                        "return `${SC_DOW[d.getUTCDay()]} ${+m[2]}/${+m[3]}`;" + NLJS + "};",
+                        "return `${CAL_DOW_SHORT[d.getUTCDay()]} ${+m[2]}/${+m[3]}`;" + NLJS + "};",
                         "the kinds + dates block");
   const K = await import("data:text/javascript," + encodeURIComponent([
     "const CAL_STORE_KINDS = [{key:'sc',label:'Set Champs'},{key:'prerelease',label:'Prereleases'},{key:'other',label:'Locals'}];",
     "const CAL_STORE_KIND_KEYS = CAL_STORE_KINDS.map(k => k.key);",
-    "const SC_DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];",
+    "const CAL_DOW_SHORT = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];",
+    // the page's translation layer as it behaves in English
+    "const _t = (s, v) => !v ? s : String(s).replace(/\\{(\\w+)\\}/g, (m, k) => (v[k] != null ? v[k] : m));",
+    "const scLocalTime12 = (x) => x;",
     kindSrc,
     "export {SC_KIND_KEYS, scParseKinds, scKindOf, scKindsLabel, scParseDates, scDateChipLabel};",
   ].join(NLJS)));

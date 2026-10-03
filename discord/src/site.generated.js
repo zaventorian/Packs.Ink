@@ -4,6 +4,8 @@
 // `node discord/tools/extract_site.mjs` after changing any of them on the site.
 /* eslint-disable */
 const SITE_ORIGIN = "https://packs.ink";
+const _t = (s, v) => !v ? s : String(s).replace(/\{(\w+)\}/g, (m, k) => (v[k] != null ? v[k] : m));
+const _term = (kind, v) => v;
 // ---- site ----
 const GRADED_FOIL_PRINTINGS = new Set(["foil", "cold foil", "holofoil", "holo"]);
 // ---- site ----
@@ -362,7 +364,7 @@ const SET_RELEASE_LABELS = {prerelease: "Prerelease", lgs: "LGS release", retail
 const SET_RELEASE_PHASES = ["prerelease", "lgs", "retail"];
 // ---- site ----
 const calEventTitle = (ev) => !ev ? ""
-  : (ev.kind === "set" && ev.subtitle) ? `${ev.title} ${ev.subtitle}`
+  : (ev.kind === "set" && ev.subtitle) ? _t("{set} {phase}", {set: _term("set", ev.title), phase: _t(ev.subtitle)})
   : ev.kind === "store" ? (ev.subtitle || ev.title || "")
   : (ev.title || "");
 // ---- site ----
@@ -387,7 +389,7 @@ const calEventSubtitle = (ev) => !ev ? null
 // ---- site ----
 const calEstimated = (ev) => !!(ev && ev.estimated);
 // ---- site ----
-const CAL_EST_SUFFIX = " (estimated)";
+const CAL_EST_SUFFIX = _t(" (estimated)");
 // ---- site ----
 const calEventFullLabel = (ev) => [calEventTitle(ev), calEventSubtitle(ev)].filter(Boolean).join(" — ")
   + (calEstimated(ev) ? CAL_EST_SUFFIX : "");

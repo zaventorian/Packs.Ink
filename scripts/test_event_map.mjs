@@ -919,7 +919,7 @@ section("18. clipped pins + the measured height");
   // nothing to skim and no way out. The names are not lost: the callout it opens
   // is a list of real buttons, one per event, which is the reachable way to
   // expose them. Measured after: 1755 -> 85 characters.
-  ok(/\$\{g\.items\.length\} events here, including \$\{nameOf\(g\.items\[0\]\)\}/.test(view),
+  ok(/_t\("\{n\} events here, including \{name\} — list them", \{n: g\.items\.length, name: nameOf\(g\.items\[0\]\)\}\)/.test(view),
      "a merged pin names its count and the first event, never all of them");
   ok(!/\$\{g\.items\.map\(fullOf\)\.join\("; "\)\}/.test(view),
      "and never recites every event into one label");

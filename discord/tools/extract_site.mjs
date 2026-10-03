@@ -42,7 +42,13 @@ export const WANT = [
 ];
 // Browser-derived constants the closure would otherwise drag in. SITE_ORIGIN
 // reads window.Capacitor for the native app; the bot is always the web.
-const STUBS = { SITE_ORIGIN: '"https://packs.ink"' };
+// _t / _term are the site's translation layer; the bot speaks English, which is
+// exactly what they return when no dictionary is loaded.
+const STUBS = {
+  SITE_ORIGIN: '"https://packs.ink"',
+  _t: "(s, v) => !v ? s : String(s).replace(/\\{(\\w+)\\}/g, (m, k) => (v[k] != null ? v[k] : m))",
+  _term: "(kind, v) => v",
+};
 
 export function generate() {
   const { names, stmts } = closureSource(WANT, { stop: Object.keys(STUBS) });

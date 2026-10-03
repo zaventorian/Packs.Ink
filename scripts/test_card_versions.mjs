@@ -18,6 +18,8 @@
 //      a third version tab out of nowhere.
 import { readFileSync } from "node:fs";
 
+// The page's translation layer as it behaves in English (the helpers below route display text through it).
+const I18N_STUB = "const _t = (s, v) => !v ? s : String(s).replace(/\\{(\\w+)\\}/g, (m, k) => (v[k] != null ? v[k] : m));\nconst _term = (kind, v) => v;\n";
 const src = readFileSync(new URL("../Index.html", import.meta.url), "utf8");
 const NL = String.fromCharCode(10);
 
@@ -48,7 +50,7 @@ const moduleSrc = [
   "export {gradedVariantLabel, isFinishOnlyPrinting, variantBadge};",
 ].join(NL);
 
-const mod = await import("data:text/javascript," + encodeURIComponent(moduleSrc));
+const mod = await import("data:text/javascript," + encodeURIComponent(I18N_STUB + moduleSrc));
 const { gradedVariantLabel, isFinishOnlyPrinting } = mod;
 
 let failed = 0;

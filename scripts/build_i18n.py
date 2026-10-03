@@ -2,7 +2,7 @@
 build_i18n.py - bake the site's language dictionaries.
 
     python scripts/build_i18n.py           # write i18n/<lang>.js
-    python scripts/build_i18n.py --check   # fail if a .js is stale or a key is missing
+    python scripts/build_i18n.py --check   # fail if a .js is stale or a _t() key is missing
 
 Inputs (all hand-edited or regenerated, all committed):
   i18n/src/ui.json              English UI string -> [ja, de, fr, it]. "" = fall back
@@ -22,9 +22,9 @@ pre-paint boot in Index.html. Bump I18N_VER there whenever these change, or a
 browser keeps the old dictionary until the service worker's network-first
 fetch replaces it (it will, but one page view late).
 
---check also lists every `_t("...")` key in Index.html that ui.json lacks:
-those strings simply show in English, which is never an error, but it is the
-to-do list.
+--check also FAILS on a `_t("...")` key in Index.html that ui.json lacks (it
+would show in English in every language). Text never wrapped in _t() at all
+is caught by scripts/i18n_audit.mjs / scripts/test_i18n_coverage.mjs.
 """
 from __future__ import annotations
 
@@ -119,7 +119,7 @@ def code_keys() -> list[str]:
     with open(os.path.join(ROOT, "Index.html"), encoding="utf-8-sig") as f:
         s = f.read()
     keys = []
-    for m in re.finditer(r'_t\("((?:[^"\\]|\\.)*)"', s):
+    for m in re.finditer(r'\b_t(?:Rich)?\("((?:[^"\\]|\\.)*)"', s):
         k = json.loads('"' + m.group(1) + '"')
         if k not in keys:
             keys.append(k)
@@ -175,6 +175,13 @@ def main() -> int:
         print(f"note: could not hash the English FAQ ({e})")
     if stale:
         print("STALE (run python scripts/build_i18n.py):", *stale, sep="\n  ")
+        return 1
+    # A _t() key with no ui.json entry ships English in every language, and
+    # nothing on screen says so. Since 2026-10-03 that fails --check (and so
+    # test_intl_cards.py / CI); "" in ui.json is the deliberate way to keep a
+    # string English. Text never wrapped in _t() is scripts/i18n_audit.mjs's job.
+    if check and missing:
+        print("MISSING: add the keys above to i18n/src/ui.json (ja, de, fr, it), then run build_i18n.py")
         return 1
     return 0
 
