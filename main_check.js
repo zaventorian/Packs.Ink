@@ -25583,6 +25583,14 @@ function squashCardName(s){
 function foldCardName(s){
   return searchNorm(squashCardName(s));
 }
+// A LOCALIZED name as an import key (decklists and CSVs written in Japanese,
+// German...). Width-folded (NFKC: ！ → !), and the name / version separator
+// dropped whatever it is — Takara writes "ウッディ／俺が助けるぜ！", most lists
+// "Name - Version". Only localized names go through this; English keeps the
+// three tiers above.
+function locCardKey(s){
+  return "loc:" + foldCardName(String(s || "").normalize("NFKC")).replace(/[-‐－／/｜|・:]/g, "");
+}
 
 // Name index over the raw catalog for CSV import — three tiers, tried in
 // order: normalized, whitespace-squashed, diacritic-folded.
@@ -57948,6 +57956,13 @@ function parseDeckText(text, raw){
       if(!candidatesByName[fk]) candidatesByName[fk] = [];
       candidatesByName[fk].push(r);
     }
+    // The card language's name too (localizeCatalog), so a list written in
+    // Japanese or German imports: "4 ウッディ - 俺が助けるぜ！".
+    if(r.loc_name){
+      const lk = locCardKey(r.loc_name);
+      if(!candidatesByName[lk]) candidatesByName[lk] = [];
+      candidatesByName[lk].push(r);
+    }
   }
   const byName = {};
   for(const [k, rows] of Object.entries(candidatesByName)){
@@ -58007,7 +58022,8 @@ function parseDeckText(text, raw){
     // over name scoring so e.g. Cinderella - Ballroom Sensation (2-205)
     // resolves to the Enchanted instead of the base printing.
     const byNum = (setNum && cn) ? (candidatesBySetCN[setNum + "|" + cn] || null) : null;
-    const byNm = byName[normalizeCardName(name)] || byName[squashCardName(name)] || byName[foldCardName(name)] || null;
+    const byNm = byName[normalizeCardName(name)] || byName[squashCardName(name)] || byName[foldCardName(name)]
+      || byName[locCardKey(name)] || null;
     let hit = byNm;
     if(byNum){
       // The number is trusted when it points at a printing OF the named card

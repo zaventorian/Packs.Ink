@@ -39,6 +39,7 @@ const parts = [
   grab("function normalizeCardName(s){", "\n}"),
   grab("function squashCardName(s){", "\n}"),
   grab("function foldCardName(s){", "\n}"),
+  grab("function locCardKey(s){", "\n}"),
   grab("const SPECIAL_DECK_LIMITS = {", "\n};"),
   grab("const getDeckLimit = (productName) =>", ";\n"),
   grab("const cardFamilyKey = (name) =>", ".toLowerCase();"),
@@ -98,6 +99,19 @@ ok("still grouped by type: characters, then songs", lines.filter(l => /^\d/.test
 ok("a card missing from the catalog is a comment", lines.includes("// 1 × gone (not in the catalog)"), true);
 ok("no raw card_id is ever a card line", lines.some(l => /^\d+ gone$/.test(l)), false);
 ok("a 0-quantity row is not exported", deckToText({cards: [{card_id: "tipo", quantity: 0}]}, cardById), "");
+
+console.log("\n== localized lists ==");
+{
+  // A Japanese / German list imports through the card language's name
+  // (localizeCatalog puts it on the row as loc_name). Takara writes the name
+  // and version with "／" and full-width punctuation; both forms must land.
+  const loc = rows.map(r => r.card_id === "elsa" ? {...r, loc_name: "エルサ - 雪の女王"}
+    : r.card_id === "tipo" ? {...r, loc_name: "Tipo - Heranwachsender Sohn"} : r);
+  const got = parseDeckText("4 エルサ／雪の女王\n3 エルサ - 雪の女王\n2 Tipo - Heranwachsender Sohn\n1 Elsa - Snow Queen", loc);
+  ok("Japanese with ／, Japanese with -, German, and English all resolve",
+     got.entries.map(e => e.card_id + ":" + e.quantity).sort(), ["elsa:4", "tipo:2"]);
+  ok("nothing unmatched", got.unmatched, []);
+}
 
 console.log("\n== round trip ==");
 const back = parseDeckText(text, rows);
