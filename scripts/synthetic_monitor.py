@@ -69,6 +69,20 @@ STALE_GRACE_HOURS = 30
 # and would no longer notice anything short of a total wipe.
 MIN_MOVERS_ROWS = 3000
 
+# The other relations the site reads straight from the browser, each with a
+# floor at roughly half its population on 2026-09-30. A refresh that empties
+# one, or a matview left unpopulated by a migration (the market index sat empty
+# for three weeks that way, every read a 500 and nothing red), serves the page
+# a blank where a table should be. One exact-count request each.
+#   (relation and filter, floor, what a reader sees when it is empty)
+POPULATED = (
+    ("sealed_prices_latest?select=tcgplayer_product_id", 150, "sealed prices (Sealed tab, EV box prices)"),
+    ("graded_sales_rollup?select=card_id", 4000, "graded prices (graded collection, Screener graded mode)"),
+    ("market_index_latest?select=scope", 60, "market indices (Screener vs Mkt, Price Graphing benchmarks)"),
+    ("rarity_avg_daily?select=set_id", 40000, "rarity averages (EV, Set Breakdown)"),
+    ("lorcana_events?select=kind", 4000, "events (the event finder and map)"),
+)
+
 # Production URL for the deploy-health check.
 SITE_URL = "https://packs.ink/"
 
@@ -188,7 +202,28 @@ def check_freshness() -> list[str]:
     except Exception as e:
         failures.append(f"price_movers count query failed: {e}")
 
+    # A3: every other relation the browser reads directly is populated.
+    for path, floor, what in POPULATED:
+        name = path.split("?")[0]
+        try:
+            total = _exact_count(path)
+            if total is None:
+                failures.append(f"{name} count unreadable - {what} may be blank.")
+            elif total < floor:
+                failures.append(f"{name} has {total} rows (< {floor}) - {what} will be blank or thin.")
+            else:
+                print(f"  [A3 PASS] {name} has {total} rows (>= {floor}).")
+        except Exception as e:
+            failures.append(f"{name} count query failed: {e}")
+
     return failures
+
+
+def _exact_count(path: str) -> int | None:
+    """Row count for a PostgREST path, from the Content-Range header."""
+    r = _sb_get(path, extra_headers={"Prefer": "count=exact", "Range-Unit": "items", "Range": "0-0"})
+    total = r.headers.get("Content-Range", "").split("/")[-1]
+    return int(total) if total.isdigit() else None
 
 
 # --- Check B: deploy health ------------------------------------------------

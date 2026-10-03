@@ -23,8 +23,11 @@ const IMG_CACHE = 'packsink-img-v1';
 const SCAN_CACHE = 'packsink-scan-v1';
 const SCAN_ASSET_RE = /^\/(scanner\/|vendor\/ort\/|vendor\/opencv\/)/;
 const CORE_ASSETS = [
+  // '/' only. '/Index.html' used to be listed too, and on Cloudflare that is a
+  // second URL answering with the same 1 MB shell, so every install (every
+  // CACHE_VERSION bump) downloaded it twice. The navigation handler below still
+  // writes and reads the '/Index.html' key, and falls back to '/'.
   '/',
-  '/Index.html',
   // Vendored core libs (formerly unpkg). Precached so the app boots offline and
   // can never be left half-loaded by a CDN outage. ?v= busts on a re-vendor.
   '/vendor/react.production.min.js?v=254',

@@ -98,6 +98,23 @@ WATCHLIST = [
         (_q("Elsa", "Challenge"),), "Foil"),
     ("Lorcana Challenge Year 3", "4", "Simba", "Pride Protector",
         (_q("Simba", "Challenge"), _q("Simba", "Tournament")), "Foil"),
+    # #11 / #12 / #14 are the foil printings of #15 / #16 / #18 (added
+    # 2026-09-30). TCGplayer lists them at $2,500-$6,500 asks with almost no
+    # sales, so eBay is the price. Each has a non-foil twin of the same name in
+    # the same set at ~$70, which TWIN_REQUIRE keeps out.
+    ("Lorcana Challenge Year 3", "11", "Stand Out", None,
+        (_q("Stand Out", "Challenge"), _q("Stand Out", "Promo")), None),
+    ("Lorcana Challenge Year 3", "12", "Down in New Orleans", None,
+        (_q("Down in New Orleans", "Challenge"), _q("Down in New Orleans", "Promo")), None),
+    ("Lorcana Challenge Year 3", "14", "Tinker Bell", "Insistent Fairy",
+        (_q("Tinker Bell", "Challenge"), _q("Insistent Fairy", "Promo")), None),
+
+    # --- Challenge 2026-27 season (C3) --------------------------------------
+    # 13/C3 is the foil of 1/C3 (the Qualifier prize). The non-foil has a live
+    # TCGplayer price (~$117) and is not ours to price; the foil asks $775.
+    ("Lorcana Challenge Promo (C3)", "13", "Mother Knows Best", None,
+        (_q("Mother Knows Best", "Challenge"), _q("Mother Knows Best", "Promo"),
+         _q("Mother Knows Best", "CCQ")), None),
 
     # --- Promo Set 1 #1-7 (the 2022 D23 Expo set; first Lorcana promos) -----
     # Both "D23" and "2022": TCGplayer-style titles say "4 D23 Promos Holo" with
@@ -146,7 +163,7 @@ WATCHLIST = [
 # drag in that is not a watchlist card.
 SET_NETS = [
     _q("C1"), _q("Top Prize"), _q("Prize Wall"), _q("Side Event"),
-    _q("C2"),
+    _q("C2"), _q("C3"),
     _q("D23", "2022"), _q("Expo", "2022"),
     _q("Cruise"),
 ]
@@ -177,9 +194,22 @@ SET_NETS = [
 #         them. 2022 is the Expo set; the Collection is 2024.
 #   #5 -> Promo Set 3 #5 ($49.40)     : Promo Set 3 is Disney Cruise Line, so the
 #         token "D23" IS decisive here, as is the year.
+def _foil_or(number_re):
+    # "Non-foil" anywhere in the title is a veto, even beside the foil's own
+    # number: a seller listed the $100 non-foil as "13/C3 NON-Foil" (2026-09-30).
+    return r"^(?!.*\bnon[\s-]?foil\b).*(?:" + number_re + r"|\bfoil\b)"
+
+
 TWIN_REQUIRE = {
     ("Promo Set 1", "1"): r"\b2022\b",
     ("Promo Set 1", "5"): r"\bd23\b|\b2022\b",
+    # The Challenge foils whose NON-FOIL twin shares the name and the set, at a
+    # thirtieth of the price. A sale counts only when its title carries the
+    # foil's own printed number or says foil without "non" in front of it.
+    ("Lorcana Challenge Year 3", "11"): _foil_or(r"\b0?11\s*/\s*c2\b"),
+    ("Lorcana Challenge Year 3", "12"): _foil_or(r"\b0?12\s*/\s*c2\b"),
+    ("Lorcana Challenge Year 3", "14"): _foil_or(r"\b0?14\s*/\s*c2\b"),
+    ("Lorcana Challenge Promo (C3)", "13"): _foil_or(r"\b0?13\s*/\s*c3\b"),
 }
 
 

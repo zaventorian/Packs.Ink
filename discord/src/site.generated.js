@@ -53,6 +53,7 @@ const SET_ORDER = [
   "Lorcana Challenge Promo (C1)",       // 2024-05-17 — Cinderella Stouthearted, Baymax, etc.
   "D23 Collection",             // 2024-08-09 — Mickey Brave Little Tailor, etc.
   "Lorcana Challenge Promo (C2)",   // 2026-01-16 — Pegasus, Mulan Charging Ahead, etc.
+  "Lorcana Challenge Promo (C3)",   // 2026-08 — the 2026-27 season's prizes; our own set row (migration 178)
   "Magical Places Promos", // 2026-01-16 — Ravensburger's "N/DIS" promo line. Not every
   // card in it is an EPCOT Festival of the Arts card — that's a sub-label inside this
   // set (like a grading sub), not a set of its own.
@@ -74,6 +75,7 @@ const PROMO_RARITY_SETS = new Set([
   "Lorcana Challenge Promo (C1)",
   "D23 Collection",
   "Lorcana Challenge Promo (C2)",
+  "Lorcana Challenge Promo (C3)",
   "Magical Places Promos",
   "Curator's Collection: Heroines",
   "Curator's Collection: Beauty and the Beast",
@@ -289,6 +291,13 @@ const TCG_PID_OVERRIDES = {
   "Simba - Pride Protector|4": 695330,                // Lorcana Challenge Y3 (C2) — Holofoil promo, Lorcast left pid null
   "Dragon Fire|9": 693401,                            // Lorcana Challenge Y3 (C2) — Lorcast left pid null
   "Stitch - Carefree Snowboarder|207": 675380,        // Winterspell Epic — Lorcast left pid null
+  "Héctor Rivera - Gone to Pieces|13": 711361,              // D23 Collection (2026 drop); Lorcast left pid null. TCGplayer spells it "Hector", so the name link never matched
+  // Lorcana Challenge Year 3 (C2) #15-#18: Lorcast indexes them with a null pid.
+  // TCGplayer listed all four on 2026-09-01; the numbers were read off the cards.
+  "Stand Out|15": 712024,
+  "Down In New Orleans|16": 712025,
+  "The Headless Horseman - Cursed Rider|17": 712026,
+  "Tinker Bell - Insistent Fairy|18": 712027,
 };
 // ---- site ----
 const PULL = {

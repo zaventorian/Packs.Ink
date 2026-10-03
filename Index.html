@@ -694,6 +694,7 @@ const POP_SET_ALIASES = [
   ["pd1-promo", "PD1"],
   ["c1-", "Lorcana Challenge Promo (C1)"],
   ["c2-", "Lorcana Challenge Promo (C2)"],
+  ["c3-", "Lorcana Challenge Promo (C3)"],
   ["d23-", "D23 Collection"],
   ["dis-magical places", "Magical Places Promos"],
   ["cc1-", "Curator's Collection: Heroines"],
@@ -1178,6 +1179,7 @@ const canonicalGradedSlot = (cardId, printing) => {
 const SECTION_SPLIT_SETS_GLOBAL = new Set([
   "Lorcana Challenge Promo (C1)",
   "Lorcana Challenge Promo (C2)",
+  "Lorcana Challenge Promo (C3)",
 ]);
 // Route every Lorcast image URL through our same-origin /img-proxy/* rewrite
 // (defined in _redirects + scripts/dev_server.py). Two reasons:
@@ -1864,6 +1866,7 @@ const SET_ORDER = [
   "Lorcana Challenge Promo (C1)",       // 2024-05-17 — Cinderella Stouthearted, Baymax, etc.
   "D23 Collection",             // 2024-08-09 — Mickey Brave Little Tailor, etc.
   "Lorcana Challenge Promo (C2)",   // 2026-01-16 — Pegasus, Mulan Charging Ahead, etc.
+  "Lorcana Challenge Promo (C3)",   // 2026-08 — the 2026-27 season's prizes; our own set row (migration 178)
   "Magical Places Promos", // 2026-01-16 — Ravensburger's "N/DIS" promo line. Not every
   // card in it is an EPCOT Festival of the Arts card — that's a sub-label inside this
   // set (like a grading sub), not a set of its own.
@@ -2208,6 +2211,7 @@ const PROMO_RARITY_SETS = new Set([
   "Lorcana Challenge Promo (C1)",
   "D23 Collection",
   "Lorcana Challenge Promo (C2)",
+  "Lorcana Challenge Promo (C3)",
   "Magical Places Promos",
   "Curator's Collection: Heroines",
   "Curator's Collection: Beauty and the Beast",
@@ -2229,7 +2233,18 @@ const PROMO_RARITY_SETS = new Set([
 const YEAR3_PRINTING_BY_NUMBER = {
   1:"foil", 2:"foil", 3:"foil", 4:"foil",
   5:"normal", 6:"normal", 7:"normal", 8:"normal", 9:"normal", 10:"normal",
+  // 11, 12 and 14 are the FOIL printings of 15, 16 and 18 (printed 11/C2, 12/C2,
+  // 14/C2 - read off TCGplayer's photos 2026-09-30). 13/C2 is not known yet:
+  // the "Mother Knows Best (Foil) #13" TCGplayer lists beside them is 13/C3.
+  11:"foil", 12:"foil", 14:"foil",
   15:"normal", 16:"normal", 17:"normal", 18:"normal",
+};
+// C3 (the 2026-27 season) follows the same shape: 1 is the non-foil Mother Knows
+// Best, 13 its foil (printed 1/C3 and 13/C3). Numbers not listed emit whatever
+// TCGCSV prices.
+const CHALLENGE_PRINTING_BY_NUMBER = {
+  "Lorcana Challenge Promo (C2)": YEAR3_PRINTING_BY_NUMBER,
+  "Lorcana Challenge Promo (C3)": { 1:"normal", 13:"foil" },
 };
 // ⚠ QUEUED, not yet in Lorcast — cn 20, "Minnie Mouse - Amethyst Champion"
 // (Dreamborn Hero, cost 4, 2{S}/3{W}, artist Max Ulichney), announced
@@ -2489,6 +2504,13 @@ const TCG_PID_OVERRIDES = {
   "Simba - Pride Protector|4": 695330,                // Lorcana Challenge Y3 (C2) — Holofoil promo, Lorcast left pid null
   "Dragon Fire|9": 693401,                            // Lorcana Challenge Y3 (C2) — Lorcast left pid null
   "Stitch - Carefree Snowboarder|207": 675380,        // Winterspell Epic — Lorcast left pid null
+  "Héctor Rivera - Gone to Pieces|13": 711361,              // D23 Collection (2026 drop); Lorcast left pid null. TCGplayer spells it "Hector", so the name link never matched
+  // Lorcana Challenge Year 3 (C2) #15-#18: Lorcast indexes them with a null pid.
+  // TCGplayer listed all four on 2026-09-01; the numbers were read off the cards.
+  "Stand Out|15": 712024,
+  "Down In New Orleans|16": 712025,
+  "The Headless Horseman - Cursed Rider|17": 712026,
+  "Tinker Bell - Insistent Fairy|18": 712027,
 };
 
 // Cards whose Normal (non-foil) TCGPlayer listings are foreign-language only —
@@ -2755,6 +2777,7 @@ const PROMO_STAMPS = {
   "Promo Set 3":                  LORCANA_ART + "promo/promo-set-3.svg",
   "Lorcana Challenge Promo (C1)": LORCANA_ART + "promo/challenge.svg",
   "Lorcana Challenge Promo (C2)": LORCANA_ART + "promo/challenge.svg",
+  "Lorcana Challenge Promo (C3)": LORCANA_ART + "promo/challenge.svg",
   "D23 Collection":               LORCANA_ART + "promo/d23.svg",
   "Magical Places Promos":        LORCANA_ART + "promo/magical-places.svg",
 };
@@ -4424,10 +4447,11 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
         || SUPPRESS_NONFOIL_NAMES.has(name + "|" + (c.collector_number||""));
       // Year 3 ghost-row suppression: each card has exactly one real printing
       // per collector number; TCGCSV publishes both. Drop the bogus one.
-      const y3Num = setName === "Lorcana Challenge Promo (C2)"
+      const y3Map = CHALLENGE_PRINTING_BY_NUMBER[setName];
+      const y3Num = y3Map
         ? parseInt(String(c.collector_number||"").split("/")[0], 10)
         : null;
-      const y3Canonical = (y3Num != null) ? YEAR3_PRINTING_BY_NUMBER[y3Num] : null;
+      const y3Canonical = (y3Num != null) ? y3Map[y3Num] : null;
       for(const p of prices){
         if(suppressNonFoil && p.printing === "Normal") continue;
         if(y3Canonical){
@@ -4538,10 +4562,11 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
                      : REGIONAL_EXCLUSIVE_LABEL[locKey] || null;
       // Same Year 3 canonical-printing rule as the priced branch — pick
       // only the one synthetic row that actually exists in the print run.
-      const y3NumNoPx = setName === "Lorcana Challenge Promo (C2)"
+      const y3MapNoPx = CHALLENGE_PRINTING_BY_NUMBER[setName];
+      const y3NumNoPx = y3MapNoPx
         ? parseInt(String(c.collector_number||"").split("/")[0], 10)
         : null;
-      const y3CanonicalNoPx = (y3NumNoPx != null) ? YEAR3_PRINTING_BY_NUMBER[y3NumNoPx] : null;
+      const y3CanonicalNoPx = (y3NumNoPx != null) ? y3MapNoPx[y3NumNoPx] : null;
       if(locLabel){
         // Localized-exclusive printings are Normal-only; the label decorates
         // the tile. When we have a locally-hosted image (Lorcast lacks art)
@@ -6995,6 +7020,7 @@ const SET_NICKNAMES = {
   "epcot":"Magical Places Promos", "epcot festival":"Magical Places Promos", "festival of the arts":"Magical Places Promos",
   "challenge promo":"Lorcana Challenge Promo (C1)", "c1":"Lorcana Challenge Promo (C1)", "lcp1":"Lorcana Challenge Promo (C1)",
   "c2":"Lorcana Challenge Promo (C2)", "lcp2":"Lorcana Challenge Promo (C2)",
+  "c3":"Lorcana Challenge Promo (C3)", "lcp3":"Lorcana Challenge Promo (C3)",
   "extras":"Extras & Oddities", "oddities":"Extras & Oddities", "extras and oddities":"Extras & Oddities",
 };
 const CARD_TYPE_ALIASES = {
@@ -25727,7 +25753,7 @@ function buildImportNameIndex(raw){
 // through to name matching.
 const DREAMBORN_CN_SUFFIX_SETS = {
   p1: "Promo Set 1", p2: "Promo Set 2", p3: "Promo Set 3", p4: "Promo Set 4",
-  c1: "Lorcana Challenge Promo (C1)", c2: "Lorcana Challenge Promo (C2)",
+  c1: "Lorcana Challenge Promo (C1)", c2: "Lorcana Challenge Promo (C2)", c3: "Lorcana Challenge Promo (C3)",
   pd1: "PD1", d23: "D23 Collection", rph: "Ravensburger Play Hub Promos",
 };
 
