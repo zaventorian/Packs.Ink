@@ -208,6 +208,37 @@ console.log(`  plays: ${deckCards.length} deck rows across ${deckWeight.size} de
 const decksWithCards = new Set(deckCards.map((d) => d.deck_id));
 const playDecks = Math.round([...decksWithCards].reduce((s, id) => s + (deckWeight.get(id) || 0), 0) * 1000) / 1000;
 
+// The play line on a card counts the CURRENT set only (Zaven, 2026-10-04):
+// Core top-cut decks from events on or after the newest booster set's release,
+// unweighted, so "in 14% of decks" is a statement about this set's meta and
+// says which set it means. `pl` (recency-weighted, every format) stays the
+// resolver's popularity prior — it must not go empty the week a set releases.
+const todayYmd = new Date(now).toISOString().slice(0, 10);
+const playSetOut = setsOut.filter((s) => s.main && s.date && s.date <= todayYmd)
+  .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))[0] || null;
+const setDecks = new Set();
+if (playSetOut) {
+  for (const td of tdecks) {
+    const t = tById.get(td.tournament_id);
+    if (!t || !td.deck_id || t.format !== "core") continue;
+    if (String(t.event_date || "").slice(0, 10) >= playSetOut.date && decksWithCards.has(td.deck_id)) setDecks.add(td.deck_id);
+  }
+}
+const setPlays = new Map();    // family key -> decks this set
+const seenSetDeck = new Set();
+for (const dc of deckCards) {
+  if (!setDecks.has(dc.deck_id)) continue;
+  const name = nameByCardId.get(dc.card_id);
+  if (!name) continue;
+  const fam = famOf(name);
+  const key = dc.deck_id + "|" + fam;
+  if (seenSetDeck.has(key)) continue;
+  seenSetDeck.add(key);
+  setPlays.set(fam, (setPlays.get(fam) || 0) + 1);
+}
+const playSet = playSetOut ? { n: playSetOut.n, since: playSetOut.date, decks: setDecks.size } : null;
+console.log(`  play (current set): ${playSet ? `${playSet.n} since ${playSet.since}, ${playSet.decks} Core top-cut decks, ${setPlays.size} cards` : "no released set"}`);
+
 const gradedCount = new Map();
 for (const g of gradedRoll) gradedCount.set(g.card_id, (gradedCount.get(g.card_id) || 0) + (g.sale_count || 0));
 const rawSales = new Set(rawRoll.map((r) => r.card_id));
@@ -318,7 +349,8 @@ const identities = [...byName.values()].map((ident) => {
   }
   printings.sort((a, b) => (a.s - b.s) || ((RARITY_RANK[a.r] ?? 9) - (RARITY_RANK[b.r] ?? 9)) || String(a.no).localeCompare(String(b.no)));
   const { spellMain, xs, ...rest } = ident;
-  return { ...rest, pl: Math.round((plays.get(famOf(ident.n)) || 0) * 1000) / 1000, p: printings };
+  const ps = setPlays.get(famOf(ident.n)) || 0;
+  return { ...rest, pl: Math.round((plays.get(famOf(ident.n)) || 0) * 1000) / 1000, ...(ps ? { ps } : {}), p: printings };
 });
 identities.sort((a, b) => a.n.localeCompare(b.n));
 
@@ -460,6 +492,7 @@ const out = {
   catalogAt,
   priceDate,
   playDecks,
+  playSet,
   // The reel's inputs (see above), newest first.
   reveals,
   newestMain: site.MAINLINE_SETS[site.MAINLINE_SETS.length - 1],
