@@ -1001,6 +1001,8 @@ const D = await mod("discord/src/data.js");
     const ids = m.components.flatMap((r) => r.components).filter((c) => c.type === 2 && c.custom_id).map((c) => c.custom_id);
     if (ids.some((id) => id !== K.KAYLEE_ID)) bad++;
   }
+  const named = K.kayleePack(R, index, "https://example.test", "Zaven *x*");
+  ok(named.content === "Zaven \\*x\\* opened Kaylee's pack:", "kaylee pack names (and escapes) whoever pressed the button");
   ok(empty === 0 && bad === 0, `200 kaylee packs: all Enchanted, all hers (${empty} empty, ${bad} bad)`);
 }
 

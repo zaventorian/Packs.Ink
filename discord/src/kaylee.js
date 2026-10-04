@@ -23,7 +23,7 @@ export function kayleeStats() {
 
 // A normal pack from the set, with its foil slot swapped for an Enchanted when
 // the roll didn't already hold one.
-export function kayleePack(R, index, origin) {
+export function kayleePack(R, index, origin, opener) {
   const si = R.resolveSet(SET_QUERY);
   if (si < 0) return { content: "Kaylee's pack isn't available right now.", embeds: [], components: [] };
   const result = openPacks(R, si, 1);
@@ -42,5 +42,7 @@ export function kayleePack(R, index, origin) {
   // The buttons that came with it open ordinary packs; this one only opens hers.
   const rows = m.components.slice(0, 1);
   rows.push({ type: 1, components: [{ type: 2, style: 1, label: "Open another Kaylee pack", custom_id: KAYLEE_ID }] });
-  return { ...m, components: rows };
+  // Discord labels a button reply with the app, not the person, so say who pressed it.
+  const who = String(opener || "").slice(0, 32).replace(/[*_~`|>\\]/g, "\\$&");
+  return { ...m, ...(who ? { content: `${who} opened Kaylee's pack:` } : {}), components: rows };
 }
