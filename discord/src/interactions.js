@@ -331,7 +331,7 @@ function component(it, deps) {
   if (tryWhat) return helpTry(tryWhat, it, deps);
   // "Open another pack" / "Open a box": a NEW message each time, so every
   // opening stands — private when the one it came from was.
-  if (isKayleeId(id)) return instant(kayleePack(deps.R, deps.index, deps.origin), it.message && (Number(it.message.flags) & EPHEMERAL));
+  if (isKayleeId(id)) return instant(kayleePack(deps.R, deps.index, deps.origin, ((it.member && it.member.user) || it.user || {}).global_name || ((it.member && it.member.user) || it.user || {}).username), it.message && (Number(it.message.flags) & EPHEMERAL));
   const pk2 = parsePackId(id);
   if (pk2) {
     const eph = it.message && (Number(it.message.flags) & EPHEMERAL);
