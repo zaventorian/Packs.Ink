@@ -986,6 +986,24 @@ const D = await mod("discord/src/data.js");
   }
 }
 
+// ── Kaylee (joke command): every pack she opens holds an Enchanted ───────
+{
+  const K = await mod("discord/src/kaylee.js");
+  const st = K.kayleeStats();
+  ok(/100\*\* packs opened/.test(st.embeds[0].description) && /12\*\* Enchanteds/.test(st.embeds[0].description), "kaylee stats: 100 packs, 12 enchanteds");
+  ok(st.components[0].components[0].custom_id === K.KAYLEE_ID && K.isKayleeId(K.KAYLEE_ID), "kaylee button id round-trips");
+  let bad = 0, empty = 0;
+  for (let i = 0; i < 200; i++) {
+    const m = K.kayleePack(R, index, "https://example.test");
+    if (!m.embeds || !m.embeds.length) { empty++; continue; }
+    if (!/Enchanted!/.test(m.embeds[0].description)) bad++;
+    if (!/Kaylee opened/.test(m.embeds[0].title)) bad++;
+    const ids = m.components.flatMap((r) => r.components).filter((c) => c.type === 2 && c.custom_id).map((c) => c.custom_id);
+    if (ids.some((id) => id !== K.KAYLEE_ID)) bad++;
+  }
+  ok(empty === 0 && bad === 0, `200 kaylee packs: all Enchanted, all hers (${empty} empty, ${bad} bad)`);
+}
+
 // ── 6. signatures ────────────────────────────────────────────────────────
 {
   const { verifyDiscordRequest } = await mod("discord/src/verify.js");
