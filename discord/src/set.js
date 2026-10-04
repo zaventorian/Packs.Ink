@@ -28,7 +28,7 @@ function priced(R, p) {
   let best = null;
   p.f.forEach((f, fi) => {
     if (f[6]) return;
-    const v = f[5] ?? f[4];
+    const v = f[4] ?? f[5];
     if (v != null && (!best || v > best.v)) best = { f, fi, v };
   });
   return best;
@@ -49,7 +49,7 @@ export function setOverview(R, index, si, { now = Date.now() } = {}) {
   chase.sort((a, b) => b.v - a.v);
   const sealed = (index.sealed || []).filter((s) => s.s === si && (s.mkt != null || s.low != null));
   const cheapest = (ty, k) => sealed.filter((s) => s.ty === ty && s[k] != null).sort((a, b) => a[k] - b[k])[0] || null;
-  const box = cheapest("Booster Boxes", "mkt") || cheapest("Booster Boxes", "low");
+  const box = cheapest("Booster Boxes", "low") || cheapest("Booster Boxes", "mkt");
   const rel = set.rel || {};
   const out = rel.lgs && rel.lgs > todayYmd(now);
   return { R, priceDate: index.priceDate, set, si, count: printings.length, added, chase: chase.slice(0, 8), sealed, box, rel,
@@ -100,18 +100,21 @@ export function setMessage(o, { origin } = {}) {
   const fields = [];
   const ev = set.ev;
   if (box) {
+    // Low leads, as it does on the site.
     fields.push({ name: "Booster box", inline: true, value: [
-      box.mkt != null ? `**${money(box.mkt)}** Market` : null,
-      o.boxLow != null && o.boxLow !== box.mkt ? `${money(o.boxLow)} Low` : null,
+      box.low != null ? `**${money(box.low)}** Low` : null,
+      box.mkt != null ? (box.low != null ? `${money(box.mkt)} Market` : `**${money(box.mkt)}** Market`) : null,
     ].filter(Boolean).join("\n") || "no price" });
   }
   if (ev && !o.upcoming) {
     fields.push({ name: "Box EV", inline: true, value: [
-      ev.mkt != null ? `**${money(ev.mkt)}** at NM Market` : null,
-      ev.low != null ? `${money(ev.low)} at Low` : null,
+      ev.low != null ? `**${money(ev.low)}** at Low` : null,
+      ev.mkt != null ? (ev.low != null ? `${money(ev.mkt)} at NM Market` : `**${money(ev.mkt)}** at NM Market`) : null,
     ].filter(Boolean).join("\n") });
-    if (box && box.mkt && ev.mkt) {
-      const ratio = ev.mkt / box.mkt;
+    const evLead = ev.low ?? ev.mkt;
+    const boxLead = box ? (ev.low != null ? (box.low ?? box.mkt) : (box.mkt ?? box.low)) : null;
+    if (box && boxLead && evLead) {
+      const ratio = evLead / boxLead;
       fields.push({ name: "Open or hold?", inline: true, value:
         `The cards in a box are worth about **${Math.round(ratio * 100)}%** of its price` +
         (ratio >= 1 ? " — more than the box." : ".") });
@@ -119,8 +122,8 @@ export function setMessage(o, { origin } = {}) {
   }
   const sealedLines = [];
   for (const ty of TYPE_ORDER) {
-    const s = o.sealed.filter((x) => x.ty === ty).sort((a, b) => (a.mkt ?? a.low) - (b.mkt ?? b.low))[0];
-    if (s) sealedLines.push(`[${TYPE_ONE[ty] || ty}](${tcgUrl(s.pid, "Normal")}) ${money(s.mkt ?? s.low)}`);
+    const s = o.sealed.filter((x) => x.ty === ty).sort((a, b) => (a.low ?? a.mkt) - (b.low ?? b.mkt))[0];
+    if (s) sealedLines.push(`[${TYPE_ONE[ty] || ty}](${tcgUrl(s.pid, "Normal")}) ${money(s.low ?? s.mkt)}`);
   }
   if (sealedLines.length) fields.push({ name: "Sealed", value: linkLines(sealedLines, 1000).join(" · ") });
 
@@ -433,7 +436,7 @@ export function packPools(R, si) {
     for (const pr of c.p) {
       if (pr.s !== si || pr.var) continue;   // a named variant is not a pack slot
       pr.f.forEach((f, fi) => {
-        const e = { i, p: pr, fi, price: f[6] ? null : (f[5] ?? f[4] ?? null) };
+        const e = { i, p: pr, fi, price: f[6] ? null : (f[4] ?? f[5] ?? null) };
         if (CH[pr.r]) { if (fi === 0) p[CH[pr.r]].push(e); return; }
         if (f[0] === "N") {
           if (pr.r === "Common") { const ink = (c.i || [])[0]; if (p.byInk[ink]) p.byInk[ink].push(e); }
@@ -477,14 +480,15 @@ function pullLabel(R, e) {
 export function packMessage(R, index, si, result, { origin, who } = {}) {
   const set = R.sets[si];
   const { pulls, total, n } = result;
-  const packPrice = (index.sealed || []).filter((s) => s.s === si && s.ty === "Booster Packs" && s.mkt != null).sort((a, b) => a.mkt - b.mkt)[0];
-  const boxPrice = (index.sealed || []).filter((s) => s.s === si && s.ty === "Booster Boxes" && s.mkt != null).sort((a, b) => a.mkt - b.mkt)[0];
-  const cost = n === 1 ? packPrice && packPrice.mkt : boxPrice && boxPrice.mkt;
+  const px = (s) => s.low ?? s.mkt;
+  const packPrice = (index.sealed || []).filter((s) => s.s === si && s.ty === "Booster Packs" && px(s) != null).sort((a, b) => px(a) - px(b))[0];
+  const boxPrice = (index.sealed || []).filter((s) => s.s === si && s.ty === "Booster Boxes" && px(s) != null).sort((a, b) => px(a) - px(b))[0];
+  const cost = n === 1 ? packPrice && px(packPrice) : boxPrice && px(boxPrice);
   const byValue = pulls.slice().sort((a, b) => (b.price || 0) - (a.price || 0) || (RANK[b.p.r] || 0) - (RANK[a.p.r] || 0));
   const hits = pulls.filter(isHit);
   const lines = [];
   const pct = cost ? Math.round((total / cost) * 100) : null;
-  lines.push(`**${money(total) || "$0.00"}** in cards at NM Market` +
+  lines.push(`**${money(total) || "$0.00"}** in cards at Low` +
     (cost ? ` — ${pct}% of the ${n === 1 ? "pack" : "box"}'s ${money(cost)}` : ""));
   if (hits.length) {
     lines.push(hits.map((e) => `✨ **${e.p.r}!** ${R.cards[e.i].n}${e.price != null ? ` — ${money(e.price)}` : ""}`).join("\n"));
@@ -515,7 +519,7 @@ export function packMessage(R, index, si, result, { origin, who } = {}) {
   const main = {
     title: clip(title, 256), url, color: hits.length ? 0xc77dff : BRAND_COLOR,
     description: clip(lines.join("\n"), 4000),
-    footer: { text: `Simulated with the site's pull rates · TCGplayer NM Market as of ${shortDate(index.priceDate)}` + (boxPrice ? ` · ${AFFILIATE_NOTE}` : "") },
+    footer: { text: `Simulated with the site's pull rates · TCGplayer Low as of ${shortDate(index.priceDate)}` + (boxPrice ? ` · ${AFFILIATE_NOTE}` : "") },
   };
   // Up to four pictures as one gallery: embeds that share a url are drawn by
   // Discord as a single embed with an image grid.

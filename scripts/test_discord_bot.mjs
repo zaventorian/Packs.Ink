@@ -54,6 +54,12 @@ const eq = (a, b, msg) => ok(a === b, `${msg} — expected ${JSON.stringify(b)},
 
 const { createResolver } = await mod("discord/src/resolver.js");
 const index = JSON.parse(readFileSync(new URL("discord/test/fixture-index.json", ROOT), "utf8"));
+// A fixture built before the play line went per-set (2026-10-04) carries no
+// current-set counts: give it some, from its own recency-weighted ones.
+if (!index.playSet) {
+  index.playSet = { n: "Attack of the Vine!", since: "2026-07-17", decks: 200 };
+  for (const c of index.cards) if (c.pl > 0) c.ps = Math.max(1, Math.round(c.pl * 4));
+}
 const R = createResolver(index);
 
 // ── 2. the resolver ──────────────────────────────────────────────────────
@@ -746,7 +752,7 @@ const D = await mod("discord/src/data.js");
   ok(/21 top-8 decks from 4 Core events since Newest Out/.test(d0), `meta: the breakdown says what it counted (${d0.split("\n")[0]})`);
   ok(/🟨🟩 `█{10} 43%` \*\*Amber\/Emerald\*\* · 9 decks/.test(d0), `meta: a pair's line carries its marks, a bar and its share (${d0.split("\n")[2]})`);
   ok(/🟨🟪 `█{7}░{3} 29%` \*\*Amber\/Amethyst\*\*/.test(d0), `meta: bars are scaled to the leading pair (${d0.split("\n")[3]})`);
-  eq(mm.embeds.map((e) => e.title).join(" | "), "What's winning: ink pairs in top 8s | Most played cards | Latest big events", "meta: breakdown first, then the cards, then the events");
+  eq(mm.embeds.map((e) => e.title).join(" | "), "What's winning: ink pairs in top 8s | Most played in Attack of the Vine! | Latest big events", "meta: breakdown first, then the cards, then the events");
   const withNames = { ...m, recent: [{ id: "t1", name: "Big Event", date: "2026-09-12", players: 200, format: "infinity", top: [
     { place: "1st", place_rank: 1, player_name: "[OSA] Moluk_x", deck_id: "d1", deck_name: null, deck_inks: ["Amber", "Emerald"], deck_visibility: "public", deck_share_token: "tok" },
     { place: "Top 4", place_rank: 4, player_name: "Some*one", deck_id: "d2", deck_name: "Rush", deck_inks: ["Ruby"], deck_visibility: "unlisted", deck_share_token: "abc" }] }] };
@@ -756,13 +762,19 @@ const D = await mod("discord/src/data.js");
   ok(mt.includes("200 players · Infinity"), "meta: an Infinity event says so");
   checkMessage(E.metaMessage({ R, index, meta: D.buildMeta([], { sets, today }) }), "meta, nothing on record");
   checkMessage(E.metaMessage({ R, index, meta: null }), "meta, read failed");
-  const played = index.cards.map((c, i) => ({ c, i })).filter((x) => x.c.pl > 0).sort((a, b) => b.c.pl - a.c.pl)[0];
+  const played = index.cards.map((c, i) => ({ c, i })).filter((x) => x.c.ps > 0).sort((a, b) => b.c.ps - a.c.ps || a.i - b.i)[0];
   if (played) {
     eq(E.playRankOf(R, played.i), 1, "the most-played card ranks #1");
-    ok(/#1 most played/.test(E.playLine(R, played.i, index.playDecks || 0) || ""), "its play line says so");
+    const pline = E.playLine(R, played.i, index.playSet) || "";
+    ok(/#1 most played/.test(pline), "its play line says so");
+    ok(pline.includes(`of ${index.playSet.n} top-cut decks`), `the play line names the current set (${pline})`);
+    eq(E.playLine(R, played.i, { ...index.playSet, decks: E.PLAY_SET_MIN_DECKS - 1 }), null, "too few decks in the current set: no play line");
+    eq(E.playLine(R, played.i, null), null, "no current set on record: no play line");
   }
-  const cold = index.cards.findIndex((c) => !c.pl);
-  if (cold >= 0) eq(E.playLine(R, cold, index.playDecks || 0), null, "a card with no recent top-cut play gets no play line");
+  const cold = index.cards.findIndex((c) => !c.ps);
+  if (cold >= 0) eq(E.playLine(R, cold, index.playSet), null, "a card not played in the current set gets no play line");
+  const mmPlay = JSON.stringify(E.metaMessage({ R, index, meta: null }));
+  ok(mmPlay.includes(`Most played in ${index.playSet.n}`), "/meta's card list is the current set's");
   const g = E.gameplayLine({ i: ["Amber", "Steel"], cost: 3, t: "Character", k: ["Storyborn", "Hero"] });
   ok(g.includes("🟨⬜ Amber/Steel") && g.includes("3 cost") && g.includes("Character — Storyborn, Hero"), `gameplay line (${g})`);
 
@@ -899,18 +911,26 @@ const D = await mod("discord/src/data.js");
 {
   const price = D.priceSummary(Array.from({ length: 60 }, (_, i) => ({ date: new Date(Date.UTC(2026, 6, 1) + i * 86400000).toISOString().slice(0, 10), low_price: 2, market_price: 3 })), "2026-08-29");
   const res = R.resolve("mowgli");
-  const base = { R, res, price, graded: [], raw: null, range: "3m", origin: "https://bot.example", inkColors: index.inkColors, playDecks: index.playDecks, gradedTarget: { cardId: res.printing.id, bucket: "" } };
+  const base = { R, res, price, graded: [], raw: null, range: "3m", origin: "https://bot.example", inkColors: index.inkColors, playSet: index.playSet, gradedTarget: { cardId: res.printing.id, bucket: "" } };
   const chart = E.cardMessage({ ...base, view: "chart" }).embeds[0].description;
   const card = E.cardMessage({ ...base, view: "card" }).embeds[0].description;
   ok(/^> /m.test(card) && /strength/.test(card), "/card carries the rules text and stats");
   ok(!/^> /m.test(chart) && !/strength/.test(chart), "/price leaves the rules text and stats to /card");
-  ok(/Amber/.test(chart) && /NM Market/.test(chart), "/price keeps the card's ink line and its price");
-  // Mowgli's fixture printing has two priced finishes.
-  ok(/\bFoil \*\*\$7\.93\*\*/.test(chart), `the other finish's price is on the reply (${chart.split("\n").pop()})`);
+  ok(/Amber/.test(chart) && /\*\*\$2\.00\*\* Low · \$3\.00 NM Market/.test(chart), "/price keeps the card's ink line and its price, Low first");
+  // Mowgli's fixture printing has two priced finishes; the other one is quoted at its Low.
+  const mf = res.printing.f.find((f, i) => i !== res.fi);
+  ok(new RegExp(`\\bFoil \\*\\*\\$${(mf[4] ?? mf[5]).toFixed(2).replace(".", "\\.")}\\*\\*`).test(chart), `the other finish's Low is on the reply (${chart.split("\n").pop()})`);
+  // /card shows the site's tile, which carries the prices: they are not repeated in text.
+  const withTile = E.cardMessage({ ...base, view: "card", priceDate: "2026-08-29" });
+  if (withTile.embeds[0].image && /\/tile\//.test(withTile.embeds[0].image.url)) {
+    const td = withTile.embeds[0].description;
+    ok(!/NM Market|\bLow\b|1D |playset|Foil \*\*/.test(td), `/card with a tile leaves the prices to the tile (${td.split("\n").slice(-2).join(" | ")})`);
+  } else ok(false, "the fixture's Mowgli has a drawn tile");
   const foilRes = { ...res, fi: res.printing.f.findIndex((f) => f[0] !== "N") };
   const foil = E.cardMessage({ ...base, res: foilRes, view: "chart" }).embeds[0].description;
-  ok(/Non-foil \*\*\$2\.25\*\*/.test(foil), "…and the non-foil's on the foil's reply");
-  ok(/playset \$12\.00/.test(chart), `a played base-rarity card prices its playset (${chart.split("\n").find((l) => /NM Market/.test(l))})`);
+  const nfFin = res.printing.f[res.fi];
+  ok(new RegExp(`Non-foil \\*\\*\\$${(nfFin[4] ?? nfFin[5]).toFixed(2).replace(".", "\\.")}\\*\\*`).test(foil), "…and the non-foil's on the foil's reply");
+  ok(/playset \$8\.00/.test(chart), `a played base-rarity card prices its playset at Low (${chart.split("\n").find((l) => /NM Market/.test(l))})`);
   const chase = R.resolve("enchanted elsa");
   const chaseTxt = E.cardMessage({ ...base, res: chase, view: "chart", gradedTarget: { cardId: chase.printing.id, bucket: "" } }).embeds[0].description;
   ok(!/playset/.test(chaseTxt), "a chase card gets no playset price");
@@ -924,21 +944,21 @@ const D = await mod("discord/src/data.js");
   const g = E.cardMessage({ ...base, res: chase, view: "graded", grade: { grader: "PSA", grade: "10" }, graded: tiers, gradedTarget: { cardId: chase.printing.id, bucket: "" } });
   const gd = g.embeds[0].description;
   ok(/\*\*\$3,000\*\* last PSA 10 sale \(Sep 12\) · avg of last 5 \$3,095/.test(gd), `a graded ask leads with that grade's last sale (${gd.split("\n").find((l) => /last PSA/.test(l))})`);
-  ok(gd.indexOf("last PSA 10 sale") < gd.indexOf("NM Market") && /^Raw: \$3\.00 NM Market/m.test(gd), "the raw price follows, plain");
+  ok(gd.indexOf("last PSA 10 sale") < gd.indexOf("NM Market") && /^Raw: \$2\.00 Low · \$3\.00 NM Market/m.test(gd), "the raw price follows, plain");
   ok(/1,056 PSA 10 sales on record/.test(gd), "sale counts carry a thousands separator");
   ok(!/1D /.test(gd), "no raw change line under a graded headline");
   ok(g.embeds[0].fields.length === 1 && g.embeds[0].fields[0].name === "PSA 9", "the headline tier is not repeated as a field");
   ok(/Sep 1$/m.test(g.embeds[0].fields[0].value.split("\n")[0]), `a graded tier says when it last sold (${g.embeds[0].fields[0].value.split("\n")[0]})`);
   // The same tiers with no grade asked: all fields, raw leads as before.
   const plain = E.cardMessage({ ...base, res: chase, view: "chart", graded: tiers, gradedTarget: { cardId: chase.printing.id, bucket: "" } });
-  ok(plain.embeds[0].fields.length === 2 && /^\*\*\$3\.00\*\* NM Market/m.test(plain.embeds[0].description), "with no grade asked, the raw price leads and every tier is a field");
+  ok(plain.embeds[0].fields.length === 2 && /^\*\*\$2\.00\*\* Low/m.test(plain.embeds[0].description), "with no grade asked, the raw price leads and every tier is a field");
   checkMessage(g, "graded-led card");
 
   // A booster box: box EV, and the way to open one or see its set.
   const box = R.resolve("azurite sea box");
   const sm = E.sealedMessage({ R, res: box, price, view: "chart", range: "3m", origin: "https://bot.example", today: "2026-09-30" });
   const sd = sm.embeds[0].description;
-  ok(/Box EV \*\*\$58\.91\*\* at NM Market — the cards inside are worth about \*\*\d+%\*\* of the box/.test(sd), `a box reply carries the set's box EV (${sd.split("\n").pop()})`);
+  ok(/Box EV \*\*\$[\d,.]+\*\* at Low — the cards inside are worth about \*\*\d+%\*\* of the box/.test(sd), `a box reply carries the set's box EV (${sd.split("\n").pop()})`);
   const labels = sm.components.flatMap((r) => r.components).map((c) => c.label);
   ok(labels.includes("Open a box") && labels.includes("Set at a glance"), `a box reply offers Open a box + Set at a glance (${labels.join(", ")})`);
   const stBtn = sm.components.flatMap((r) => r.components).find((c) => c.label === "Set at a glance");
@@ -1064,7 +1084,7 @@ const D = await mod("discord/src/data.js");
   await Promise.all(pending.splice(0));
   ok(patches.length === 1 && /\/webhooks\/123\/tok\/messages\/@original$/.test(patches[0].url), "/price edits the deferred reply");
   const body = patches[0] && patches[0].body;
-  ok(body && body.embeds && body.embeds[0] && /\*\*\$3\.59\*\* NM Market/.test(body.embeds[0].description), `/price shows the live price (${body && body.embeds[0] && body.embeds[0].description.split("\n").join(" | ")})`);
+  ok(body && body.embeds && body.embeds[0] && /\*\*\$2\.00\*\* Low · \$3\.59 NM Market/.test(body.embeds[0].description), `/price shows the live price (${body && body.embeds[0] && body.embeds[0].description.split("\n").join(" | ")})`);
   ok(body && body.allowed_mentions && Array.isArray(body.allowed_mentions.parse) && !body.allowed_mentions.parse.length, "replies never ping anyone");
   checkMessage(body, "live /price");
 

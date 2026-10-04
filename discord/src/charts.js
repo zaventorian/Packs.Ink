@@ -37,13 +37,17 @@ export function priceChartSpec(rows, rangeKey, { sealed = false, rawDots = null 
   const showLow = lo.length > 0 && !hasDots;
   const legend = [];
   if (hasDots) legend.push({ label: "eBay sales", color: THEME.teal, value: String(rawDots.length) });
+  // Low is the headline line, as on the site (Zaven, 2026-10-04); Market is
+  // the second. Where Low is left off (eBay dots), Market takes the lead.
   // Sealed product has no condition, so its market price is just "Market".
-  if (mk.length) legend.push({ label: sealed ? "Market" : "NM Market", color: THEME.gold, value: money(mk[mk.length - 1][1]) });
-  if (showLow) legend.push({ label: "Low", color: THEME.lilac, value: money(lo[lo.length - 1][1]) });
+  const mkLabel = sealed ? "Market" : "NM Market";
+  const primary = showLow ? lo : mk, secondary = showLow ? mk : [];
+  if (showLow) legend.push({ label: "Low", color: THEME.gold, value: money(lo[lo.length - 1][1]) });
+  if (mk.length) legend.push({ label: mkLabel, color: showLow ? THEME.lilac : THEME.gold, value: money(mk[mk.length - 1][1]) });
   return {
     lines: [
-      ...(mk.length ? [{ pts: mk, color: THEME.gold, width: 2.6, fill: true, endDot: true }] : []),
-      ...(showLow ? [{ pts: lo, color: THEME.lilac, width: 1.7 }] : []),
+      ...(primary.length ? [{ pts: primary, color: THEME.gold, width: 2.6, fill: true, endDot: true }] : []),
+      ...(secondary.length ? [{ pts: secondary, color: THEME.lilac, width: 1.7 }] : []),
     ],
     dots: hasDots ? [{ pts: rawDots, color: THEME.teal, r: 4.6, alpha: 0.9 }] : [],
     legend, corner: (RANGES[rangeKey] || {}).label,

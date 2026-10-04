@@ -36,7 +36,7 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
   catalog rule (Holofoil mislabel, connecting foils, C2 ghosts, regional
   exclusives, variant clones, `printingBadge`) applies with no copy of it.
   `card-index.json` is NOT committed; `check_index.mjs` refuses a build that
-  came out small. Popularity is recency-weighted tournament top-cut appearances
+  came out small. Popularity (the resolver's prior) is recency-weighted tournament top-cut appearances
   (half-life 120 days) grouped by `cardFamilyKey`; collector words (a chase
   rarity, a grade) switch the tiebreak to graded sale volume.
 - **⚠ `discord/src/site.generated.js` is Index.html code copied VERBATIM**
@@ -356,6 +356,34 @@ first. Guarded by section 13 of `test_discord_bot.mjs`.
 - A no-match with nothing to suggest points at `/help`; help and the command
   descriptions now tell `/card` and `/price` apart.
 - `simulate.mjs` no longer tries to fetch an `attachment://` chart at the end of a run.
+
+### 2026-10-04: Low leads, /card trusts its tile, play share is per set
+
+Zaven: *"lets use low, like we do on the site"*, and on /card: the price lines are
+*"in the photo already"*. Guarded in `test_discord_bot.mjs`.
+
+- **Low is the headline price everywhere in the bot**: `/price` (`**$1.49** Low · $2.29
+  NM Market`), the change line (Low's deltas, Market's only when there is no Low), the
+  other finish, the playset (4 × Low), the versions menu, `/meta`'s card list, `/set`
+  (chase list, box, box EV, sealed lines), `/open` (pull values and the pack/box cost)
+  and sealed replies. The chart draws Low as the gold line and Market as the second;
+  on an eBay-led promo Low is still left off and Market takes the gold.
+  - **The standing chip still judges `market_price`** — that is the site's own
+    `priceStanding` rule, and a phantom Low must never read "Cheapest in 12 months".
+  - **The channel reports are NOT switched**: `discord_reports.py` ranks movers off
+    `discord_digest.py`, which reads Market on purpose (a sticky or phantom Low makes a
+    1D mover list noise). Changing that is a separate decision.
+- **`/card` with a drawn tile prints no prices** — no Low/Market line, no 1D/1W/1M, no
+  other finish. The tile carries them. Without a tile (no TCGplayer listing, a graded
+  ask, an eBay-led promo) the text lines are still there.
+- **The 🏆 play line counts the CURRENT set only**: "In 14% of Attack of the Vine!
+  top-cut decks · #39 most played". The index build stores `ps` per card (Core top-cut
+  decks from events on or after the newest released booster set's LGS date, unweighted)
+  and `index.playSet {n, since, decks}`. Under `PLAY_SET_MIN_DECKS` (8) decks there is
+  no line at all, so the first week of a set says nothing rather than quoting the old
+  meta. `/meta`'s card list ("Most played in <set>") reads the same counts.
+  - **`pl` (recency-weighted, every format) stays the resolver's popularity prior** —
+    it decides which Mowgli "mowgli" means, and it must not go empty on release day.
 
 ### The channel report's layout (2026-09-28)
 

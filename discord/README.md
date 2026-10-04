@@ -9,7 +9,7 @@ on workers.dev), so deploying it can never touch packs.ink.
 
 | | |
 |---|---|
-| `/card mowgli` | The site's card tile (the art, NM Market / Low and the 1D / 1W / 1M changes, drawn by the site's own code), with the card's rules text and stats as printed, graded sales, its ink / cost / type, how much it's played in recent tournament top cuts, and the price of its other finish. |
+| `/card mowgli` | The site's card tile (the art, Low / Market and the 1D / 1W / 1M changes, drawn by the site's own code — the reply doesn't repeat those prices in text), with the card's rules text and stats as printed, graded sales, its ink / cost / type, and how much it's played in the current set's tournament top cuts. |
 | `/price mowgli` | The number: price, changes, the other finish, a playset's cost on a played card, and a price chart (1M / 3M / 1Y / All buttons) — the rules text stays on `/card`. |
 | `/price elsa psa 10` | Graded: that grade's last sale (with its date) and average of the last 5 lead, the raw price follows, every other grade is a field, and the chart is the PSA 10 sales. |
 | `/price azurite sea box` | Sealed product: price, changes, chart, TCGplayer + Amazon links. A booster box adds the set's box EV ("worth about 50% of the box"), an **Open a box** button and **Set at a glance**. |

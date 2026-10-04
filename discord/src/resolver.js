@@ -850,7 +850,7 @@ export function createResolver(index) {
     const fl = finishLabel(p, fi);
     const bits = [set.n, p.r, p.var, fl && fl !== p.var ? fl : null].filter(Boolean).join(" · ");
     const f = p.f[fi] || [];
-    const px = money(f[5] ?? f[4]);
+    const px = money(f[4] ?? f[5]);
     let label = c.n + (bits ? " — " + bits : "") + (px ? " · " + px : "");
     if (label.length > 100) label = label.slice(0, 99) + "…";
     return label;

@@ -167,9 +167,16 @@ export function cardMessage(ctx) {
     const rules = rulesText(c);
     if (rules) lines.push(rules);
   }
-  const play = playLine(R, res.index, ctx.playDecks);
+  const play = playLine(R, res.index, ctx.playSet);
   if (play) lines.push(play);
-  lines.push("");
+
+  // The card view shows the site's tile, and the tile already carries Low,
+  // Market and the 1D/1W/1M changes — the same numbers printed above it were
+  // the reply saying everything twice (Zaven, 2026-10-04). So the price lines
+  // are left to the picture there; the chart view keeps them.
+  const tile = view === "card" && !ctx.grade && !(ctx.raw && ctx.raw.last_sold_price != null)
+    ? tileUrl(p, f && f[0], origin, ctx.priceDate) : null;
+  if (!tile) lines.push("");
 
   const mkt = price ? price.market : (f ? f[5] : null);
   const low = price ? price.low : (f ? f[4] : null);
@@ -181,8 +188,10 @@ export function cardMessage(ctx) {
   // about the slab, and the answer used to sit fourth, in a grid of six tiers,
   // under the raw price and its changes. cardPayload puts that tier first.
   const gradeLead = ctx.grade && (ctx.graded || [])[0] && sameTier((ctx.graded || [])[0], ctx.grade) ? ctx.graded[0] : null;
-  const tcgBits = () => [mkt != null ? `${money(mkt)} NM Market` : null, low != null ? `${money(low)} Low` : null].filter(Boolean);
-  if (rawLead) {
+  const tcgBits = () => [low != null ? `${money(low)} Low` : null, mkt != null ? `${money(mkt)} NM Market` : null].filter(Boolean);
+  if (tile) {
+    // nothing: the tile is the price
+  } else if (rawLead) {
     const n = ctx.raw.last_5_count || 0;
     lines.push(`**${money(ctx.raw.last_sold_price)}** last sold on eBay (${shortDate(ctx.raw.last_sold_date)})` +
       (ctx.raw.avg_last_5 != null && n > 1 ? ` · avg of last ${n} ${money(ctx.raw.avg_last_5)}` : ""));
@@ -198,11 +207,13 @@ export function cardMessage(ctx) {
   } else if (noListing) {
     lines.push("No TCGplayer listing of its own — TCGplayer files it with the regular printing.");
   } else if (mkt != null || low != null) {
+    // Low leads, as it does on the site; NM Market follows.
+    const lead = low ?? mkt;
     const bits = [];
-    if (mkt != null) bits.push(`**${money(mkt)}** NM Market`);
-    if (low != null) bits.push(`${money(low)} Low`);
+    if (low != null) bits.push(`**${money(low)}** Low`);
+    if (mkt != null) bits.push(low != null ? `${money(mkt)} NM Market` : `**${money(mkt)}** NM Market`);
     // A card that is PLAYED is bought four at a time.
-    const playset = play && mkt != null && BASE_RARITY.has(p.r) ? money(mkt * 4) : null;
+    const playset = play && lead != null && BASE_RARITY.has(p.r) ? money(lead * 4) : null;
     if (playset) bits.push(`playset ${playset}`);
     lines.push(bits.join(" · "));
   } else {
@@ -210,8 +221,8 @@ export function cardMessage(ctx) {
   }
   // The change line and the "Cheapest in 12 months" note are judgements ON
   // TCGplayer's price, so they are left off where that price isn't the market.
-  if (price && !noListing && !rawLead && !gradeLead) {
-    const d = price.market != null ? price.mktDelta : price.lowDelta;
+  if (price && !tile && !noListing && !rawLead && !gradeLead) {
+    const d = price.low != null ? price.lowDelta : price.mktDelta;
     const ch = [["1d", "1D"], ["1w", "1W"], ["1m", "1M"], ["1y", "1Y"]]
       .map(([k, l]) => (d && d[k] != null ? `${l} ${pct(d[k])}` : null)).filter(Boolean);
     if (ch.length) lines.push(ch.join(" · "));
@@ -220,9 +231,9 @@ export function cardMessage(ctx) {
   // The card's OTHER finish, priced, on the same reply: "and the foil?" is the
   // one follow-up every price reply gets, and it cost a menu pick. Prices are
   // the index's (as of its price date), like the versions menu's.
-  if (!rawLead && !gradeLead && !noListing) {
-    const others = p.f.map((x, i) => ({ x, i })).filter(({ x, i }) => i !== res.fi && !x[6] && (x[5] ?? x[4]) != null)
-      .map(({ x, i }) => `${R.finishLabel(p, i) || FIN_PRINTING[x[0]] || "Other"} **${money(x[5] ?? x[4])}**`);
+  if (!tile && !rawLead && !gradeLead && !noListing) {
+    const others = p.f.map((x, i) => ({ x, i })).filter(({ x, i }) => i !== res.fi && !x[6] && (x[4] ?? x[5]) != null)
+      .map(({ x, i }) => `${R.finishLabel(p, i) || FIN_PRINTING[x[0]] || "Other"} **${money(x[4] ?? x[5])}**`);
     if (others.length) lines.push(others.join(" · "));
   }
 
@@ -259,7 +270,6 @@ export function cardMessage(ctx) {
     // picture the card page shows. Never on a graded reply (the tile carries
     // raw prices) or where eBay sales lead (the tile would lead with the
     // TCGplayer price the reply has just called secondary).
-    const tile = !ctx.grade && !rawLead ? tileUrl(p, f && f[0], origin, ctx.priceDate) : null;
     if (tile || img) embed.image = { url: tile || img };
   } else {
     if (img) embed.thumbnail = { url: img };
@@ -359,25 +369,32 @@ export function rulesText(c) {
   }).filter(Boolean).join("\n");
 }
 
-// Rank among every card with a recent top-cut appearance, most played first.
+// How much a card is played in the CURRENT set's meta only (Zaven,
+// 2026-10-04): `ps` counts the Core top-cut decks since the newest booster
+// set released (index.playSet), and the line names that set. Until the set
+// has PLAY_SET_MIN_DECKS decks on record there is no line at all — a share of
+// three decks is noise, and the previous set's numbers would be a different
+// meta presented as this one.
+export const PLAY_SET_MIN_DECKS = 8;
 const PLAY_RANK = new WeakMap();
 export function playRankOf(R, i) {
   let m = PLAY_RANK.get(R);
   if (!m) {
     m = new Map();
-    R.cards.map((c, k) => [k, c.pl || 0]).filter((x) => x[1] > 0).sort((a, b) => b[1] - a[1] || a[0] - b[0])
+    R.cards.map((c, k) => [k, c.ps || 0]).filter((x) => x[1] > 0).sort((a, b) => b[1] - a[1] || a[0] - b[0])
       .forEach(([k], pos) => m.set(k, pos + 1));
     PLAY_RANK.set(R, m);
   }
   return m.get(i) || null;
 }
-export function playLine(R, i, playDecks) {
+export function playLine(R, i, playSet) {
   const c = R.cards[i];
+  if (!playSet || !playSet.n || !(playSet.decks >= PLAY_SET_MIN_DECKS)) return null;
   const rank = playRankOf(R, i);
-  if (!rank || !(c.pl > 0)) return null;
-  const share = playDecks > 0 ? c.pl / playDecks : null;
-  if (share != null && share < 0.02 && rank > 100) return null;
-  return `🏆 ${share != null && share >= 0.01 ? `In ${Math.round(share * 100)}% of recent tournament top-cut decks` : "Played in recent tournament top cuts"}` +
+  if (!rank || !(c.ps > 0)) return null;
+  const share = c.ps / playSet.decks;
+  if (share < 0.02 && rank > 100) return null;
+  return `🏆 ${share >= 0.01 ? `In ${Math.round(share * 100)}%` : `In ${c.ps}`} of ${playSet.n} top-cut decks` +
     (rank <= 100 ? ` · #${rank} most played` : "");
 }
 
@@ -404,7 +421,7 @@ export function versionOptions(R, res) {
     const set = R.sets[p.s] || {};
     const fin = R.finishLabel(p, fi);
     const f = p.f[fi] || [];
-    const px = money(f[5] ?? f[4]);
+    const px = money(f[4] ?? f[5]);
     out.push({
       label: clip(i === res.index ? [set.n, p.r, fin].filter(Boolean).join(" · ") : c.n, 100),
       // The card's own printings share its stats, which are on screen above;
@@ -433,11 +450,11 @@ export function sealedMessage(ctx) {
   const lines = [[it.ty, it.sn].filter(Boolean).join(" · "), ""];
   const mkt = price ? price.market : it.mkt, low = price ? price.low : it.low;
   const bits = [];
-  if (mkt != null) bits.push(`**${money(mkt)}** Market`);
-  if (low != null) bits.push(`${money(low)} Low`);
+  if (low != null) bits.push(`**${money(low)}** Low`);
+  if (mkt != null) bits.push(low != null ? `${money(mkt)} Market` : `**${money(mkt)}** Market`);
   lines.push(bits.length ? bits.join(" · ") : "No TCGplayer price yet.");
   if (price) {
-    const d = price.market != null ? price.mktDelta : price.lowDelta;
+    const d = price.low != null ? price.lowDelta : price.mktDelta;
     const ch = [["1d", "1D"], ["1w", "1W"], ["1m", "1M"], ["1y", "1Y"]]
       .map(([k, l]) => (d && d[k] != null ? `${l} ${pct(d[k])}` : null)).filter(Boolean);
     if (ch.length) lines.push(ch.join(" · "));
@@ -448,10 +465,11 @@ export function sealedMessage(ctx) {
   // /set shows, computed in the daily build.
   const set = it.s != null ? R.sets[it.s] : null;
   const isBox = it.ty === "Booster Boxes";
-  const ev = isBox && set && set.ev && set.ev.mkt != null ? set.ev.mkt : null;
+  const ev = isBox && set && set.ev ? (set.ev.low ?? set.ev.mkt ?? null) : null;
+  const boxPx = low ?? mkt;
   if (ev != null) {
-    const ratio = mkt ? ev / mkt : null;
-    lines.push(`Box EV **${money(ev)}** at NM Market` +
+    const ratio = boxPx ? ev / boxPx : null;
+    lines.push(`Box EV **${money(ev)}** at ${set.ev.low != null ? "Low" : "NM Market"}` +
       (ratio != null ? ` — the cards inside are worth about **${Math.round(ratio * 100)}%** of the box${ratio >= 1 ? ", more than it costs" : ""}` : ""));
   }
   const embed = {
@@ -476,7 +494,7 @@ export function sealedMessage(ctx) {
   if (alts.length) {
     const opts = [it, ...alts].slice(0, 25).map((x) => ({
       label: clip(x.n, 100), value: R.sealedKey(x),
-      description: clip([x.ty, money(x.mkt ?? x.low)].filter(Boolean).join(" · "), 100) || undefined,
+      description: clip([x.ty, money(x.low ?? x.mkt)].filter(Boolean).join(" · "), 100) || undefined,
       default: x.pid === it.pid,
     }));
     components.push({ type: 1, components: [{ type: 3, custom_id: pickId(view === "card" ? "card" : "chart", range), placeholder: "Other products", options: opts }] });
@@ -804,22 +822,24 @@ export function metaMessage({ R, index, meta }) {
       : `No Core top 8s on record ${since}.`,
   };
 
-  const ranked = R.cards.map((c, i) => ({ c, i })).filter((x) => x.c.pl > 0)
-    .sort((a, b) => b.c.pl - a.c.pl || a.i - b.i).slice(0, 10);
-  const total = index.playDecks || 0;
+  // The current set's meta only, the same count a /card play line reads.
+  const ps = index.playSet && index.playSet.decks >= PLAY_SET_MIN_DECKS ? index.playSet : null;
+  const ranked = ps ? R.cards.map((c, i) => ({ c, i })).filter((x) => x.c.ps > 0)
+    .sort((a, b) => b.c.ps - a.c.ps || a.i - b.i).slice(0, 10) : [];
+  const total = ps ? ps.decks : 0;
   const picks = [];
   const lines = ranked.map((x, k) => {
     const { printing, fi } = R.pickPrinting(x.i);
     const f = printing.f[fi] || printing.f[0] || [];
     const listed = !f[6];
-    const px = listed ? (f[5] ?? f[4]) : null;
-    const share = total > 0 ? ` · in ${Math.round((x.c.pl / total) * 100)}% of decks` : "";
+    const px = listed ? (f[4] ?? f[5]) : null;
+    const share = total > 0 ? ` · in ${Math.round((x.c.ps / total) * 100)}% of decks` : "";
     picks.push({ label: clip(x.c.n, 100), value: R.cardKey(printing, fi), description: statsLineFor(x.c, [`#${k + 1} most played`, px != null ? money(px) : null]) });
     return `\`${String(k + 1).padStart(2)}\` ${inkMarks(x.c.i)} [${clip(x.c.n, 44)}](${buyUrl(x.c.n, listed ? f[1] : null, f[2] || FIN_PRINTING[f[0]])})${share}${px != null ? ` · ${money(px)}` : ""}`;
   });
   const played = {
-    title: "Most played cards", color: BRAND_COLOR, url: `${SITE}/decks?s=tournaments`,
-    description: fitLines(lines, 2400) || "No tournament decks on record yet.",
+    title: ps ? `Most played in ${ps.n}` : "Most played cards", color: BRAND_COLOR, url: `${SITE}/decks?s=tournaments`,
+    description: fitLines(lines, 2400) || "Not enough Core top cuts on record since the current set released yet.",
   };
 
   const fields = [];
@@ -837,7 +857,7 @@ export function metaMessage({ R, index, meta }) {
   const results = {
     title: "Latest big events", color: BRAND_COLOR, url: `${SITE}/decks?s=tournaments`,
     ...(fields.length ? { fields } : { description: "No recent results on record." }),
-    footer: { text: `Top 8s from events packs.ink tracks · play share is recency-weighted across recent top cuts · TCGplayer NM Market as of ${shortDate(index.priceDate)} · ${AFFILIATE_NOTE}` },
+    footer: { text: `Top 8s from events packs.ink tracks · ${ps ? `play share counts Core top cuts since ${ps.n} released` : "play share counts the current set's Core top cuts"} · TCGplayer Low as of ${shortDate(index.priceDate)} · ${AFFILIATE_NOTE}` },
   };
   const components = [];
   if (picks.length) components.push({ type: 1, components: [{ type: 3, custom_id: openId("card"), placeholder: "Look at a card", options: picks.slice(0, 25) }] });
