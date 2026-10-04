@@ -6,6 +6,7 @@
 // things that are pure and local — autocomplete, /help — answer directly.
 import * as E from "./embeds.js";
 import * as D from "./data.js";
+import { kayleeStats, kayleePack, isKayleeId } from "./kaylee.js";
 import { setOverview, setMessage, openPacks, packMessage, parsePackId, newCards, newCardsMessage, freshRevealRows } from "./set.js";
 import { CALENDAR_REGIONS } from "./site.generated.js";
 import { chartResponse } from "./charts.js";
@@ -56,6 +57,7 @@ function command(it, deps) {
     case "calendar": return deferred(it, deps, priv, () => calendar(deps));
     case "meta": return deferred(it, deps, priv, () => meta(deps));
     case "new": return deferred(it, deps, priv, () => newReply(deps));
+    case "kaylee": return instant(kayleeStats(), priv);
     case "help": return { type: R_.MESSAGE, data: { ...E.helpMessage(deps.commandIds), flags: EPHEMERAL, allowed_mentions: QUIET } };
     // "send" posts the latest report HERE, publicly; the rest of /reports
     // answers the manager alone.
@@ -329,6 +331,7 @@ function component(it, deps) {
   if (tryWhat) return helpTry(tryWhat, it, deps);
   // "Open another pack" / "Open a box": a NEW message each time, so every
   // opening stands — private when the one it came from was.
+  if (isKayleeId(id)) return instant(kayleePack(deps.R, deps.index, deps.origin), it.message && (Number(it.message.flags) & EPHEMERAL));
   const pk2 = parsePackId(id);
   if (pk2) {
     const eph = it.message && (Number(it.message.flags) & EPHEMERAL);

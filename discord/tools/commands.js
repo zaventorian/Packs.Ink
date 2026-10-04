@@ -50,6 +50,7 @@ export const COMMANDS = [
     description: "Set releases, Challenges and qualifiers coming up",
     options: [privOpt],
   },
+  { name: "kaylee", type: 1, ...EVERYWHERE, description: "Kaylee's pack stats. Totally normal.", options: [privOpt] },
   { name: "help", type: 1, ...EVERYWHERE, description: "What this bot can do" },
   {
     name: "new", type: 1, ...EVERYWHERE,
