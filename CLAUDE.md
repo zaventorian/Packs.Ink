@@ -1424,6 +1424,29 @@ Covers: Promo videos — 16:9 and 9:16.
 - ⚠ The track is a commercial Disney recording
 - ⚠ All three bullet beats show the configurator beside the copy
 
+## Tier List (`/tierlist`) — added 2026-10-05
+
+Analytics sub-tab with its own path (`MARKET_SUB_PATHS`, like `/ticker`): rank a set's Enchanteds +
+Iconics in S/A/B/C/D, then copy a canvas-drawn picture (logo, title, QR, `packs.ink/tierlist`) or the
+link. `TierListView` + `buildTierListBlob` sit just above "Home (landing)" in Index.html.
+Guards: `scripts/test_tier_list.mjs`.
+
+- **The URL IS the list**, no table: `?ts=` set number (MAINLINE index + 1), `?tl=` tiers, `?tn=` title,
+  `?tt=` renamed labels (`_`-joined, only when not S/A/B/C/D). Owned at `/tierlist` in App's view sync
+  (`TIER_URL_KEYS`), stripped everywhere else.
+- **⚠ Cards are encoded by COLLECTOR-NUMBER OFFSET from the set's first chase card**, one base-36 char
+  each, never by card_id: prestaged sets swap their stand-in ids for Lorcast's, and an id-keyed link
+  would lose every card that day. 20 cards ≈ 25 chars.
+- **⚠ A link is SHOWN, not saved** (the "a link may choose for you, never over you" rule): opening
+  someone's list leaves your own list for that set alone until you move a card. A link that equals
+  your saved list (a refresh — the address bar carries it) is just your list, no "shared" banner.
+- Mouse/pen drag (pointer events + `elementFromPoint`, edge auto-scroll); a finger taps a card, then
+  a tier, so cards keep `touch-action:manipulation` and the page still scrolls on a phone. Keys 1–5
+  place a focused card, 0 unranks, ←/→ reorder.
+- Desktop: Copy image (image only — no text/plain beside it; apps disagree on which half they paste)
+  + Copy link. Touch: one share sheet carrying the PNG and the link together.
+- Unranked cards are not in the picture, like TierMaker.
+
 ## Brand assets
 
 - `Logos/` ships at runtime.

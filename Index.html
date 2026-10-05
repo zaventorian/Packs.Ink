@@ -30,7 +30,7 @@
    you); the settings menu is what saves one. Keep I18N_VER in step with the
    ?v= the dictionaries were last changed under. */
 (function(){
-  var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="2", l=null;
+  var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="3", l=null;
   try{
     var q=new URLSearchParams(location.search).get("hl");
     l = (q && (OK[q]||q==="en")) ? q : localStorage.getItem("packsink:lang");
@@ -250,7 +250,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=522">
+<link rel="stylesheet" href="styles.css?v=523">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1957,7 +1957,7 @@ const MARKET_SUB_LABELS = {
   overview: "Overview", ev: "Expected Value", trade: "Trade Compare",
   avg: "Set Breakdown", setval: "Playset Cost", sim: "Simulator",
   swiss: "Swiss Odds", lore: "Lore Tracker", dice: "Dice Tray",
-  ticker: "Stream Ticker", elo: "Elo",
+  ticker: "Stream Ticker", tierlist: "Tier List", elo: "Elo",
 };
 const collectionSectionHref = (key, viewerContext) => {
   const q = new URLSearchParams();
@@ -37236,6 +37236,7 @@ const MARKET_SUBS = [
   ["swiss",  _t("Swiss Odds")],
   ["lore",   _t("Lore Tracker")],
   ["dice",   _t("Dice Tray")],
+  ["tierlist", _t("Tier List")],
   // Last of the visible tabs on purpose: the row scrolls horizontally on a
   // phone, and an OBS overlay is the most niche thing under this tab.
   ["ticker", _t("Stream Ticker")],
@@ -41149,6 +41150,8 @@ const MARKET_TOOL_INFO = {
            pts:[_t("Up to 8 dice, each held in its own seat"),_t("d4 through d100, plus coins and rock-paper-scissors"),_t("Tap one die to reroll just that one")]},
   lore:   {blurb:_t("Keep score at the table."),
            pts:[_t("One to four players, face-to-face on a phone"),_t("Every change logged, with one-tap undo"),_t("Knows the cards that move the 20-lore goal")]},
+  tierlist: {blurb:_t("Rank a set's chase cards and share the picture."),
+           pts:[_t("Every Enchanted and Iconic in the set"),_t("Drag to rank, or tap a card then a tier"),_t("Copy an image with a QR code back to your list")]},
   ticker: {blurb:_t("Put the market on your stream."),
            pts:[_t("A scrolling bar of the biggest movers"),_t("Pick the time frames and rarities it cycles"),_t("One URL to paste into an OBS browser source")]},
   elo:    {blurb:_t("Ratings for the Chicagoland scene."),
@@ -42005,7 +42008,7 @@ const AnalyticsOverview = ({subs, onOpen, onOpenSealed}) => html`<${React.Fragme
     sub=${_t("Every calculator on the site, and the question each one answers.")}/>
   <div class="mkt-ov-grid">
     ${subs.filter(([k]) => k !== "overview" && MARKET_TOOL_INFO[k]).map(([k, label]) => html`<a key=${k}
-      class="mkt-ov-card" href=${"/analytics?a="+k} onClick=${navHandler(()=>onOpen(k))}>
+      class="mkt-ov-card" href=${MARKET_SUB_PATHS[k] || ("/analytics?a="+k)} onClick=${navHandler(()=>onOpen(k))}>
       <span class="mkt-ov-head">
         <span class="mkt-ov-ico" aria-hidden="true">${HOME_TOOL_ICONS[k]}</span>
         <span class="mkt-ov-name">${label}</span>
@@ -42196,7 +42199,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
     <div class="market-subtabs" ref=${subtabsRef}>
       ${subsList.map(([k,l])=>html`<a key=${k}
         class=${"market-subtab"+(sub===k?" active":"")}
-        href=${"/analytics"+(k==="ev"?"":"?a="+k)}
+        href=${MARKET_SUB_PATHS[k] || ("/analytics"+(k==="ev"?"":"?a="+k))}
         onClick=${navHandler(()=>setSub(k))}>${l}</a>`)}
       ${openScreenerSealed && html`<a class="market-subtab market-subtab-ext" href="/screener"
         title=${_t("Sealed product pricing lives in the Screener's Sealed mode now")}
@@ -42206,6 +42209,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
       onOpenSealed=${openScreenerSealed}/>`}
     ${sub==="lore" && html`<${LoreTracker} onOpen=${setSub} onHome=${onHome}/>`}
     ${sub==="dice" && html`<${DiceTray} onOpen=${setSub}/>`}
+    ${sub==="tierlist" && html`<${TierListView} raw=${raw}/>`}
     ${sub==="elo" && html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user} onSignIn=${onSignIn}/>`}
     ${sub==="setval"  && html`<${SetValuesView} rawData=${raw} sets=${setsNewest} theme=${theme}
       priceMode=${priceMode} setPriceMode=${setPriceMode}
@@ -42256,6 +42260,693 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
     <//>`}
   </div>`;
 }
+
+// ── Tier List (Analytics » Tier List, packs.ink/tierlist) ───────────────────
+// Rank a set's chase cards (every Enchanted + Iconic) and share the result. The
+// whole list rides in the URL — ?ts= the set, ?tl= the tiers, ?tn= the title,
+// ?tt= renamed tier labels — so a link IS the list and needs no table, and the
+// exported picture carries a QR code back to that exact link.
+//
+// ⚠ Cards are encoded by COLLECTOR-NUMBER OFFSET from the set's first chase
+// card, one base-36 character each, never by card_id: prestaged sets swap their
+// stand-in ids for Lorcast's when the set is indexed, and an id-keyed link would
+// silently lose every card on that day. Numbers never move. A tier is a run of
+// characters, tiers are separated by "." (trailing empty tiers dropped), so a
+// whole 20-card list is ~25 characters.
+const TIER_DEFAULTS = [
+  {label: "S", color: "#ff7a7a"},
+  {label: "A", color: "#ffb36b"},
+  {label: "B", color: "#ffd86b"},
+  {label: "C", color: "#b4e27a"},
+  {label: "D", color: "#7cc8f2"},
+];
+const TIER_COUNT = TIER_DEFAULTS.length;
+const TIER_URL_KEYS = ["ts", "tl", "tn", "tt"];
+const TIER_LS = "packsink:tierlist:v1";
+const TIER_LABEL_MAX = 12;
+const TIER_TITLE_MAX = 60;
+const TIER_SITE = "https://packs.ink";
+const TIER_PATH = "/tierlist";
+const TIER_RARITIES = new Set(["Enchanted", "Iconic"]);
+
+// set name -> its chase cards, oldest collector number first. One pass over the
+// catalog. Variant clones (`::variant::`) and labelled one-offs are left out:
+// the tier list is the set's printed chase run, nothing else.
+const tierPools = (raw) => {
+  const bySet = new Map();
+  const main = new Set(MAINLINE_SETS);
+  for(const r of raw || []){
+    if(!r || !main.has(r.Set) || !TIER_RARITIES.has(r.Rarity)) continue;
+    const id = r.card_id;
+    if(!id || String(id).includes("::") || r.variant_label) continue;
+    const num = parseInt(String(r.Number || "").split("/")[0], 10);
+    if(!Number.isFinite(num)) continue;
+    let m = bySet.get(r.Set);
+    if(!m){ m = new Map(); bySet.set(r.Set, m); }
+    const img = r.img_normal || r.img_large || r.img_small || null;
+    const prev = m.get(num);
+    if(!prev || (!prev.img && img)) m.set(num, {id, num, rarity: r.Rarity, row: r, img});
+  }
+  const out = new Map();
+  for(const [set, m] of bySet) out.set(set, [...m.values()].sort((a, b) => a.num - b.num));
+  return out;
+};
+
+const tierBlank = () => ({tiers: Array.from({length: TIER_COUNT}, () => []), title: "", labels: null});
+
+// Keep a stored or decoded list honest against the set's real pool: unknown
+// ids dropped, each card in at most one tier, always TIER_COUNT tiers.
+const tierClean = (list, pool) => {
+  const ok = new Set(pool.map(p => p.id));
+  const seen = new Set();
+  const tiers = Array.from({length: TIER_COUNT}, (_, i) => {
+    const t = (list && Array.isArray(list.tiers) && Array.isArray(list.tiers[i])) ? list.tiers[i] : [];
+    return t.filter(id => ok.has(id) && !seen.has(id) && seen.add(id));
+  });
+  const labels = list && Array.isArray(list.labels) && list.labels.length === TIER_COUNT
+    ? list.labels.map(l => String(l || "").slice(0, TIER_LABEL_MAX)) : null;
+  return {tiers, title: String((list && list.title) || "").slice(0, TIER_TITLE_MAX), labels};
+};
+
+const tierEncode = (tiers, pool) => {
+  if(!pool.length) return "";
+  const base = pool[0].num;
+  const off = new Map(pool.map(p => [p.id, p.num - base]));
+  const parts = tiers.map(t => t.map(id => {
+    const o = off.get(id);
+    return (o != null && o >= 0 && o < 36) ? o.toString(36) : "";
+  }).join(""));
+  while(parts.length && !parts[parts.length - 1]) parts.pop();
+  return parts.join(".");
+};
+const tierDecode = (str, pool) => {
+  const tiers = Array.from({length: TIER_COUNT}, () => []);
+  if(!str || !pool.length) return tiers;
+  const base = pool[0].num;
+  const idAt = new Map(pool.map(p => [p.num - base, p.id]));
+  const seen = new Set();
+  String(str).split(".").slice(0, TIER_COUNT).forEach((grp, i) => {
+    for(const ch of grp){
+      const id = idAt.get(parseInt(ch, 36));
+      if(id && !seen.has(id)){ seen.add(id); tiers[i].push(id); }
+    }
+  });
+  return tiers;
+};
+// Renamed tier labels travel as one "_"-joined param (a character
+// URLSearchParams leaves unescaped, so the link stays readable), and only when one of
+// them differs from S/A/B/C/D — a default list keeps a short link.
+const tierLabelsParam = (labels) => {
+  if(!labels || labels.every((l, i) => (l || TIER_DEFAULTS[i].label) === TIER_DEFAULTS[i].label)) return "";
+  return labels.map((l, i) => String(l || TIER_DEFAULTS[i].label).replace(/_/g, " ").slice(0, TIER_LABEL_MAX)).join("_");
+};
+const tierParseLabels = (s) => {
+  if(!s) return null;
+  const parts = String(s).split("_").slice(0, TIER_COUNT).map(x => x.trim().slice(0, TIER_LABEL_MAX));
+  if(!parts.some(Boolean)) return null;
+  return TIER_DEFAULTS.map((d, i) => parts[i] || d.label);
+};
+const tierLabelOf = (list, i) => (list.labels && list.labels[i]) || TIER_DEFAULTS[i].label;
+
+const tierQuery = (setName, list, pool) => {
+  const q = new URLSearchParams();
+  const si = MAINLINE_SETS.indexOf(setName);
+  if(si >= 0) q.set("ts", String(si + 1));
+  const tl = tierEncode(list.tiers, pool);
+  if(tl) q.set("tl", tl);
+  if(list.title) q.set("tn", list.title);
+  const tt = tierLabelsParam(list.labels);
+  if(tt) q.set("tt", tt);
+  return q.toString();
+};
+const tierShareUrl = (setName, list, pool) => {
+  const q = tierQuery(setName, list, pool);
+  return TIER_SITE + TIER_PATH + (q ? "?" + q : "");
+};
+// Read a tier list out of a query string. null when there is none.
+const tierParamsFrom = (search) => {
+  try {
+    const q = new URLSearchParams(search || "");
+    if(!TIER_URL_KEYS.some(k => q.has(k))) return null;
+    const n = parseInt(q.get("ts") || "", 10);
+    const set = (n >= 1 && n <= MAINLINE_SETS.length) ? MAINLINE_SETS[n - 1] : null;
+    return {set, tl: q.get("tl") || "", tn: (q.get("tn") || "").slice(0, TIER_TITLE_MAX), tt: q.get("tt") || ""};
+  } catch { return null; }
+};
+// Captured at MODULE LOAD, the same reason the ticker's params are: the
+// catalog may not be in yet when the view first renders, and nothing may
+// strip the query in between and leave a shared link opening blank.
+const TIER_LANDING = (() => {
+  try {
+    const p = (window.location.pathname.replace(/\/$/, "") || "/");
+    const a = new URLSearchParams(window.location.search).get("a");
+    if(p !== TIER_PATH && !(p === "/analytics" && a === "tierlist")) return null;
+    return tierParamsFrom(window.location.search);
+  } catch { return null; }
+})();
+let _tierLandingUsed = false;
+
+const tierReadStore = () => {
+  try {
+    const v = JSON.parse(localStorage.getItem(TIER_LS) || "null");
+    if(v && typeof v === "object" && v.lists && typeof v.lists === "object") return {last: v.last || null, lists: v.lists};
+  } catch {}
+  return {last: null, lists: {}};
+};
+
+// Where a drag would land, read off the DOM under the pointer: a tier row
+// (`data-tl-zone` = its index) or the unranked pool (-1). Inside a row the
+// index is the first card the pointer sits before — line by line, so it works
+// when a busy tier wraps.
+const tierDropAt = (x, y) => {
+  const el = document.elementFromPoint(x, y);
+  const zone = el && el.closest && el.closest("[data-tl-zone]");
+  if(!zone) return null;
+  const tier = Number(zone.getAttribute("data-tl-zone"));
+  if(!(tier >= 0)) return {tier: -1, index: null};
+  const cards = [...zone.querySelectorAll("[data-tl-card]")];
+  let index = cards.length;
+  for(let i = 0; i < cards.length; i++){
+    const r = cards[i].getBoundingClientRect();
+    if(y < r.top){ index = i; break; }
+    if(y <= r.bottom && x < r.left + r.width / 2){ index = i; break; }
+  }
+  return {tier, index};
+};
+
+// ── The exported picture, drawn on a canvas (never html2canvas: a stale
+// stylesheet from the service worker must not be able to break it). Fixed
+// brand palette rather than the viewer's theme — the picture is a thing that
+// gets posted, and it should look like packs.ink wherever it lands.
+const tierQrMatrix = async (text) => {
+  try {
+    const qrcode = await window.__loadQrcode();
+    const qr = qrcode(0, "M");
+    qr.addData(text);
+    qr.make();
+    return {n: qr.getModuleCount(), dark: (r, c) => qr.isDark(r, c)};
+  } catch { return null; }
+};
+const tierFitFont = (ctx, text, maxW, from, to, weight, family) => {
+  for(let s = from; s >= to; s--){
+    ctx.font = `${weight} ${s}px ${family}`;
+    if(ctx.measureText(text).width <= maxW) return s;
+  }
+  return to;
+};
+const buildTierListBlob = async (spec) => {
+  const W = 1200, S = 2, PAD = 36;
+  const LABEL_W = 116, CW = 90, CH = 126, GAP = 8, RP = 8, ROW_GAP = 8;
+  const perLine = Math.max(1, Math.floor((W - 2 * PAD - LABEL_W - 2 * RP + GAP) / (CW + GAP)));
+  const SERIF = "Cinzel, Georgia, serif";
+  const SANS = "'Nunito Sans', system-ui, sans-serif";
+  try {
+    await Promise.all(["700 40px Cinzel", "700 20px Cinzel", "600 18px 'Nunito Sans'",
+      "700 15px 'Nunito Sans'", "800 15px 'Nunito Sans'"].map(f => document.fonts.load(f)));
+  } catch {}
+  const cards = spec.rows.flatMap(r => r.cards);
+  const [logo, qr, ...imgs] = await Promise.all([
+    loadPosterImage("/Logos/packs-ink-logo.png"),
+    tierQrMatrix(spec.url),
+    ...cards.map(c => loadPosterImage(c.src)),
+  ]);
+  const imgOf = new Map(cards.map((c, i) => [c, imgs[i]]));
+
+  const LOGO_W = 128, LOGO_H = Math.round(LOGO_W * 1260 / 1200);
+  const QR = 120;
+  const headH = Math.max(LOGO_H, QR + 30);
+  const rowH = spec.rows.map(r => {
+    const lines = Math.max(1, Math.ceil(r.cards.length / perLine));
+    return lines * CH + (lines - 1) * GAP + 2 * RP;
+  });
+  const top = PAD + headH + 24;
+  const footH = 44;
+  const H = top + rowH.reduce((a, b) => a + b, 0) + ROW_GAP * (spec.rows.length - 1) + 18 + footH;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = W * S; canvas.height = H * S;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(S, S);
+
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, "#241238");
+  bg.addColorStop(1, "#120a1c");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+  const glow = ctx.createRadialGradient(PAD + LOGO_W / 2, PAD + LOGO_H / 2, 10, PAD + LOGO_W / 2, PAD + LOGO_H / 2, 420);
+  glow.addColorStop(0, "rgba(232,190,90,0.16)");
+  glow.addColorStop(1, "rgba(232,190,90,0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#e8c35a";
+  ctx.fillRect(0, 0, W, 4);
+
+  if(logo) ctx.drawImage(logo, PAD, PAD, LOGO_W, LOGO_H);
+
+  // Title + subtitle, between the logo and the QR block.
+  const tx = PAD + (logo ? LOGO_W + 22 : 0);
+  const tMaxW = W - PAD - QR - 28 - tx;
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "#f6efe0";
+  const tSize = tierFitFont(ctx, spec.title, tMaxW, 40, 26, 700, SERIF);
+  ctx.font = `700 ${tSize}px ${SERIF}`;
+  let titleLines = [spec.title];
+  if(ctx.measureText(spec.title).width > tMaxW) titleLines = wrapPosterText(ctx, spec.title, tMaxW, 2);
+  const lineH = Math.round(tSize * 1.18);
+  const blockH = titleLines.length * lineH + 8 + 24;
+  let ty = PAD + Math.max(0, (headH - blockH) / 2) + tSize;
+  for(const ln of titleLines){ ctx.fillText(ln, tx, ty); ty += lineH; }
+  ctx.font = `600 18px ${SANS}`;
+  ctx.fillStyle = "#e8c35a";
+  ctx.fillText(spec.subtitle, tx, ty + 4);
+
+  // QR block, top right: a white tile so any phone camera reads it, and the
+  // short address under it for anyone who would rather type.
+  const qx = W - PAD - QR, qy = PAD + Math.max(0, (headH - (QR + 30)) / 2);
+  ctx.fillStyle = "#ffffff";
+  roundRectPath(ctx, qx, qy, QR, QR, 10);
+  ctx.fill();
+  if(qr){
+    const q = 8, cell = (QR - 2 * q) / qr.n;
+    ctx.fillStyle = "#120a1c";
+    for(let r = 0; r < qr.n; r++) for(let c = 0; c < qr.n; c++){
+      if(qr.dark(r, c)) ctx.fillRect(qx + q + c * cell, qy + q + r * cell, Math.ceil(cell * 100) / 100 + 0.35, Math.ceil(cell * 100) / 100 + 0.35);
+    }
+  }
+  ctx.font = `800 15px ${SANS}`;
+  ctx.fillStyle = "#e8c35a";
+  ctx.textAlign = "center";
+  ctx.fillText(spec.displayUrl, qx + QR / 2, qy + QR + 22);
+  ctx.textAlign = "left";
+
+  // Tier rows.
+  let y = top;
+  spec.rows.forEach((row, ri) => {
+    const h = rowH[ri];
+    ctx.fillStyle = "rgba(255,255,255,0.05)";
+    roundRectPath(ctx, PAD, y, W - 2 * PAD, h, 12);
+    ctx.fill();
+    ctx.save();
+    roundRectPath(ctx, PAD, y, W - 2 * PAD, h, 12);
+    ctx.clip();
+    ctx.fillStyle = row.color;
+    ctx.fillRect(PAD, y, LABEL_W, h);
+    ctx.restore();
+    // Label: as big as fits, two lines when a renamed label needs it.
+    ctx.fillStyle = "#1a1022";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const lw = LABEL_W - 18;
+    const size = tierFitFont(ctx, row.label, lw, 44, 18, 700, SERIF);
+    ctx.font = `700 ${size}px ${SERIF}`;
+    if(ctx.measureText(row.label).width <= lw){
+      ctx.fillText(row.label, PAD + LABEL_W / 2, y + h / 2 + 2);
+    } else {
+      const ls = wrapPosterText(ctx, row.label, lw, 2);
+      ls.forEach((ln, i) => ctx.fillText(ln, PAD + LABEL_W / 2, y + h / 2 + (i - (ls.length - 1) / 2) * (size + 2) + 2));
+    }
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    row.cards.forEach((c, i) => {
+      const cx = PAD + LABEL_W + RP + (i % perLine) * (CW + GAP);
+      const cy = y + RP + Math.floor(i / perLine) * (CH + GAP);
+      ctx.save();
+      roundRectPath(ctx, cx, cy, CW, CH, 6);
+      ctx.clip();
+      const im = imgOf.get(c);
+      if(im) drawImageCover(ctx, im, cx, cy, CW, CH);
+      else {
+        ctx.fillStyle = "#2c1d40";
+        ctx.fillRect(cx, cy, CW, CH);
+        ctx.fillStyle = "#cfc4b2";
+        ctx.font = `700 11px ${SANS}`;
+        wrapPosterText(ctx, c.name, CW - 10, 5).forEach((ln, k) => ctx.fillText(ln, cx + 5, cy + 18 + k * 14));
+      }
+      ctx.restore();
+    });
+    y += h + ROW_GAP;
+  });
+
+  // Footer: where to make your own, and the day it was made.
+  const fy = H - footH / 2 + 4;
+  ctx.font = `700 15px ${SANS}`;
+  ctx.fillStyle = "#cfc4b2";
+  ctx.fillText(spec.footer, PAD, fy);
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#9d93a8";
+  ctx.font = `600 15px ${SANS}`;
+  ctx.fillText(spec.date, W - PAD, fy);
+  ctx.textAlign = "left";
+
+  return posterCanvasBlob(canvas, "image/png");
+};
+
+function TierListView({raw}){
+  const pools = useMemo(() => tierPools(raw), [raw]);
+  const setList = useMemo(() => MAINLINE_SETS.slice().reverse().filter(s => (pools.get(s) || []).length), [pools]);
+  const [store, setStore] = useState(tierReadStore);
+  // A list opened from a link is SHOWN, not saved: looking at somebody's list
+  // must not overwrite your own for that set. The first edit makes it yours.
+  const [shared, setShared] = useState(null);
+  const [pendingLink, setPendingLink] = useState(() => {
+    const live = tierParamsFrom(window.location.search);
+    if(live) return live;
+    if(!_tierLandingUsed && TIER_LANDING){ _tierLandingUsed = true; return TIER_LANDING; }
+    return null;
+  });
+  const [pick, setPick] = useState(() => store.last);
+  const curSet = (pick && setList.includes(pick)) ? pick : (setList[0] || null);
+  const pool = useMemo(() => (curSet && pools.get(curSet)) || [], [pools, curSet]);
+  const poolById = useMemo(() => new Map(pool.map(p => [p.id, p])), [pool]);
+
+  useEffect(() => {
+    if(!pendingLink || !pools.size) return;
+    const set = pendingLink.set && pools.has(pendingLink.set) ? pendingLink.set : null;
+    if(set){
+      const p = pools.get(set);
+      const linked = tierClean({tiers: tierDecode(pendingLink.tl, p), title: pendingLink.tn,
+        labels: tierParseLabels(pendingLink.tt)}, p);
+      // A refresh of your OWN list arrives as a link too (the address bar
+      // carries it). Only a list that differs from yours is somebody else's.
+      const mine = tierClean(store.lists[set] || tierBlank(), p);
+      if(tierQuery(set, linked, p) !== tierQuery(set, mine, p)) setShared({set, list: linked});
+      setPick(set);
+    }
+    setPendingLink(null);
+  }, [pendingLink, pools]);
+
+  const viewingShared = !!(shared && shared.set === curSet);
+  const list = useMemo(() => viewingShared ? shared.list : tierClean(store.lists[curSet] || tierBlank(), pool),
+    [viewingShared, shared, store, curSet, pool]);
+  const listRef = useRef(list);
+  listRef.current = list;
+  const setRef = useRef(curSet);
+  setRef.current = curSet;
+
+  const dirty = useRef(false);
+  useEffect(() => {
+    if(!dirty.current) return;
+    try { localStorage.setItem(TIER_LS, JSON.stringify(store)); } catch {}
+  }, [store]);
+
+  const updateList = useCallback((fn) => {
+    const set = setRef.current;
+    if(!set) return;
+    const next = fn(listRef.current);
+    dirty.current = true;
+    setStore(s => ({...s, last: set, lists: {...s.lists, [set]: next}}));
+    setShared(sh => (sh && sh.set === set) ? null : sh);
+  }, []);
+
+  // The address bar always holds the list on screen, so a refresh or a
+  // bookmark keeps it. Deferred a tick: App's view sync pushes the /tierlist
+  // entry in the same commit, and writing before it would leave no entry to
+  // go Back to.
+  useEffect(() => {
+    if(!curSet || pendingLink) return;
+    const t = setTimeout(() => {
+      try {
+        if((window.location.pathname.replace(/\/$/, "") || "/") !== TIER_PATH) return;
+        const empty = !list.title && !tierLabelsParam(list.labels) && list.tiers.every(t => !t.length);
+        const q = (empty && curSet === setList[0]) ? "" : tierQuery(curSet, list, pool);
+        const want = TIER_PATH + (q ? "?" + q : "");
+        if(window.location.pathname + window.location.search !== want) window.history.replaceState(window.history.state, "", want);
+      } catch {}
+    }, 0);
+    return () => clearTimeout(t);
+  }, [curSet, list, pool, pendingLink, setList]);
+
+  const chooseSet = (s) => {
+    setPick(s);
+    setSel(null);
+    setStore(st => ({...st, last: s}));
+    dirty.current = true;
+  };
+
+  const [sel, setSel] = useState(null);
+  const [drag, setDrag] = useState(null);
+  const [editLabel, setEditLabel] = useState(null);
+  const clickBlockUntil = useRef(0);
+
+  const moveCard = useCallback((id, tier, index) => updateList(l => {
+    const from = l.tiers.findIndex(t => t.includes(id));
+    const fromPos = from >= 0 ? l.tiers[from].indexOf(id) : -1;
+    const tiers = l.tiers.map(t => t.filter(x => x !== id));
+    if(tier >= 0){
+      let at = index == null ? tiers[tier].length : index;
+      if(from === tier && fromPos >= 0 && fromPos < at) at -= 1;
+      tiers[tier].splice(Math.max(0, Math.min(at, tiers[tier].length)), 0, id);
+    }
+    return {...l, tiers};
+  }), [updateList]);
+
+  // Mouse and pen drag; a finger taps instead (tap a card, then a tier), so the
+  // cards can leave touch scrolling alone on a phone.
+  const onCardPointerDown = (e, id) => {
+    if(e.pointerType === "touch" || e.button !== 0) return;
+    const d = {id, x0: e.clientX, y0: e.clientY, active: false};
+    const move = (ev) => {
+      if(!d.active){
+        if(Math.hypot(ev.clientX - d.x0, ev.clientY - d.y0) < 5) return;
+        d.active = true;
+        setSel(null);
+      }
+      ev.preventDefault();
+      // The pool sits below five rows, so a drag from it has to be able to
+      // carry the page with it: nudge the scroll near either edge.
+      const edge = 70;
+      if(ev.clientY < edge) window.scrollBy(0, -Math.ceil((edge - ev.clientY) / 4));
+      else if(ev.clientY > window.innerHeight - edge) window.scrollBy(0, Math.ceil((ev.clientY - window.innerHeight + edge) / 4));
+      setDrag({id, x: ev.clientX, y: ev.clientY, over: tierDropAt(ev.clientX, ev.clientY)});
+    };
+    const up = (ev) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      if(!d.active) return;
+      clickBlockUntil.current = Date.now() + 250;
+      const over = ev.type === "pointerup" ? tierDropAt(ev.clientX, ev.clientY) : null;
+      setDrag(null);
+      if(over) moveCard(id, over.tier, over.index);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  };
+
+  const onCardClick = (e, id, tier, index) => {
+    e.stopPropagation();
+    if(Date.now() < clickBlockUntil.current) return;
+    if(sel && sel !== id && tier >= 0){ moveCard(sel, tier, index); setSel(null); return; }
+    setSel(sel === id ? null : id);
+  };
+  const onZoneClick = (tier) => {
+    if(!sel) return;
+    moveCard(sel, tier, null);
+    setSel(null);
+  };
+  const onCardKey = (e, id) => {
+    const k = e.key;
+    if(k >= "1" && k <= String(TIER_COUNT)){ e.preventDefault(); moveCard(id, Number(k) - 1, null); setSel(null); }
+    else if(k === "0" || k === "Backspace" || k === "Delete"){ e.preventDefault(); moveCard(id, -1, null); setSel(null); }
+    else if(k === "Escape"){ setSel(null); }
+    else if(k === "ArrowLeft" || k === "ArrowRight"){
+      const l = listRef.current;
+      const t = l.tiers.findIndex(x => x.includes(id));
+      if(t < 0) return;
+      e.preventDefault();
+      const i = l.tiers[t].indexOf(id);
+      moveCard(id, t, k === "ArrowLeft" ? Math.max(0, i - 1) : i + 2);
+    }
+  };
+
+  const ranked = new Set(list.tiers.flat());
+  const unranked = pool.filter(p => !ranked.has(p.id));
+  const counts = {e: pool.filter(p => p.rarity === "Enchanted").length, i: pool.filter(p => p.rarity === "Iconic").length};
+  const setLabel = curSet ? _term("set", curSet) : "";
+  const defaultTitle = _t("{set} Tier List", {set: setLabel});
+  const title = list.title || defaultTitle;
+  const subtitle = [counts.e ? _t("{n} Enchanted", {n: counts.e}) : null,
+    counts.i ? _t("{n} Iconic", {n: counts.i}) : null].filter(Boolean).join(" · ");
+  const shareUrl = curSet ? tierShareUrl(curSet, list, pool) : TIER_SITE + TIER_PATH;
+  const nameOf = (p) => cardDisplayName(p.row);
+
+  const blobFor = () => buildTierListBlob({
+    title, subtitle: setLabel + (subtitle ? " · " + subtitle : ""),
+    url: shareUrl, displayUrl: "packs.ink/tierlist",
+    footer: _t("Make your own at packs.ink/tierlist"),
+    date: new Date().toLocaleDateString(SITE_LANG || undefined, {year: "numeric", month: "short", day: "numeric"}),
+    rows: list.tiers.map((t, i) => ({label: tierLabelOf(list, i), color: TIER_DEFAULTS[i].color,
+      cards: t.map(id => poolById.get(id)).filter(Boolean).map(p => ({src: proxyImg(p.img), name: nameOf(p)}))})),
+  });
+  const fileName = "packsink-tier-list.png";
+  const canShare = typeof navigator !== "undefined" && !!navigator.share && isTouchDevice();
+
+  const copyImage = () => {
+    flashToast(_t("Drawing your tier list…"), 8000);
+    const p = blobFor();
+    p.catch(err => console.error("[tierlist] image failed", err));
+    deliverImage(p, {name: fileName, copiedMsg: _t("Tier list image copied — paste it anywhere")});
+  };
+  const copyLink = () => {
+    const done = () => flashToast(_t("Link copied — it opens this exact tier list"));
+    try {
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(shareUrl).then(done, () => window.prompt(_t("Copy this link"), shareUrl));
+        return;
+      }
+    } catch {}
+    window.prompt(_t("Copy this link"), shareUrl);
+  };
+  // Phones: one share sheet carrying the picture AND the link, which is what
+  // lands in a group chat as image + tappable link in one message.
+  const shareAll = () => {
+    flashToast(_t("Drawing your tier list…"), 8000);
+    blobFor().then(async (blob) => {
+      const text = title + "\n" + shareUrl;
+      const file = new File([blob], fileName, {type: "image/png"});
+      try {
+        if(navigator.canShare && navigator.canShare({files: [file]})){
+          await navigator.share({files: [file], text, title});
+          return;
+        }
+        await navigator.share({text, title, url: shareUrl});
+      } catch(err){
+        if(err && err.name === "AbortError") return;
+        showImageSaver(blob, fileName);
+      }
+    }).catch(err => { console.error("[tierlist] share failed", err); flashToast(_t("Couldn't prepare the image — try again")); });
+  };
+  const saveImage = () => {
+    flashToast(_t("Drawing your tier list…"), 8000);
+    blobFor().then(b => { downloadImageBlob(b, fileName); flashToast(_t("Image saved")); })
+      .catch(err => { console.error("[tierlist] save failed", err); flashToast(_t("Couldn't prepare the image — try again")); });
+  };
+  const reset = () => {
+    const before = listRef.current;
+    if(before.tiers.every(t => !t.length)) return;
+    updateList(l => ({...l, tiers: tierBlank().tiers}));
+    setSel(null);
+    flashToast(_t("Every card is back in the pool"), 5000, {label: _t("Undo"), run: () => updateList(() => before)});
+  };
+  const startOwn = () => {
+    setShared(null);
+    setSel(null);
+  };
+
+  const commitLabel = (i, v) => {
+    setEditLabel(null);
+    const clean = String(v || "").trim().slice(0, TIER_LABEL_MAX);
+    updateList(l => {
+      const labels = TIER_DEFAULTS.map((d, k) => k === i ? (clean || d.label) : tierLabelOf(l, k));
+      return {...l, labels: labels.every((x, k) => x === TIER_DEFAULTS[k].label) ? null : labels};
+    });
+  };
+
+  const selCard = sel ? poolById.get(sel) : null;
+
+  const renderCard = (p, tier, index) => html`<button key=${p.id} type="button" data-tl-card=${p.id}
+      class=${"tl-card" + (sel === p.id ? " is-sel" : "") + (drag && drag.id === p.id ? " is-dragging" : "")}
+      title=${nameOf(p)} aria-label=${nameOf(p)} aria-pressed=${sel === p.id ? "true" : "false"}
+      onPointerDown=${e => onCardPointerDown(e, p.id)}
+      onClick=${e => onCardClick(e, p.id, tier, index)}
+      onKeyDown=${e => onCardKey(e, p.id)}>
+    ${p.img ? html`<img src=${p.img} alt="" draggable="false" onError=${hideBrokenImg}/>` : html`<span class="tl-card-name">${nameOf(p)}</span>`}
+    ${p.rarity === "Iconic" && html`<span class="tl-card-badge" aria-hidden="true">${_term("rarity", "Iconic")}</span>`}
+  </button>`;
+  const withInsert = (cards, tier, render) => {
+    const out = cards.map((p, i) => render(p, i));
+    if(drag && drag.over && drag.over.tier === tier && drag.over.index != null){
+      out.splice(drag.over.index, 0, html`<span key="__ins" class="tl-insert" aria-hidden="true"></span>`);
+    }
+    return out;
+  };
+
+  if(!curSet){
+    return html`<div class="tl-page">
+      <${MarketHeader} title=${_t("Tier List")}
+        sub=${_t("Rank a set's Enchanteds and Iconics, then share the picture.")}/>
+      <p class="muted">${_t("Loading cards…")}</p>
+    </div>`;
+  }
+
+  return html`<div class=${"tl-page" + (sel ? " has-sel" : "") + (drag ? " is-dragging" : "")}>
+    <${MarketHeader} title=${_t("Tier List")}
+      sub=${_t("Rank a set's Enchanteds and Iconics, then share the picture.")}/>
+
+    <div class="tl-bar">
+      <label class="tl-field">
+        <span class="tl-field-lbl">${_t("Set")}</span>
+        <select class="tl-select" value=${curSet} onChange=${e => chooseSet(e.target.value)}>
+          ${setList.map(s => html`<option key=${s} value=${s}>${_term("set", s)}</option>`)}
+        </select>
+      </label>
+      <label class="tl-field tl-field--grow">
+        <span class="tl-field-lbl">${_t("Title")}</span>
+        <input class="tl-title-in" type="text" maxLength=${TIER_TITLE_MAX} value=${list.title}
+          placeholder=${defaultTitle}
+          onChange=${e => { const v = e.target.value; updateList(l => ({...l, title: v.slice(0, TIER_TITLE_MAX)})); }}/>
+      </label>
+    </div>
+
+    <div class="tl-actions">
+      ${canShare
+        ? html`<button type="button" class="tl-btn tl-btn--primary" onClick=${shareAll}>${uiIcon("share", 15)} ${_t("Share image + link")}</button>`
+        : html`<button type="button" class="tl-btn tl-btn--primary" onClick=${copyImage}>${uiIcon("image", 15)} ${_t("Copy image")}</button>`}
+      <button type="button" class="tl-btn" onClick=${copyLink}>${uiIcon("link", 15)} ${_t("Copy link")}</button>
+      <button type="button" class="tl-btn" onClick=${saveImage}>${uiIcon("save", 15)} ${_t("Save image")}</button>
+      <button type="button" class="tl-btn tl-btn--quiet" onClick=${reset}
+        disabled=${list.tiers.every(t => !t.length)}>${uiIcon("undo", 15)} ${_t("Reset")}</button>
+    </div>
+
+    ${viewingShared && html`<div class="tl-shared">
+      <span>${_t("You're looking at a shared tier list. Move a card and it becomes yours — your own list for this set is untouched until then.")}</span>
+      ${store.lists[curSet] && html`<button type="button" class="tl-btn tl-btn--quiet" onClick=${startOwn}>${_t("Show my list")}</button>`}
+    </div>`}
+
+    <p class="tl-hint" aria-live="polite">${selCard
+      ? _t("Now tap a tier for {name} — or tap the pool to send it back.", {name: nameOf(selCard)})
+      : _t("Drag cards into a tier — or tap a card, then tap a tier. Tap a tier's letter to rename it.")}</p>
+
+    <div class="tl-board">
+      ${list.tiers.map((t, i) => html`<div key=${i} class=${"tl-row" + (drag && drag.over && drag.over.tier === i ? " is-over" : "")}
+          data-tl-zone=${i} onClick=${() => onZoneClick(i)}>
+        <div class="tl-label" style=${{background: TIER_DEFAULTS[i].color}}>
+          ${editLabel === i
+            ? html`<input class="tl-label-in" type="text" maxLength=${TIER_LABEL_MAX} defaultValue=${tierLabelOf(list, i)}
+                aria-label=${_t("Tier name")} autoFocus onFocus=${e => e.target.select()}
+                onClick=${e => e.stopPropagation()}
+                onBlur=${e => commitLabel(i, e.target.value)}
+                onKeyDown=${e => { if(e.key === "Enter") e.target.blur(); else if(e.key === "Escape") setEditLabel(null); }}/>`
+            : html`<button type="button" class="tl-label-btn" title=${sel ? _t("Place the card here") : _t("Rename this tier")}
+                onClick=${e => { e.stopPropagation(); if(sel) onZoneClick(i); else setEditLabel(i); }}>
+                <span class=${"tl-label-txt" + (tierLabelOf(list, i).length > 3 ? " is-long" : "")}>${tierLabelOf(list, i)}</span>
+              </button>`}
+        </div>
+        <div class="tl-cards">
+          ${withInsert(t.map(id => poolById.get(id)).filter(Boolean), i, (p, k) => renderCard(p, i, k))}
+        </div>
+      </div>`)}
+    </div>
+
+    <div class=${"tl-pool" + (drag && drag.over && drag.over.tier === -1 ? " is-over" : "")}
+        data-tl-zone="-1" onClick=${() => onZoneClick(-1)}>
+      <div class="tl-pool-head">
+        <span>${_t("Unranked")}</span>
+        <span class="tl-pool-n">${unranked.length} / ${pool.length}</span>
+      </div>
+      <div class="tl-cards">
+        ${unranked.length
+          ? unranked.map(p => renderCard(p, -1, null))
+          : html`<span class="tl-pool-empty">${_t("Every card is ranked. Copy the image or the link to share it.")}</span>`}
+      </div>
+    </div>
+
+    ${drag && poolById.get(drag.id) && poolById.get(drag.id).img && html`<img class="tl-ghost" alt="" aria-hidden="true"
+      src=${poolById.get(drag.id).img} style=${{left: drag.x + "px", top: drag.y + "px"}}/>`}
+  </div>`;
+}
+
 
 // ── Home (landing) ──────────────────────────────────────────────────────
 // Two horizontally-scrolling banners of biggest 1-day movers, split by
@@ -51518,6 +52209,14 @@ const HOME_TOOL_ICONS = {
     <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/>
     <path d="M4 7.5l8 4.5 8-4.5"/>
     <path d="M12 12v9"/>`),
+  // Tier List — three ranked rows, each a label block and a shrinking bar
+  tierlist: _navSvg(html`
+    <rect x="3" y="4" width="5" height="4" rx="1"/>
+    <path d="M11 6h10"/>
+    <rect x="3" y="10" width="5" height="4" rx="1"/>
+    <path d="M11 12h7"/>
+    <rect x="3" y="16" width="5" height="4" rx="1"/>
+    <path d="M11 18h4"/>`),
   // Trade Compare — two opposing arrows
   trade: _navSvg(html`
     <path d="M8 3L4 7l4 4"/>
@@ -60815,7 +61514,7 @@ const VIEW_PATHS = {
 // ⚠ The overlay itself is still ticker.html at /ticker?bar=1 — every OBS
 // source already in the wild points there, so the worker keeps serving the raw
 // page for ?bar= and ?embed= and only falls through to the SPA without them.
-const MARKET_SUB_PATHS = { ticker: "/ticker" };
+const MARKET_SUB_PATHS = { ticker: "/ticker", tierlist: "/tierlist" };
 const _normPath = (p) => (p || "/").replace(/\/$/, "") || "/";
 const MARKET_SUB_BY_PATH = Object.fromEntries(
   Object.entries(MARKET_SUB_PATHS).map(([sub, path]) => [_normPath(path), sub]));
@@ -60856,6 +61555,7 @@ const MARKET_SUB_TITLES = {
   lore:   "Lorcana Lore Tracker — Packs.Ink",
   dice:   "Dice Tray — Packs.Ink",
   ticker: "Lorcana Stream Ticker for OBS — Packs.Ink",
+  tierlist: "Lorcana Enchanted Tier List Maker — Packs.Ink",
   elo:    "Chicagoland Lorcana Elo — Packs.Ink",
 };
 const PATH_TO_VIEW = (() => {
@@ -61663,7 +62363,8 @@ function App(){
                            ...CARD_URL_KEYS,
                            "ck","cv","cm","cr","cq","cspan","cn","cg",
                            "cmap","cmr","cms","cmk","ce",
-                           ...ELO_URL_PARAMS, ...SC_DEEP_PARAMS, ...TICKER_PARAM_KEYS];
+                           ...ELO_URL_PARAMS, ...SC_DEEP_PARAMS, ...TICKER_PARAM_KEYS,
+                           ...TIER_URL_KEYS];
       // Each view "owns" the deep-link params it actually consumes — those
       // survive a same-view strip so /decks?tourney=<id> deep-links + ctrl-
       // click new-tab opens hold their query even though the view didn't
@@ -61696,8 +62397,11 @@ function App(){
       // included, which Price Graphing and the Screener own everywhere else.
       // Stripping them made a refresh, a bookmark or Copy link reopen the
       // default reel.
+      // Same at /tierlist: the list on screen lives in ?ts= ?tl= ?tn= ?tt=.
       const owned = (view === "market" && marketSub === "ticker")
         ? new Set([...(VIEW_OWNED[view] || []), ...TICKER_PARAM_KEYS])
+        : (view === "market" && marketSub === "tierlist")
+        ? new Set([...(VIEW_OWNED[view] || []), ...TIER_URL_KEYS])
         : (VIEW_OWNED[view] || new Set());
       if(tabStripRef.current){
         for(const k of tabStripRef.current) url.searchParams.delete(k);
