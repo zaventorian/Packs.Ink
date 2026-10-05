@@ -1515,10 +1515,26 @@ The board, drag, viewer and share/export buttons are shared components (`TierBoa
   yourself" (same pool, all unranked) and "Start from this ranking".
 - **Adding cards**: the picker routes through `parseSearchQuery` + `matchesCardFilter` (AND mode),
   plus set / rarity / ink chips; "Add all N". An empty filter lists nothing on purpose. A set filter
-  also matches that set's promos, like the Cards tab. Starters on an empty list: every Legendary /
-  every Common (draft) / one ink in the newest set, or a character search. A starter writes the
-  title and the cards in one tick, so `updateList` sets `listRef.current` itself — without that the
-  second write overwrote the first.
+  also matches that set's promos, like the Cards tab. (A "Start from" box of one-tap starters
+  shipped in the first cut and was removed the same day at Zaven's request.) `updateList` sets
+  `listRef.current` itself so two edits in one tick compose instead of the second overwriting.
+- **2 to 10 tiers** ("+ Add a tier", an x on each tier label), chase AND custom lists. **⚠ The
+  count travels in the LABELS**: five default tiers send no `?tt=`; any other list sends one label
+  per tier, so the label count IS the tier count (`tierCountOf`, `tierNormLabels`). The codes split
+  tiers by "." and cannot say how many there are on their own, so every decode takes the count from
+  the labels — including the worker's (`tierCountFromLabels`). A removed tier's cards go back to the
+  pool, with Undo. Colours are positional (TIER_DEFAULTS has ten). Migration 182 widened both
+  `labels` checks to 160 characters for ten renamed tiers.
+- **Likes and views (migration 182, APPLIED 2026-10-05)**: `custom_tier_list_likes` (one row per
+  list + person; `like_count` kept by a trigger), `view_count` bumped by `bump_tier_list_view(slug)`
+  once per browser session and never for the owner. You can like any list you can open (the insert
+  policy calls a DEFINER check, `tier_list_likeable`, because the caller's own RLS hides unlisted
+  rows). **The owner cannot write the counters**: authenticated has column-level INSERT/UPDATE on
+  the editable columns only (PostgREST's upsert names every payload column in its DO UPDATE SET,
+  so `slug` and `user_id` are in that grant). Community sorts Newest / Most liked. All of it
+  verified in a rolled-back transaction.
+- **A creator's public lists show on their profile page** (`CreatorTierLists`, under their decks;
+  `list_public_tier_lists(p_user)`), and open through `openTierListSlug`.
 - A list opened with "New tier list" and left with no card, title or renamed tier is deleted on
   the way out — read off the STORED entry, never the decoded one.
 - **Following feed**: public lists by people you follow ride the home Following panel ("Tier list"
@@ -1526,8 +1542,7 @@ The board, drag, viewer and share/export buttons are shared components (`TierBoa
   writes `/tierlist?tid=` BEFORE switching views so the page reads it on mount.
 - Link previews (`worker/tierlist.mjs`): `?tc=` and `?tid=` get the same bare title + one line,
   `?tid=` via a GET of the STABLE RPC. Guards: `scripts/test_tier_list.mjs` (codec, store shape,
-  worker counts). Not built yet: a creator's lists on their profile page (`list_public_tier_lists`
-  already takes `p_user`), more than five tiers, views/likes.
+  worker counts, 2-10 tiers).
 
 ## Brand assets
 

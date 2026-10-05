@@ -3,7 +3,7 @@
 // a shared link still opens, it just shows the wrong cards in the wrong tiers.
 import fs from "node:fs";
 import vm from "node:vm";
-import { TIER_SETS, tierDecodeNums, tierPreviewFrom, tierCustomCount, tierCustomPreviewFrom } from "../worker/tierlist.mjs";
+import { TIER_SETS, tierDecodeNums, tierPreviewFrom, tierCustomCount, tierCustomPreviewFrom, tierCountFromLabels } from "../worker/tierlist.mjs";
 
 const index = fs.readFileSync(new URL("../Index.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const start = index.indexOf("const TIER_DEFAULTS = [");
@@ -17,7 +17,7 @@ const MAINLINE_SETS = ["The First Chapter", "Rise of the Floodborn", "Into the I
   "Wilds Unknown", "Attack of the Vine!", "Hyperia City"];
 const ctx = vm.createContext({MAINLINE_SETS, URLSearchParams, Map, Set, btoa, atob, escape, unescape,
   window: {location: {pathname: "/", search: ""}}});
-vm.runInContext(block + "\n;globalThis.T = {tierPools, tierClean, tierEncode, tierDecode, tierLabelsParam, tierParseLabels, tierQuery, tierParamsFrom, tierToStored, tierFromStored, TIER_COUNT, tierCardIndex, tierCustomEncode, tierCustomDecode, tierCustomClean, tierCustomQuery, tierCustomToStored, tierCustomFromStored, TIER_CUSTOM_MAX};", ctx);
+vm.runInContext(block + "\n;globalThis.T = {tierPools, tierClean, tierEncode, tierDecode, tierLabelsParam, tierParseLabels, tierQuery, tierParamsFrom, tierToStored, tierFromStored, TIER_COUNT, tierCardIndex, tierCustomEncode, tierCustomDecode, tierCustomClean, tierCustomQuery, tierCustomToStored, tierCustomFromStored, TIER_CUSTOM_MAX, tierRenamed, tierWithAdded, tierWithRemoved, tierLabelsOf, TIER_MAX, TIER_MIN};", ctx);
 const T = ctx.T;
 
 let fails = 0;
@@ -172,5 +172,35 @@ const spv = tierCustomPreviewFrom("?tid=AbC123xyz0", {slug: "AbC123xyz0", title:
 check("worker: saved list preview names its author", [spv.title, spv.desc, spv.url],
   ["Frogs", "1 card · by Zaven · make your own at packs.ink/tierlist", "https://packs.ink/tierlist?tid=AbC123xyz0"]);
 check("worker: a private or missing list is no preview", tierCustomPreviewFrom("?tid=AbC123xyz0", null), null);
+
+// ── More (or fewer) than five tiers: the count rides in the labels ──
+const six = T.tierWithAdded({...clist, labels: null, tiers: [["h223"], ["m1"], [], [], []]});
+check("tiers: adding one gives six, named E", [six.tiers.length, T.tierLabelsOf(six)], [6, ["S", "A", "B", "C", "D", "E"]]);
+const sixQ = T.tierCustomQuery({...six, tiers: [["h223"], [], [], [], [], ["m1"]]}, idx);
+const sixP = T.tierParamsFrom("?" + sixQ);
+const sixBack = T.tierCustomFromStored({code: sixP.tc, title: sixP.tn, labels: sixP.tt}, idx);
+check("tiers: a six-tier list round-trips through its link", [sixBack.tiers.length, sixBack.tiers[5], sixBack.pool], [6, ["m1"], ["p1", "h5"]]);
+check("tiers: the worker counts six from the labels", tierCountFromLabels(sixP.tt), 6);
+const backToFive = T.tierWithRemoved(six, 5);
+check("tiers: removing the extra one goes back to plain defaults (no ?tt=)", [backToFive.tiers.length, backToFive.labels], [5, null]);
+const three = T.tierWithRemoved(T.tierWithRemoved({...clist, labels: null}, 1), 1);
+check("tiers: removed tiers' cards go back to the pool", [three.tiers.length, T.tierLabelsOf(three), three.pool], [3, ["S", "C", "D"], ["p1", "h5", "m1"]]);
+const threeBack = T.tierCustomFromStored(T.tierCustomToStored(three, idx), idx);
+check("tiers: a three-tier list stores and reads back as three", [threeBack.tiers.length, T.tierLabelsOf(threeBack)], [3, ["S", "C", "D"]]);
+let ten = {...clist, labels: null};
+for(let i = 0; i < 9; i++) ten = T.tierWithAdded(ten);
+check("tiers: never more than TIER_MAX", ten.tiers.length, T.TIER_MAX);
+let two = {...clist, labels: null};
+for(let i = 0; i < 9; i++) two = T.tierWithRemoved(two, 0);
+check("tiers: never fewer than TIER_MIN", two.tiers.length, T.TIER_MIN);
+check("tiers: renaming keeps the count", T.tierLabelsOf(T.tierRenamed(six, 5, "Trash")), ["S", "A", "B", "C", "D", "Trash"]);
+check("tiers: a blank rename goes back to the letter", T.tierRenamed({...clist, labels: ["GOAT", "A", "B", "C", "D"]}, 0, " ").labels, null);
+const chaseSix = {tiers: [["c242"], [], [], [], [], ["c223"]], title: "", labels: ["S", "A", "B", "C", "D", "E"]};
+const chaseQ = T.tierQuery("Hyperia City", chaseSix, pool);
+const cpq = T.tierParamsFrom("?" + chaseQ);
+check("tiers: a six-tier chase list round-trips", T.tierFromStored({code: cpq.tl, labels: cpq.tt}, pool).tiers, chaseSix.tiers);
+check("tiers: the worker reads the sixth tier of a chase link",
+  tierDecodeNums(cpq.tl, 223, tierCountFromLabels(cpq.tt))[5], [223]);
+check("tiers: a first-day five-label link is still five", T.tierParseLabels("S_A_B_C_D").length, 5);
 if(fails){ console.log(`\n${fails} failure(s)`); process.exit(1); }
 console.log("\nall passed");

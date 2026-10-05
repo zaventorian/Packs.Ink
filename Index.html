@@ -30,7 +30,7 @@
    you); the settings menu is what saves one. Keep I18N_VER in step with the
    ?v= the dictionaries were last changed under. */
 (function(){
-  var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="5", l=null;
+  var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="6", l=null;
   try{
     var q=new URLSearchParams(location.search).get("hl");
     l = (q && (OK[q]||q==="en")) ? q : localStorage.getItem("packsink:lang");
@@ -3239,6 +3239,7 @@ const UI_ICON_PATHS = {
   // controls are drawn glyphs rather than the site's labelled pills.
   close:     _icoSvg(html`<path d="M6 6l12 12"/><path d="M18 6L6 18"/>`),
   undo:      _icoSvg(html`<path d="M3 8h11a6 6 0 0 1 0 12h-6"/><path d="M7 4L3 8l4 4"/>`),
+  heart:     _icoSvg(html`<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>`),
   list:      _icoSvg(html`<path d="M8 6h12"/><path d="M8 12h12"/><path d="M8 18h12"/><path d="M4 6h.01"/><path d="M4 12h.01"/><path d="M4 18h.01"/>`),
   globe:     _icoSvg(html`<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5c2.4 2.4 3.6 5.2 3.6 8.5s-1.2 6.1-3.6 8.5"/><path d="M12 3.5c-2.4 2.4-3.6 5.2-3.6 8.5s1.2 6.1 3.6 8.5"/>`),
   link:      _icoSvg(html`<path d="M10 13.5a4 4 0 0 0 5.7.3l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.5 1.5"/><path d="M14 10.5a4 4 0 0 0-5.7-.3l-2.6 2.6a4 4 0 0 0 5.7 5.7l1.5-1.5"/>`),
@@ -42279,8 +42280,29 @@ const TIER_DEFAULTS = [
   {label: "B", color: "#ffd86b"},
   {label: "C", color: "#b4e27a"},
   {label: "D", color: "#7cc8f2"},
+  {label: "E", color: "#9aa8ff"},
+  {label: "F", color: "#c79bf2"},
+  {label: "G", color: "#f29bd4"},
+  {label: "H", color: "#8fdcc9"},
+  {label: "I", color: "#d6cbb8"},
 ];
-const TIER_COUNT = TIER_DEFAULTS.length;
+// A list has TIER_COUNT tiers unless someone adds or removes one (2..10).
+// ⚠ The COUNT travels in the labels: a list with the default five tiers and
+// default letters sends no ?tt= at all, any other list sends one label per
+// tier, so the number of labels IS the number of tiers. Codes split tiers by
+// "." and cannot say how many there are on their own.
+const TIER_COUNT = 5;
+const TIER_MIN = 2;
+const TIER_MAX = TIER_DEFAULTS.length;
+// How many tiers a parsed/stored labels array means.
+const tierCountOf = (labels) => Array.isArray(labels) && labels.length >= TIER_MIN && labels.length <= TIER_MAX
+  ? labels.length : TIER_COUNT;
+// null for the default five letters, else one label per tier.
+const tierNormLabels = (labels, n) => {
+  const k = n || tierCountOf(labels);
+  const out = Array.from({length: k}, (_, i) => String((labels && labels[i]) || TIER_DEFAULTS[i].label).slice(0, TIER_LABEL_MAX));
+  return k === TIER_COUNT && out.every((l, i) => l === TIER_DEFAULTS[i].label) ? null : out;
+};
 const TIER_URL_KEYS = ["ts", "tl", "tn", "tt", "tc", "tid", "tv"];
 const TIER_LS = "packsink:tierlist:v1";
 const TIER_LABEL_MAX = 12;
@@ -42325,19 +42347,19 @@ const tierPools = (raw) => {
   return out;
 };
 
-const tierBlank = () => ({tiers: Array.from({length: TIER_COUNT}, () => []), title: "", labels: null});
+const tierBlank = (n) => ({tiers: Array.from({length: n || TIER_COUNT}, () => []), title: "", labels: null});
 
 // Keep a stored or decoded list honest against the set's real pool: unknown
 // ids dropped, each card in at most one tier, always TIER_COUNT tiers.
 const tierClean = (list, pool) => {
   const ok = new Set(pool.map(p => p.id));
   const seen = new Set();
-  const tiers = Array.from({length: TIER_COUNT}, (_, i) => {
+  const n = tierCountOf(list && list.labels);
+  const tiers = Array.from({length: n}, (_, i) => {
     const t = (list && Array.isArray(list.tiers) && Array.isArray(list.tiers[i])) ? list.tiers[i] : [];
     return t.filter(id => ok.has(id) && !seen.has(id) && seen.add(id));
   });
-  const labels = list && Array.isArray(list.labels) && list.labels.length === TIER_COUNT
-    ? list.labels.map(l => String(l || "").slice(0, TIER_LABEL_MAX)) : null;
+  const labels = list && Array.isArray(list.labels) ? tierNormLabels(list.labels, n) : null;
   return {tiers, title: String((list && list.title) || "").slice(0, TIER_TITLE_MAX), labels};
 };
 
@@ -42357,15 +42379,15 @@ const tierEncode = (tiers, pool) => {
   while(parts.length && !parts[parts.length - 1]) parts.pop();
   return parts.length ? base + "-" + parts.join(".") : "";
 };
-const tierDecode = (str, pool) => {
-  const tiers = Array.from({length: TIER_COUNT}, () => []);
+const tierDecode = (str, pool, n) => {
+  const tiers = Array.from({length: n || TIER_COUNT}, () => []);
   if(!str || !pool.length) return tiers;
   const m = /^(\d{1,4})-(.*)$/.exec(String(str));
   const base = m ? Number(m[1]) : pool[0].num;
   const body = m ? m[2] : String(str);
   const idAt = new Map(pool.map(p => [p.num - base, p.id]));
   const seen = new Set();
-  body.split(".").slice(0, TIER_COUNT).forEach((grp, i) => {
+  body.split(".").slice(0, tiers.length).forEach((grp, i) => {
     for(const ch of grp){
       const id = idAt.get(parseInt(ch, 36));
       if(id && !seen.has(id)){ seen.add(id); tiers[i].push(id); }
@@ -42377,14 +42399,15 @@ const tierDecode = (str, pool) => {
 // URLSearchParams leaves unescaped, so the link stays readable), and only when one of
 // them differs from S/A/B/C/D — a default list keeps a short link.
 const tierLabelsParam = (labels) => {
-  if(!labels || labels.every((l, i) => (l || TIER_DEFAULTS[i].label) === TIER_DEFAULTS[i].label)) return "";
+  if(!labels || !tierNormLabels(labels)) return "";
   return labels.map((l, i) => String(l || TIER_DEFAULTS[i].label).replace(/_/g, " ").slice(0, TIER_LABEL_MAX)).join("_");
 };
 const tierParseLabels = (s) => {
   if(!s) return null;
-  const parts = String(s).split("_").slice(0, TIER_COUNT).map(x => x.trim().slice(0, TIER_LABEL_MAX));
+  const parts = String(s).split("_").slice(0, TIER_MAX).map(x => x.trim().slice(0, TIER_LABEL_MAX));
   if(!parts.some(Boolean)) return null;
-  return TIER_DEFAULTS.map((d, i) => parts[i] || d.label);
+  const n = Math.max(parts.length, TIER_MIN);
+  return Array.from({length: n}, (_, i) => parts[i] || TIER_DEFAULTS[i].label);
 };
 const tierLabelOf = (list, i) => (list.labels && list.labels[i]) || TIER_DEFAULTS[i].label;
 
@@ -42438,8 +42461,10 @@ const tierToStored = (list, pool) => ({code: tierEncode(list.tiers, pool), title
   labels: tierLabelsParam(list.labels), t: list.t || Date.now()});
 const tierFromStored = (e, pool) => {
   if(!e) return tierBlank();
-  if(typeof e.code === "string")
-    return {...tierClean({tiers: tierDecode(e.code, pool), title: e.title, labels: tierParseLabels(e.labels)}, pool), t: e.t};
+  if(typeof e.code === "string"){
+    const labels = tierParseLabels(e.labels);
+    return {...tierClean({tiers: tierDecode(e.code, pool, tierCountOf(labels)), title: e.title, labels}, pool), t: e.t};
+  }
   return {...tierClean(e, pool), t: e.t};
 };
 // ── Custom lists: any cards the person picks ─────────────────────────────────
@@ -42519,13 +42544,14 @@ const tierCustomEncode = (groups, idx) => {
 };
 // Returns {tiers, pool, missing}: `missing` counts cards the catalog no longer
 // has, so the page can say so instead of quietly showing a shorter list.
-const tierCustomDecode = (str, idx) => {
-  const groups = Array.from({length: TIER_COUNT + 1}, () => []);
+const tierCustomDecode = (str, idx, n) => {
+  const k = n || TIER_COUNT;
+  const groups = Array.from({length: k + 1}, () => []);
   let g = 0, cur = null, missing = 0, kept = 0;
   const seen = new Set();
   for(const tok of String(str || "").split(".")){
     if(!tok) continue;
-    if(tok === "*"){ if(g < TIER_COUNT) g++; continue; }
+    if(tok === "*"){ if(g < k) g++; continue; }
     if(tok[0] === "_"){ cur = tok.slice(1).toUpperCase(); continue; }
     let e = null;
     if(tok[0] === "-"){ const id = tierUnB64(tok.slice(1)); e = id ? idx.byId.get(id) : null; }
@@ -42536,20 +42562,22 @@ const tierCustomDecode = (str, idx) => {
     kept++;
     groups[g].push(e.id);
   }
-  return {tiers: groups.slice(0, TIER_COUNT), pool: groups[TIER_COUNT], missing};
+  return {tiers: groups.slice(0, k), pool: groups[k], missing};
 };
-const tierCustomBlank = () => ({tiers: Array.from({length: TIER_COUNT}, () => []), pool: [], title: "", labels: null});
+const tierCustomBlank = (n) => ({tiers: Array.from({length: n || TIER_COUNT}, () => []), pool: [], title: "", labels: null});
 // Unknown ids dropped, each card once across tiers + pool, capped.
 const tierCustomClean = (list, idx) => {
   const seen = new Set();
   const keep = (id) => idx.byId.has(id) && !seen.has(id) && seen.size < TIER_CUSTOM_MAX && !!seen.add(id);
-  const tiers = Array.from({length: TIER_COUNT}, (_, i) => {
+  const n = tierCountOf(list && list.labels);
+  const tiers = Array.from({length: n}, (_, i) => {
     const t = (list && Array.isArray(list.tiers) && Array.isArray(list.tiers[i])) ? list.tiers[i] : [];
     return t.filter(keep);
   });
-  const pool = (list && Array.isArray(list.pool) ? list.pool : []).filter(keep);
-  const labels = list && Array.isArray(list.labels) && list.labels.length === TIER_COUNT
-    ? list.labels.map(l => String(l || "").slice(0, TIER_LABEL_MAX)) : null;
+  // A tier that no longer exists (more tiers than labels) hands its cards to the pool.
+  const spill = (list && Array.isArray(list.tiers) ? list.tiers.slice(n) : []).flat();
+  const pool = [...(list && Array.isArray(list.pool) ? list.pool : []), ...spill].filter(keep);
+  const labels = list && Array.isArray(list.labels) ? tierNormLabels(list.labels, n) : null;
   return {tiers, pool, title: String((list && list.title) || "").slice(0, TIER_TITLE_MAX), labels};
 };
 const tierCustomQuery = (list, idx) => {
@@ -42571,10 +42599,31 @@ const tierCustomToStored = (list, idx, extra) => {
 };
 const tierCustomFromStored = (e, idx) => {
   if(!e) return {...tierCustomBlank(), missing: 0};
-  const d = tierCustomDecode(e.code, idx);
-  return {...tierCustomClean({tiers: d.tiers, pool: d.pool, title: e.title,
-    labels: tierParseLabels(e.labels)}, idx), missing: d.missing, t: e.t};
+  const labels = tierParseLabels(e.labels);
+  const d = tierCustomDecode(e.code, idx, tierCountOf(labels));
+  return {...tierCustomClean({tiers: d.tiers, pool: d.pool, title: e.title, labels}, idx), missing: d.missing, t: e.t};
 };
+// Rename tier i (blank = back to its default letter), add a tier at the
+// bottom, or remove one (a custom list's pool takes its cards back; a chase
+// list's are simply unranked). Each keeps the labels in step with the count.
+const tierRenamed = (l, i, v) => {
+  const clean = String(v || "").trim().slice(0, TIER_LABEL_MAX);
+  const next = l.tiers.map((_, k) => k === i ? (clean || TIER_DEFAULTS[k].label) : tierLabelOf(l, k));
+  return {...l, labels: tierNormLabels(next, next.length)};
+};
+const tierWithAdded = (l) => {
+  if(l.tiers.length >= TIER_MAX) return l;
+  const labels = [...l.tiers.map((_, k) => tierLabelOf(l, k)), TIER_DEFAULTS[l.tiers.length].label];
+  return {...l, tiers: [...l.tiers, []], labels: tierNormLabels(labels, labels.length)};
+};
+const tierWithRemoved = (l, i) => {
+  if(l.tiers.length <= TIER_MIN || i < 0 || i >= l.tiers.length) return l;
+  const labels = l.tiers.map((_, k) => tierLabelOf(l, k)).filter((_, k) => k !== i);
+  const out = {...l, tiers: l.tiers.filter((_, k) => k !== i), labels: tierNormLabels(labels, labels.length)};
+  if(Array.isArray(l.pool)) out.pool = [...l.pool, ...l.tiers[i]];
+  return out;
+};
+const tierLabelsOf = (l) => l.tiers.map((_, i) => tierLabelOf(l, i));
 const tierNewSlug = () => {
   const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   const b = new Uint8Array(10);
@@ -42836,7 +42885,7 @@ const tierCustomFetchMine = async (uid) => {
   if(_tierCustomOff || !uid) return null;
   try {
     const {data, error} = await sbClient.from("custom_tier_lists")
-      .select("slug,title,labels,code,card_count,ranked_count,visibility,forked_from,updated_at").eq("user_id", uid);
+      .select("slug,title,labels,code,card_count,ranked_count,visibility,forked_from,updated_at,like_count,view_count").eq("user_id", uid);
     if(error){ tierCustomFail("load", error); return null; }
     return data || [];
   } catch(e){ console.warn("[tierlist] load failed", e); return null; }
@@ -42874,15 +42923,36 @@ const tierCustomFetchOne = async (slug) => {
     return (data && data[0]) || null;
   } catch(e){ console.warn("[tierlist] open failed", e); return null; }
 };
-const tierCustomFetchPublic = async (scope) => {
+const tierCustomFetchPublic = async (scope, opts) => {
   if(_tierCustomOff) return undefined;
+  const o = opts || {};
   try {
-    const {data, error} = await sbClient.rpc("list_public_tier_lists", {p_scope: scope, p_limit: 60});
+    const {data, error} = await sbClient.rpc("list_public_tier_lists",
+      {p_scope: scope, p_limit: 60, p_sort: o.sort || "new", ...(o.user ? {p_user: o.user} : {})});
     if(error){ tierCustomFail("community", error); return _tierCustomOff ? undefined : null; }
     return data || [];
   } catch(e){ console.warn("[tierlist] community failed", e); return null; }
 };
 const tierCustomShortUrl = (slug) => TIER_SITE + TIER_PATH + "?tid=" + slug;
+// Like / unlike (migration 182). true on success.
+const tierLikeSet = async (uid, slug, on) => {
+  try {
+    const q = sbClient.from("custom_tier_list_likes");
+    const {error} = on ? await q.insert({slug, user_id: uid}) : await q.delete().eq("slug", slug).eq("user_id", uid);
+    if(error && !(on && error.code === "23505")){ console.warn("[tierlist] like failed", error); return false; }
+    return true;
+  } catch(e){ console.warn("[tierlist] like failed", e); return false; }
+};
+// A view is counted once per list per browser session, never the owner's.
+const TIER_VIEWED_SS = "packsink:tierlist:viewed";
+const tierCountView = (slug) => {
+  try {
+    const seen = JSON.parse(sessionStorage.getItem(TIER_VIEWED_SS) || "[]");
+    if(seen.includes(slug)) return;
+    sessionStorage.setItem(TIER_VIEWED_SS, JSON.stringify([...seen, slug].slice(-200)));
+  } catch {}
+  sbClient.rpc("bump_tier_list_view", {p_slug: slug}).then(() => {}, () => {});
+};
 
 // Open a list (by slug) on the Tier List page from anywhere — the home
 // Following feed uses it. App listens and switches views; the page reads ?tid=.
@@ -42932,11 +43002,12 @@ function useTierCustomStore(user){
         const rt = Date.parse(r.updated_at) || 0;
         const mine = local[r.slug];
         if(mine && (mine.t || 0) > rt){
-          merged[r.slug] = {...mine, r: uid};
+          merged[r.slug] = {...mine, r: uid, lk: r.like_count, vw: r.view_count};
           tierCustomSaveRemote(uid, r.slug, mine);
         } else {
           merged[r.slug] = {code: r.code || "", title: r.title || "", labels: r.labels || "", t: rt,
-            vis: r.visibility, fork: r.forked_from || null, n: r.card_count, rk: r.ranked_count, r: uid};
+            vis: r.visibility, fork: r.forked_from || null, n: r.card_count, rk: r.ranked_count, r: uid,
+            lk: r.like_count, vw: r.view_count};
         }
       }
       for(const [slug, l] of Object.entries(local)){
@@ -43009,7 +43080,7 @@ function TierCardViewer({card, tierIdx, labels, onPlace, onPrev, onNext, onClose
       if(k === "Escape"){ e.preventDefault(); onClose(); }
       else if(k === "ArrowLeft"){ e.preventDefault(); onPrev(); }
       else if(k === "ArrowRight"){ e.preventDefault(); onNext(); }
-      else if(k >= "1" && k <= String(TIER_COUNT)){ e.preventDefault(); onPlace(Number(k) - 1); }
+      else if(k >= "1" && k <= "9" && Number(k) <= labels.length){ e.preventDefault(); onPlace(Number(k) - 1); }
       else if(k === "0"){ e.preventDefault(); onPlace(-1); }
     };
     document.addEventListener("keydown", onKey);
@@ -43020,7 +43091,7 @@ function TierCardViewer({card, tierIdx, labels, onPlace, onPrev, onNext, onClose
       document.body.style.overflow = prevOverflow;
       try { prevFocus && prevFocus.focus && prevFocus.focus(); } catch {}
     };
-  }, [onClose, onPrev, onNext, onPlace]);
+  }, [onClose, onPrev, onNext, onPlace, labels.length]);
   // The cards either side are fetched ahead, so stepping through them shows
   // the next picture at once instead of holding the old one while it loads.
   useEffect(() => {
@@ -43081,7 +43152,7 @@ function TierCardViewer({card, tierIdx, labels, onPlace, onPrev, onNext, onClose
 // a held finger), keyboard placement and the full-screen viewer. Shared by the
 // set chase lists and the custom lists; the parent owns the list and decides
 // what a move means (onMove: tier -1 = back to the pool).
-function TierBoard({list, cards, unranked, labels, onMove, onRename, onRemove, showSet, hint}){
+function TierBoard({list, cards, unranked, labels, onMove, onRename, onRemove, onAddTier, onRemoveTier, showSet, hint}){
   const [drag, setDrag] = useState(null);
   const [editLabel, setEditLabel] = useState(null);
   const clickBlockUntil = useRef(0);
@@ -43183,7 +43254,7 @@ function TierBoard({list, cards, unranked, labels, onMove, onRename, onRemove, s
   };
   const onCardKey = (e, id) => {
     const k = e.key;
-    if(k >= "1" && k <= String(TIER_COUNT)){ e.preventDefault(); onMove(id, Number(k) - 1, null); }
+    if(k >= "1" && k <= "9" && Number(k) <= list.tiers.length){ e.preventDefault(); onMove(id, Number(k) - 1, null); }
     else if(k === "0" || k === "Backspace" || k === "Delete"){ e.preventDefault(); onMove(id, -1, null); }
     else if(k === "ArrowLeft" || k === "ArrowRight"){
       const l = listRef.current;
@@ -43297,12 +43368,17 @@ function TierBoard({list, cards, unranked, labels, onMove, onRename, onRemove, s
                 onClick=${() => setEditLabel(i)}>
                 <span class=${"tl-label-txt" + (labels[i].length > 3 ? " is-long" : "")}>${labels[i]}</span>
               </button>`}
+          ${onRemoveTier && list.tiers.length > TIER_MIN && editLabel !== i && html`<button type="button" class="tl-label-x"
+            title=${_t("Remove this tier")} aria-label=${_t("Remove this tier")}
+            onClick=${() => onRemoveTier(i)}>${uiIcon("close", 12)}</button>`}
         </div>
         <div class="tl-cards">
           ${withInsert(t, i)}
         </div>
       </div>`)}
     </div>
+    ${onAddTier && list.tiers.length < TIER_MAX && html`<button type="button" class="tl-addtier" onClick=${onAddTier}>
+      + ${_t("Add a tier")}</button>`}
 
     <div class=${"tl-pool" + (drag && drag.over && drag.over.tier === -1 ? " is-over" : "")} data-tl-zone="-1">
       <div class="tl-pool-head">
@@ -43453,8 +43529,9 @@ function TierChaseView({raw, user, onSignIn, initialLink, onCopyToMine}){
     const set = pendingLink.set && pools.has(pendingLink.set) ? pendingLink.set : null;
     if(set){
       const p = pools.get(set);
-      const linked = tierClean({tiers: tierDecode(pendingLink.tl, p), title: pendingLink.tn,
-        labels: tierParseLabels(pendingLink.tt)}, p);
+      const lbl = tierParseLabels(pendingLink.tt);
+      const linked = tierClean({tiers: tierDecode(pendingLink.tl, p, tierCountOf(lbl)), title: pendingLink.tn,
+        labels: lbl}, p);
       // A refresh of your OWN list arrives as a link too (the address bar
       // carries it). Only a list that differs from yours is somebody else's.
       const mine = tierFromStored(store.lists[set], p);
@@ -43559,12 +43636,13 @@ function TierChaseView({raw, user, onSignIn, initialLink, onCopyToMine}){
 
   const onMove = useCallback((id, tier, index) =>
     updateList(l => ({...l, tiers: tierMoveIn(l.tiers, id, tier, index)})), [updateList]);
-  const onRename = useCallback((i, v) => {
-    const clean = String(v || "").trim().slice(0, TIER_LABEL_MAX);
-    updateList(l => {
-      const next = TIER_DEFAULTS.map((d, k) => k === i ? (clean || d.label) : tierLabelOf(l, k));
-      return {...l, labels: next.every((x, k) => x === TIER_DEFAULTS[k].label) ? null : next};
-    });
+  const onRename = useCallback((i, v) => updateList(l => tierRenamed(l, i, v)), [updateList]);
+  const onAddTier = useCallback(() => updateList(tierWithAdded), [updateList]);
+  const onRemoveTier = useCallback((i) => {
+    const before = listRef.current;
+    updateList(l => tierWithRemoved(l, i));
+    if(before.tiers[i] && before.tiers[i].length)
+      flashToast(_t("Tier removed — its cards are back in the pool"), 5000, {label: _t("Undo"), run: () => updateList(() => before)});
   }, [updateList]);
 
   const ranked = new Set(list.tiers.flat());
@@ -43576,7 +43654,7 @@ function TierChaseView({raw, user, onSignIn, initialLink, onCopyToMine}){
   const subtitle = [counts.e ? _t("{n} Enchanted", {n: counts.e}) : null,
     counts.i ? _t("{n} Iconic", {n: counts.i}) : null].filter(Boolean).join(" · ");
   const shareUrl = curSet ? tierShareUrl(curSet, list, pool) : TIER_SITE + TIER_PATH;
-  const labels = TIER_DEFAULTS.map((_, i) => tierLabelOf(list, i));
+  const labels = tierLabelsOf(list);
 
   const share = useTierShare({
     user, onSignIn, title, shareUrl,
@@ -43593,7 +43671,7 @@ function TierChaseView({raw, user, onSignIn, initialLink, onCopyToMine}){
   const reset = () => {
     const before = listRef.current;
     if(before.tiers.every(t => !t.length)) return;
-    updateList(l => ({...l, tiers: tierBlank().tiers}));
+    updateList(l => ({...l, tiers: l.tiers.map(() => [])}));
     flashToast(_t("Every card is back in the pool"), 5000, {label: _t("Undo"), run: () => updateList(() => before)});
   };
   const startOwn = () => setShared(null);
@@ -43633,7 +43711,7 @@ function TierChaseView({raw, user, onSignIn, initialLink, onCopyToMine}){
     </div>`}
 
     <${TierBoard} key=${curSet} list=${list} cards=${poolById} unranked=${unranked} labels=${labels}
-      onMove=${onMove} onRename=${onRename}
+      onMove=${onMove} onRename=${onRename} onAddTier=${onAddTier} onRemoveTier=${onRemoveTier}
       hint=${_t("Drag cards into a tier (on a phone, press and hold a card first), or tap a card to see it full size and pick its tier. Tap a tier's letter to rename it.")}/>
 
     ${share.nudgeEl}
@@ -43665,7 +43743,7 @@ const tierPickMatch = (idx, flt) => {
 };
 const TIER_PICK_RARITIES = ["Common", "Uncommon", "Rare", "Super Rare", "Legendary", "Epic", "Enchanted", "Iconic", "Promo"];
 
-function TierCardPicker({idx, flt, setFlt, inList, onAdd, onRemove, count, searchRef}){
+function TierCardPicker({idx, flt, setFlt, inList, onAdd, onRemove, count}){
   const dq = React.useDeferredValue(flt.q);
   const [shown, setShown] = useState(TIER_PICK_PAGE);
   const results = useMemo(() => tierPickMatch(idx, {...flt, q: dq}), [idx, dq, flt.set, flt.rars, flt.inks]);
@@ -43686,7 +43764,7 @@ function TierCardPicker({idx, flt, setFlt, inList, onAdd, onRemove, count, searc
   const active = !!(flt.q.trim() || flt.set || flt.rars.size || flt.inks.size);
   return html`<div class="tl-pick">
     <div class="tl-pick-row">
-      <input ref=${searchRef} class="tl-title-in tl-pick-q" type="search" value=${flt.q}
+      <input class="tl-title-in tl-pick-q" type="search" value=${flt.q}
         placeholder=${_t("Search cards: 'mickey mouse', 'amber common', 'hyperia legendary'")}
         aria-label=${_t("Search cards")}
         onChange=${e => { const v = e.target.value; setFlt(f => ({...f, q: v})); }}/>
@@ -43743,7 +43821,7 @@ const tierStripIds = (l, n) => {
   const ranked = l.tiers.flat();
   return (ranked.length ? ranked : l.pool).slice(0, n);
 };
-function TierListTile({entry, idx, author, onOpen, onDelete, vis}){
+function TierListTile({entry, idx, author, onOpen, onDelete, vis, likes, views}){
   const l = useMemo(() => tierCustomFromStored(entry, idx), [entry, idx]);
   const [armed, setArmed] = useState(false);
   useEffect(() => { if(!armed) return; const t = setTimeout(() => setArmed(false), 3000); return () => clearTimeout(t); }, [armed]);
@@ -43763,6 +43841,10 @@ function TierListTile({entry, idx, author, onOpen, onDelete, vis}){
         <span>${_t("{n} cards", {n})}${n ? " · " + _t("{n} ranked", {n: rk}) : ""}</span>
         ${entry.t ? html`<span>${relativeTime(new Date(entry.t).toISOString())}</span>` : null}
         ${visLbl && html`<span class=${"tl-vis-pill tl-vis-pill--" + vis}>${visLbl}</span>`}
+        ${(likes != null || views != null) && html`<span class="tl-stats">
+          ${likes != null && html`<span title=${_t("{n} likes", {n: likes})}>${uiIcon("heart", 12)} ${likes}</span>`}
+          ${views != null && html`<span title=${_t("{n} views", {n: views})}>${uiIcon("eye", 12)} ${views}</span>`}
+        </span>`}
       </span>
     </button>
     ${onDelete && html`<button type="button" class=${"tl-tile-del" + (armed ? " is-armed" : "")}
@@ -43771,13 +43853,6 @@ function TierListTile({entry, idx, author, onOpen, onDelete, vis}){
       onClick=${() => armed ? onDelete() : setArmed(true)}>${armed ? _t("Delete?") : uiIcon("trash", 15)}</button>`}
   </div>`;
 }
-
-const tierNewestSet = (idx) => {
-  const has = new Set();
-  for(const e of idx.byId.values()) if(e.set) has.add(e.set);
-  for(let i = MAINLINE_SETS.length - 1; i >= 0; i--) if(has.has(MAINLINE_SETS[i])) return MAINLINE_SETS[i];
-  return null;
-};
 
 function TierMyLists({store, idx, user, onSignIn, onOpen, onNew}){
   const rows = Object.entries(store.lists).sort((a, b) => (b[1].t || 0) - (a[1].t || 0));
@@ -43794,34 +43869,42 @@ function TierMyLists({store, idx, user, onSignIn, onOpen, onNew}){
       ? html`<div class="tl-tiles">
           ${rows.map(([slug, e]) => html`<${TierListTile} key=${slug} entry=${e} idx=${idx}
             vis=${user && store.remote ? (e.vis || "unlisted") : null}
+            likes=${e.lk != null && e.vis !== "private" ? e.lk : null} views=${e.vw != null && e.vis !== "private" ? e.vw : null}
             onOpen=${() => onOpen(slug)} onDelete=${() => { store.remove(slug); flashToast(_t("List deleted")); }}/>`)}
         </div>`
       : html`<p class="tl-pick-empty">${_t("You haven't made a list yet.")}</p>`}
   </div>`;
 }
 
+const tierRemoteEntry = (r) => ({code: r.code, title: r.title, labels: r.labels, n: r.card_count, rk: r.ranked_count,
+  t: Date.parse(r.updated_at) || 0});
 function TierCommunity({idx, user, onSignIn, onOpen}){
   const [scope, setScope] = useState("all");
+  const [sort, setSort] = useState("new");
   const [rows, setRows] = useState(null);
   const [state, setState] = useState("loading");
   useEffect(() => {
     if(scope === "following" && !user){ setRows([]); setState("ok"); return; }
     let cancelled = false;
     setState("loading");
-    tierCustomFetchPublic(scope).then(r => {
+    tierCustomFetchPublic(scope, {sort}).then(r => {
       if(cancelled) return;
       if(r === undefined){ setState("off"); setRows([]); return; }
       if(r === null){ setState("err"); return; }
       setRows(r); setState("ok");
     });
     return () => { cancelled = true; };
-  }, [scope, user && user.id]);
+  }, [scope, sort, user && user.id]);
+  const seg = (val, cur, set, lbl) => html`<button key=${val} type="button" class=${cur === val ? "is-on" : ""}
+    aria-pressed=${cur === val ? "true" : "false"} onClick=${() => set(val)}>${lbl}</button>`;
   return html`<div class="tl-community">
-    <div class="tl-seg" role="group" aria-label=${_t("Whose lists")}>
-      <button type="button" class=${scope === "all" ? "is-on" : ""} aria-pressed=${scope === "all" ? "true" : "false"}
-        onClick=${() => setScope("all")}>${_t("Everyone")}</button>
-      <button type="button" class=${scope === "following" ? "is-on" : ""} aria-pressed=${scope === "following" ? "true" : "false"}
-        onClick=${() => setScope("following")}>${_t("Following")}</button>
+    <div class="tl-community-bar">
+      <div class="tl-seg" role="group" aria-label=${_t("Whose lists")}>
+        ${seg("all", scope, setScope, _t("Everyone"))}${seg("following", scope, setScope, _t("Following"))}
+      </div>
+      <div class="tl-seg" role="group" aria-label=${_t("Sort")}>
+        ${seg("new", sort, setSort, _t("Newest"))}${seg("liked", sort, setSort, _t("Most liked"))}
+      </div>
     </div>
     ${scope === "following" && !user
       ? html`<div class="tl-signin">
@@ -43835,8 +43918,8 @@ function TierCommunity({idx, user, onSignIn, onOpen}){
           ? _t("Nobody you follow has published a list yet. Follow creators from the Decks tab.")
           : _t("No public lists yet. Make one under My lists and set it to Public.")}</p>`
       : html`<div class="tl-tiles">
-          ${rows.map(r => html`<${TierListTile} key=${r.slug} idx=${idx}
-            entry=${{code: r.code, title: r.title, labels: r.labels, n: r.card_count, rk: r.ranked_count, t: Date.parse(r.updated_at) || 0}}
+          ${rows.map(r => html`<${TierListTile} key=${r.slug} idx=${idx} entry=${tierRemoteEntry(r)}
+            likes=${r.like_count != null ? r.like_count : null} views=${r.view_count != null ? r.view_count : null}
             author=${r.display_name || _t("Someone")} onOpen=${() => onOpen(r.slug)}/>`)}
         </div>`}
   </div>`;
@@ -43893,7 +43976,7 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
   const fork = (keepRanking) => {
     const base = listRef.current;
     const next = keepRanking ? base
-      : {...base, tiers: tierCustomBlank().tiers, pool: [...base.tiers.flat(), ...base.pool]};
+      : {...base, tiers: base.tiers.map(() => []), pool: [...base.tiers.flat(), ...base.pool]};
     const slug = tierNewSlug();
     store.put(slug, tierCustomToStored({...next, t: Date.now()}, idx, {vis: "unlisted",
       fork: source.kind === "remote" ? source.slug : null}));
@@ -43936,40 +44019,34 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
     if(add.length < ids.filter(id => !have.has(id)).length) flashToast(_t("A list holds up to {n} cards", {n: TIER_CUSTOM_MAX}));
     else if(add.length > 1) flashToast(_t("Added {n} cards", {n: add.length}));
   }, [updateList]);
-  const onRename = useCallback((i, v) => {
-    const clean = String(v || "").trim().slice(0, TIER_LABEL_MAX);
-    updateList(l => {
-      const next = TIER_DEFAULTS.map((d, k) => k === i ? (clean || d.label) : tierLabelOf(l, k));
-      return {...l, labels: next.every((x, k) => x === TIER_DEFAULTS[k].label) ? null : next};
-    });
+  const onRename = useCallback((i, v) => updateList(l => tierRenamed(l, i, v)), [updateList]);
+  const onAddTier = useCallback(() => updateList(tierWithAdded), [updateList]);
+  const onRemoveTier = useCallback((i) => {
+    const before = listRef.current;
+    updateList(l => tierWithRemoved(l, i));
+    if(before.tiers[i] && before.tiers[i].length)
+      flashToast(_t("Tier removed — its cards are back in the pool"), 5000, {label: _t("Undo"), run: () => updateList(() => before)});
   }, [updateList]);
 
   const inList = useMemo(() => new Set([...list.tiers.flat(), ...list.pool]), [list]);
   const count = inList.size;
   const [flt, setFlt] = useState({q: "", set: "", rars: new Set(), inks: new Set()});
   const [pickOpen, setPickOpen] = useState(() => own && count === 0);
-  const searchRef = useRef(null);
-  const newest = useMemo(() => tierNewestSet(idx), [idx]);
-  const tSet = flt.set || newest;
-  const tSetLbl = tSet ? _term("set", tSet) : "";
-  // Starter templates: one tap fills the list (and the picker shows what it
-  // did, so the filter can be adjusted). A character search can't be guessed,
-  // so that one puts the cursor in the search box.
-  const applyTemplate = (t) => {
-    const next = {q: "", set: tSet || "", rars: new Set(t.rars || []), inks: new Set(t.inks || [])};
-    setFlt(next);
-    setPickOpen(true);
-    const ids = tierPickMatch(idx, next).map(e => e.id);
-    if(!listRef.current.title && t.title) updateList(l => ({...l, title: t.title.slice(0, TIER_TITLE_MAX)}));
-    onAddCards(ids);
-  };
-  const focusSearch = () => {
-    setFlt({q: "", set: "", rars: new Set(), inks: new Set()});
-    setPickOpen(true);
-    setTimeout(() => { try { searchRef.current && searchRef.current.focus(); } catch {} }, 0);
+  // Likes on somebody else's list: optimistic, put back if the write fails.
+  const [like, setLike] = useState(() => source.kind === "remote"
+    ? {n: source.row.like_count || 0, on: !!source.row.liked_by_me} : null);
+  const toggleLike = async () => {
+    if(!like) return;
+    if(!user){ onSignIn && onSignIn(); return; }
+    const on = !like.on;
+    setLike({n: Math.max(0, like.n + (on ? 1 : -1)), on});
+    if(!(await tierLikeSet(user.id, source.slug, on))){
+      setLike(like);
+      flashToast(_t("Couldn't save that — try again in a moment."));
+    }
   };
 
-  const labels = TIER_DEFAULTS.map((_, i) => tierLabelOf(list, i));
+  const labels = tierLabelsOf(list);
   const unranked = list.pool.map(id => idx.byId.get(id)).filter(Boolean);
   const cards = idx.byId;
   const author = source.kind === "remote" ? (source.row.display_name || _t("Someone")) : null;
@@ -43993,7 +44070,7 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
   const reset = () => {
     const before = listRef.current;
     if(!ranked) return;
-    updateList(l => ({...l, tiers: tierCustomBlank().tiers, pool: [...l.tiers.flat(), ...l.pool]}));
+    updateList(l => ({...l, tiers: l.tiers.map(() => []), pool: [...l.tiers.flat(), ...l.pool]}));
     flashToast(_t("Every card is back in the pool"), 5000, {label: _t("Undo"), run: () => updateList(() => before)});
   };
   const setVis = (v) => {
@@ -44048,7 +44125,15 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
       ${own && html`<button type="button" class=${"tl-btn tl-btn--quiet" + (delArmed ? " tl-btn--danger" : "")}
         onClick=${() => { if(!delArmed){ setDelArmed(true); return; } store.remove(source.slug); flashToast(_t("List deleted")); onBack(); }}>
         ${uiIcon("trash", 15)} ${delArmed ? _t("Tap again to delete") : _t("Delete")}</button>`}
+      ${like && html`<button type="button" class=${"tl-btn tl-like" + (like.on ? " is-on" : "")}
+        aria-pressed=${like.on ? "true" : "false"}
+        title=${user ? (like.on ? _t("Unlike this list") : _t("Like this list")) : _t("Sign in to like this list")}
+        onClick=${toggleLike}>${uiIcon("heart", 15)} ${like.n}</button>`}
       ${onAccount && entry && entry.r === user.id && html`<span class="tl-sync">${uiIcon("check", 13)} ${_t("Saved to your account")}</span>`}
+      ${onAccount && entry && vis !== "private" && entry.lk != null && html`<span class="tl-stats">
+        <span title=${_t("{n} likes", {n: entry.lk})}>${uiIcon("heart", 13)} ${entry.lk}</span>
+        <span title=${_t("{n} views", {n: entry.vw || 0})}>${uiIcon("eye", 13)} ${entry.vw || 0}</span>
+      </span>`}
     </div>
 
     ${own && html`<section class=${"tl-addcards" + (pickOpen ? " is-open" : "")}>
@@ -44059,33 +44144,14 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
         <span class="tl-addcards-caret" aria-hidden="true">${pickOpen ? "▾" : "▸"}</span>
       </button>
       ${pickOpen && html`<div class="tl-addcards-body">
-        ${count === 0 && html`<div class="tl-starters">
-          <span class="tl-field-lbl">${_t("Start from")}</span>
-          <div class="tl-starter-row">
-            ${tSet && html`<button type="button" class="tl-starter" onClick=${() => applyTemplate({rars: ["Legendary"],
-                title: _t("{set} Legendaries", {set: tSetLbl})})}>
-              <${RarityTag} rarity="Legendary" hideText=${true}/> ${_t("Every Legendary in {set}", {set: tSetLbl})}</button>`}
-            ${tSet && html`<button type="button" class="tl-starter" onClick=${() => applyTemplate({rars: ["Common"],
-                title: _t("{set} Commons for draft", {set: tSetLbl})})}>
-              <${RarityTag} rarity="Common" hideText=${true}/> ${_t("Every Common in {set} (for draft)", {set: tSetLbl})}</button>`}
-            <button type="button" class="tl-starter" onClick=${focusSearch}>
-              ${uiIcon("search", 14)} ${_t("Every version of a character")}</button>
-          </div>
-          ${tSet && html`<div class="tl-starter-row">
-            <span class="tl-starter-lbl">${_t("One ink in {set}:", {set: tSetLbl})}</span>
-            ${INKS.map(ink => html`<button key=${ink} type="button" class="tl-chip tl-chip--ink"
-                title=${_term("ink", ink)} onClick=${() => applyTemplate({inks: [ink],
-                  title: _t("{set}: {ink}", {set: tSetLbl, ink: _term("ink", ink)})})}>
-              <img src=${INK_ICONS[ink]} alt=${_term("ink", ink)}/></button>`)}
-          </div>`}
-        </div>`}
         <${TierCardPicker} idx=${idx} flt=${flt} setFlt=${setFlt} inList=${inList} count=${count}
-          onAdd=${onAddCards} onRemove=${onRemoveCards} searchRef=${searchRef}/>
+          onAdd=${onAddCards} onRemove=${onRemoveCards}/>
       </div>`}
     </section>`}
 
     <${TierBoard} key=${own ? source.slug : "x"} list=${list} cards=${cards} unranked=${unranked} labels=${labels}
       onMove=${onMove} onRename=${onRename} onRemove=${onRemoveOne} showSet=${true}
+      onAddTier=${onAddTier} onRemoveTier=${onRemoveTier}
       hint=${count ? _t("Drag cards into a tier (on a phone, press and hold a card first), or tap a card to see it full size and pick its tier. Tap a tier's letter to rename it.") : null}/>
 
     ${share.nudgeEl}
@@ -44103,6 +44169,11 @@ function TierOpenSlug({slug, idx, user, onSignIn, store, onOpenSlug, onBack, bac
     tierCustomFetchOne(slug).then(r => { if(!cancelled) setRow(r === undefined ? null : r); });
     return () => { cancelled = true; };
   }, [slug, mine]);
+  // Count a view of somebody else's list (once a session).
+  useEffect(() => {
+    if(mine || !row || (user && row.user_id === user.id)) return;
+    tierCountView(slug);
+  }, [row, mine, user && user.id]);
   // Your own list from another device, before this one has synced: take it.
   useEffect(() => {
     if(mine || !row || !user || row.user_id !== user.id) return;
@@ -44116,6 +44187,28 @@ function TierOpenSlug({slug, idx, user, onSignIn, store, onOpenSlug, onBack, bac
   </div>`;
   return html`<${TierCustomEditor} key=${slug} idx=${idx} user=${user} onSignIn=${onSignIn} store=${store}
     source=${source} onOpenSlug=${onOpenSlug} onBack=${onBack} backLabel=${backLabel}/>`;
+}
+
+// A creator's public tier lists, under their decks on the profile page.
+function CreatorTierLists({creatorId, raw}){
+  const [rows, setRows] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    setRows(null);
+    tierCustomFetchPublic("all", {user: creatorId}).then(r => { if(!cancelled) setRows(r || []); });
+    return () => { cancelled = true; };
+  }, [creatorId]);
+  const codeN = _setCodeById.size;
+  const idx = useMemo(() => tierCardIndex(raw, r => _setCodeById.get(r.set_id)), [raw, codeN]);
+  if(!rows || !rows.length) return null;
+  return html`<section class="creator-tierlists">
+    <h3 class="creator-tierlists-title">${_t("Tier lists")}</h3>
+    <div class="tl-tiles">
+      ${rows.map(r => html`<${TierListTile} key=${r.slug} idx=${idx} entry=${tierRemoteEntry(r)}
+        likes=${r.like_count != null ? r.like_count : null} views=${r.view_count != null ? r.view_count : null}
+        onOpen=${() => openTierListSlug(r.slug)}/>`)}
+    </div>
+  </section>`;
 }
 
 const TIER_TAB_LS = "packsink:tierlist:tab";
@@ -59547,6 +59640,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                    : _t("{name} hasn't published any public decks.", {name: c.display_name || _t("This user")})}
           </div>`
         : html`<div class="deck-list">${creatorProfile.decks.map(entry => renderExternalCard(entry, {}))}</div>`}
+      ${cid && html`<${CreatorTierLists} creatorId=${cid} raw=${raw}/>`}
       ${toastEl}
     <//>`;
   }
