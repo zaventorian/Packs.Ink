@@ -414,6 +414,23 @@ card art tile much bigger"*.
     MEASURED (price column = the wider price, three change cells share the rest,
     values right-aligned so the last one ends on the card's right edge), the type
     stepping down together only when a four-figure price would not fit.
+- **⚠ `/card` replies in Components V2, not an embed (2026-10-05)** — `src/layout.js`.
+  An embed caps its picture at ~400 x 300, so the card topped out ~200 px wide with
+  grey space beside it however the tile was drawn. A side-by-side test in a real
+  channel (embed / the picture as a loose attachment / V2) picked V2: the embed is
+  converted to a container (title + text block, fields as a text block, the picture
+  as a media gallery, the footer as `-#` text, the buttons and menus as rows inside
+  it), sent with `flags: 32768`. `patchOriginal` applies it AFTER `withUploads`, so the
+  gallery item points at the uploaded `attachment://` file.
+  - **Which replies:** the `/card` command, "Look at a card" menus with the card view,
+    and /help's Try it for /card. `/price` stays an embed (a chart is wide; an embed
+    fits it). A button keeps the layout of the message it is on (`layoutOfMessage`
+    reads the V2 flag off `it.message`), because a V2 message can never become an
+    embed again — so "Price chart" on a /card reply answers as V2.
+  - A `content` note above the reply becomes its own text block (V2 has no content).
+  - If Discord refuses the V2 edit, the existing retry sends the plain embed, which
+    works on a first edit; on a button update of a V2 message it cannot (the flag
+    sticks), and the old message stands.
 - **PSA tiers on `/card` only for chase cards and promos** (`GRADED_ON_CARD`:
   Enchanted / Epic / Iconic / Promo). A base-rarity card's two PSA 9 sales were noise
   beside the picture. `/price`, and any reply where a grade was asked for, keep every

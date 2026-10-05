@@ -14,6 +14,7 @@ import { chartResponse } from "./charts.js";
 export const T = { PING: 1, COMMAND: 2, COMPONENT: 3, AUTOCOMPLETE: 4, MODAL_SUBMIT: 5 };
 export const R_ = { PONG: 1, MESSAGE: 4, DEFERRED: 5, DEFERRED_UPDATE: 6, AUTOCOMPLETE: 8, MODAL: 9 };
 const EPHEMERAL = 64;
+import { applyLayout, layoutOfMessage } from "./layout.js";
 const MANAGE_GUILD = 1n << 5n;
 export const DISCORD_API = "https://discord.com/api/v10";
 // Nothing the bot says may ping anyone — the "closest match for …" line
@@ -51,7 +52,8 @@ function command(it, deps) {
   const o = d.options || [];
   const priv = !!optVal(o, "private", false);
   switch (d.name) {
-    case "card": return deferred(it, deps, priv, () => lookup(String(optVal(o, "name", "")), "card", D.DEFAULT_RANGE, deps));
+    // /card answers in the big layout (layout.js); /price stays an embed.
+    case "card": return deferred(it, deps, priv, async () => ({ ...(await lookup(String(optVal(o, "name", "")), "card", D.DEFAULT_RANGE, deps)), _layout: "big" }));
     case "price": return deferred(it, deps, priv, () => lookup(String(optVal(o, "name", "")), "chart", String(optVal(o, "range", D.DEFAULT_RANGE)), deps));
     case "events": return deferred(it, deps, priv, () => events(o, deps));
     case "calendar": return deferred(it, deps, priv, () => calendar(deps));
@@ -112,6 +114,8 @@ const RETRY_MAX_WAIT_MS = 2500;
 const retryable = (status) => status === 0 || status === 429 || status >= 500;
 
 async function patchOriginal(it, deps, payload, { update = false } = {}) {
+  const layout = (payload && payload._layout) || "embed";
+  if (payload && "_layout" in payload) { payload = { ...payload }; delete payload._layout; }
   const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
   const once = async (method, url, body, files) => {
     try {
@@ -145,7 +149,7 @@ async function patchOriginal(it, deps, payload, { update = false } = {}) {
   // shown loose under the embed. A payload's own list wins.
   const plainBody = { attachments: [], ...payload };
   const up = await withUploads(payload, deps).catch((e) => { deps.log && deps.log("upload prep failed", e && e.message); return null; });
-  let r = await send("PATCH", orig, up ? up.body : plainBody, up && up.files);
+  let r = await send("PATCH", orig, applyLayout(up ? up.body : plainBody, layout), up && up.files);
   if (r.ok) return;
   if (deps.log) deps.log("patch failed", r.status, (await r.text().catch(() => "")).slice(0, 800));
   // The upload is the new risk, so if it was refused for any reason the reply
@@ -360,13 +364,15 @@ function component(it, deps) {
     const place = { lat: ev.lat, lng: ev.lng, city: ev.label };
     return deferredUpdate(it, deps, () => eventsBoard({ place, radius: ev.radius, kind: ev.kind, query: ev.label }, deps));
   }
+  // A card reply keeps the layout it was sent in (layout.js).
+  const keep = async (p) => ({ ...(await p), _layout: layoutOfMessage(it.message) });
   const rg = E.parseRangeId(id);
-  if (rg) return deferredUpdate(it, deps, () => byKey(rg.key, rg.view, rg.range, deps, rg.grade));
+  if (rg) return deferredUpdate(it, deps, () => keep(byKey(rg.key, rg.view, rg.range, deps, rg.grade)));
   const pk = E.parsePickId(id);
   if (pk) {
     const key = (it.data.values || [])[0];
     if (!key) return { type: R_.DEFERRED_UPDATE };
-    return deferredUpdate(it, deps, () => byKey(key, pk.view === "graded" ? "chart" : pk.view, pk.range, deps));
+    return deferredUpdate(it, deps, () => keep(byKey(key, pk.view === "graded" ? "chart" : pk.view, pk.range, deps)));
   }
   // "Look at a card" from a set, /new or /meta list: a NEW reply that
   // only the person who asked sees, so the list stays put for everyone else.
@@ -374,7 +380,7 @@ function component(it, deps) {
   if (op) {
     const key = (it.data.values || [])[0];
     if (!key) return { type: R_.DEFERRED_UPDATE };
-    return deferred(it, deps, true, () => byKey(key, op.view, D.DEFAULT_RANGE, deps));
+    return deferred(it, deps, true, async () => ({ ...(await byKey(key, op.view, D.DEFAULT_RANGE, deps)), _layout: op.view === "card" ? "big" : "embed" }));
   }
   return { type: R_.MESSAGE, data: { content: "That button has expired.", flags: EPHEMERAL } };
 }
@@ -529,7 +535,7 @@ export function packReply(name, n, it, deps) {
 // ── /help's examples ─────────────────────────────────────────────────────
 function helpTry(what, it, deps) {
   const note = (text, m) => ({ ...m, content: text });
-  if (what === "card") return deferred(it, deps, true, async () => note("Example: `/card mowgli`", await lookup("mowgli", "card", D.DEFAULT_RANGE, deps)));
+  if (what === "card") return deferred(it, deps, true, async () => ({ ...note("Example: `/card mowgli`", await lookup("mowgli", "card", D.DEFAULT_RANGE, deps)), _layout: "big" }));
   if (what === "open") return instant(note("Example: `/open` — add `box: True` for a whole box", packReply("", 1, it, deps)), true);
   return instant(note("Example: `/set`", setReply("", deps)), true);
 }

@@ -1319,13 +1319,30 @@ const D = await mod("discord/src/data.js");
     ok(a.sent.length === 1 && s0.multipart && s0.method === "PATCH" && /\/messages\/@original$/.test(s0.url), "/card's first reply is ONE multipart edit of the deferred message");
     ok(!s0.ctype, "a multipart edit leaves Content-Type to the runtime (it carries the boundary)");
     eq(a.asked[0], tilePath, "the Worker reads the tile from its own asset store");
-    const e0 = s0.body && s0.body.embeds && s0.body.embeds[0];
-    eq(e0 && e0.image && e0.image.url, "attachment://packs-ink-0.webp", "the embed points at the uploaded file, not a URL Discord would have to fetch");
+    // /card answers in Components V2 (layout.js): the tile is a media gallery item.
+    const c0 = s0.body && s0.body.components && s0.body.components.find((c) => c.type === 17);
+    const g0 = c0 && c0.components.find((c) => c.type === 12);
+    ok(s0.body && s0.body.flags === 32768 && !s0.body.embeds && !s0.body.content && c0, "/card is a Components V2 message: one container, no embed");
+    eq(g0 && g0.items[0].media.url, "attachment://packs-ink-0.webp", "the card picture points at the uploaded file, not a URL Discord would have to fetch");
+    ok(c0 && c0.components[0].type === 10 && /^### \[/.test(c0.components[0].content) && c0.components.some((c) => c.type === 1),
+      "the title, text and the reply's buttons are inside the container");
     ok(s0.files && s0.files.length === 1 && s0.files[0].name === "packs-ink-0.webp" && s0.files[0].type === "image/webp" && s0.files[0].size === 4 && s0.files[0].field === "files[0]",
       "the file rides along as files[0], named as the embed references it");
     eq(JSON.stringify(s0.body && s0.body.attachments), JSON.stringify([{ id: 0, filename: "packs-ink-0.webp" }]), "attachments declares exactly the uploaded file");
     ok(s0.body && s0.body.allowed_mentions && !s0.body.allowed_mentions.parse.length, "an upload still never pings anyone");
-    ok(s0.body && Array.isArray(s0.body.components) && s0.body.components.length > 0, "an upload keeps the reply's buttons");
+    ok(c0 && c0.components.filter((c) => c.type === 1).length > 0, "an upload keeps the reply's buttons");
+
+    // layout.js: /price stays an embed; a button keeps its message's layout.
+    const pr = await run({ ...cardCmd, data: { ...cardCmd.data, name: "price" } });
+    ok(pr.sent[0] && pr.sent[0].body.embeds && pr.sent[0].body.embeds[0] && !pr.sent[0].body.flags, "/price stays an embed");
+    const L = await mod("discord/src/layout.js");
+    eq(L.layoutOfMessage({ flags: 64 | 32768 }), "big", "a V2 message's buttons keep it V2");
+    eq(L.layoutOfMessage({ flags: 64, embeds: [{ title: "x" }] }), "embed", "an embed reply's buttons keep it an embed");
+    eq(L.applyLayout({ content: "x", embeds: [] }, "big").content, "x", "a reply with no embed is left alone");
+    const noted = L.toComponentsV2({ content: "Example: `/card mowgli`", embeds: [{ title: "T", description: "d" }], components: [] });
+    ok(noted.components[0].type === 10 && /Example/.test(noted.components[0].content) && noted.components[1].type === 17, "a note above the reply becomes its own text block");
+    const bigBtn = await run({ type: 3, token: "tk9", application_id: "123", message: { flags: 32768 }, data: { custom_id: E.rangeId("3m", "chart", key), component_type: 2 } });
+    ok(bigBtn.sent[0] && bigBtn.sent[0].body.flags === 32768, "Price chart on a /card reply answers in V2");
 
     // Switching to the chart uploads the CHART, drawn here by the chart route,
     // and its attachments list names only it, so the tile is dropped.
@@ -1369,14 +1386,17 @@ const D = await mod("discord/src/data.js");
     ok(f.sent.length === 3 && f.sent[2].body.content && !f.sent[2].body.embeds.length, "when both are refused, the plain-text fallback still answers");
 
     // The asset store can't produce the file: nothing to upload, the link stands.
+    // (A /card reply is V2: its picture is the media gallery's.)
+    const picUrl = (b) => (b.embeds && b.embeds[0] && b.embeds[0].image ? b.embeds[0].image.url
+      : ((((b.components || []).find((c) => c.type === 17) || {}).components || []).find((c) => c.type === 12) || { items: [{ media: {} }] }).items[0].media.url) || "";
     const g = await run(cardCmd, { assets: { fetch: async () => new Response("nope", { status: 404 }) } });
-    ok(g.sent.length === 1 && !g.sent[0].multipart && g.sent[0].body.embeds[0].image.url.startsWith(O + tilePath), "a tile missing from the asset store falls back to the link");
+    ok(g.sent.length === 1 && !g.sent[0].multipart && picUrl(g.sent[0].body).startsWith(O + tilePath), "a tile missing from the asset store falls back to the link");
     const g2 = await run(cardCmd, { assets: { fetch: async () => { throw new Error("boom"); } } });
     ok(g2.sent.length === 1 && !g2.sent[0].multipart, "an asset store that throws falls back to the link");
 
     // No binding at all (an older deploy config): exactly the old behaviour.
     const h = await run(cardCmd, { assets: null });
-    ok(h.sent.length === 1 && !h.sent[0].multipart && h.sent[0].body.embeds[0].image.url.startsWith(O + tilePath), "without an asset binding the tile is linked, as before");
+    ok(h.sent.length === 1 && !h.sent[0].multipart && picUrl(h.sent[0].body).startsWith(O + tilePath), "without an asset binding the tile is linked, as before");
   }
 
   // withUploads directly: thumbnails too, several embeds, a cap of ten files.
