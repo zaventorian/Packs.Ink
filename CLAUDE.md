@@ -1440,11 +1440,21 @@ Guards: `scripts/test_tier_list.mjs`.
 - **⚠ A link is SHOWN, not saved** (the "a link may choose for you, never over you" rule): opening
   someone's list leaves your own list for that set alone until you move a card. A link that equals
   your saved list (a refresh — the address bar carries it) is just your list, no "shared" banner.
-- Mouse/pen drag (pointer events + `elementFromPoint`, edge auto-scroll); a finger taps a card, then
-  a tier, so cards keep `touch-action:manipulation` and the page still scrolls on a phone. Keys 1–5
-  place a focused card, 0 unranks, ←/→ reorder.
-- Desktop: Copy image (image only — no text/plain beside it; apps disagree on which half they paste)
-  + Copy link. Touch: one share sheet carrying the PNG and the link together.
+- Mouse/pen drag (pointer events + `elementFromPoint`, edge auto-scroll). A click/tap opens the card
+  FULL SCREEN (`TierCardViewer`): tier buttons, ‹ › through the cards, and a TCGplayer affiliate
+  button (`tcgUrl`, or a `tcgSetSearchUrl` name search for a card with no product yet). Placing an
+  UNRANKED card from there advances to the next unranked one, so a phone ranks a whole set without
+  leaving the view. Cards keep `touch-action:manipulation`, so the page still scrolls on a phone.
+  Keys: 1–5 place, 0 unranks, ←/→ reorder (board) or step (viewer), Esc closes.
+- Copy link copies a LINE + the link (`tierShareText`): "Check out my <set> Chase Card Tier List on
+  Packs.Ink ✨🏆". The two emoji are built with `String.fromCodePoint` so the served source stays
+  emoji-free for `test_no_emoji.mjs`. Copy image is image only (apps disagree on which half of an
+  image+text clipboard they paste). Touch: one share sheet with the PNG and the line together.
+- **Saved to the account when signed in — `tier_lists` (migration 180, APPLIED 2026-10-05)**, one row
+  per (user, set) in the link's own shape (code / title / labels). On sign-in the newer side of each
+  set wins and device-only lists are carried up; edits write through, debounced 900ms. Missing table =
+  device-only, silently. A signed-out visitor gets a small sign-in nudge after a copy/share/save, once
+  per visit (`sessionStorage packsink:tierlist:nudgeDismissed`), never on load.
 - Unranked cards are not in the picture, like TierMaker.
 
 ## Brand assets
