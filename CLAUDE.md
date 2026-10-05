@@ -1441,10 +1441,13 @@ Guards: `scripts/test_tier_list.mjs`.
   card". First-day codes with no base (v523) still read that way. Device storage
   (`packsink:tierlist:v1`) and the account row use the same code (`tierToStored` / `tierFromStored`);
   v523's id-keyed device lists still read and are rewritten on their next edit.
-- **Link previews** (Discord, iMessage...): `worker/tierlist.mjs`, bots only, names the set, the title,
-  what is in each tier, and the highest-ranked card with a JPEG/PNG/WebP picture (an unreleased
-  Lorcast card is AVIF only and is skipped). ⚠ Its `TIER_SETS` must equal `MAINLINE_SETS` (`ts=` indexes
-  it); the guard checks that, and that the worker decodes the client's own codes.
+- **Link previews** (Discord, iMessage...): `worker/tierlist.mjs`, bots only, and deliberately BARE —
+  the list's title and one line ("18 Enchanted · 2 Iconic · make your own at packs.ink/tierlist"),
+  no picture (the image tags are REMOVED and `twitter:card` set to `summary`, or apps draw the site
+  banner). The first version listed every tier and showed a full-size card, which repeated the pasted
+  image in a second, bigger block (Zaven 10/5: "remove all this excess"). ⚠ Its `TIER_SETS` must equal
+  `MAINLINE_SETS` (`ts=` indexes it); the guard checks that, and that the worker decodes the client's
+  own codes.
 - **⚠ A link is SHOWN, not saved** (the "a link may choose for you, never over you" rule): opening
   someone's list leaves your own list for that set alone until you move a card. A link that equals
   your saved list (a refresh — the address bar carries it) is just your list, no "shared" banner.

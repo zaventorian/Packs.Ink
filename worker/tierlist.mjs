@@ -1,7 +1,13 @@
 // Link previews for packs.ink/tierlist?... (Discord, iMessage, Slack...).
 // A tier list link carries the whole list in its query (see the Tier List in
-// Index.html), so a preview bot can be told what is in it without any table:
-// the set, the title, which cards sit in which tier, and the top card's art.
+// Index.html), so a preview bot can be told which set and title it is.
+//
+// ⚠ The preview is deliberately BARE: a title and one short line, no picture.
+// A tier list link is nearly always posted beside the copied image of that
+// list, and the first version (tier-by-tier names plus a full-size card)
+// repeated all of it in a second, bigger block under the message (Zaven,
+// 2026-10-05: "remove all this excess"). The link's own picture is the
+// exported image the person pastes, not one the preview picks.
 //
 // ⚠ TIER_SETS must stay identical to MAINLINE_SETS in Index.html — `ts=` is an
 // index into it. scripts/test_tier_list.mjs checks the two lists agree and
@@ -37,16 +43,8 @@ export function tierDecodeNums(code, firstNum) {
   return tiers;
 }
 
-export function tierLabels(tt) {
-  if (!tt) return DEFAULT_LABELS.slice();
-  const parts = String(tt).split("_").slice(0, DEFAULT_LABELS.length).map((x) => x.trim().slice(0, 12));
-  return DEFAULT_LABELS.map((d, i) => parts[i] || d);
-}
-
-const clip = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s);
-
-// `rows` = the set's chase cards: {name, version, collector_number, rarity,
-// image_large, image_normal, tcgplayer_product_id}. Pure, so it is testable.
+// `rows` = the set's chase cards: {collector_number, rarity,
+// tcgplayer_product_id}. Pure, so it is testable.
 export function tierPreviewFrom(search, rows) {
   const q = new URLSearchParams(search);
   const si = parseInt(q.get("ts") || "", 10);
@@ -61,36 +59,20 @@ export function tierPreviewFrom(search, rows) {
   }
   const nums = [...byNum.keys()].sort((a, b) => a - b);
   const tiers = tierDecodeNums(q.get("tl") || "", nums[0]);
-  const labels = tierLabels(q.get("tt"));
+  const ranked = tiers.flat().filter((n) => byNum.has(n)).length;
+  // Site name ("Packs.Ink") is already shown above the title by every app
+  // that draws one, so the title does not repeat it.
   const title = (q.get("tn") || "").slice(0, 60) || `${set} Chase Card Tier List`;
-  const lines = [];
-  tiers.forEach((t, i) => {
-    const names = t.map((n) => byNum.get(n)).filter(Boolean).map((r) => r.name);
-    if (names.length) lines.push(`${labels[i]}: ${names.join(", ")}`);
-  });
   const ench = [...byNum.values()].filter((r) => r.rarity === "Enchanted").length;
   const icon = [...byNum.values()].filter((r) => r.rarity === "Iconic").length;
-  const desc = lines.length
-    ? clip(lines.join(" · "), 280)
+  const count = `${ench} Enchanted${icon ? ` · ${icon} Iconic` : ""}`;
+  const desc = ranked
+    ? `${count} · make your own at packs.ink/tierlist`
     : `Rank ${set}'s ${ench} Enchanted${icon ? ` and ${icon} Iconic` : ""} cards and share the picture.`;
-  // The top-ranked card is the picture. Only formats every preview bot draws:
-  // TCGplayer's JPEG when the card is listed, or our own JPEG/PNG/WebP art.
-  // Otherwise the site's own preview image stays.
-  // The highest-ranked card that HAS such a picture wins: an unreleased
-  // Lorcast card is AVIF only, and skipping it beats losing the art entirely.
-  let image = null, w = 0, h = 0;
-  for (const r of tiers.flat().map((n) => byNum.get(n)).filter(Boolean)) {
-    if (r.tcgplayer_product_id) {
-      image = `https://tcgplayer-cdn.tcgplayer.com/product/${r.tcgplayer_product_id}_in_1000x1000.jpg`; w = 1000; h = 1000;
-      break;
-    }
-    const src = r.image_large || r.image_normal || "";
-    if (/\.(jpe?g|png|webp)(\?|$)/i.test(src)) { image = src; w = 734; h = 1024; break; }
-  }
   return {
-    title: title + " | Packs.Ink",
+    title,
     desc,
-    image, w, h,
+    bare: true,
     url: "https://packs.ink/tierlist" + (search && search !== "?" ? search : ""),
   };
 }
@@ -101,7 +83,7 @@ export async function tierPreview(search, sbGet) {
   const set = si >= 1 && si <= TIER_SETS.length ? TIER_SETS[si - 1] : null;
   if (!set) return null;
   const rows = await sbGet(
-    "cards?select=name,version,collector_number,rarity,image_large,image_normal,tcgplayer_product_id,sets!inner(name)"
+    "cards?select=collector_number,rarity,tcgplayer_product_id,sets!inner(name)"
     + `&sets.name=eq.${encodeURIComponent(set)}&rarity=in.(Enchanted,Iconic)&limit=60`);
   return tierPreviewFrom(search, rows);
 }
