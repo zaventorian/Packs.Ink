@@ -1481,6 +1481,69 @@ Guards: `scripts/test_tier_list.mjs`.
   non-passive `touchmove` listener present BEFORE a touch starts (dnd-kit's fix), so the view keeps a
   no-op one registered while mounted. Account saves debounce PER SET.
 
+### Custom lists, My lists, Community (2026-10-05)
+
+Zaven's feedback: "make your own tier list" from any cards, mass-add with our filters, publish like
+a public decklist, a user-made section, and the Following feed. The page is three tabs now
+(`?tv=chase|mine|community`); `TierChaseView` is the set chase list above, unchanged in behaviour.
+The board, drag, viewer and share/export buttons are shared components (`TierBoard`,
+`useTierShare`), so a fix to either mode lands in both.
+
+- **A custom list is five tiers PLUS its own pool** (picked, not yet ranked), and the pool travels in
+  the link: a list with nothing ranked is a template somebody else can rank. One code, `?tc=`:
+  tokens split on "." — `_14` switches set, `223` is a card in it, `*` starts the next group (tiers,
+  then pool), `-<base64url>` is a card keyed by card_id. **Keyed by printed SET CODE + COLLECTOR
+  NUMBER** (`_setCodeById`), never card_id, for the prestage-swap reason above. Two card_ids sharing a
+  code + number (an Extras foil, a labelled one-off): the plain card keeps the short key, the other is
+  keyed by id (`tierCardIndex`). Variant clones (`::`) are left out. Cap `TIER_CUSTOM_MAX` (300).
+- **⚠ The page waits for the set codes (`codeN > 0`), not just the catalog.** Decoded without them
+  every card reads as missing, and the next edit would save the list without them.
+- **Saved lists: `custom_tier_lists` (migration 181, APPLIED 2026-10-05)**, keyed by a 10-char slug
+  the CLIENT mints, so a list made signed out keeps its id when carried up. Short link
+  `?tid=<slug>`. Visibility: private / unlisted (default) / public. Public rows are readable by
+  anyone (RLS); an unlisted one only through `get_custom_tier_list(slug)`; Community reads
+  `list_public_tier_lists(scope, user, limit, before)` (scope `following` = people you follow).
+  Verified in a rolled-back transaction: another user can't read private, update, or insert as you.
+  A private list's Copy link is the long `?tc=` link (it carries the list itself).
+- **Device ⇄ account sync (`useTierCustomStore`)**: each list carries `r` = the account it was last
+  confirmed on. On sign-in: newer side wins; a device list with no `r` is carried up; one whose `r`
+  is this account but is gone remotely was deleted on another device and is DROPPED (without `r`,
+  every other device would resurrect it); another account's lists stay on the device untouched.
+  Verified headless on the demo account (rows cleaned up by slug).
+- **Somebody else's list (link or `?tid=`) is shown, and the first edit makes a COPY** (`fork`,
+  `forked_from` recorded) — the chase lists' rule. Two buttons say so up front: "Rank these cards
+  yourself" (same pool, all unranked) and "Start from this ranking".
+- **Adding cards**: the picker routes through `parseSearchQuery` + `matchesCardFilter` (AND mode),
+  plus set / rarity / ink chips; "Add all N". An empty filter lists nothing on purpose. A set filter
+  also matches that set's promos, like the Cards tab. (A "Start from" box of one-tap starters
+  shipped in the first cut and was removed the same day at Zaven's request.) `updateList` sets
+  `listRef.current` itself so two edits in one tick compose instead of the second overwriting.
+- **2 to 10 tiers** ("+ Add a tier", an x on each tier label), chase AND custom lists. **⚠ The
+  count travels in the LABELS**: five default tiers send no `?tt=`; any other list sends one label
+  per tier, so the label count IS the tier count (`tierCountOf`, `tierNormLabels`). The codes split
+  tiers by "." and cannot say how many there are on their own, so every decode takes the count from
+  the labels — including the worker's (`tierCountFromLabels`). A removed tier's cards go back to the
+  pool, with Undo. Colours are positional (TIER_DEFAULTS has ten). Migration 182 widened both
+  `labels` checks to 160 characters for ten renamed tiers.
+- **Likes and views (migration 182, APPLIED 2026-10-05)**: `custom_tier_list_likes` (one row per
+  list + person; `like_count` kept by a trigger), `view_count` bumped by `bump_tier_list_view(slug)`
+  once per browser session and never for the owner. You can like any list you can open (the insert
+  policy calls a DEFINER check, `tier_list_likeable`, because the caller's own RLS hides unlisted
+  rows). **The owner cannot write the counters**: authenticated has column-level INSERT/UPDATE on
+  the editable columns only (PostgREST's upsert names every payload column in its DO UPDATE SET,
+  so `slug` and `user_id` are in that grant). Community sorts Newest / Most liked. All of it
+  verified in a rolled-back transaction.
+- **A creator's public lists show on their profile page** (`CreatorTierLists`, under their decks;
+  `list_public_tier_lists(p_user)`), and open through `openTierListSlug`.
+- A list opened with "New tier list" and left with no card, title or renamed tier is deleted on
+  the way out — read off the STORED entry, never the decoded one.
+- **Following feed**: public lists by people you follow ride the home Following panel ("Tier list"
+  tag); a click goes through `openTierListSlug` → App's `packsink:open-tierlist` listener, which
+  writes `/tierlist?tid=` BEFORE switching views so the page reads it on mount.
+- Link previews (`worker/tierlist.mjs`): `?tc=` and `?tid=` get the same bare title + one line,
+  `?tid=` via a GET of the STABLE RPC. Guards: `scripts/test_tier_list.mjs` (codec, store shape,
+  worker counts, 2-10 tiers).
+
 ## Brand assets
 
 - `Logos/` ships at runtime.

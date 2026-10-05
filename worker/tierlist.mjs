@@ -25,8 +25,14 @@ const DEFAULT_LABELS = ["S", "A", "B", "C", "D"];
 // base-36 character a card, tiers split by "."), or a bare "<tiers>" from the
 // first day, read against the set's first chase card. Returns tiers of
 // collector NUMBERS.
-export function tierDecodeNums(code, firstNum) {
-  const tiers = DEFAULT_LABELS.map(() => []);
+// n = how many tiers: the number of ?tt= labels when there are any (a list
+// with other than five tiers always sends them), else five.
+export function tierCountFromLabels(tt) {
+  const parts = String(tt || "").split("_");
+  return tt && parts.some((x) => x.trim()) ? Math.min(Math.max(parts.length, 2), 10) : DEFAULT_LABELS.length;
+}
+export function tierDecodeNums(code, firstNum, n) {
+  const tiers = Array.from({ length: n || DEFAULT_LABELS.length }, () => []);
   if (!code) return tiers;
   const m = /^(\d{1,4})-(.*)$/.exec(String(code));
   const base = m ? Number(m[1]) : firstNum;
@@ -58,7 +64,7 @@ export function tierPreviewFrom(search, rows) {
     if (!prev || (!prev.tcgplayer_product_id && r.tcgplayer_product_id)) byNum.set(n, r);
   }
   const nums = [...byNum.keys()].sort((a, b) => a - b);
-  const tiers = tierDecodeNums(q.get("tl") || "", nums[0]);
+  const tiers = tierDecodeNums(q.get("tl") || "", nums[0], tierCountFromLabels(q.get("tt")));
   const ranked = tiers.flat().filter((n) => byNum.has(n)).length;
   // Site name ("Packs.Ink") is already shown above the title by every app
   // that draws one, so the title does not repeat it.
@@ -77,8 +83,45 @@ export function tierPreviewFrom(search, rows) {
   };
 }
 
+// A custom list (any cards someone picked): ?tc= carries the whole list,
+// ?tid= names a saved one. Same bare shape: a title and one line.
+const SLUG_RE = /^[A-Za-z0-9]{8,16}$/;
+export function tierCustomCount(code) {
+  return String(code || "").split(".").filter((t) => t && t !== "*" && t[0] !== "_").length;
+}
+export function tierCustomPreviewFrom(search, row) {
+  const q = new URLSearchParams(search);
+  const base = "https://packs.ink/tierlist";
+  if (q.has("tid")) {
+    if (!row) return null;
+    const n = Number(row.card_count) || 0;
+    const by = row.display_name ? ` · by ${String(row.display_name).slice(0, 40)}` : "";
+    return {
+      title: String(row.title || "").slice(0, 60) || "Lorcana tier list",
+      desc: `${n} card${n === 1 ? "" : "s"}${by} · make your own at packs.ink/tierlist`,
+      bare: true,
+      url: `${base}?tid=${row.slug}`,
+    };
+  }
+  if (!q.has("tc")) return null;
+  const n = tierCustomCount(q.get("tc"));
+  return {
+    title: (q.get("tn") || "").slice(0, 60) || "Lorcana tier list",
+    desc: `${n} card${n === 1 ? "" : "s"} · make your own at packs.ink/tierlist`,
+    bare: true,
+    url: base + (search && search !== "?" ? search : ""),
+  };
+}
+
 export async function tierPreview(search, sbGet) {
   const q = new URLSearchParams(search);
+  if (q.has("tid")) {
+    const slug = q.get("tid") || "";
+    if (!SLUG_RE.test(slug)) return null;
+    const rows = await sbGet("rpc/get_custom_tier_list?p_slug=" + encodeURIComponent(slug));
+    return tierCustomPreviewFrom(search, rows && rows[0]);
+  }
+  if (q.has("tc")) return tierCustomPreviewFrom(search, null);
   const si = parseInt(q.get("ts") || "", 10);
   const set = si >= 1 && si <= TIER_SETS.length ? TIER_SETS[si - 1] : null;
   if (!set) return null;

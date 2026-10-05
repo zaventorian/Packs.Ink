@@ -318,7 +318,8 @@ export default {
     const isBot = PREVIEW_BOT_RE.test(request.headers.get("User-Agent") || "");
     // A tier list link carries its set and title in the query, so the
     // preview can name them (worker/tierlist.mjs). Bare: no picture.
-    if (isBot && url.pathname === "/tierlist" && url.searchParams.has("ts")) {
+    if (isBot && url.pathname === "/tierlist"
+        && ["ts", "tc", "tid"].some((k) => url.searchParams.has(k))) {
       const plain = await env.ASSETS.fetch(new Request(new URL("/", url.origin)));
       if (plain.ok) {
         let preview = null;
