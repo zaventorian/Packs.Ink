@@ -914,7 +914,7 @@ const D = await mod("discord/src/data.js");
   const base = { R, res, price, graded: [], raw: null, range: "3m", origin: "https://bot.example", inkColors: index.inkColors, playSet: index.playSet, gradedTarget: { cardId: res.printing.id, bucket: "" } };
   const chart = E.cardMessage({ ...base, view: "chart" }).embeds[0].description;
   const card = E.cardMessage({ ...base, view: "card" }).embeds[0].description;
-  ok(!/^> /m.test(card) && /strength/.test(card), "/card carries the stats, not the rules text");
+  ok(!/^> /m.test(card) && !/strength|willpower/.test(card), "/card leaves the stats and the rules text to the card picture");
   ok(!/Character —|\d cost/.test(card), "/card leaves the ink / cost / type line to the card picture");
   ok(!/^> /m.test(chart) && !/strength/.test(chart), "/price leaves the rules text and stats to /card");
   ok(/Amber/.test(chart) && /\*\*\$2\.00\*\* Low · \$3\.00 NM Market/.test(chart), "/price keeps the card's ink line and its price, Low first");

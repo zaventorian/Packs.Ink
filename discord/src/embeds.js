@@ -156,16 +156,12 @@ export function cardMessage(ctx) {
   // it is played — measured from recent tournament top cuts, the same number
   // that decides which version "mowgli" means.
   // /card is the PICTURE (Zaven, 2026-10-04: "people mostly want to see the
-  // card, nothing else"): the ink / cost / type line and the rules text are
-  // printed on the card itself, so the card view leaves them out and keeps
-  // only the stats line. /price keeps the ink line; its rules text was moved
-  // to /card on 2026-09-29 and is now in the picture alone.
+  // card, nothing else"): the ink / cost / type line, the stats and the rules
+  // text are all printed on the card itself, so the card view leaves them
+  // out. /price keeps the ink line.
   if (view !== "card") {
     const ident = gameplayLine(c);
     if (ident) lines.push(`*${ident}*`);
-  } else {
-    const stats = statsLine(c);
-    if (stats) lines.push(stats);
   }
   const play = playLine(R, res.index, ctx.playSet);
   if (play) lines.push(play);

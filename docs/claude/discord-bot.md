@@ -394,19 +394,20 @@ Zaven: *"lets use low, like we do on the site"*, and on /card: the price lines a
 Zaven: *"people mostly want to see the card nothing else for /card"*, and *"make the
 card art tile much bigger"*.
 
-- **The card view drops the ink / cost / type line and the rules text** — both are
-  printed on the card. It keeps the set line, the stats line and the 🏆 play line.
+- **The card view drops the ink / cost / type line, the stats line and the rules
+  text** — all printed on the card. It keeps the set line and the 🏆 play line.
   `/price` keeps the ink line. `rulesText` stays (tested) but no reply uses it now.
 - **⚠ Discord fits an embed image inside a ~400 x 300 box**, so the site's portrait
-  tile (about 1:2) rendered ~150 px wide. `bake_tiles.mjs` `widen()` rearranges a
-  portrait tile 4:3: the art panel exactly as the site drew it on the left, the tile's
-  own info block (name, Low / Market, 1D/1W/1M, packs.ink · date) scaled onto its
-  right. Same pixels, rearranged — still the site's `drawCardTileCanvas`. The card
-  shows ~1.5x the size (~2.2x the area). A Location's tile (already landscape art)
-  keeps the old shape. Saved at 720 px wide (`WIDE_OUT_WIDTH`).
-  - The geometry in `TILE` (W 300, PAD 12, art 276 x 386) is the site's; if
-    `drawCardTileCanvas` changes its layout, `widen()` must follow or it crops wrong.
-    Nothing tests that in CI (no canvas there) — render one tile and LOOK.
+  tile (about 1:2) rendered ~150 px wide. `bake_tiles.mjs` `compactTile()` draws a
+  portrait card for Discord as the art at ~248 of the 300 px (was ~190), with a
+  two-row price table UNDER it: LOW / MKT, price, 1D / 1W / 1M — the site's own
+  `fmt`, `fmtPct`, `posterPctColor` and `drawImageCover`. Name, rarity and date are
+  left out of the picture: the embed already says them. A first cut put the prices
+  BESIDE the art (4:3, art ~283 px); Zaven wanted them back under it. The canvas
+  may be wider than the art (the box is height-bound below 4:3, so width is free).
+  A Location's tile (already landscape art) keeps the site's `drawCardTileCanvas`.
+  - Nothing tests the drawing in CI (no canvas there) — render one tile and LOOK,
+    including a four-figure price and a `+15x` change.
 
 ### The channel report's layout (2026-09-28)
 

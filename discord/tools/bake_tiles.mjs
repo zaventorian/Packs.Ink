@@ -41,15 +41,15 @@ export const ART_CACHE = fileURLToPath(new URL("../.tile-art-cache/", import.met
 // detail nobody sees and half again the upload.
 const OUT_WIDTH = 450;
 // ⚠ Discord fits an embed image inside a ~400 x 300 box, so the site's
-// portrait tile (1:2) came out 150 px wide — the card a thumbnail beside an
-// empty half of the embed (Zaven, 2026-10-04: "make the card art tile much
-// bigger"). A portrait card is therefore laid out WIDE for Discord: the art
-// panel exactly as the site draws it on the left, and the tile's own info
-// block (name, prices, changes, packs.ink · date) moved to its right, the
-// whole thing 4:3 so it fills the box. Same pixels the site drew, rearranged.
-const WIDE_RATIO = 4 / 3;
-const WIDE_OUT_WIDTH = 720;
-const TILE = { W: 300, PAD: 12, SCALE: 2 };
+// portrait tile (about 1:2) rendered ~150 px wide — the card a thumbnail
+// (Zaven, 2026-10-04: "make the card art tile much bigger"). A portrait card
+// is drawn for Discord as the ART, as big as the box allows, with a compact
+// price table UNDER it (Low and Market, 1D / 1W / 1M) — he wanted the prices
+// back under the card, not beside it. The name, rarity and date are already
+// in the embed around it, so the picture carries only the card and the
+// numbers. Laid out in display px (the box is 300 tall), drawn at 2x.
+const DISCORD_H = 300;
+const DISCORD_SCALE = 2;
 const WEBP_QUALITY = 82;
 // The art box on the tile is 276 x 386 CSS px, drawn at 2x.
 const ART_CACHE_WIDTH = 560;
@@ -89,7 +89,8 @@ let _site = null;
 export function siteTile() {
   if (_site) return _site;
   const palette = velvetPalette();
-  _site = loadSite(["drawCardTileCanvas", "computeSeriesDeltas", "CARD_DELTA_WINDOWS", "roundRectPath"], {
+  _site = loadSite(["drawCardTileCanvas", "computeSeriesDeltas", "CARD_DELTA_WINDOWS", "roundRectPath",
+    "drawImageCover", "fmt", "fmtPct", "posterPctColor"], {
     stop: ["posterPalette"],
     globals: { posterPalette: () => palette },
   });
@@ -146,9 +147,13 @@ export function tileArtSource(p) {
 export async function drawTile({ name, meta, low, market, dateStr, art, logo, landscape = false }) {
   registerFonts();
   const site = siteTile();
-  const tile = createCanvas(10, 10);
-  const H = site.drawCardTileCanvas(tile, { artImg: art, logoImg: logo, name, meta, low, market, dateStr, landscape });
-  const canvas = landscape ? tile : widen(tile, H, site);
+  let canvas;
+  if (landscape) {
+    canvas = createCanvas(10, 10);
+    site.drawCardTileCanvas(canvas, { artImg: art, logoImg: logo, name, meta, low, market, dateStr, landscape });
+  } else {
+    canvas = compactTile(site, velvetPalette(), art, low, market);
+  }
   // Raw pixels straight into sharp: a PNG round trip cost ~135 ms a tile, all
   // of it compression thrown away a line later. sharp works off the main
   // thread, so the tiles overlap; effort 2 is twice as fast as the default
@@ -156,32 +161,65 @@ export async function drawTile({ name, meta, low, market, dateStr, art, logo, la
   const px = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
   return sharp(Buffer.from(px.data.buffer, px.data.byteOffset, px.data.byteLength),
     { raw: { width: canvas.width, height: canvas.height, channels: 4 } })
-    .resize({ width: landscape ? OUT_WIDTH : WIDE_OUT_WIDTH }).webp({ quality: WEBP_QUALITY, effort: 2 }).toBuffer();
+    .resize({ width: landscape ? OUT_WIDTH : canvas.width }).webp({ quality: WEBP_QUALITY, effort: 2 }).toBuffer();
 }
 
-// The portrait tile rearranged 4:3 (see WIDE_RATIO). Every coordinate is the
-// site's tile geometry in CSS px (drawCardTileCanvas: W 300, PAD 12, art
-// 276 x 386, info from 12 px under the art), times its SCALE.
-export function widen(tile, H, site) {
-  const { W, PAD, SCALE: S } = TILE;
-  const artW = W - PAD * 2, artH = Math.round(artW * 7 / 5);
-  const LH = PAD + artH + PAD, LW = Math.round(LH * WIDE_RATIO);
-  const out = createCanvas(LW * S, LH * S);
+// The card as big as Discord's image box allows, the prices under it:
+//
+//     [            card art            ]
+//     LOW  $1.25   1D -16%  1W -29%  1M -49%
+//     MKT  $2.32   1D +1.3% 1W -1.7% 1M -37%
+//
+// Formatting and colours are the site's own (fmt, fmtPct, posterPctColor), the
+// art drawn with its drawImageCover, so the numbers read exactly as the site's
+// tile prints them. The canvas is wider than the art when the table needs it:
+// Discord's box is height-bound for anything narrower than 4:3, so extra width
+// costs the art nothing.
+export function compactTile(site, P, art, low, market) {
+  const S = DISCORD_SCALE, PAD = 8, ROW = 15, GAP = 7, R = 8;
+  const tableW = 246;
+  const stripH = GAP + ROW * 2;
+  const AH = DISCORD_H - PAD * 2 - stripH, AW = Math.round(AH * 5 / 7);
+  const W = Math.max(AW, tableW) + PAD * 2, H = DISCORD_H;
+  const out = createCanvas(W * S, H * S);
   const ctx = out.getContext("2d");
-  const P = velvetPalette();
   ctx.scale(S, S);
-  site.roundRectPath(ctx, 0.5, 0.5, LW - 1, LH - 1, 12);
+  site.roundRectPath(ctx, 0.5, 0.5, W - 1, H - 1, R + 2);
   ctx.fillStyle = P.bg; ctx.fill();
   ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.stroke();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  // The art panel, as drawn (its rounded corners are already clipped in).
-  ctx.drawImage(tile, PAD * S, PAD * S, artW * S, artH * S, PAD * S, PAD * S, artW * S, artH * S);
-  // The info block: everything under the art, inside the panel's border.
-  const sx = 2, sy = PAD + artH + 4, sw = W - 4, sh = H - sy - 2;
-  const dx0 = PAD + artW + 4, dw = LW - 2 - dx0;
-  const k = Math.min(dw / sw, (LH - 4) / sh);
-  const dh = sh * k, dy = (LH - dh) / 2;
-  ctx.drawImage(tile, sx * S, sy * S, sw * S, sh * S, dx0 * S, dy * S, sw * k * S, dh * S);
+
+  const ax = (W - AW) / 2;
+  site.roundRectPath(ctx, ax, PAD, AW, AH, R);
+  ctx.save(); ctx.clip();
+  if (art) site.drawImageCover(ctx, art, ax, PAD, AW, AH);
+  else { ctx.fillStyle = P.surface; ctx.fillRect(ax, PAD, AW, AH); }
+  ctx.restore();
+
+  const wins = site.CARD_DELTA_WINDOWS.slice(0, 3);
+  const tx = (W - tableW) / 2;
+  const row = (label, src, y) => {
+    ctx.textBaseline = "alphabetic";
+    ctx.textAlign = "left"; ctx.fillStyle = P.muted; ctx.font = "800 8px 'Nunito Sans', sans-serif";
+    ctx.fillText(label, tx, y);
+    // The price, right-aligned in its column, shrunk only if a four-figure
+    // price would run into the label.
+    const px = site.fmt(src.now);
+    let size = 11.5;
+    ctx.font = `800 ${size}px 'Nunito Sans', sans-serif`;
+    while (size > 8 && ctx.measureText(px).width > 54) { size -= 0.5; ctx.font = `800 ${size}px 'Nunito Sans', sans-serif`; }
+    ctx.textAlign = "right"; ctx.fillStyle = P.text; ctx.fillText(px, tx + 78, y);
+    wins.forEach((w, k) => {
+      const cx = tx + 88 + k * 53;
+      ctx.textAlign = "left"; ctx.fillStyle = P.muted; ctx.font = "800 7.5px 'Nunito Sans', sans-serif";
+      ctx.fillText(w.label, cx, y);
+      const v = src.byWin ? src.byWin[w.key] : null;
+      ctx.fillStyle = site.posterPctColor(v, P); ctx.font = "800 10.5px 'Nunito Sans', sans-serif";
+      ctx.fillText(site.fmtPct(v), cx + 14, y);
+    });
+  };
+  const y0 = PAD + AH + GAP + 11;
+  row("LOW", low, y0);
+  row("MKT", market, y0 + ROW);
   return out;
 }
 
