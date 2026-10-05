@@ -42335,6 +42335,11 @@ const tierClean = (list, pool) => {
   return {tiers, title: String((list && list.title) || "").slice(0, TIER_TITLE_MAX), labels};
 };
 
+// ⚠ The code CARRIES ITS BASE ("223-j0.72" = offsets from #223). Taking the
+// base from the pool at read time breaks every shared link for a set still
+// being revealed: the day a lower-numbered chase card is added, every offset
+// silently points one card further along. A code with no base (links made the
+// first day, v523) still reads against the pool's first card.
 const tierEncode = (tiers, pool) => {
   if(!pool.length) return "";
   const base = pool[0].num;
@@ -42344,15 +42349,17 @@ const tierEncode = (tiers, pool) => {
     return (o != null && o >= 0 && o < 36) ? o.toString(36) : "";
   }).join(""));
   while(parts.length && !parts[parts.length - 1]) parts.pop();
-  return parts.join(".");
+  return parts.length ? base + "-" + parts.join(".") : "";
 };
 const tierDecode = (str, pool) => {
   const tiers = Array.from({length: TIER_COUNT}, () => []);
   if(!str || !pool.length) return tiers;
-  const base = pool[0].num;
+  const m = /^(\d{1,4})-(.*)$/.exec(String(str));
+  const base = m ? Number(m[1]) : pool[0].num;
+  const body = m ? m[2] : String(str);
   const idAt = new Map(pool.map(p => [p.num - base, p.id]));
   const seen = new Set();
-  String(str).split(".").slice(0, TIER_COUNT).forEach((grp, i) => {
+  body.split(".").slice(0, TIER_COUNT).forEach((grp, i) => {
     for(const ch of grp){
       const id = idAt.get(parseInt(ch, 36));
       if(id && !seen.has(id)){ seen.add(id); tiers[i].push(id); }
@@ -42413,6 +42420,18 @@ const TIER_LANDING = (() => {
 })();
 let _tierLandingUsed = false;
 
+// A saved list is kept in the LINK's shape (code / title / labels), not by
+// card id: a prestaged set's stand-in ids are replaced by Lorcast's on the day
+// it is indexed, and an id-keyed list would lose every card. Lists saved by
+// id on the first day (v523) still read, and are rewritten on their next edit.
+const tierToStored = (list, pool) => ({code: tierEncode(list.tiers, pool), title: list.title || "",
+  labels: tierLabelsParam(list.labels), t: list.t || Date.now()});
+const tierFromStored = (e, pool) => {
+  if(!e) return tierBlank();
+  if(typeof e.code === "string")
+    return {...tierClean({tiers: tierDecode(e.code, pool), title: e.title, labels: tierParseLabels(e.labels)}, pool), t: e.t};
+  return {...tierClean(e, pool), t: e.t};
+};
 const tierReadStore = () => {
   try {
     const v = JSON.parse(localStorage.getItem(TIER_LS) || "null");
@@ -42653,7 +42672,7 @@ const TIER_NUDGE_KEY = "packsink:tierlist:nudgeDismissed";
 // phone: the tier buttons are the big targets a thumb wants, and placing an
 // unranked card moves straight on to the next unranked one, so a whole set
 // can be ranked without leaving the view.
-function TierCardViewer({card, tierIdx, labels, onPlace, onPrev, onNext, onClose, pos, total, flash, preload}){
+function TierCardViewer({card, tierIdx, labels, onPlace, onPrev, onNext, onClose, pos, total, flash, preload, left}){
   const row = card.row || {};
   const name = cardDisplayName(row);
   const buy = (row.tcgplayer_product_id && tcgUrl(row.tcgplayer_product_id, row.tcg_printing))
@@ -42712,7 +42731,7 @@ function TierCardViewer({card, tierIdx, labels, onPlace, onPrev, onNext, onClose
         <span class="tl-view-pos">${pos} / ${total}</span>
         <button type="button" class="tl-view-step" onClick=${onNext}>${_t("Next")} ›</button>
       </div>
-      <div class="tl-view-tiers-lbl">${_t("Put this card in a tier")}</div>
+      <div class="tl-view-tiers-lbl">${_t("Put this card in a tier")}${left > 0 ? " · " + _t("{n} unranked", {n: left}) : ""}</div>
       <div class="tl-view-tiers" role="group" aria-label=${_t("Put this card in a tier")}>
         ${labels.map((l, i) => html`<button key=${i} type="button"
             class=${"tl-view-tier" + (tierIdx === i ? " is-on" : "")} style=${{"--tier": TIER_DEFAULTS[i].color}}
@@ -42758,7 +42777,7 @@ function TierListView({raw, user, onSignIn}){
         labels: tierParseLabels(pendingLink.tt)}, p);
       // A refresh of your OWN list arrives as a link too (the address bar
       // carries it). Only a list that differs from yours is somebody else's.
-      const mine = tierClean(store.lists[set] || tierBlank(), p);
+      const mine = tierFromStored(store.lists[set], p);
       if(tierQuery(set, linked, p) !== tierQuery(set, mine, p)) setShared({set, list: linked});
       setPick(set);
     }
@@ -42766,7 +42785,7 @@ function TierListView({raw, user, onSignIn}){
   }, [pendingLink, pools]);
 
   const viewingShared = !!(shared && shared.set === curSet);
-  const list = useMemo(() => viewingShared ? shared.list : tierClean(store.lists[curSet] || tierBlank(), pool),
+  const list = useMemo(() => viewingShared ? shared.list : tierFromStored(store.lists[curSet], pool),
     [viewingShared, shared, store, curSet, pool]);
   const listRef = useRef(list);
   listRef.current = list;
@@ -42786,7 +42805,7 @@ function TierListView({raw, user, onSignIn}){
   // written through, debounced.
   const uid = user && user.id;
   const [synced, setSynced] = useState(false);
-  const saveTimer = useRef(null);
+  const saveTimers = useRef({});
   useEffect(() => {
     setSynced(false);
     if(!uid || !pools.size) return;
@@ -42801,16 +42820,14 @@ function TierListView({raw, user, onSignIn}){
         if(!p || !p.length) continue;
         const rt = Date.parse(r.updated_at) || 0;
         const mine = local[r.set_name];
-        if(!mine || (mine.t || 0) < rt){
-          merged[r.set_name] = {...tierClean({tiers: tierDecode(r.code, p), title: r.title,
-            labels: tierParseLabels(r.labels)}, p), t: rt};
-        }
+        if(!mine || (mine.t || 0) < rt) merged[r.set_name] = {code: r.code || "", title: r.title || "", labels: r.labels || "", t: rt};
       }
       for(const [set, l] of Object.entries(local)){
         const p = pools.get(set);
         if(!p || !p.length) continue;
         const r = remote.get(set);
-        const clean = tierClean(l, p);
+        const clean = tierFromStored(l, p);
+        if(merged[set] === l && typeof l.code !== "string") merged[set] = tierToStored(clean, p);
         if(tierListEmpty(clean) && !r) continue;
         if(!r || (l.t || 0) > (Date.parse(r.updated_at) || 0)) tierSaveRemote(uid, set, {...clean, t: l.t}, p);
       }
@@ -42825,13 +42842,15 @@ function TierListView({raw, user, onSignIn}){
     const set = setRef.current;
     if(!set) return;
     const next = {...fn(listRef.current), t: Date.now()};
+    const p = poolRef.current;
     dirty.current = true;
-    setStore(s => ({...s, last: set, lists: {...s.lists, [set]: next}}));
+    setStore(s => ({...s, last: set, lists: {...s.lists, [set]: tierToStored(next, p)}}));
     setShared(sh => (sh && sh.set === set) ? null : sh);
+    // One timer PER SET: editing a second set inside the debounce must not
+    // cancel the first set's pending save.
     if(uid && !_tierRemoteOff){
-      clearTimeout(saveTimer.current);
-      const p = poolRef.current;
-      saveTimer.current = setTimeout(() => tierSaveRemote(uid, set, next, p), 900);
+      clearTimeout(saveTimers.current[set]);
+      saveTimers.current[set] = setTimeout(() => tierSaveRemote(uid, set, next, p), 900);
     }
   }, [uid]);
 
@@ -42922,6 +42941,11 @@ function TierListView({raw, user, onSignIn}){
   // the hold exists. The listeners are native and non-passive: React's touch
   // handlers are passive, and only a cancelable touchmove can stop the page
   // scrolling under a card that is being dragged.
+  useEffect(() => {
+    const noop = () => {};
+    window.addEventListener("touchmove", noop, {passive: false});
+    return () => window.removeEventListener("touchmove", noop, {passive: false});
+  }, []);
   const onCardTouchStart = (e, id) => {
     if(e.touches.length !== 1) return;
     const t0 = e.touches[0];
@@ -43018,6 +43042,13 @@ function TierListView({raw, user, onSignIn}){
     // left, then simply to the next card on the board.
     const rankedBefore = new Set(before.tiers.flat());
     const left = pool.filter(p => p.id !== id && !rankedBefore.has(p.id));
+    if(!left.length && tier >= 0 && !rankedBefore.has(id)){
+      // That was the last unranked card: the job is done, so say so and get
+      // out of the way of the finished board.
+      setViewId(null);
+      flashToast(_t("Every card is ranked. Copy the image or the link to share it."), 4000);
+      return;
+    }
     if(left.length){
       const cur = pool.find(p => p.id === id);
       const next = left.find(p => cur && p.num > cur.num) || left[0];
@@ -43069,11 +43100,17 @@ function TierListView({raw, user, onSignIn}){
     rows: list.tiers.map((t, i) => ({label: labels[i], color: TIER_DEFAULTS[i].color,
       cards: t.map(id => poolById.get(id)).filter(Boolean).map(p => ({src: proxyImg(p.img), name: nameOf(p)}))})),
   });
-  const fileName = "packsink-tier-list.png";
+  const fileName = "packsink-" + String(curSet || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + "-tier-list.png";
   const canShare = typeof navigator !== "undefined" && !!navigator.share && isTouchDevice();
   const shareText = tierShareText(setLabel, shareUrl);
 
+  const nothingRanked = () => {
+    if(list.tiers.some(t => t.length)) return false;
+    flashToast(_t("Rank at least one card first"));
+    return true;
+  };
   const copyImage = () => {
+    if(nothingRanked()) return;
     flashToast(_t("Drawing your tier list…"), 8000);
     const p = blobFor();
     p.catch(err => console.error("[tierlist] image failed", err));
@@ -43093,6 +43130,7 @@ function TierListView({raw, user, onSignIn}){
   // Phones: one share sheet carrying the picture AND the line with the link,
   // which lands in a group chat as image + tappable link in one message.
   const shareAll = () => {
+    if(nothingRanked()) return;
     flashToast(_t("Drawing your tier list…"), 8000);
     blobFor().then(async (blob) => {
       const file = new File([blob], fileName, {type: "image/png"});
@@ -43110,6 +43148,7 @@ function TierListView({raw, user, onSignIn}){
     }).catch(err => { console.error("[tierlist] share failed", err); flashToast(_t("Couldn't prepare the image — try again")); });
   };
   const saveImage = () => {
+    if(nothingRanked()) return;
     flashToast(_t("Drawing your tier list…"), 8000);
     blobFor().then(b => { downloadImageBlob(b, fileName); flashToast(_t("Image saved")); maybeNudge(); })
       .catch(err => { console.error("[tierlist] save failed", err); flashToast(_t("Couldn't prepare the image — try again")); });
@@ -43231,7 +43270,7 @@ function TierListView({raw, user, onSignIn}){
 
     ${viewCard && html`<${TierCardViewer} card=${viewCard} tierIdx=${viewTier} labels=${labels}
       pos=${order.indexOf(viewCard.id) + 1} total=${order.length}
-      flash=${flash} preload=${viewPreload}
+      flash=${flash} preload=${viewPreload} left=${unranked.length}
       onPlace=${placeFromView} onPrev=${prevView} onNext=${nextView} onClose=${closeView}/>`}
 
     ${nudge && html`<div class="tl-nudge" role="status">

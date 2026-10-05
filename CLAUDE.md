@@ -1434,9 +1434,17 @@ Guards: `scripts/test_tier_list.mjs`.
 - **The URL IS the list**, no table: `?ts=` set number (MAINLINE index + 1), `?tl=` tiers, `?tn=` title,
   `?tt=` renamed labels (`_`-joined, only when not S/A/B/C/D). Owned at `/tierlist` in App's view sync
   (`TIER_URL_KEYS`), stripped everywhere else.
-- **⚠ Cards are encoded by COLLECTOR-NUMBER OFFSET from the set's first chase card**, one base-36 char
-  each, never by card_id: prestaged sets swap their stand-in ids for Lorcast's, and an id-keyed link
-  would lose every card that day. 20 cards ≈ 25 chars.
+- **⚠ Cards are encoded by COLLECTOR-NUMBER OFFSET, and the code CARRIES ITS BASE** (`tl=223-j0.72..h`:
+  offsets from #223, one base-36 char a card, tiers split by "."), never by card_id: prestaged sets
+  swap their stand-in ids for Lorcast's. The base is in the code because a set still being revealed
+  can gain a LOWER-numbered chase card, which would shift every link read against "the pool's first
+  card". First-day codes with no base (v523) still read that way. Device storage
+  (`packsink:tierlist:v1`) and the account row use the same code (`tierToStored` / `tierFromStored`);
+  v523's id-keyed device lists still read and are rewritten on their next edit.
+- **Link previews** (Discord, iMessage...): `worker/tierlist.mjs`, bots only, names the set, the title,
+  what is in each tier, and the highest-ranked card with a JPEG/PNG/WebP picture (an unreleased
+  Lorcast card is AVIF only and is skipped). ⚠ Its `TIER_SETS` must equal `MAINLINE_SETS` (`ts=` indexes
+  it); the guard checks that, and that the worker decodes the client's own codes.
 - **⚠ A link is SHOWN, not saved** (the "a link may choose for you, never over you" rule): opening
   someone's list leaves your own list for that set alone until you move a card. A link that equals
   your saved list (a refresh — the address bar carries it) is just your list, no "shared" banner.
@@ -1465,7 +1473,10 @@ Guards: `scripts/test_tier_list.mjs`.
   set wins and device-only lists are carried up; edits write through, debounced 900ms. Missing table =
   device-only, silently. A signed-out visitor gets a small sign-in nudge after a copy/share/save, once
   per visit (`sessionStorage packsink:tierlist:nudgeDismissed`), never on load.
-- Unranked cards are not in the picture, like TierMaker.
+- Unranked cards are not in the picture, like TierMaker; an empty board won't export. Ranking the last
+  unranked card from the viewer closes it with an "every card is ranked" toast. iOS needs a
+  non-passive `touchmove` listener present BEFORE a touch starts (dnd-kit's fix), so the view keeps a
+  no-op one registered while mounted. Account saves debounce PER SET.
 
 ## Brand assets
 
