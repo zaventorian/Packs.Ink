@@ -915,6 +915,14 @@ const D = await mod("discord/src/data.js");
   const chart = E.cardMessage({ ...base, view: "chart" }).embeds[0].description;
   const card = E.cardMessage({ ...base, view: "card" }).embeds[0].description;
   ok(!/^> /m.test(card) && !/strength|willpower/.test(card), "/card leaves the stats and the rules text to the card picture");
+  {
+    const t = [{ grader: "PSA", grade: "10", last_sold_price: 3, avg_last_5: 12.75, sale_count: 2, last_sold_date: "2026-02-27", printing: "" }];
+    const plainCard = E.cardMessage({ ...base, view: "card", graded: t });
+    ok(!plainCard.embeds[0].fields.length && !/eBay/.test(plainCard.embeds[0].footer.text), `/card on a base-rarity card shows no PSA tiers (${res.printing.r})`);
+    ok(E.cardMessage({ ...base, view: "chart", graded: t }).embeds[0].fields.length === 1, "/price still shows them");
+    const ch = R.resolve("enchanted elsa");
+    ok(E.cardMessage({ ...base, res: ch, view: "card", graded: t, gradedTarget: { cardId: ch.printing.id, bucket: "" } }).embeds[0].fields.length === 1, "/card on a chase card shows them");
+  }
   ok(!/Character —|\d cost/.test(card), "/card leaves the ink / cost / type line to the card picture");
   ok(!/^> /m.test(chart) && !/strength/.test(chart), "/price leaves the rules text and stats to /card");
   ok(/Amber/.test(chart) && /\*\*\$2\.00\*\* Low · \$3\.00 NM Market/.test(chart), "/price keeps the card's ink line and its price, Low first");

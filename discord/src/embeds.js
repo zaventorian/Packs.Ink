@@ -42,6 +42,11 @@ const clip = (s, n) => { s = String(s || ""); return s.length <= n ? s : s.slice
 export const count = (n) => (Number.isFinite(Number(n)) ? Number(n).toLocaleString("en-US") : String(n ?? ""));
 const sameTier = (row, g) => !!(row && g && row.grader === g.grader && String(row.grade) === String(g.grade));
 const BASE_RARITY = new Set(["Common", "Uncommon", "Rare", "Super Rare", "Legendary"]);
+// /card shows graded (PSA) tiers only for the cards people actually grade and
+// trade as slabs — chase rarities and promos (Zaven, 2026-10-04). A $0.01
+// Uncommon's two PSA 9 sales are noise beside the card. /price, and any reply
+// where a grade was asked for, keep every tier.
+export const GRADED_ON_CARD = new Set(["Enchanted", "Epic", "Iconic", "Promo"]);
 // As many WHOLE lines as fit in `budget` characters, then "…and N more". Any
 // text holding links goes through this, never clip(): a line cut mid-way is a
 // broken markdown link, which Discord shows as raw brackets and a URL.
@@ -234,7 +239,8 @@ export function cardMessage(ctx) {
   }
 
   const fields = [];
-  for (const g of ctx.graded || []) {
+  const tiers = view === "card" && !ctx.grade && !GRADED_ON_CARD.has(p.r) ? [] : (ctx.graded || []);
+  for (const g of tiers) {
     if (g === gradeLead) continue;   // already the headline
     fields.push({
       name: `${g.grader} ${g.grade}`,
@@ -255,7 +261,7 @@ export function cardMessage(ctx) {
     color: hex(c.i && c.i[0] && ctx.inkColors ? ctx.inkColors[c.i[0]] : null),
     description: clip(lines.join("\n"), 4000),
     fields: fields.slice(0, 12),
-    footer: { text: footerText(ctx, price) },
+    footer: { text: footerText({ ...ctx, graded: tiers }, price) },
   };
   const date = ctx.chartDate || (price && price.date) || "";
   const graded = view === "graded" && ctx.grade;
