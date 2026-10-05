@@ -98,12 +98,14 @@ const rows = [];
 for(let n = 223; n <= 242; n++) rows.push({name: "Card" + n, version: "V", collector_number: String(n), rarity: n <= 240 ? "Enchanted" : "Iconic",
   image_large: "https://x/supabase/" + n + ".jpg", tcgplayer_product_id: n === 242 ? 123 : null});
 const pv = tierPreviewFrom("?" + q, rows);
-check("worker: preview title", pv.title, "My list | Packs.Ink");
-check("worker: preview names each tier", pv.desc, "GOAT: Card242, Card223 · A: Card230, Card225 · C: Card240");
-check("worker: preview image is the top card, TCGplayer's JPEG when listed", pv.image, "https://tcgplayer-cdn.tcgplayer.com/product/123_in_1000x1000.jpg");
+// Bare on purpose: the link is posted beside the image of the list, so the
+// preview must not repeat the tiers or show a card of its own.
+check("worker: preview title is the list's own, no site suffix", pv.title, "My list");
+check("worker: preview is one short line, no tier-by-tier names", pv.desc, "18 Enchanted · 2 Iconic · make your own at packs.ink/tierlist");
+check("worker: preview carries no picture", [pv.bare, pv.image], [true, undefined]);
 const pv2 = tierPreviewFrom("?ts=14", rows);
-check("worker: an empty list invites, and keeps the site image", [pv2.desc, pv2.image, pv2.title],
-  ["Rank Hyperia City's 18 Enchanted and 2 Iconic cards and share the picture.", null, "Hyperia City Chase Card Tier List | Packs.Ink"]);
+check("worker: an empty list invites", [pv2.desc, pv2.title],
+  ["Rank Hyperia City's 18 Enchanted and 2 Iconic cards and share the picture.", "Hyperia City Chase Card Tier List"]);
 check("worker: an unknown set is no preview", tierPreviewFrom("?ts=99", rows), null);
 
 if(fails){ console.log(`\n${fails} failure(s)`); process.exit(1); }

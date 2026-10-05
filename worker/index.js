@@ -165,12 +165,24 @@ function withTimeout(promise, ms) {
 
 function rewritePreview(res, p) {
   const set = (v) => ({ element(el) { el.setAttribute("content", v); } });
-  const headers = new Headers(res.headers);
-  // The shell's validators describe the GENERIC document; answering a later
-  // If-None-Match with 304 would hand a browser the wrong page's cached copy.
-  headers.delete("ETag");
-  headers.delete("Last-Modified");
-  headers.delete("Content-Length");
+  // A BARE preview (tier lists) is a title and a line with no picture at all:
+  // the image tags are removed, not just left at the site default, or the
+  // apps draw the big site banner instead. twitter:card goes to "summary".
+  const drop = { element(el) { el.remove(); } };
+  if (p.bare) {
+    return new HTMLRewriter()
+      .on("title", { element(el) { el.setInnerContent(p.title); } })
+      .on('meta[name="description"]', set(p.desc))
+      .on('meta[property="og:title"]', set(p.title))
+      .on('meta[property="og:description"]', set(p.desc))
+      .on('meta[property="og:url"]', set(p.url))
+      .on('meta[property^="og:image"]', drop)
+      .on('meta[name="twitter:image"]', drop)
+      .on('meta[name="twitter:card"]', set("summary"))
+      .on('meta[name="twitter:title"]', set(p.title))
+      .on('meta[name="twitter:description"]', set(p.desc))
+      .transform(new Response(res.body, { status: 200, headers: previewHeaders(res) }));
+  }
   return new HTMLRewriter()
     .on("title", { element(el) { el.setInnerContent(p.title); } })
     .on('meta[name="description"]', set(p.desc))
@@ -185,7 +197,17 @@ function rewritePreview(res, p) {
     .on('meta[name="twitter:title"]', set(p.title))
     .on('meta[name="twitter:description"]', set(p.desc))
     .on('meta[name="twitter:image"]', p.image ? set(p.image) : {})
-    .transform(new Response(res.body, { status: 200, headers }));
+    .transform(new Response(res.body, { status: 200, headers: previewHeaders(res) }));
+}
+
+function previewHeaders(res) {
+  const headers = new Headers(res.headers);
+  // The shell's validators describe the GENERIC document; answering a later
+  // If-None-Match with 304 would hand a browser the wrong page's cached copy.
+  headers.delete("ETag");
+  headers.delete("Last-Modified");
+  headers.delete("Content-Length");
+  return headers;
 }
 
 export default {
@@ -294,8 +316,8 @@ export default {
     // both and re-downloaded the whole shell every time, for meta tags only a
     // bot reads. People get the ordinary shell (and its 304) below.
     const isBot = PREVIEW_BOT_RE.test(request.headers.get("User-Agent") || "");
-    // A tier list link carries its whole list in the query, so the preview
-    // can name the set, the title and what is in each tier (worker/tierlist.mjs).
+    // A tier list link carries its set and title in the query, so the
+    // preview can name them (worker/tierlist.mjs). Bare: no picture.
     if (isBot && url.pathname === "/tierlist" && url.searchParams.has("ts")) {
       const plain = await env.ASSETS.fetch(new Request(new URL("/", url.origin)));
       if (plain.ok) {
