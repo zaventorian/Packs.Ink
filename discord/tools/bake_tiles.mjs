@@ -164,23 +164,25 @@ export async function drawTile({ name, meta, low, market, dateStr, art, logo, la
     .resize({ width: landscape ? OUT_WIDTH : canvas.width }).webp({ quality: WEBP_QUALITY, effort: 2 }).toBuffer();
 }
 
-// The card as big as Discord's image box allows, the prices under it:
+// The card as big as Discord's image box allows, the prices under it, the
+// table exactly as wide as the card (Zaven, 2026-10-04: "card bigger, price
+// %s smaller, lined up under card"):
 //
-//     [            card art            ]
-//     LOW  $1.25   1D -16%  1W -29%  1M -49%
-//     MKT  $2.32   1D +1.3% 1W -1.7% 1M -37%
+//     [   card art   ]
+//     LOW $1.25 1D -16% 1W -29% 1M -49%
+//     MKT $2.32 1D +1.3% 1W -1.7% 1M -37%
 //
 // Formatting and colours are the site's own (fmt, fmtPct, posterPctColor), the
 // art drawn with its drawImageCover, so the numbers read exactly as the site's
-// tile prints them. The canvas is wider than the art when the table needs it:
-// Discord's box is height-bound for anything narrower than 4:3, so extra width
-// costs the art nothing.
+// tile prints them. Columns are MEASURED: the price column is as wide as the
+// wider of the two prices, and the three change cells share the rest, each
+// value right-aligned, so the last column ends on the card's right edge. The
+// type only shrinks when a four-figure price would not fit otherwise.
 export function compactTile(site, P, art, low, market) {
-  const S = DISCORD_SCALE, PAD = 8, ROW = 15, GAP = 7, R = 8;
-  const tableW = 246;
+  const S = DISCORD_SCALE, PAD = 5, ROW = 12, GAP = 5, R = 7;
   const stripH = GAP + ROW * 2;
   const AH = DISCORD_H - PAD * 2 - stripH, AW = Math.round(AH * 5 / 7);
-  const W = Math.max(AW, tableW) + PAD * 2, H = DISCORD_H;
+  const W = AW + PAD * 2, H = DISCORD_H;
   const out = createCanvas(W * S, H * S);
   const ctx = out.getContext("2d");
   ctx.scale(S, S);
@@ -188,7 +190,7 @@ export function compactTile(site, P, art, low, market) {
   ctx.fillStyle = P.bg; ctx.fill();
   ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.stroke();
 
-  const ax = (W - AW) / 2;
+  const ax = PAD;
   site.roundRectPath(ctx, ax, PAD, AW, AH, R);
   ctx.save(); ctx.clip();
   if (art) site.drawImageCover(ctx, art, ax, PAD, AW, AH);
@@ -196,30 +198,44 @@ export function compactTile(site, P, art, low, market) {
   ctx.restore();
 
   const wins = site.CARD_DELTA_WINDOWS.slice(0, 3);
-  const tx = (W - tableW) / 2;
-  const row = (label, src, y) => {
-    ctx.textBaseline = "alphabetic";
-    ctx.textAlign = "left"; ctx.fillStyle = P.muted; ctx.font = "800 8px 'Nunito Sans', sans-serif";
-    ctx.fillText(label, tx, y);
-    // The price, right-aligned in its column, shrunk only if a four-figure
-    // price would run into the label.
-    const px = site.fmt(src.now);
-    let size = 11.5;
-    ctx.font = `800 ${size}px 'Nunito Sans', sans-serif`;
-    while (size > 8 && ctx.measureText(px).width > 54) { size -= 0.5; ctx.font = `800 ${size}px 'Nunito Sans', sans-serif`; }
-    ctx.textAlign = "right"; ctx.fillStyle = P.text; ctx.fillText(px, tx + 78, y);
-    wins.forEach((w, k) => {
-      const cx = tx + 88 + k * 53;
-      ctx.textAlign = "left"; ctx.fillStyle = P.muted; ctx.font = "800 7.5px 'Nunito Sans', sans-serif";
-      ctx.fillText(w.label, cx, y);
-      const v = src.byWin ? src.byWin[w.key] : null;
-      ctx.fillStyle = site.posterPctColor(v, P); ctx.font = "800 10.5px 'Nunito Sans', sans-serif";
-      ctx.fillText(site.fmtPct(v), cx + 14, y);
+  const font = (px) => `800 ${px}px 'Nunito Sans', sans-serif`;
+  const rows = [["LOW", low], ["MKT", market]].map(([label, src]) => ({
+    label, price: site.fmt(src.now),
+    cells: wins.map((w) => { const v = src.byWin ? src.byWin[w.key] : null; return { w: w.label, v, t: site.fmtPct(v) }; }),
+  }));
+  // Fit: start at the sizes that read well, step down together until the
+  // widest row fits the card's width.
+  let k = 1, lay;
+  for (; k >= 0.7; k -= 0.05) {
+    const fL = 6.5 * k, fP = 9 * k, fW = 6 * k, fV = 8.5 * k, gap = 4 * k;
+    ctx.font = font(fL); const labelW = Math.max(...rows.map((r) => ctx.measureText(r.label).width));
+    ctx.font = font(fP); const priceW = Math.max(...rows.map((r) => ctx.measureText(r.price).width));
+    ctx.font = font(fW); const winW = Math.max(...wins.map((w) => ctx.measureText(w.label).width));
+    ctx.font = font(fV); const valW = Math.max(...rows.flatMap((r) => r.cells.map((c) => ctx.measureText(c.t).width)));
+    const sep = 6 * k;
+    const cellW = (AW - (labelW + gap + priceW + gap) - sep * 2) / 3;
+    lay = { fL, fP, fW, fV, gap, sep, labelW, priceW, cellW };
+    if (cellW >= winW + 3 * k + valW) break;
+  }
+  const { fL, fP, fW, fV, gap, sep, labelW, priceW, cellW } = lay;
+  const priceR = ax + labelW + gap + priceW;
+  const cell0 = priceR + gap;
+  const y0 = PAD + AH + GAP + 9;
+  ctx.textBaseline = "alphabetic";
+  rows.forEach((r, ri) => {
+    const y = y0 + ri * ROW;
+    ctx.textAlign = "left"; ctx.fillStyle = P.muted; ctx.font = font(fL);
+    ctx.fillText(r.label, ax, y);
+    ctx.textAlign = "right"; ctx.fillStyle = P.text; ctx.font = font(fP);
+    ctx.fillText(r.price, priceR, y);
+    r.cells.forEach((c, ci) => {
+      const cx = cell0 + ci * (cellW + sep);
+      ctx.textAlign = "left"; ctx.fillStyle = P.muted; ctx.font = font(fW);
+      ctx.fillText(c.w, cx, y);
+      ctx.textAlign = "right"; ctx.fillStyle = site.posterPctColor(c.v, P); ctx.font = font(fV);
+      ctx.fillText(c.t, cx + cellW, y);
     });
-  };
-  const y0 = PAD + AH + GAP + 11;
-  row("LOW", low, y0);
-  row("MKT", market, y0 + ROW);
+  });
   return out;
 }
 

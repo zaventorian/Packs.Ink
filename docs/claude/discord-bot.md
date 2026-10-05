@@ -408,6 +408,16 @@ card art tile much bigger"*.
   A Location's tile (already landscape art) keeps the site's `drawCardTileCanvas`.
   - Nothing tests the drawing in CI (no canvas there) — render one tile and LOOK,
     including a four-figure price and a `+15x` change.
+  - **Same night, round three** (*"card bigger, price %s smaller, lined up under
+    card"*): the canvas is now exactly the card's width plus a 5 px rim, the art
+    ~261 of the 300 px, and the table spans the card's width exactly — columns
+    MEASURED (price column = the wider price, three change cells share the rest,
+    values right-aligned so the last one ends on the card's right edge), the type
+    stepping down together only when a four-figure price would not fit.
+- **PSA tiers on `/card` only for chase cards and promos** (`GRADED_ON_CARD`:
+  Enchanted / Epic / Iconic / Promo). A base-rarity card's two PSA 9 sales were noise
+  beside the picture. `/price`, and any reply where a grade was asked for, keep every
+  tier; the footer's "Sales from eBay" follows what is shown.
 
 ### The channel report's layout (2026-09-28)
 
