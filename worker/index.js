@@ -25,6 +25,8 @@
 // them onto https://packs.ink, so renaming one invalidates every user's offline
 // card art and breaks installed native builds. scripts/build_dist.mjs asserts
 // Index.html still references both.
+import { tierPreview } from "./tierlist.mjs";
+
 const PROXIES = [
   ["/img-proxy/", "https://cards.lorcast.io/"],
   ["/tcg-img-proxy/", "https://tcgplayer-cdn.tcgplayer.com/"],
@@ -176,12 +178,13 @@ function rewritePreview(res, p) {
     .on('meta[property="og:title"]', set(p.title))
     .on('meta[property="og:description"]', set(p.desc))
     .on('meta[property="og:url"]', set(p.url))
-    .on('meta[property="og:image"]', set(p.image))
-    .on('meta[property="og:image:width"]', set(String(p.w)))
-    .on('meta[property="og:image:height"]', set(String(p.h)))
+    // A preview with no picture of its own keeps the site's default image.
+    .on('meta[property="og:image"]', p.image ? set(p.image) : {})
+    .on('meta[property="og:image:width"]', p.image ? set(String(p.w)) : {})
+    .on('meta[property="og:image:height"]', p.image ? set(String(p.h)) : {})
     .on('meta[name="twitter:title"]', set(p.title))
     .on('meta[name="twitter:description"]', set(p.desc))
-    .on('meta[name="twitter:image"]', set(p.image))
+    .on('meta[name="twitter:image"]', p.image ? set(p.image) : {})
     .transform(new Response(res.body, { status: 200, headers }));
 }
 
@@ -290,7 +293,19 @@ export default {
     // and returns the shell with no ETag, so a PERSON on a card link waited on
     // both and re-downloaded the whole shell every time, for meta tags only a
     // bot reads. People get the ordinary shell (and its 304) below.
-    const cardParam = url.pathname === "/cards" && PREVIEW_BOT_RE.test(request.headers.get("User-Agent") || "")
+    const isBot = PREVIEW_BOT_RE.test(request.headers.get("User-Agent") || "");
+    // A tier list link carries its whole list in the query, so the preview
+    // can name the set, the title and what is in each tier (worker/tierlist.mjs).
+    if (isBot && url.pathname === "/tierlist" && url.searchParams.has("ts")) {
+      const plain = await env.ASSETS.fetch(new Request(new URL("/", url.origin)));
+      if (plain.ok) {
+        let preview = null;
+        try { preview = await withTimeout(tierPreview(url.search, sbGet), PREVIEW_TIMEOUT_MS); } catch { preview = null; }
+        if (preview) return rewritePreview(plain, preview);
+        return new Response(plain.body, { status: 200, headers: plain.headers });
+      }
+    }
+    const cardParam = url.pathname === "/cards" && isBot
       ? url.searchParams.get("card") : null;
     if (cardParam) {
       // No conditional headers: the rewritten page must be a full 200.

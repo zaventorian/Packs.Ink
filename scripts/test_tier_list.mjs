@@ -3,6 +3,7 @@
 // a shared link still opens, it just shows the wrong cards in the wrong tiers.
 import fs from "node:fs";
 import vm from "node:vm";
+import { TIER_SETS, tierDecodeNums, tierPreviewFrom } from "../worker/tierlist.mjs";
 
 const index = fs.readFileSync(new URL("../Index.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const start = index.indexOf("const TIER_DEFAULTS = [");
@@ -16,7 +17,7 @@ const MAINLINE_SETS = ["The First Chapter", "Rise of the Floodborn", "Into the I
   "Wilds Unknown", "Attack of the Vine!", "Hyperia City"];
 const ctx = vm.createContext({MAINLINE_SETS, URLSearchParams, Map, Set,
   window: {location: {pathname: "/", search: ""}}});
-vm.runInContext(block + "\n;globalThis.T = {tierPools, tierClean, tierEncode, tierDecode, tierLabelsParam, tierParseLabels, tierQuery, tierParamsFrom, TIER_COUNT};", ctx);
+vm.runInContext(block + "\n;globalThis.T = {tierPools, tierClean, tierEncode, tierDecode, tierLabelsParam, tierParseLabels, tierQuery, tierParamsFrom, tierToStored, tierFromStored, TIER_COUNT};", ctx);
 const T = ctx.T;
 
 let fails = 0;
@@ -47,9 +48,15 @@ check("pool: Iconics counted", pool.filter(p => p.rarity === "Iconic").length, 2
 
 const list = {tiers: [["c242", "c223"], ["c230", "c225"], [], ["c240"], []], title: "", labels: null};
 const enc = T.tierEncode(list.tiers, pool);
-check("encode: one char per card, trailing empty tiers dropped", enc, "j0.72..h");
+check("encode: base, then one char per card, trailing empty tiers dropped", enc, "223-j0.72..h");
 check("decode: round trip", T.tierDecode(enc, pool), list.tiers);
-check("decode: a card can only sit in one tier", T.tierDecode("00.0", pool)[0], ["c223"]);
+check("decode: a card can only sit in one tier", T.tierDecode("223-00.0", pool)[0], ["c223"]);
+check("decode: a first-day code with no base still reads", T.tierDecode("j0.72..h", pool), list.tiers);
+check("encode: nothing ranked is an empty code", T.tierEncode([[], [], [], [], []], pool), "");
+// A lower-numbered chase card revealed after a link was shared must not shift it.
+const raw2 = raw.concat([{Set: "Hyperia City", card_id: "c221", Rarity: "Enchanted", Number: "221", img_normal: "/img/221"}]);
+const pool2 = T.tierPools(raw2).get("Hyperia City");
+check("decode: a later, lower card does not shift an old link", T.tierDecode(enc, pool2), list.tiers);
 check("decode: unknown offsets ignored", T.tierDecode("z", pool)[0], []);
 check("decode: never more tiers than rows", T.tierDecode("0.1.2.3.4.5.6", pool).length, T.TIER_COUNT);
 
@@ -73,6 +80,31 @@ const clean = T.tierClean({tiers: [["c223", "nope", "c223"], ["c223", "c224"]], 
 check("clean: unknown ids and duplicates dropped", clean.tiers.slice(0, 2), [["c223"], ["c224"]]);
 check("clean: always five tiers", clean.tiers.length, T.TIER_COUNT);
 check("clean: title capped", clean.title.length, 60);
+
+// Device storage is the link's shape, and the first-day id-keyed form still reads.
+const stored = T.tierToStored({...list, title: "T", labels: ["GOAT", "A", "B", "C", "D"], t: 5}, pool);
+check("store: kept as a code, not card ids", [stored.code, stored.title, stored.labels, stored.t], ["223-j0.72..h", "T", "GOAT_A_B_C_D", 5]);
+check("store: round trip", T.tierFromStored(stored, pool).tiers, list.tiers);
+check("store: a v523 id-keyed list still reads", T.tierFromStored({tiers: list.tiers, title: "x", t: 3}, pool).tiers, list.tiers);
+check("store: nothing saved is a blank list", T.tierFromStored(undefined, pool).tiers.flat(), []);
+
+// The link-preview worker reads the client's own codes, and indexes the same sets.
+const msStart = index.indexOf("const MAINLINE_SETS = [");
+const mainline = vm.runInNewContext("(" + index.slice(index.indexOf("[", msStart), index.indexOf("];", msStart) + 1) + ")");
+check("worker: TIER_SETS matches MAINLINE_SETS in Index.html", TIER_SETS, mainline);
+check("worker: decodes a based code to collector numbers", tierDecodeNums("223-j0.72..h", 999), [[242, 223], [230, 225], [], [240], []]);
+check("worker: decodes a first-day code against the first card", tierDecodeNums("j0", 223)[0], [242, 223]);
+const rows = [];
+for(let n = 223; n <= 242; n++) rows.push({name: "Card" + n, version: "V", collector_number: String(n), rarity: n <= 240 ? "Enchanted" : "Iconic",
+  image_large: "https://x/supabase/" + n + ".jpg", tcgplayer_product_id: n === 242 ? 123 : null});
+const pv = tierPreviewFrom("?" + q, rows);
+check("worker: preview title", pv.title, "My list | Packs.Ink");
+check("worker: preview names each tier", pv.desc, "GOAT: Card242, Card223 · A: Card230, Card225 · C: Card240");
+check("worker: preview image is the top card, TCGplayer's JPEG when listed", pv.image, "https://tcgplayer-cdn.tcgplayer.com/product/123_in_1000x1000.jpg");
+const pv2 = tierPreviewFrom("?ts=14", rows);
+check("worker: an empty list invites, and keeps the site image", [pv2.desc, pv2.image, pv2.title],
+  ["Rank Hyperia City's 18 Enchanted and 2 Iconic cards and share the picture.", null, "Hyperia City Chase Card Tier List | Packs.Ink"]);
+check("worker: an unknown set is no preview", tierPreviewFrom("?ts=99", rows), null);
 
 if(fails){ console.log(`\n${fails} failure(s)`); process.exit(1); }
 console.log("\nall passed");

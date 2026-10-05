@@ -53,8 +53,9 @@
   arrival. The old key is orphaned, which is what stops a stale `market` resurfacing; it needs
   no migration.
 - **The home Toolbox is NOT a mirror of this tab bar, and it holds exactly SIX chips** (three
-  even rows of the two-column grid). As of 2026-09-26 (Zaven): Expected Value · Trade Compare ·
-  Set Breakdown · Playset Cost · Swiss Odds · Simulator. **Dice Tray and Lore Tracker came out**
+  even rows of the two-column grid). As of 2026-10-05 (Zaven): Expected Value · Trade Compare ·
+  Set Breakdown · Playset Cost · Swiss Odds · Tier List (Tier List took Simulator's chip; Simulator
+  stays an Analytics tab and the EV rows' Sim button still opens it). **Dice Tray and Lore Tracker came out**
   — on phones they already have their own bubbles in the movers toolbar's corner (the fixed
   `dice` / `lore` HOME_PANELS entries), which is where someone mid-game reaches for them. The
   Stream Ticker stays out (an OBS overlay is not a cold-open tool). Dropping a chip from

@@ -1434,16 +1434,34 @@ Guards: `scripts/test_tier_list.mjs`.
 - **The URL IS the list**, no table: `?ts=` set number (MAINLINE index + 1), `?tl=` tiers, `?tn=` title,
   `?tt=` renamed labels (`_`-joined, only when not S/A/B/C/D). Owned at `/tierlist` in App's view sync
   (`TIER_URL_KEYS`), stripped everywhere else.
-- **⚠ Cards are encoded by COLLECTOR-NUMBER OFFSET from the set's first chase card**, one base-36 char
-  each, never by card_id: prestaged sets swap their stand-in ids for Lorcast's, and an id-keyed link
-  would lose every card that day. 20 cards ≈ 25 chars.
+- **⚠ Cards are encoded by COLLECTOR-NUMBER OFFSET, and the code CARRIES ITS BASE** (`tl=223-j0.72..h`:
+  offsets from #223, one base-36 char a card, tiers split by "."), never by card_id: prestaged sets
+  swap their stand-in ids for Lorcast's. The base is in the code because a set still being revealed
+  can gain a LOWER-numbered chase card, which would shift every link read against "the pool's first
+  card". First-day codes with no base (v523) still read that way. Device storage
+  (`packsink:tierlist:v1`) and the account row use the same code (`tierToStored` / `tierFromStored`);
+  v523's id-keyed device lists still read and are rewritten on their next edit.
+- **Link previews** (Discord, iMessage...): `worker/tierlist.mjs`, bots only, names the set, the title,
+  what is in each tier, and the highest-ranked card with a JPEG/PNG/WebP picture (an unreleased
+  Lorcast card is AVIF only and is skipped). ⚠ Its `TIER_SETS` must equal `MAINLINE_SETS` (`ts=` indexes
+  it); the guard checks that, and that the worker decodes the client's own codes.
 - **⚠ A link is SHOWN, not saved** (the "a link may choose for you, never over you" rule): opening
   someone's list leaves your own list for that set alone until you move a card. A link that equals
   your saved list (a refresh — the address bar carries it) is just your list, no "shared" banner.
+- **A finger drags too: press and hold a card `TIER_HOLD_MS` (280ms), then drag** — a finger that moves
+  first is scrolling and is left alone. The touch listeners are NATIVE and non-passive (React's touch
+  handlers are passive, and only a cancelable touchmove stops the page scrolling under the card).
+  Edge auto-scroll only runs toward the edge being dragged at, or a card picked up near the bottom of
+  the screen scrolls the page away before it moves. ⚠ Every coloured button here restates its colour
+  for `:hover` — the site-wide `button:hover` outranks one class, and a phone keeps :hover on the last
+  thing tapped, which greyed out the tier button you had just pressed (reported 10/5).
 - Mouse/pen drag (pointer events + `elementFromPoint`, edge auto-scroll). A click/tap opens the card
   FULL SCREEN (`TierCardViewer`): tier buttons, ‹ › through the cards, and a TCGplayer affiliate
   button (`tcgUrl`, or a `tcgSetSearchUrl` name search for a card with no product yet). Placing an
-  UNRANKED card from there advances to the next unranked one, so a phone ranks a whole set without
+  card from there ALWAYS moves on (next unranked card while any are left, else the next on the board),
+  with a "Placed X in S" flash, the picture keyed by card so it swaps at once, and the next cards
+  preloaded; Previous / Next are a labelled row under the card, and a swipe on the card steps too. So
+  a phone ranks a whole set without
   leaving the view. Cards keep `touch-action:manipulation`, so the page still scrolls on a phone.
   Keys: 1–5 place, 0 unranks, ←/→ reorder (board) or step (viewer), Esc closes.
 - Copy link copies a LINE + the link (`tierShareText`): "Check out my <set> Chase Card Tier List on
@@ -1455,7 +1473,10 @@ Guards: `scripts/test_tier_list.mjs`.
   set wins and device-only lists are carried up; edits write through, debounced 900ms. Missing table =
   device-only, silently. A signed-out visitor gets a small sign-in nudge after a copy/share/save, once
   per visit (`sessionStorage packsink:tierlist:nudgeDismissed`), never on load.
-- Unranked cards are not in the picture, like TierMaker.
+- Unranked cards are not in the picture, like TierMaker; an empty board won't export. Ranking the last
+  unranked card from the viewer closes it with an "every card is ranked" toast. iOS needs a
+  non-passive `touchmove` listener present BEFORE a touch starts (dnd-kit's fix), so the view keeps a
+  no-op one registered while mounted. Account saves debounce PER SET.
 
 ## Brand assets
 
