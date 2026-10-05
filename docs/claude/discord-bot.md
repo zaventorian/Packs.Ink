@@ -370,9 +370,13 @@ Zaven: *"lets use low, like we do on the site"*, and on /card: the price lines a
   on an eBay-led promo Low is still left off and Market takes the gold.
   - **The standing chip still judges `market_price`** — that is the site's own
     `priceStanding` rule, and a phantom Low must never read "Cheapest in 12 months".
-  - **The channel reports are NOT switched**: `discord_reports.py` ranks movers off
-    `discord_digest.py`, which reads Market on purpose (a sticky or phantom Low makes a
-    1D mover list noise). Changing that is a separate decision.
+  - **The channel reports switched too (same day)**: `discord_reports.py` ranks and
+    quotes Low (`REPORT_PRICE_COL` / `REPORT_PCT_PREFIX` / `REPORT_DAILY_COL`), the
+    stale check compares today's `low_price`, and the weekly picture strips draw the
+    Low trend. **⚠ A section's price floor now holds at BOTH ends of the window**
+    (`qualifies`), the home banners' rule: on Low, a $0.50 -> $6.00 card read "+1100%"
+    and led the base section in the first preview. The standing notes and the shared
+    digest (`discord_digest.PRICE_COL`) stay on Market.
 - **`/card` with a drawn tile prints no prices** — no Low/Market line, no 1D/1W/1M, no
   other finish. The tile carries them. Without a tile (no TCGplayer listing, a graded
   ask, an eBay-led promo) the text lines are still there.

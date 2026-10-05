@@ -52,8 +52,8 @@ EVENING = at(TODAY, 21, 20)       # when the report is meant to go out
 
 def mover(cid, name, version, rarity, printing, pid, price, p1, p7, set_id="s_fab"):
     return {"card_id": cid, "name": name, "version": version, "rarity": rarity, "set_id": set_id,
-            "printing": printing, "tcgplayer_product_id": pid, "market_today": price,
-            "mkt_pct_1d": p1, "mkt_pct_7d": p7}
+            "printing": printing, "tcgplayer_product_id": pid, "low_today": price,
+            "pct_1d": p1, "pct_7d": p7}
 
 
 MOVERS = [
@@ -126,12 +126,12 @@ class FakeSb:
         if table == "sets":
             return [dict(s) for s in SETS]
         if table == "price_movers":
-            pct = next(k for k in filters if k.startswith("mkt_pct_"))
-            floor = float(filters[rep.digest.PRICE_COL].split(".", 1)[1])
-            return [dict(m) for m in self.movers if m[pct] not in (None, 0) and m["market_today"] >= floor]
+            pct = next(k for k in filters if k.startswith("pct_"))
+            floor = float(filters[rep.REPORT_PRICE_COL].split(".", 1)[1])
+            return [dict(m) for m in self.movers if m[pct] not in (None, 0) and m["low_today"] >= floor]
         if table == "prices_daily" and filters.get("date", "").startswith("eq."):
             return [{"tcgplayer_product_id": m["tcgplayer_product_id"], "printing": m["printing"],
-                     "market_price": (m["market_today"] - 1 if m["tcgplayer_product_id"] in STALE_PIDS else m["market_today"])}
+                     "low_price": (m["low_today"] - 1 if m["tcgplayer_product_id"] in STALE_PIDS else m["low_today"])}
                     for m in self.movers]
         if table == "prices_daily":      # history: a year of prices, today's at the end
             out = []
@@ -139,13 +139,13 @@ class FakeSb:
                 for i in range(200):
                     d = self.price_date - dt.timedelta(days=199 - i)
                     if i == 199:
-                        v = m["market_today"]
+                        v = m["low_today"]
                     elif m["tcgplayer_product_id"] in LOW_PIDS:
-                        v = m["market_today"] * 1.3
+                        v = m["low_today"] * 1.3
                     else:
-                        v = m["market_today"] * (0.9 + 0.2 * ((i * 7) % 13) / 13)
+                        v = m["low_today"] * (0.9 + 0.2 * ((i * 7) % 13) / 13)
                     out.append({"tcgplayer_product_id": m["tcgplayer_product_id"], "printing": m["printing"],
-                                "date": d.isoformat(), "market_price": v})
+                                "date": d.isoformat(), "market_price": v, "low_price": v})
             return out
         if table == "market_index_daily":
             rows = self.index
@@ -374,7 +374,16 @@ check("https://www.tcgplayer.com/product/${productId}/?Language=English" in tcg
 block = html[html.index("const SET_DISPLAY_NAMES"):html.index("};", html.index("const SET_DISPLAY_NAMES"))]
 site = dict(re.findall(r'"([^"]+)":\s*"([^"]+)"', block))
 check(site == rep.SET_DISPLAY_NAMES, f"SET_DISPLAY_NAMES matches Index.html ({site})")
-check(rep.digest.PRICE_COL == "market_today", "reports read NM Market, never Low")
+# A card that started the window under the floor is not news, however far it
+# climbed (the home banners' rule): $0.50 -> $6.00 is "+1100%" off one listing.
+cheap = {"rarity": "Super Rare", "printing": "Normal", "pct": 1100.0, "price": 6.0,
+         "usd": rep.dollar_move(6.0, 1100.0)}
+check(not rep.qualifies(cheap, "base"), "a card that started under the floor never qualifies")
+check(rep.qualifies({**cheap, "pct": 20.0, "usd": rep.dollar_move(6.0, 20.0)}, "base"),
+      "a card above the floor at both ends does")
+check(rep.REPORT_PRICE_COL == "low_today" and rep.REPORT_PCT_PREFIX == "pct_" and rep.REPORT_DAILY_COL == "low_price",
+      "reports rank and quote TCGplayer's Low, as the site does")
+check(rep.digest.PRICE_COL == "market_today", "the shared digest (and the standing notes) still read NM Market")
 
 # ── 11. the old delivery rules, unchanged ──
 sb2 = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": TODAY.isoformat()}])

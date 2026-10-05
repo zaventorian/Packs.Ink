@@ -204,7 +204,7 @@ def _card_strip(cards, key, session):
                font=F["semi"](k(18)), fill=MUTED, anchor="ma")
         d.text((s(x + 8), ty + k(60)), fmt_money(c["price"]), font=F["xbold"](k(24)), fill=TEXT)
         _spark(d, c.get("spark") or [], (s(x + TW - 70), ty + k(62), s(x + TW - 4), ty + k(88)), col)
-    d.text((s(PAD), s(H - 34)), "NM Market · 30-day trend line on each card", font=F["semi"](s(17)), fill=MUTED)
+    d.text((s(PAD), s(H - 34)), "TCGplayer Low · 30-day trend line on each card", font=F["semi"](s(17)), fill=MUTED)
     d.text((s(W - PAD), s(H - 34)), "packs.ink", font=F["xbold"](s(19)), fill=GOLD, anchor="ra")
     return _png(im, W, H)
 
