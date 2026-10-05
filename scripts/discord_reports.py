@@ -52,7 +52,7 @@ Operationally:
   * ⚠ Stale rows are dropped before anything is posted. price_movers carries a
     SKU's last change forever once its listing disappears, so "today's" move
     can be months old; a mover only counts when prices_daily holds the same
-    market price for it on the newest date. The Discord bot's /movers applies
+    Low for it on the newest date. The Discord bot's /movers applies
     the identical check (discord/src/data.js fetchMovers).
   * A channel the bot can no longer post in (removed from the server, lost
     permission, channel deleted) is recorded in last_error and skipped; /reports
@@ -104,6 +104,13 @@ CHASE_RARITIES = {"Enchanted", "Epic", "Iconic"}
 # rank: what the list is ordered by, and what the bold number leads with.
 # min_price / min_usd: the floor. Both have to clear, so a $4 card moving
 # 50 cents is out however big its percent is (Zaven, 2026-09-28: "raise the floor").
+# The reports rank and quote TCGplayer's LOW, as the site does (Zaven,
+# 2026-10-04). The standing notes ("12-mo low") still judge NM Market history,
+# the site's own priceStanding rule — a phantom Low must never read as a bargain.
+REPORT_PRICE_COL = "low_today"       # price_movers
+REPORT_PCT_PREFIX = "pct_"           # price_movers: pct_1d, pct_7d, ...
+REPORT_DAILY_COL = "low_price"       # prices_daily
+
 SECTIONS = {
     "chase": {"title": "✦ CHASE", "rank": "pct", "min_price": 10.0, "min_usd": 2.0,
               "color": 0xE3B341, "lines": {"1d": 4, "7d": 5}},
@@ -166,22 +173,22 @@ def fresh_enough(price_date, now):
 
 
 def drop_stale(sb, rows, price_date):
-    """Keep only movers whose market price is really today's."""
+    """Keep only movers whose Low is really today's."""
     pids = sorted({r["tcgplayer_product_id"] for r in rows if r.get("tcgplayer_product_id")})
     if not pids:
         return []
     live = sb.select(
         "prices_daily",
-        columns="tcgplayer_product_id,printing,market_price",
+        columns=f"tcgplayer_product_id,printing,{REPORT_DAILY_COL}",
         filters={"source": "eq.tcgcsv", "grade": "eq.raw", "date": f"eq.{price_date.isoformat()}",
                  "tcgplayer_product_id": "in.(" + ",".join(str(p) for p in pids) + ")"},
         order="tcgplayer_product_id.asc,printing.asc",
     )
-    today = {(r["tcgplayer_product_id"], r.get("printing") or "Normal"): r.get("market_price") for r in live}
+    today = {(r["tcgplayer_product_id"], r.get("printing") or "Normal"): r.get(REPORT_DAILY_COL) for r in live}
     out = []
     for r in rows:
         v = today.get((r.get("tcgplayer_product_id"), r.get("printing") or "Normal"))
-        mine = r.get(digest.PRICE_COL)
+        mine = r.get(REPORT_PRICE_COL)
         if v is not None and mine is not None and abs(float(v) - float(mine)) < 0.005:
             out.append(r)
     return out
@@ -224,8 +231,14 @@ def dollar_move(price, pct):
 
 
 def qualifies(row, key):
+    """The floor holds at BOTH ends of the window — today's price and the price
+    the card started at — the home movers banners' rule. On Low that is what
+    keeps a card that jumped from $0.50 to $6.00 ("+1100%") out of the report:
+    one cheap listing selling through is not a market move."""
     cfg = SECTIONS[key]
-    return row["price"] >= cfg["min_price"] and abs(row["usd"]) >= cfg["min_usd"]
+    start = row["price"] - row["usd"]
+    return (row["price"] >= cfg["min_price"] and start >= cfg["min_price"]
+            and abs(row["usd"]) >= cfg["min_usd"])
 
 
 def rank(rows, key):
@@ -235,10 +248,10 @@ def rank(rows, key):
 
 def sectioned(rows, window):
     """price_movers rows -> {section: [ranked, floored rows]} with pct / usd / price."""
-    pct_col = digest.PCT_PREFIX + window
+    pct_col = REPORT_PCT_PREFIX + window
     out = {k: [] for k in SECTION_ORDER}
     for r in rows:
-        p, price = r.get(pct_col), r.get(digest.PRICE_COL)
+        p, price = r.get(pct_col), r.get(REPORT_PRICE_COL)
         if p is None or price is None or float(p) == 0:
             continue
         usd = dollar_move(price, p)
@@ -529,12 +542,12 @@ def market_chart_series(sb, price_date, pulse, sets_meta):
 
 # ── the report ───────────────────────────────────────────────────────────────
 def fetch_candidates(sb, window):
-    pct_col = digest.PCT_PREFIX + window
+    pct_col = REPORT_PCT_PREFIX + window
     floor = min(s["min_price"] for s in SECTIONS.values())
     cols = ("card_id,name,version,rarity,set_id,printing,tcgplayer_product_id,"
-            f"{digest.PRICE_COL},{pct_col}")
+            f"{REPORT_PRICE_COL},{pct_col}")
     return sb.select("price_movers", columns=cols,
-                     filters={digest.PRICE_COL: f"gte.{floor}", pct_col: "neq.0"},
+                     filters={REPORT_PRICE_COL: f"gte.{floor}", pct_col: "neq.0"},
                      order="card_id.asc,printing.asc")
 
 
@@ -712,6 +725,14 @@ def build_report(sb, price_date, window, session=requests, now=None):
     for i in range(0, len(pids), 40):
         hist.update(digest.fetch_history(sb, pids[i:i + 40], since))
     standing = {k: digest.price_standing(hist.get(k, [])) for k in look}
+    # The picture strips draw each card's LOW trend, matching the price beside it.
+    low_hist = {}
+    if weekly:
+        for i in range(0, len(pids), 40):
+            try:
+                low_hist.update(digest.fetch_history(sb, pids[i:i + 40], since, col=REPORT_DAILY_COL))
+            except Exception as e:  # a missing trend line must never cost the report
+                print(f"  (low history unavailable: {str(e)[:160]})")
 
     worth = []
     if weekly:
@@ -773,7 +794,7 @@ def build_report(sb, price_date, window, session=requests, now=None):
                 "pid": r.get("tcgplayer_product_id"), "name": r.get("name") or "",
                 "version": r.get("version") if r.get("version") not in (None, "None") else set_display(sets.get(r.get("set_id"), "")),
                 "price": r["price"], "pct": r["pct"], "usd": r["usd"],
-                "spark": hist.get(key_of(r), [])} for r in rows if r.get("tcgplayer_product_id")],
+                "spark": low_hist.get(key_of(r), [])} for r in rows if r.get("tcgplayer_product_id")],
                 SECTIONS[key]["rank"], session=session)
             if strip:
                 files[f"{key}.png"] = strip

@@ -147,8 +147,8 @@ def fetch_movers(sb, window, direction, limit):
     return [r for r in rows if r.get(pct) is not None]
 
 
-def fetch_history(sb, pids, since):
-    """market_price history for a pid list, bucketed by (pid, printing).
+def fetch_history(sb, pids, since, col="market_price"):
+    """market_price (or `col`) history for a pid list, bucketed by (pid, printing).
 
     Only the rows price_movers itself is built from (tcgcsv / raw), so "the
     latest observation" means the same thing here as in the matview."""
@@ -157,18 +157,18 @@ def fetch_history(sb, pids, since):
     ids = ",".join(str(p) for p in sorted(set(pids)))
     rows = sb.select(
         "prices_daily",
-        columns="tcgplayer_product_id,printing,date,market_price",
+        columns=f"tcgplayer_product_id,printing,date,{col}",
         filters={"tcgplayer_product_id": f"in.({ids})", "date": f"gte.{since}",
                  "source": "eq.tcgcsv", "grade": "eq.raw"},
         order="tcgplayer_product_id.asc,printing.asc,date.asc",
     )
     out: dict[tuple, list] = {}
     for r in rows:
-        if r.get("market_price") is None:
+        if r.get(col) is None:
             continue
         key = (r["tcgplayer_product_id"], r.get("printing") or "Normal")
         out.setdefault(key, []).append(
-            (dt.date.fromisoformat(str(r["date"])[:10]), r["market_price"]))
+            (dt.date.fromisoformat(str(r["date"])[:10]), r[col]))
     for v in out.values():
         v.sort(key=lambda p: p[0])
     return out
