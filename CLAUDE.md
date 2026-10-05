@@ -1424,6 +1424,39 @@ Covers: Promo videos — 16:9 and 9:16.
 - ⚠ The track is a commercial Disney recording
 - ⚠ All three bullet beats show the configurator beside the copy
 
+## Tier List (`/tierlist`) — added 2026-10-05
+
+Analytics sub-tab with its own path (`MARKET_SUB_PATHS`, like `/ticker`): rank a set's Enchanteds +
+Iconics in S/A/B/C/D, then copy a canvas-drawn picture (logo, title, QR, `packs.ink/tierlist`) or the
+link. `TierListView` + `buildTierListBlob` sit just above "Home (landing)" in Index.html.
+Guards: `scripts/test_tier_list.mjs`.
+
+- **The URL IS the list**, no table: `?ts=` set number (MAINLINE index + 1), `?tl=` tiers, `?tn=` title,
+  `?tt=` renamed labels (`_`-joined, only when not S/A/B/C/D). Owned at `/tierlist` in App's view sync
+  (`TIER_URL_KEYS`), stripped everywhere else.
+- **⚠ Cards are encoded by COLLECTOR-NUMBER OFFSET from the set's first chase card**, one base-36 char
+  each, never by card_id: prestaged sets swap their stand-in ids for Lorcast's, and an id-keyed link
+  would lose every card that day. 20 cards ≈ 25 chars.
+- **⚠ A link is SHOWN, not saved** (the "a link may choose for you, never over you" rule): opening
+  someone's list leaves your own list for that set alone until you move a card. A link that equals
+  your saved list (a refresh — the address bar carries it) is just your list, no "shared" banner.
+- Mouse/pen drag (pointer events + `elementFromPoint`, edge auto-scroll). A click/tap opens the card
+  FULL SCREEN (`TierCardViewer`): tier buttons, ‹ › through the cards, and a TCGplayer affiliate
+  button (`tcgUrl`, or a `tcgSetSearchUrl` name search for a card with no product yet). Placing an
+  UNRANKED card from there advances to the next unranked one, so a phone ranks a whole set without
+  leaving the view. Cards keep `touch-action:manipulation`, so the page still scrolls on a phone.
+  Keys: 1–5 place, 0 unranks, ←/→ reorder (board) or step (viewer), Esc closes.
+- Copy link copies a LINE + the link (`tierShareText`): "Check out my <set> Chase Card Tier List on
+  Packs.Ink ✨🏆". The two emoji are built with `String.fromCodePoint` so the served source stays
+  emoji-free for `test_no_emoji.mjs`. Copy image is image only (apps disagree on which half of an
+  image+text clipboard they paste). Touch: one share sheet with the PNG and the line together.
+- **Saved to the account when signed in — `tier_lists` (migration 180, APPLIED 2026-10-05)**, one row
+  per (user, set) in the link's own shape (code / title / labels). On sign-in the newer side of each
+  set wins and device-only lists are carried up; edits write through, debounced 900ms. Missing table =
+  device-only, silently. A signed-out visitor gets a small sign-in nudge after a copy/share/save, once
+  per visit (`sessionStorage packsink:tierlist:nudgeDismissed`), never on load.
+- Unranked cards are not in the picture, like TierMaker.
+
 ## Brand assets
 
 - `Logos/` ships at runtime.

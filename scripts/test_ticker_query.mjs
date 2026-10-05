@@ -223,7 +223,7 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("dev server: same bar/embed gate",
     /if url_path == "\/ticker":[\s\S]{0,200}?if "bar" in q or "embed" in q:[\s\S]{0,80}?ticker\.html/.test(dev), true);
   check("Index.html: /ticker is the Stream Ticker tab's canonical path",
-    /const MARKET_SUB_PATHS = \{ ticker: "\/ticker" \}/.test(index), true);
+    /const MARKET_SUB_PATHS = \{[^}]*\bticker: "\/ticker"[^}]*\}/.test(index), true);
   check("Index.html: a tab with its own path does not also write ?a=",
     /MARKET_SUB_PATHS\[marketSub\]\) \? null : marketSub/.test(index), true);
   check("Index.html: the ticker tab uses the auto-height frame",
@@ -247,7 +247,7 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("Index.html: at /ticker the ticker's params are owned, not stripped",
     /marketSub === "ticker"\)\s*\?\s*new Set\(\[\.\.\.\(VIEW_OWNED\[view\] \|\| \[\]\), \.\.\.TICKER_PARAM_KEYS\]\)/.test(index), true);
   check("Index.html: ...and stripped once you leave",
-    /\.\.\.SC_DEEP_PARAMS, \.\.\.TICKER_PARAM_KEYS\]/.test(index), true);
+    /\.\.\.SC_DEEP_PARAMS, \.\.\.TICKER_PARAM_KEYS[,\]]/.test(index), true);
   check("Index.html: the ticker tab mirrors the configurator onto its address",
     /mirrorParamsAt="\/ticker"/.test(index) && /"packsink:embed-params"/.test(index), true);
   check("ticker: the embedded configurator reports its settings to the host",
