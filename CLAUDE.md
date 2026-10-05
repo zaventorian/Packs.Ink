@@ -1440,10 +1440,20 @@ Guards: `scripts/test_tier_list.mjs`.
 - **⚠ A link is SHOWN, not saved** (the "a link may choose for you, never over you" rule): opening
   someone's list leaves your own list for that set alone until you move a card. A link that equals
   your saved list (a refresh — the address bar carries it) is just your list, no "shared" banner.
+- **A finger drags too: press and hold a card `TIER_HOLD_MS` (280ms), then drag** — a finger that moves
+  first is scrolling and is left alone. The touch listeners are NATIVE and non-passive (React's touch
+  handlers are passive, and only a cancelable touchmove stops the page scrolling under the card).
+  Edge auto-scroll only runs toward the edge being dragged at, or a card picked up near the bottom of
+  the screen scrolls the page away before it moves. ⚠ Every coloured button here restates its colour
+  for `:hover` — the site-wide `button:hover` outranks one class, and a phone keeps :hover on the last
+  thing tapped, which greyed out the tier button you had just pressed (reported 10/5).
 - Mouse/pen drag (pointer events + `elementFromPoint`, edge auto-scroll). A click/tap opens the card
   FULL SCREEN (`TierCardViewer`): tier buttons, ‹ › through the cards, and a TCGplayer affiliate
   button (`tcgUrl`, or a `tcgSetSearchUrl` name search for a card with no product yet). Placing an
-  UNRANKED card from there advances to the next unranked one, so a phone ranks a whole set without
+  card from there ALWAYS moves on (next unranked card while any are left, else the next on the board),
+  with a "Placed X in S" flash, the picture keyed by card so it swaps at once, and the next cards
+  preloaded; Previous / Next are a labelled row under the card, and a swipe on the card steps too. So
+  a phone ranks a whole set without
   leaving the view. Cards keep `touch-action:manipulation`, so the page still scrolls on a phone.
   Keys: 1–5 place, 0 unranks, ←/→ reorder (board) or step (viewer), Esc closes.
 - Copy link copies a LINE + the link (`tierShareText`): "Check out my <set> Chase Card Tier List on
