@@ -40,6 +40,16 @@ export const ART_CACHE = fileURLToPath(new URL("../.tile-art-cache/", import.met
 // this width: Discord shows an embed image at most ~400px wide, so 600 is all
 // detail nobody sees and half again the upload.
 const OUT_WIDTH = 450;
+// ⚠ Discord fits an embed image inside a ~400 x 300 box, so the site's
+// portrait tile (1:2) came out 150 px wide — the card a thumbnail beside an
+// empty half of the embed (Zaven, 2026-10-04: "make the card art tile much
+// bigger"). A portrait card is therefore laid out WIDE for Discord: the art
+// panel exactly as the site draws it on the left, and the tile's own info
+// block (name, prices, changes, packs.ink · date) moved to its right, the
+// whole thing 4:3 so it fills the box. Same pixels the site drew, rearranged.
+const WIDE_RATIO = 4 / 3;
+const WIDE_OUT_WIDTH = 720;
+const TILE = { W: 300, PAD: 12, SCALE: 2 };
 const WEBP_QUALITY = 82;
 // The art box on the tile is 276 x 386 CSS px, drawn at 2x.
 const ART_CACHE_WIDTH = 560;
@@ -79,7 +89,7 @@ let _site = null;
 export function siteTile() {
   if (_site) return _site;
   const palette = velvetPalette();
-  _site = loadSite(["drawCardTileCanvas", "computeSeriesDeltas", "CARD_DELTA_WINDOWS"], {
+  _site = loadSite(["drawCardTileCanvas", "computeSeriesDeltas", "CARD_DELTA_WINDOWS", "roundRectPath"], {
     stop: ["posterPalette"],
     globals: { posterPalette: () => palette },
   });
@@ -136,8 +146,9 @@ export function tileArtSource(p) {
 export async function drawTile({ name, meta, low, market, dateStr, art, logo, landscape = false }) {
   registerFonts();
   const site = siteTile();
-  const canvas = createCanvas(10, 10);
-  site.drawCardTileCanvas(canvas, { artImg: art, logoImg: logo, name, meta, low, market, dateStr, landscape });
+  const tile = createCanvas(10, 10);
+  const H = site.drawCardTileCanvas(tile, { artImg: art, logoImg: logo, name, meta, low, market, dateStr, landscape });
+  const canvas = landscape ? tile : widen(tile, H, site);
   // Raw pixels straight into sharp: a PNG round trip cost ~135 ms a tile, all
   // of it compression thrown away a line later. sharp works off the main
   // thread, so the tiles overlap; effort 2 is twice as fast as the default
@@ -145,7 +156,33 @@ export async function drawTile({ name, meta, low, market, dateStr, art, logo, la
   const px = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
   return sharp(Buffer.from(px.data.buffer, px.data.byteOffset, px.data.byteLength),
     { raw: { width: canvas.width, height: canvas.height, channels: 4 } })
-    .resize({ width: OUT_WIDTH }).webp({ quality: WEBP_QUALITY, effort: 2 }).toBuffer();
+    .resize({ width: landscape ? OUT_WIDTH : WIDE_OUT_WIDTH }).webp({ quality: WEBP_QUALITY, effort: 2 }).toBuffer();
+}
+
+// The portrait tile rearranged 4:3 (see WIDE_RATIO). Every coordinate is the
+// site's tile geometry in CSS px (drawCardTileCanvas: W 300, PAD 12, art
+// 276 x 386, info from 12 px under the art), times its SCALE.
+export function widen(tile, H, site) {
+  const { W, PAD, SCALE: S } = TILE;
+  const artW = W - PAD * 2, artH = Math.round(artW * 7 / 5);
+  const LH = PAD + artH + PAD, LW = Math.round(LH * WIDE_RATIO);
+  const out = createCanvas(LW * S, LH * S);
+  const ctx = out.getContext("2d");
+  const P = velvetPalette();
+  ctx.scale(S, S);
+  site.roundRectPath(ctx, 0.5, 0.5, LW - 1, LH - 1, 12);
+  ctx.fillStyle = P.bg; ctx.fill();
+  ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.stroke();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // The art panel, as drawn (its rounded corners are already clipped in).
+  ctx.drawImage(tile, PAD * S, PAD * S, artW * S, artH * S, PAD * S, PAD * S, artW * S, artH * S);
+  // The info block: everything under the art, inside the panel's border.
+  const sx = 2, sy = PAD + artH + 4, sw = W - 4, sh = H - sy - 2;
+  const dx0 = PAD + artW + 4, dw = LW - 2 - dx0;
+  const k = Math.min(dw / sw, (LH - 4) / sh);
+  const dh = sh * k, dy = (LH - dh) / 2;
+  ctx.drawImage(tile, sx * S, sy * S, sw * S, sh * S, dx0 * S, dy * S, sw * k * S, dh * S);
+  return out;
 }
 
 // fetchHistory(pids, since) -> prices_daily rows {tcgplayer_product_id,

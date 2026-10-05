@@ -389,6 +389,25 @@ Zaven: *"lets use low, like we do on the site"*, and on /card: the price lines a
   - **`pl` (recency-weighted, every format) stays the resolver's popularity prior** —
     it decides which Mowgli "mowgli" means, and it must not go empty on release day.
 
+### 2026-10-04 (later): /card is the picture, and the picture is WIDE
+
+Zaven: *"people mostly want to see the card nothing else for /card"*, and *"make the
+card art tile much bigger"*.
+
+- **The card view drops the ink / cost / type line and the rules text** — both are
+  printed on the card. It keeps the set line, the stats line and the 🏆 play line.
+  `/price` keeps the ink line. `rulesText` stays (tested) but no reply uses it now.
+- **⚠ Discord fits an embed image inside a ~400 x 300 box**, so the site's portrait
+  tile (about 1:2) rendered ~150 px wide. `bake_tiles.mjs` `widen()` rearranges a
+  portrait tile 4:3: the art panel exactly as the site drew it on the left, the tile's
+  own info block (name, Low / Market, 1D/1W/1M, packs.ink · date) scaled onto its
+  right. Same pixels, rearranged — still the site's `drawCardTileCanvas`. The card
+  shows ~1.5x the size (~2.2x the area). A Location's tile (already landscape art)
+  keeps the old shape. Saved at 720 px wide (`WIDE_OUT_WIDTH`).
+  - The geometry in `TILE` (W 300, PAD 12, art 276 x 386) is the site's; if
+    `drawCardTileCanvas` changes its layout, `widen()` must follow or it crops wrong.
+    Nothing tests that in CI (no canvas there) — render one tile and LOOK.
+
 ### The channel report's layout (2026-09-28)
 
 Zaven, on the first live report: *"foil prices aren't super important, base

@@ -155,17 +155,17 @@ export function cardMessage(ctx) {
   // What a player needs to place the card (its ink, cost, type) and how much
   // it is played — measured from recent tournament top cuts, the same number
   // that decides which version "mowgli" means.
-  const ident = gameplayLine(c);
-  if (ident) lines.push(`*${ident}*`);
-  // What the card DOES, under its name (Zaven, 2026-09-29) — on the CARD
-  // view. /price is asked about a number, and the same eight lines of rules
-  // text above every chart pushed the chart, the changes and the graded
-  // tiers below the fold; the card is one button away.
-  if (view === "card") {
+  // /card is the PICTURE (Zaven, 2026-10-04: "people mostly want to see the
+  // card, nothing else"): the ink / cost / type line and the rules text are
+  // printed on the card itself, so the card view leaves them out and keeps
+  // only the stats line. /price keeps the ink line; its rules text was moved
+  // to /card on 2026-09-29 and is now in the picture alone.
+  if (view !== "card") {
+    const ident = gameplayLine(c);
+    if (ident) lines.push(`*${ident}*`);
+  } else {
     const stats = statsLine(c);
     if (stats) lines.push(stats);
-    const rules = rulesText(c);
-    if (rules) lines.push(rules);
   }
   const play = playLine(R, res.index, ctx.playSet);
   if (play) lines.push(play);
