@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import unicodedata
 import sys
 import time
 from typing import Any
@@ -83,6 +84,8 @@ def _norm_name(s: str | None) -> str:
     which Lorcast never carries — strip it or no chase card ever passes the
     name check."""
     s = re.sub(r"\s*\((?:Iconic|Enchanted|Epic)\)\s*$", "", s or "", flags=re.I)
+    # TCGplayer drops accents Lorcast keeps (Mamá Coco, Héctor Rivera).
+    s = "".join(ch for ch in unicodedata.normalize("NFKD", s) if not unicodedata.combining(ch))
     s = s.lower().replace("’", "'").replace("'", "")
     return re.sub(r"\s+", " ", s).strip()
 
