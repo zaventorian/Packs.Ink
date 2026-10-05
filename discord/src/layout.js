@@ -1,42 +1,29 @@
-// ⚠ A TEST (Zaven, 2026-10-05): can /card show the card bigger than an embed
-// allows? Discord fits an embed's picture inside ~400 x 300, so a tall card
-// comes out ~200 px wide however it is drawn. /card's `layout` option tries
-// the two ways out of the embed, to compare in a real channel; the loser is
-// deleted with this file.
+// /card's reply in Discord's newer message layout ("Components V2"), chosen
+// 2026-10-05 after a side-by-side test in a real channel. An embed fits its
+// picture inside ~400 x 300, so a tall card came out ~200 px wide however it
+// was drawn; a V2 media gallery shows it much bigger. The test's other option
+// — the picture as a loose attachment beside the embed — lost and is gone.
 //
-//   embed — today's reply, unchanged.
-//   image — the same embed with its picture taken OUT of it: the uploaded file
-//           is left on the message as a plain attachment, which Discord draws
-//           on its own (bigger, it is thought) next to the embed.
-//   big   — Discord's newer message layout ("Components V2"): the embed becomes
-//           a container of text blocks, the picture a media gallery, the
-//           buttons and menus rows inside it. A V2 message can carry no embed
-//           and can never go back to being one.
+//   embed — every other reply, and /price (a chart is wide; an embed fits it).
+//   big   — the embed becomes a container of text blocks, the picture a media
+//           gallery, the buttons and menus rows inside it. A V2 message can
+//           carry no embed and can never go back to being one.
 //
-// A button on a test reply keeps its layout: the layout is read off the
-// message the button sits on (layoutOfMessage), so no custom_id changes.
-export const LAYOUTS = ["embed", "image", "big"];
+// A button keeps the layout of the message it sits on (layoutOfMessage), so
+// "Price chart" on a /card reply answers in V2 and "Card image" on a /price
+// reply stays an embed. No custom_id changes.
+export const LAYOUTS = ["embed", "big"];
 export const IS_COMPONENTS_V2 = 1 << 15;
 
 export function layoutOfMessage(msg) {
   if (!msg) return "embed";
-  if (Number(msg.flags) & IS_COMPONENTS_V2) return "big";
-  const e = (msg.embeds || [])[0];
-  if (e && !e.image && (msg.attachments || []).some((a) => /^image\//.test(a.content_type || "") || /\.(webp|png|jpe?g)$/i.test(a.filename || ""))) return "image";
-  return "embed";
+  return Number(msg.flags) & IS_COMPONENTS_V2 ? "big" : "embed";
 }
 
 // body: a reply as patchOriginal would send it (embeds may already point at
 // uploaded attachment:// files). Returns the body to send in that layout.
 export function applyLayout(body, layout) {
   if (!body || layout === "embed" || !Array.isArray(body.embeds) || !body.embeds.length) return body;
-  if (layout === "image") {
-    const embeds = body.embeds.map((e) => ({ ...e }));
-    const e = embeds[0];
-    // Only an UPLOADED picture can stand on its own; a linked one stays put.
-    if (e.image && /^attachment:\/\//.test(e.image.url || "")) delete e.image;
-    return { ...body, embeds };
-  }
   if (layout === "big") return toComponentsV2(body);
   return body;
 }
@@ -61,7 +48,10 @@ export function toComponentsV2(body) {
   for (const row of body.components || []) parts.push(row);
   const container = { type: 17, components: parts };
   if (e.color != null) container.accent_color = e.color;
-  const out = { components: [container], flags: IS_COMPONENTS_V2 };
+  // A V2 message has no `content`; a note above the reply ("Example: …")
+  // becomes a text block of its own, above the container.
+  const top = body.content ? [{ type: 10, content: clip(body.content, 1000) }] : [];
+  const out = { components: [...top, container], flags: IS_COMPONENTS_V2 };
   if (body.attachments) out.attachments = body.attachments;
   if (body.allowed_mentions) out.allowed_mentions = body.allowed_mentions;
   return out;

@@ -14,7 +14,7 @@ import { chartResponse } from "./charts.js";
 export const T = { PING: 1, COMMAND: 2, COMPONENT: 3, AUTOCOMPLETE: 4, MODAL_SUBMIT: 5 };
 export const R_ = { PONG: 1, MESSAGE: 4, DEFERRED: 5, DEFERRED_UPDATE: 6, AUTOCOMPLETE: 8, MODAL: 9 };
 const EPHEMERAL = 64;
-import { applyLayout, layoutOfMessage, LAYOUTS } from "./layout.js";
+import { applyLayout, layoutOfMessage } from "./layout.js";
 const MANAGE_GUILD = 1n << 5n;
 export const DISCORD_API = "https://discord.com/api/v10";
 // Nothing the bot says may ping anyone — the "closest match for …" line
@@ -52,12 +52,8 @@ function command(it, deps) {
   const o = d.options || [];
   const priv = !!optVal(o, "private", false);
   switch (d.name) {
-    case "card": {
-      // TEST (2026-10-05): see layout.js.
-      const lay = String(optVal(o, "layout", "embed"));
-      const layout = LAYOUTS.includes(lay) ? lay : "embed";
-      return deferred(it, deps, priv, async () => ({ ...(await lookup(String(optVal(o, "name", "")), "card", D.DEFAULT_RANGE, deps)), _layout: layout }));
-    }
+    // /card answers in the big layout (layout.js); /price stays an embed.
+    case "card": return deferred(it, deps, priv, async () => ({ ...(await lookup(String(optVal(o, "name", "")), "card", D.DEFAULT_RANGE, deps)), _layout: "big" }));
     case "price": return deferred(it, deps, priv, () => lookup(String(optVal(o, "name", "")), "chart", String(optVal(o, "range", D.DEFAULT_RANGE)), deps));
     case "events": return deferred(it, deps, priv, () => events(o, deps));
     case "calendar": return deferred(it, deps, priv, () => calendar(deps));
@@ -368,7 +364,7 @@ function component(it, deps) {
     const place = { lat: ev.lat, lng: ev.lng, city: ev.label };
     return deferredUpdate(it, deps, () => eventsBoard({ place, radius: ev.radius, kind: ev.kind, query: ev.label }, deps));
   }
-  // A card reply keeps the layout it was sent in (the layout.js test).
+  // A card reply keeps the layout it was sent in (layout.js).
   const keep = async (p) => ({ ...(await p), _layout: layoutOfMessage(it.message) });
   const rg = E.parseRangeId(id);
   if (rg) return deferredUpdate(it, deps, () => keep(byKey(rg.key, rg.view, rg.range, deps, rg.grade)));
@@ -384,7 +380,7 @@ function component(it, deps) {
   if (op) {
     const key = (it.data.values || [])[0];
     if (!key) return { type: R_.DEFERRED_UPDATE };
-    return deferred(it, deps, true, () => byKey(key, op.view, D.DEFAULT_RANGE, deps));
+    return deferred(it, deps, true, async () => ({ ...(await byKey(key, op.view, D.DEFAULT_RANGE, deps)), _layout: op.view === "card" ? "big" : "embed" }));
   }
   return { type: R_.MESSAGE, data: { content: "That button has expired.", flags: EPHEMERAL } };
 }
@@ -539,7 +535,7 @@ export function packReply(name, n, it, deps) {
 // ── /help's examples ─────────────────────────────────────────────────────
 function helpTry(what, it, deps) {
   const note = (text, m) => ({ ...m, content: text });
-  if (what === "card") return deferred(it, deps, true, async () => note("Example: `/card mowgli`", await lookup("mowgli", "card", D.DEFAULT_RANGE, deps)));
+  if (what === "card") return deferred(it, deps, true, async () => ({ ...note("Example: `/card mowgli`", await lookup("mowgli", "card", D.DEFAULT_RANGE, deps)), _layout: "big" }));
   if (what === "open") return instant(note("Example: `/open` — add `box: True` for a whole box", packReply("", 1, it, deps)), true);
   return instant(note("Example: `/set`", setReply("", deps)), true);
 }
