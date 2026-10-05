@@ -1327,6 +1327,31 @@ const D = await mod("discord/src/data.js");
     ok(s0.body && s0.body.allowed_mentions && !s0.body.allowed_mentions.parse.length, "an upload still never pings anyone");
     ok(s0.body && Array.isArray(s0.body.components) && s0.body.components.length > 0, "an upload keeps the reply's buttons");
 
+    // TEST layouts (2026-10-05, src/layout.js): the same upload, shown two other ways.
+    const withLayout = (v) => ({ ...cardCmd, data: { ...cardCmd.data, options: [...cardCmd.data.options, { type: 3, name: "layout", value: v }] } });
+    const im = await run(withLayout("image"));
+    const si = im.sent[0] || {};
+    ok(si.multipart && si.body.embeds[0] && !si.body.embeds[0].image && si.files.length === 1
+      && JSON.stringify(si.body.attachments) === JSON.stringify([{ id: 0, filename: "packs-ink-0.webp" }]),
+      "layout image: the tile is uploaded and left on the message, not in the embed");
+    const bg = await run(withLayout("big"));
+    const sb = bg.sent[0] || {};
+    const cont = sb.body && sb.body.components && sb.body.components[0];
+    ok(sb.multipart && sb.body.flags === 32768 && !sb.body.embeds && !sb.body.content && cont && cont.type === 17,
+      "layout big: a Components V2 message, one container, no embed");
+    const gal = cont && cont.components.find((c) => c.type === 12);
+    eq(gal && gal.items[0].media.url, "attachment://packs-ink-0.webp", "layout big: the tile is a media gallery item pointing at the upload");
+    ok(cont && cont.components.some((c) => c.type === 1) && cont.components[0].type === 10 && /^### \[/.test(cont.components[0].content),
+      "layout big: the title, text and the reply's buttons are inside the container");
+    const bogus = await run(withLayout("nope"));
+    ok(bogus.sent[0] && bogus.sent[0].body.embeds && bogus.sent[0].body.embeds[0].image, "an unknown layout is today's embed");
+    const L = await mod("discord/src/layout.js");
+    eq(L.layoutOfMessage({ flags: 64 | 32768 }), "big", "a V2 message's buttons keep it V2");
+    eq(L.layoutOfMessage({ flags: 64, embeds: [{ title: "x" }], attachments: [{ filename: "packs-ink-0.webp", content_type: "image/webp" }] }), "image", "an embed with a loose picture keeps the image layout");
+    eq(L.layoutOfMessage({ flags: 64, embeds: [{ title: "x", image: { url: "attachment://packs-ink-0.webp" } }], attachments: [{ filename: "packs-ink-0.webp" }] }), "embed", "today's reply stays an embed");
+    const bigBtn = await run({ type: 3, token: "tk9", application_id: "123", message: { flags: 32768 }, data: { custom_id: E.rangeId("3m", "chart", key), component_type: 2 } });
+    ok(bigBtn.sent[0] && bigBtn.sent[0].body.flags === 32768, "a button on a big reply answers in the big layout");
+
     // Switching to the chart uploads the CHART, drawn here by the chart route,
     // and its attachments list names only it, so the tile is dropped.
     const b = await run({ type: 3, token: "tk2", application_id: "123", data: { custom_id: E.rangeId("3m", "chart", key), component_type: 2 } });

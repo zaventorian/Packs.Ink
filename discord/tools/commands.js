@@ -20,7 +20,10 @@ export const COMMANDS = [
   {
     name: "card", type: 1, ...EVERYWHERE,
     description: "A Lorcana card: its picture, text, stats, price and how much it's played",
-    options: [nameOpt, privOpt],
+    // TEST (2026-10-05): which reply shows the card biggest — see src/layout.js.
+    options: [nameOpt, { type: 3, name: "layout", description: "Test: how the card picture is shown", choices: [
+      { name: "Embed (today's)", value: "embed" }, { name: "Picture under the text", value: "image" },
+      { name: "Big (new Discord layout)", value: "big" }] }, privOpt],
   },
   {
     name: "price", type: 1, ...EVERYWHERE,
