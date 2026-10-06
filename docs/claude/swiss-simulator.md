@@ -21,8 +21,8 @@ all seven themes work with no extra CSS, and reuses Index.html's pre-paint theme
   report-only policy) or enforcement will block it from the other end.
 - **The engine is one self-contained `swissEngine()`** stringified into a Blob worker, so the
   worker and the main-thread fallback literally run the same text and can't drift. Flat typed
-  arrays, not an object per player; counting sort into point brackets; the intentional-draw
-  guarantee check reads a precomputed suffix histogram, making it O(1) instead of O(N) per pairing.
+  arrays, not an object per player; counting sort into point brackets; the intentional-draw plan
+  is built once per round from point histograms, O(tables + point range), never O(N) per pairing.
   Benchmarked **9.5x the reference tool** (databorn.ink) at 256p/8r, and it uses up to 8 workers.
 - **Odds come from pooling every simulated player who held your record**, not from tracking one
   player — under equal skill they're interchangeable, so a 10k-sim run yields ~10^5 samples per
@@ -31,18 +31,39 @@ all seven themes work with no extra CSS, and reuses Index.html's pre-paint theme
   ~6.7%, because their tiebreakers are better.
 - **Guarded by `node scripts/test_swiss_engine.mjs`** (extracts the real engine out of swiss.html,
   house pattern): Swiss-triangle exactness at 64p/6r, conservation across odd fields/drops/IDs/tiers,
-  flagship ID behavior (the 5-0 pair always IDs into 5-0-1 and cuts), tie-inclusive tier payouts,
-  and determinism. Run it after touching the engine, pairing, ID rule, or sharding.
+  flagship ID behavior (the 5-0 pair always IDs into 5-0-1 and cuts), the coordinated rule's exact
+  64/6/top8 answer (one 4-1 table joins them), "a planned final-round draw always lands" across six
+  field shapes incl. prize tiers, the day-two cut, tie-inclusive tier payouts, and determinism. Run
+  it after touching the engine, pairing, ID rule, or sharding.
 - **Reproducibility is exact, cross-device — keep it that way.** The run is split into a FIXED
   ≤16-shard plan (`shardPlan`) with seeds derived from the shard index, workers pull shards off a
   queue, and results fold IN SHARD ORDER. Counts are exact in f64, but the tiebreaker accumulators
   are float sums, so fold order is part of the guarantee — folding on arrival order (or splitting by
   `hardwareConcurrency`, as v1 did) makes the same Copy link give different numbers on a 4-core
   phone vs an 8-core desktop (measured: 137026 vs 137027 vs 136949 for one cell).
-- **The ID guarantee counts the OPPONENT as a threat** when the post-draw opponent can still tie or
-  beat you (`bMin` floor in the engine) — a same-bracket opponent ties you forever, and excluding
-  them let knife-edge pairs "safely" draw each other into a 9th-place tiebreaker. Ties with third
-  parties already counted (>= not >). Don't simplify either away.
+- **Intentional draws are COORDINATED, and that rule was chosen by replaying real events
+  (2026-10-06).** In the last two rounds, `planDraws` takes tables best-first by their LOWER
+  player's points; a table draws if, with it and every table above it drawing out the event, every
+  drawing player still finishes inside the cut — while each other table PLAYS and so puts at most
+  ONE player (its winner, who then wins out) above them. Ties count as threats for the cut (a tie
+  goes to tiebreakers); with prize tiers on, tables below keep drawing into each wider tier, where
+  only players strictly ahead count (tiers are tie-inclusive).
+  - **It replaced a "guarantee" rule that assumed every player who could reach your total might ALL
+    win out.** They can't — they're paired against each other — so it told 4-1s at a 64-player Top 8
+    "you need the win" while real 4-1s drew in and made it 96% of the time.
+  - **`python scripts/swiss_replay.py check`** scores both rules on the last two rounds of every
+    cached event (546 RPH events: 8 two-day Challenges, ~45 qualifiers/championships, 492 SCs; run
+    `fetch` first, ~10 min, cache gitignored). Measured: coordinated calls **92%** of the final-round
+    draws that got both players in (and 99% of its calls that players took got both in); the old
+    rule called **63%**. With two rounds left: **50% vs 7%**.
+  - **What it still misses, on purpose:** gambles. ~23% of real final-round 0-0s were draws into
+    spots that were only *likely* (71% got both in), and with two rounds left real players draw
+    about twice as often as the rule allows (80% success). Modelling them would mean simulating
+    risk appetite; the pooled "If you draw" odds already show what a draw is worth.
+  - **Don't "fix" it back to a guarantee.** Simulated at each real event's size/rounds/cut, the
+    coordinated engine lands on the exact real cut line 76% of the time for 17-32 player Top 8s
+    (old: 63%) and 74% for 227+ player Top 32s (old: 34%), and it stops overstating a bubble loss
+    (33-64 player Top 8, 4-1 loses the last round: real 6%, old 45%, now 22%).
 - **`pct()` only says 100%/0% when literally every/no sample hit** — near-certain values render as
   >99.9% / <0.1% bands. On a draw-safety tool, rounding 99.5% up to "100%" is the one dishonesty
   that matters.
@@ -71,6 +92,22 @@ all seven themes work with no extra CSS, and reuses Index.html's pre-paint theme
 - **No awarded-byes setting either.** A bye for one player is statistically invisible once the odds
   pool the whole field, and a bye is just a win for record purposes. The meaningful version is
   "N players receive a first-round bye", which changes the field's point spread — not built.
+- **Defaults are measured, not guessed (2026-10-06, same replay).** Time draws ("unintentional
+  draw rate") default to **3%**: middle rounds run 3-5% at Set Championships and qualifiers, 1.3%
+  at two-day Challenges. **Top cut follows the field** (`CUT_STEPS`): no cut to 8 players, Top 4 to
+  16 (182 of 195 real 9-16 player SCs), Top 8 to 128, Top 16 to 226, then Top 32 — set on every
+  Players edit, the same way rounds already were. The round ladder matched what organisers run.
+- **Two-day events (`day2After` / `day2Pts`, link param `d2=8.18`).** Every RPH-published Disney
+  Lorcana Challenge plays 8 rounds, then everyone on **18+** points (all of them — it is a points
+  line, not a top-N) plays 4 more into a Top 32. Players below the line are marked `elim` and leave
+  pairing like a drop, but **stay in the conditional pools for the rounds they played** — leaving
+  them out (as drops are) would pool only the day-one records that made day two and inflate every
+  day-one odd. From 410 players the rounds hint offers "Use that format" (12 rounds, Top 32, day
+  two on, 1.5% time draws). It matters below ~1,200 players: at 560 a 5-3 who wins out reaches 27
+  against a real line of 26; at 2,000 the line is 30 either way (and the sim agrees: 30, with 10-2
+  getting in 91% against a real 77-84%). "Where do I stand" adds the exact day-two odds.
+- **Real events drop 10-30% of the field by the last round.** Drops stay off by default for the
+  reason above; the cut maths barely moves because the droppers are the losing records.
 - Every match is 50/50 — this measures bracket structure, not decks. Say so in any UI copy.
 - Not built: PlayHub standings import. It needs a server-side fetch (PlayHub is CORS-blocked); the
   Cloudflare worker is the natural place, mirroring the existing `/img-proxy` pattern.
