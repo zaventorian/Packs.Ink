@@ -101,8 +101,10 @@ def index_rows(latest=TODAY):
 
 
 class FakeSb:
-    def __init__(self, subs, price_date=TODAY, table_missing=False, movers=None, index_latest=TODAY, latest=None):
+    def __init__(self, subs, price_date=TODAY, table_missing=False, movers=None, index_latest=TODAY, latest=None,
+                 ebay=None):
         self.subs = subs
+        self.ebay = ebay or {}        # {"roll": [...], "cards": [...], "sales": [...]}
         self.latest = latest          # None: migration 175 not applied
         self.upserts = []
         self.url = "https://example.supabase.co"
@@ -126,6 +128,15 @@ class FakeSb:
             return [{"price_date": self.price_date.isoformat()}]
         if table == "sets":
             return [dict(s) for s in SETS]
+        if table == "raw_sales_rollup":
+            return [dict(r) for r in self.ebay.get("roll", [])]
+        if table == "cards":
+            return [dict(r) for r in self.ebay.get("cards", [])]
+        if table == "raw_sales":
+            return [dict(r) for r in self.ebay.get("sales", [])]
+        if table == "price_movers" and "card_id" in filters:
+            ids = set(re.findall(r'"([^"]+)"', filters["card_id"]))
+            return [dict(m) for m in self.movers if m["card_id"] in ids]
         if table == "price_movers":
             pct = next(k for k in filters if k.startswith("pct_"))
             floor = float(filters[rep.REPORT_PRICE_COL].split(".", 1)[1])
@@ -618,6 +629,60 @@ both = rep.extra_embeds(ExtraSb(CARDS, EVENTS), TODAY, "7d", sets_x, now=NOW)
 check(len(both) == 2 and all(e.get("_keep") for e in both), "weekly carries both sections, and trimming never touches them")
 check(len(rep.extra_embeds(ExtraSb(CARDS, EVENTS), TODAY, "1d", sets_x, now=NOW)) == 1, "the daily carries reveals only")
 check(all(rep.embed_chars(e) < 1500 for e in both), "the extra sections stay short")
+
+# ── promos we track on eBay: eBay's sales decide the move, TCGplayer's Low never does ──
+def sale(cid, price, day, printing=None):
+    return {"card_id": cid, "printing": printing, "sale_price": price, "sold_date": day.isoformat(),
+            "scraped_at": day.isoformat() + "T12:00:00"}
+
+
+D = lambda n: TODAY - dt.timedelta(days=n)  # noqa: E731
+FLAGS = {"p_gold": {"id": "p_gold", "split_printing": True, "foil_split": False},
+         "p_rap": {"id": "p_rap", "split_printing": True, "foil_split": False},
+         "p_one": {"id": "p_one", "split_printing": False, "foil_split": False}}
+SALES = ([sale("p_one", 100, D(20 + i)) for i in range(5)]               # baseline $100
+         + [sale("p_one", 60, D(2))]                                    # one sale this week
+         + [sale("p_rap", 6000, D(40 + i), "Foil") for i in range(4)]   # Top Prize, nothing this week
+         + [sale("p_rap", 100, D(30 + i), "Non-Foil") for i in range(5)]
+         + [sale("p_rap", 160, D(0), "Non-Foil")]                       # Prize Wall sold this week
+         + [sale("p_gold", 9800, D(3))]                                 # unlabelled: never a price
+         + [sale("p_one", 999, TODAY + dt.timedelta(days=1))])          # after the price date: ignored
+mv = rep.ebay_moves(SALES, FLAGS, TODAY, 7)
+check(set(mv) == {("p_one", ""), ("p_rap", "Non-Foil")}, f"eBay moves: only buckets that sold this week ({sorted(mv)})")
+one = mv.get(("p_one", ""), {})
+check(abs(one.get("now", 0) - (60 + 400) / 5) < 1e-9 and one.get("was") == 100 and one.get("sold") == 1,
+      "the move is the average of the last 5 sales now against before the window")
+check(("p_gold", "Unknown") not in mv, "an unlabelled split-card sale stands for neither printing")
+check(not rep.ebay_moves(SALES, FLAGS, TODAY, 7) .get(("p_rap", "Foil")), "a bucket with no sale this week has no move")
+thin = [sale("p_one", 100, D(20)), sale("p_one", 100, D(21)), sale("p_one", 300, D(1))]
+check(not rep.ebay_moves(thin, FLAGS, TODAY, 7), "a baseline of two sales is not a price")
+check(rep.sale_pkey("Holofoil", False, True) == "Foil" and rep.sale_pkey(None, True, False) == "Unknown"
+      and rep.sale_pkey("Foil", False, False) == "", "sale_pkey matches graded_sale_pkey")
+
+EB_MOVERS = MOVERS + [
+    mover("p_gold", "Mickey Mouse", "Brave Little Tailor", "Promo", "Holofoil", 51, 200000.0, 50.0, 1233.3, set_id="s_c1"),
+    mover("p_rap", "Rapunzel", "Gifted with Healing", "Promo", "Holofoil", 52, 6000.0, 40.0, 40.0, set_id="s_c1"),
+    {**mover("p_rap", "Rapunzel", "Gifted with Healing", "Promo", "Normal", 52, 100.0, 0.0, -30.0, set_id="s_c1")},
+    mover("p_one", "Elsa", "Snow Queen", "Promo", "Holofoil", 53, 5999.99, 0.0, 0.0, set_id="s_p3"),
+]
+ebay_sb = FakeSb([], movers=EB_MOVERS, ebay={"roll": [{"card_id": c} for c in FLAGS],
+                                            "cards": list(FLAGS.values()), "sales": SALES})
+with redirect_stdout(io.StringIO()):
+    erep = rep.build_report(ebay_sb, TODAY, "7d", session=FakeCdn())
+promo = next((e["description"] for e in erep["embeds"] if "PROMOS" in (e.get("author") or {}).get("name", "")), "")
+check("200,000" not in promo and "Brave Little Tailor" not in promo,
+      "a tracked card's TCGplayer spike never reaches the report (the $200,000 Golden Mickey)")
+check("Elsa — Snow Queen" in promo and "−8.0%" in promo and "eBay avg of last 5 sales · 1 sold this week" in promo,
+      "a tracked card that sold on eBay moves by its eBay sales, and says so")
+check("Rapunzel — Gifted with Healing (Prize Wall)" in promo and "+12.0%" in promo,
+      "a Challenge card's Prize Wall moves by its own bucket's sales")
+check("(Top Prize)" not in promo, "a printing that didn't sell on eBay this week is left out, not priced off TCGplayer")
+check("Woody" in promo, "an untracked promo still moves by TCGplayer")
+with redirect_stdout(io.StringIO()):
+    drep = rep.build_report(ebay_sb, TODAY, "1d", session=FakeCdn())
+dpromo = next((e["description"] for e in drep["embeds"] if "PROMOS" in (e.get("author") or {}).get("name", "")), "")
+check("Rapunzel — Gifted with Healing (Prize Wall)" in dpromo and "1 sold today" in dpromo,
+      "the daily carries an eBay sale from the last day")
 
 print("FAILS:", FAILS)
 sys.exit(1 if FAILS else 0)
