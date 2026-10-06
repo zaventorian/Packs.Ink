@@ -109,10 +109,12 @@ def _sb_headers(extra: dict | None = None) -> dict:
     return h
 
 
-def count_upcoming(table: str) -> int:
-    """How many not-yet-started rows are on file. Used by the prune guard."""
+def count_upcoming(table: str) -> int | None:
+    """How many not-yet-started rows are on file, or None if it couldn't be
+    counted. Used by the prune guard, which must NOT read a failed count as 0:
+    0 switches the 70% ratio check off, so a short pull could mass-delete."""
     if not (SUPABASE_URL and SERVICE_KEY):
-        return 0
+        return None
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     url = (f"{SUPABASE_URL}/rest/v1/{table}?select=event_id"
            f"&start_datetime=gte.{quote(now)}&limit=1")
@@ -121,10 +123,10 @@ def count_upcoming(table: str) -> int:
             {"Prefer": "count=exact", "Range": "0-0"}))
         with urllib.request.urlopen(req, timeout=40) as r:
             rng = r.headers.get("Content-Range") or ""
-        return int(rng.split("/")[-1]) if "/" in rng else 0
+        return int(rng.split("/")[-1])
     except Exception as e:
         print(f"  ! couldn't count {table} ({e})")
-        return 0
+        return None
 
 
 def upsert_events(rows: list[dict], chunk: int = 200) -> None:
@@ -214,7 +216,12 @@ def archive_past_events() -> bool:
     delete-then-archive would strand the rows permanently, and this table is the
     only record that a store ran a Tuesday league night at all. RPH's upcoming
     feed stops listing an event once it starts, so a row's values are frozen at
-    the last pull that saw it; re-archiving is an idempotent upsert on event_id.
+    the last pull that saw it.
+
+    INSERT-ONLY (resolution=ignore-duplicates): a past row stays in
+    lorcana_events for KEEP_PAST_DAYS and is re-read here every day, and a merge
+    re-wrote the history row each time with those frozen values - over the
+    display_status (and counts) scrape_store_history.py had since corrected.
 
     Returns False on any failure, including the archive table not existing yet
     (PGRST205 / 42P01 before migration 121 is applied). That's deliberate: until
@@ -223,7 +230,7 @@ def archive_past_events() -> bool:
     """
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     endpoint = f"{SUPABASE_URL}/rest/v1/lorcana_events_history"
-    headers = _sb_headers({"Prefer": "resolution=merge-duplicates,return=minimal"})
+    headers = _sb_headers({"Prefer": "resolution=ignore-duplicates,return=minimal"})
     moved = 0
     offset = 0
     page = 500
@@ -259,7 +266,8 @@ def archive_past_events() -> bool:
         sys.stdout.flush()
     if moved:
         print()
-    print(f"  archived {moved} past events into lorcana_events_history")
+    print(f"  archived {moved} past events into lorcana_events_history "
+          f"(insert-only: a row already there is kept as it is)")
     return True
 
 
@@ -311,7 +319,7 @@ def add_tracked_store_feeds(raw: list[dict]) -> list[dict]:
     return raw + missed
 
 
-def prune(run_start_iso: str, pulled: int, before_upcoming: int) -> bool:
+def prune(run_start_iso: str, pulled: int, before_upcoming: int | None) -> bool:
     """Delete upcoming rows RPH has stopped listing (cancelled/removed) plus
     long-past rows. Guarded twice: a partial pull must never mass-delete live
     events, and a row has to go unseen for PRUNE_GRACE_HOURS, so one scan's miss
@@ -324,6 +332,13 @@ def prune(run_start_iso: str, pulled: int, before_upcoming: int) -> bool:
         print(f"::error::Event pull of {pulled} is below the {MIN_PULL_ABSOLUTE} floor; "
               f"prune skipped and this pull treated as partial.")
         return False
+    if before_upcoming is None:
+        # Without the count the ratio guard can't run, and that guard is what
+        # stops a short-but-above-the-floor pull deleting live events. Skip the
+        # whole prune (archive + sweep included, as for a partial pull) - past
+        # rows wait a day - but this isn't a partial pull, so don't say it is.
+        print("::warning::Couldn't count the upcoming events on file; prune skipped this run.")
+        return None
     if before_upcoming and pulled < before_upcoming * MIN_PULL_RATIO:
         print(f"::error::Pulled {pulled} events vs {before_upcoming} upcoming on file "
               f"(< {MIN_PULL_RATIO:.0%}); prune skipped and this pull treated as partial.")
