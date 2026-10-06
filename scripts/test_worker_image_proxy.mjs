@@ -55,6 +55,12 @@ check("...nosniff", ok.headers.get("X-Content-Type-Options"), "nosniff");
 check("...and ACAO * (canvas exports, native builds)", ok.headers.get("Access-Control-Allow-Origin"), "*");
 check("the upstream asked is the intended CDN", asked[0].startsWith("https://cards.lorcast.io/card/digital/normal/crd_x.avif"), true);
 
+check("Lorcast art (versioned URLs) stays immutable for 30 days",
+  ok.headers.get("Cache-Control"), "public, max-age=2592000, immutable");
+const tcg = await get(TCG, {type: "image/jpeg"});
+check("a TCGplayer photo is NOT immutable (a placeholder is swapped at the same URL)",
+  tcg.headers.get("Cache-Control"), "public, max-age=86400, stale-while-revalidate=604800");
+
 const pr = await get("/img-proxy//evil.example/x.png", {type: "image/png"});
 check("a protocol-relative path never leaves the CDN", pr.status === 400 || asked.every(u => u.startsWith("https://cards.lorcast.io/")), true);
 check("an upstream error is passed on, not cached as art", (await get(LORCAST, {type: "image/avif", status: 404})).status, 404);
