@@ -631,58 +631,99 @@ check(len(rep.extra_embeds(ExtraSb(CARDS, EVENTS), TODAY, "1d", sets_x, now=NOW)
 check(all(rep.embed_chars(e) < 1500 for e in both), "the extra sections stay short")
 
 # ── promos we track on eBay: eBay's sales decide the move, TCGplayer's Low never does ──
-def sale(cid, price, day, printing=None):
+def sale(cid, price, day, printing=None, seen=None):
+    """A sale sold on `day`, reaching us (scraped_at) at `seen` — by default
+    noon the day it sold."""
     return {"card_id": cid, "printing": printing, "sale_price": price, "sold_date": day.isoformat(),
-            "scraped_at": day.isoformat() + "T12:00:00"}
+            "scraped_at": (seen or at(day, 12)).isoformat()}
 
 
 D = lambda n: TODAY - dt.timedelta(days=n)  # noqa: E731
 FLAGS = {"p_gold": {"id": "p_gold", "split_printing": True, "foil_split": False},
          "p_rap": {"id": "p_rap", "split_printing": True, "foil_split": False},
-         "p_one": {"id": "p_one", "split_printing": False, "foil_split": False}}
+         "p_one": {"id": "p_one", "split_printing": False, "foil_split": False},
+         "p_late": {"id": "p_late", "split_printing": False, "foil_split": False}}
 SALES = ([sale("p_one", 100, D(20 + i)) for i in range(5)]               # baseline $100
          + [sale("p_one", 60, D(2))]                                    # one sale this week
          + [sale("p_rap", 6000, D(40 + i), "Foil") for i in range(4)]   # Top Prize, nothing this week
          + [sale("p_rap", 100, D(30 + i), "Non-Foil") for i in range(5)]
          + [sale("p_rap", 160, D(0), "Non-Foil")]                       # Prize Wall sold this week
          + [sale("p_gold", 9800, D(3))]                                 # unlabelled: never a price
-         + [sale("p_one", 999, TODAY + dt.timedelta(days=1))])          # after the price date: ignored
-mv = rep.ebay_moves(SALES, FLAGS, TODAY, 7)
-check(set(mv) == {("p_one", ""), ("p_rap", "Non-Foil")}, f"eBay moves: only buckets that sold this week ({sorted(mv)})")
+         + [sale("p_one", 999, TODAY + dt.timedelta(days=1))]           # reached us after the report: ignored
+         + [sale("p_late", 40, D(10 + i)) for i in range(5)]            # baseline $40...
+         + [sale("p_late", 90, D(3), seen=at(TODAY, 17))])              # ...sold Friday, scraped today
+WEEK = (EVENING - dt.timedelta(days=7), EVENING, TODAY - dt.timedelta(days=rep.EBAY_FRESH_DAYS))
+DAY = (EVENING - dt.timedelta(days=1), EVENING, TODAY - dt.timedelta(days=rep.EBAY_FRESH_DAYS))
+mv = rep.ebay_moves(SALES, FLAGS, *WEEK)
+check(set(mv) == {("p_one", ""), ("p_rap", "Non-Foil"), ("p_late", "")}, f"eBay moves: only buckets with new sales ({sorted(mv)})")
 one = mv.get(("p_one", ""), {})
 check(abs(one.get("now", 0) - (60 + 400) / 5) < 1e-9 and one.get("was") == 100 and one.get("sold") == 1,
-      "the move is the average of the last 5 sales now against before the window")
+      "the move is the average of the last 5 sales now against the average before them")
 check(("p_gold", "Unknown") not in mv, "an unlabelled split-card sale stands for neither printing")
-check(not rep.ebay_moves(SALES, FLAGS, TODAY, 7) .get(("p_rap", "Foil")), "a bucket with no sale this week has no move")
+check(not mv.get(("p_rap", "Foil")), "a bucket with no new sale has no move")
 thin = [sale("p_one", 100, D(20)), sale("p_one", 100, D(21)), sale("p_one", 300, D(1))]
-check(not rep.ebay_moves(thin, FLAGS, TODAY, 7), "a baseline of two sales is not a price")
+check(not rep.ebay_moves(thin, FLAGS, *WEEK), "a baseline of two sales is not a price")
 check(rep.sale_pkey("Holofoil", False, True) == "Foil" and rep.sale_pkey(None, True, False) == "Unknown"
       and rep.sale_pkey("Foil", False, False) == "", "sale_pkey matches graded_sale_pkey")
+# ⚠ "New" is when a sale REACHED us, not when it sold: Terapeak lists a sale a
+# day or more late, so "sold on the price date" left the daily with no eBay
+# moves at all.
+dmv = rep.ebay_moves(SALES, FLAGS, *DAY)
+check(("p_late", "") in dmv, "a sale that sold three days ago but reached us today moves the daily")
+check(("p_one", "") not in dmv, "a sale we already knew of at the last daily is baseline, not news")
+base5 = [sale("p_one", 100, D(20 + i)) for i in range(5)]
+backfill = base5 + [sale("p_one", 900, D(60), seen=at(TODAY, 17))]
+check(not rep.ebay_moves(backfill, FLAGS, *DAY), "a backfilled old sale never reads as a fresh move")
+# The window runs from the previous report of the same cadence.
+yest = TODAY - dt.timedelta(days=1)
+
+
+def win(latest, now=EVENING, window="1d"):
+    return rep.ebay_window(FakeSb([], latest=latest), TODAY, window, now)
+
+
+prev = at(yest, 21, 5)
+check(win([{"cadence": "daily", "price_date": yest.isoformat(), "built_at": prev.isoformat()}]) == (prev, EVENING),
+      "the daily's window opens at the previous daily's build")
+first = at(TODAY, 21, 0)
+check(win([{"cadence": "daily", "price_date": TODAY.isoformat(), "built_at": first.isoformat()}], now=at(TODAY, 23, 0))
+      == (first - dt.timedelta(days=1), first), "a second run the same day rebuilds the first run's window")
+check(win(None) == (EVENING - dt.timedelta(days=1), EVENING), "with nothing kept, the window is the last day")
+check(win(None, window="7d") == (EVENING - dt.timedelta(days=7), EVENING), "...or the last week for the weekly")
+long_ago = at(TODAY - dt.timedelta(days=20), 21)
+check(win([{"cadence": "daily", "price_date": "2026-09-08", "built_at": long_ago.isoformat()}])[0]
+      == EVENING - dt.timedelta(days=1 + rep.EBAY_MAX_GAP_DAYS), "a long gap never dumps weeks of sales into one report")
+check(win([{"cadence": "weekly", "price_date": yest.isoformat(), "built_at": prev.isoformat()}])[0]
+      == EVENING - dt.timedelta(days=1), "another cadence's report never opens this one's window")
 
 EB_MOVERS = MOVERS + [
     mover("p_gold", "Mickey Mouse", "Brave Little Tailor", "Promo", "Holofoil", 51, 200000.0, 50.0, 1233.3, set_id="s_c1"),
     mover("p_rap", "Rapunzel", "Gifted with Healing", "Promo", "Holofoil", 52, 6000.0, 40.0, 40.0, set_id="s_c1"),
     {**mover("p_rap", "Rapunzel", "Gifted with Healing", "Promo", "Normal", 52, 100.0, 0.0, -30.0, set_id="s_c1")},
     mover("p_one", "Elsa", "Snow Queen", "Promo", "Holofoil", 53, 5999.99, 0.0, 0.0, set_id="s_p3"),
+    mover("p_late", "Belle", "Strange but Special", "Promo", "Holofoil", 54, 12.0, 0.0, 0.0, set_id="s_p3"),
 ]
 ebay_sb = FakeSb([], movers=EB_MOVERS, ebay={"roll": [{"card_id": c} for c in FLAGS],
                                             "cards": list(FLAGS.values()), "sales": SALES})
 with redirect_stdout(io.StringIO()):
-    erep = rep.build_report(ebay_sb, TODAY, "7d", session=FakeCdn())
+    erep = rep.build_report(ebay_sb, TODAY, "7d", session=FakeCdn(), now=EVENING)
 promo = next((e["description"] for e in erep["embeds"] if "PROMOS" in (e.get("author") or {}).get("name", "")), "")
 check("200,000" not in promo and "Brave Little Tailor" not in promo,
       "a tracked card's TCGplayer spike never reaches the report (the $200,000 Golden Mickey)")
-check("Elsa — Snow Queen" in promo and "−8.0%" in promo and "eBay avg of last 5 sales · 1 sold this week" in promo,
-      "a tracked card that sold on eBay moves by its eBay sales, and says so")
+check("Elsa — Snow Queen" in promo and "−8.0%" in promo and "eBay avg of last 5 sales · 1 new sale" in promo,
+      "a tracked card with a new eBay sale moves by its eBay sales, and says so")
 check("Rapunzel — Gifted with Healing (Prize Wall)" in promo and "+12.0%" in promo,
       "a Challenge card's Prize Wall moves by its own bucket's sales")
-check("(Top Prize)" not in promo, "a printing that didn't sell on eBay this week is left out, not priced off TCGplayer")
+check("(Top Prize)" not in promo, "a printing with no new eBay sale is left out, not priced off TCGplayer")
 check("Woody" in promo, "an untracked promo still moves by TCGplayer")
 with redirect_stdout(io.StringIO()):
-    drep = rep.build_report(ebay_sb, TODAY, "1d", session=FakeCdn())
+    drep = rep.build_report(ebay_sb, TODAY, "1d", session=FakeCdn(), now=EVENING)
 dpromo = next((e["description"] for e in drep["embeds"] if "PROMOS" in (e.get("author") or {}).get("name", "")), "")
-check("Rapunzel — Gifted with Healing (Prize Wall)" in dpromo and "1 sold today" in dpromo,
+check("Rapunzel — Gifted with Healing (Prize Wall)" in dpromo and "1 new sale" in dpromo,
       "the daily carries an eBay sale from the last day")
+check("Belle — Strange but Special" in dpromo and "+25.0%" in dpromo,
+      "the daily carries a sale that sold days ago but reached us since the last report")
+check("Elsa — Snow Queen" not in dpromo, "the daily leaves out a sale the last daily already knew of")
 
 print("FAILS:", FAILS)
 sys.exit(1 if FAILS else 0)

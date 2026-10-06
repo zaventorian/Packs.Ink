@@ -302,10 +302,21 @@ def sectioned(rows, window, ebay=()):
 # "+1233%" to $200,000 led the Promos section on 2026-10-05. Zaven: "for those
 # cards, we should use the ebay sales data and ignore the tcgp for changes in
 # price." Any card in raw_sales_rollup leaves the TCGplayer movers entirely, and
-# comes back only when it SOLD on eBay inside the window: its move is the
-# average of its last 5 eBay sales now against the same average at the start of
-# the window — the site's "Avg of last 5", so a report and a card page agree.
+# comes back only when NEW eBay sales of it reached us since the last report:
+# its move is the average of its last 5 eBay sales now against the same average
+# before them — the site's "Avg of last 5", so a report and a card page agree.
+#
+# ⚠ "New" is when we LEARNED of a sale (scraped_at), not when it sold. The
+# scrape runs once a day and Terapeak lists a sale a day or more after it
+# sells, so "sold on the price date" (the first rule) almost never held and the
+# daily carried no eBay moves at all; a sale that sold Saturday and reached us
+# Tuesday fell between two weeklies. The window runs from the previous report
+# of the same cadence (discord_report_latest.built_at) to now, and a sale that
+# sold more than EBAY_FRESH_DAYS before the price date is never "new" — a
+# backfill of old sales must not read as this week's market.
 EBAY_MIN_BEFORE = 3            # a baseline of one or two sales is not a price
+EBAY_FRESH_DAYS = 14
+EBAY_MAX_GAP_DAYS = 2          # past one missed report, a window stops growing
 EBAY_FOIL = {"foil", "cold foil", "holofoil", "holo"}
 EBAY_NONFOIL = {"normal", "non-foil", "nonfoil"}
 
@@ -333,9 +344,45 @@ def catalog_bucket(printing):
     return s
 
 
-def ebay_moves(sales, flags, price_date, days):
-    """{(card_id, bucket): move} for every bucket that sold inside the window
-    and has a real baseline before it. Pure — the test drives it directly."""
+def _utc(ts):
+    """An ISO timestamp as an aware UTC datetime (a naive one is taken as
+    UTC), or None."""
+    if not ts:
+        return None
+    try:
+        t = dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
+
+
+def ebay_window(sb, price_date, window, now):
+    """(cutoff, end): a sale scraped after cutoff and by end is NEW to this
+    report. cutoff is when the previous report of this cadence was built; a
+    rebuild of a report already kept for this price date (a second run the
+    same day) reuses that report's own window, so both say the same thing."""
+    span = dt.timedelta(days=digest.WINDOW_DAYS[window])
+    cadence = "daily" if window == "1d" else "weekly"
+    end, cutoff = now, None
+    try:
+        row = (load_latest(sb) or {}).get(cadence) or {}
+    except Exception:
+        row = {}
+    built = _utc(row.get("built_at"))
+    if built and built <= now:
+        if str(row.get("price_date") or "")[:10] == price_date.isoformat():
+            end, cutoff = built, built - span
+        else:
+            cutoff = built
+    if cutoff is None:
+        cutoff = end - span
+    return max(cutoff, end - span - dt.timedelta(days=EBAY_MAX_GAP_DAYS)), end
+
+
+def ebay_moves(sales, flags, cutoff, end, floor):
+    """{(card_id, bucket): move} for every bucket with a sale NEW to this
+    report — scraped after cutoff and by end, sold on or after floor — and a
+    real baseline from what was known before. Pure — the test drives it."""
     groups = {}
     for s in sales:
         cid, price, day = s.get("card_id"), s.get("sale_price"), s.get("sold_date")
@@ -345,23 +392,26 @@ def ebay_moves(sales, flags, price_date, days):
         key = (cid, sale_pkey(s.get("printing"), f.get("split_printing"), f.get("foil_split")))
         if key[1] == "Unknown":
             continue
+        seen = _utc(s.get("scraped_at"))
+        if seen and seen > end:
+            continue                  # reached us after this report: the next one's
         d = dt.date.fromisoformat(str(day)[:10])
-        if d > price_date:
-            continue
-        groups.setdefault(key, []).append((d, str(s.get("scraped_at") or ""), float(price)))
-    start = price_date - dt.timedelta(days=days)
+        fresh = bool(seen and seen > cutoff and d >= floor)
+        old = not (seen and seen > cutoff)
+        if fresh or old:
+            groups.setdefault(key, []).append((d, str(s.get("scraped_at") or ""), float(price), fresh))
     out = {}
     for key, rows in groups.items():
         rows.sort()
-        sold = [r for r in rows if r[0] > start]
-        before = [r for r in rows if r[0] <= start][-5:]
-        if not sold or len(before) < EBAY_MIN_BEFORE:
+        new = [r for r in rows if r[3]]
+        before = [r for r in rows if not r[3]][-5:]
+        if not new or len(before) < EBAY_MIN_BEFORE:
             continue
         now = [r[2] for r in rows[-5:]]
         avg_now, avg_was = sum(now) / len(now), sum(r[2] for r in before) / len(before)
         if avg_was <= 0 or avg_now == avg_was:
             continue
-        out[key] = {"now": avg_now, "was": avg_was, "sold": len(sold), "n": len(now),
+        out[key] = {"now": avg_now, "was": avg_was, "sold": len(new), "n": len(now),
                     "pct": (avg_now / avg_was - 1) * 100}
     return out
 
@@ -389,9 +439,10 @@ def ebay_rows(moves, flags, catalog):
     return out
 
 
-def fetch_ebay(sb, price_date, window):
+def fetch_ebay(sb, price_date, window, now=None):
     """(card ids we track on eBay, report rows), or None when the eBay tables
     can't be read — the report then runs on TCGplayer alone, as before."""
+    now = now or dt.datetime.now(dt.timezone.utc)
     try:
         roll = sb.select("raw_sales_rollup", columns="card_id", order="card_id.asc,printing.asc")
         ids = sorted({r["card_id"] for r in roll if r.get("card_id")})
@@ -401,15 +452,15 @@ def fetch_ebay(sb, price_date, window):
         flags = {r["id"]: r for r in sb.select("cards", columns="id,split_printing,foil_split",
                                                filters={"id": inlist}, order="id.asc")}
         sales = sb.select("raw_sales", columns="card_id,printing,sale_price,sold_date,scraped_at",
-                          filters={"card_id": inlist, "excluded": "is.false",
-                                   "sold_date": f"lte.{price_date.isoformat()}"},
+                          filters={"card_id": inlist, "excluded": "is.false"},
                           order="card_id.asc,sold_date.asc,item_id.asc")
         catalog = sb.select("price_movers", columns="card_id,name,version,rarity,set_id,printing,tcgplayer_product_id",
                             filters={"card_id": inlist}, order="card_id.asc,printing.asc")
     except Exception as e:
         print(f"  (eBay sales unavailable, promos stay on TCGplayer: {type(e).__name__}: {str(e)[:160]})")
         return None
-    moves = ebay_moves(sales, flags, price_date, digest.WINDOW_DAYS[window])
+    cutoff, end = ebay_window(sb, price_date, window, now)
+    moves = ebay_moves(sales, flags, cutoff, end, price_date - dt.timedelta(days=EBAY_FRESH_DAYS))
     return set(ids), ebay_rows(moves, flags, catalog)
 
 
@@ -496,10 +547,11 @@ def arrow(row):
 
 def ebay_note(row, weekly):
     """What an eBay row's price is: the average of its last N eBay sales, and
-    how many sold in the window — a move made by one sale should say so."""
+    how many NEW sales moved it — a move made by one sale should say so. "New"
+    is new to us since the last report, not sold in a calendar window (see
+    ebay_window), so the line does not claim a sale date it doesn't know."""
     e = row["ebay"]
-    span = "this week" if weekly else "today"
-    return f"eBay avg of last {e['n']} sales · {e['sold']} sold {span}"
+    return f"eBay avg of last {e['n']} sales · {e['sold']} new sale{'' if e['sold'] == 1 else 's'}"
 
 
 def daily_line(row, key, sets, standing):
@@ -901,8 +953,9 @@ def build_report(sb, price_date, window, session=requests, now=None):
     weekly = window != "1d"
     sets_meta = load_sets(sb)
     sets = {sid: m["name"] for sid, m in sets_meta.items()}
+    now = now or dt.datetime.now(dt.timezone.utc)
     cands = fetch_candidates(sb, window)
-    eb = fetch_ebay(sb, price_date, window)
+    eb = fetch_ebay(sb, price_date, window, now=now)
     tracked, ebay = eb if eb is not None else (set(), [])
     ranked = sectioned([r for r in cands if r.get("card_id") not in tracked], window, ebay)
     fresh = {}
@@ -1070,7 +1123,7 @@ def load_latest(sb):
     """{cadence: row} for the stored reports, or None when migration 175 is
     not applied yet."""
     try:
-        rows = sb.select(LATEST_TABLE, columns="cadence,price_date,files", order="cadence.asc")
+        rows = sb.select(LATEST_TABLE, columns="cadence,price_date,files,built_at", order="cadence.asc")
     except RuntimeError as e:
         msg = str(e)
         if "404" in msg or "42P01" in msg or "PGRST205" in msg or "does not exist" in msg:
@@ -1175,7 +1228,7 @@ def run(args, sb=None, session=requests, now=None):
 
     def report_for(cadence):
         if cadence not in built:
-            built[cadence] = build_report(sb, price_date, WINDOW[cadence], session=session)
+            built[cadence] = build_report(sb, price_date, WINDOW[cadence], session=session, now=now)
         return built[cadence]
 
     # Kept whether or not any channel subscribes: /reports send posts it.
