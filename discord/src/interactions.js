@@ -404,7 +404,7 @@ async function events(o, deps) {
   const radius = Math.min(250, Math.max(5, Number(optVal(o, "radius", 50)) || 50));
   const kind = D.EVENT_KINDS.includes(String(optVal(o, "kind", "all"))) ? String(optVal(o, "kind", "all")) : "all";
   const place = await D.resolvePlace(deps.db, near);
-  if (!place) return { content: `Couldn't place “${near.slice(0, 60)}”. Try a postal code, or a town name.`, embeds: [], components: [] };
+  if (!place) return { content: `Couldn't place “${E.escMd(near.slice(0, 60))}”. Try a postal code, or a town name.`, embeds: [], components: [] };
   return eventsBoard({ place, radius, kind, query: near }, deps);
 }
 async function eventsBoard({ place, radius, kind, query }, deps) {
@@ -516,7 +516,7 @@ function pickSet(R, index, name, { released = false } = {}) {
   const mains = R.sets.map((s, i) => i).filter((i) => R.sets[i].main).sort((a, b) => R.sets[b].main - R.sets[a].main);
   return (released ? mains.find((i) => !(R.sets[i].rel && R.sets[i].rel.lgs > today)) : mains[0]) ?? -1;
 }
-const noSet = (name) => ({ content: `No set called “${String(name).slice(0, 60)}”. Try a name or a number — \`hyperia city\`, \`azurite\`, \`set 5\`.`, embeds: [], components: [] });
+const noSet = (name) => ({ content: `No set called “${E.escMd(String(name).slice(0, 60))}”. Try a name or a number — \`hyperia city\`, \`azurite\`, \`set 5\`.`, embeds: [], components: [] });
 
 export function setReply(name, deps) {
   const si = pickSet(deps.R, deps.index, name);

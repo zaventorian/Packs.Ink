@@ -1513,6 +1513,29 @@ const D = await mod("discord/src/data.js");
     `a refused V2 /card with nothing uploaded is retried as the embed, not plain text (${sent.map((s) => (s.b.flags ? "V2" : s.b.embeds && s.b.embeds.length ? "embed" : "text")).join(" -> ")})`);
 }
 {
+  // ⚠ What somebody typed is echoed in PUBLIC replies. Unescaped, "[free
+  // packs](https://…)" became a link the bot posted, and **…** bold text.
+  const { handleInteraction } = await mod("discord/src/interactions.js");
+  const evil = "[free](https://evil.example) **x** `y";
+  // Markdown that would render: outside code spans (escaped backticks aside),
+  // an unescaped link or bold.
+  const live = (s) => { const t = String(s).replace(/\\`/g, "").replace(/`[^`]*`/g, ""); return /(^|[^\\])\[free\]\(https:\/\/e/.test(t) || /(^|[^\\])\*\*x/.test(t); };
+  const nf = E.notFoundMessage(R, R.resolve(evil), evil, {});
+  ok(!live(nf.embeds[0].description) && nf.embeds[0].description.includes("\\[free\\]"), `"No card matched" escapes the query (${nf.embeds[0].description.split("\n")[0]})`);
+  const dn = E.notFoundMessage(R, { kind: "none", dimsOnly: true, suggestions: [] }, "ench **x** [free](https://e.x)", {});
+  ok(!live(dn.embeds[0].description), `the "narrows it down" line escapes the query (${dn.embeds[0].description.split("\n")[0]})`);
+  // Inside the example's code span a backtick would close it early.
+  const dt1 = E.notFoundMessage(R, { kind: "none", dimsOnly: true, suggestions: [] }, "e`", {});
+  ok(dt1.embeds[0].description.includes("`elsa e'`"), `a backtick never closes the example's code span (${dt1.embeds[0].description.split("\n")[0]})`);
+  const res = R.resolve("mogli");
+  const cm = E.cardMessage({ R, res, price: null, graded: [], raw: null, range: "3m", origin: "https://bot.example", inkColors: index.inkColors,
+    playSet: index.playSet, gradedTarget: { cardId: res.printing.id, bucket: "" }, query: "mogli " + evil });
+  ok(res.corrected && /Closest match/.test(cm.embeds[0].description) && !live(cm.embeds[0].description), "\"Closest match for …\" escapes the query");
+  const ns = await handleInteraction({ type: 2, token: "ns", application_id: "123", data: { type: 1, name: "set", options: [{ type: 3, name: "set", value: evil }] } },
+    { R, index, db: { async get() { return []; }, async all() { return []; } }, origin: "https://bot.example", appId: "123", log: () => {}, fetch: async () => new Response("{}"), waitUntil: () => {} });
+  ok(ns.type === 4 && /No set called/.test(ns.data.content) && !live(ns.data.content), `"No set called …" escapes the name (${ns.data && ns.data.content})`);
+}
+{
   // Graded tiers follow the SITE's split rule (gradedSplitTiers): a card's
   // sales split by printing only when the catalog carries two printings. The
   // shapes below are the live rollup's (2026-10-06).

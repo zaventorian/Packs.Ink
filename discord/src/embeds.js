@@ -147,7 +147,7 @@ export function cardMessage(ctx) {
   const lines = [];
 
   const lead = [];
-  if (ctx.query && res.corrected) lead.push(`Closest match for “${clip(ctx.query, 40)}”.`);
+  if (ctx.query && res.corrected) lead.push(`Closest match for “${escMd(clip(ctx.query, 40))}”.`);
   if (res.ambiguous && !res.exact) {
     lead.push(res.basis === "collector"
       ? "Showing the most-traded version — pick another below."
@@ -516,17 +516,21 @@ export function sealedMessage(ctx) {
 }
 
 // ── nothing found ────────────────────────────────────────────────────────
+// What somebody typed, echoed in a PUBLIC reply: as text it is escaped
+// (escMd), so "[free](https://…)" is not a link the bot posted; inside a code
+// span only a backtick can break out, so it is swapped for a quote.
+const codeSafe = (s) => String(s || "").replace(/`/g, "'");
 export function notFoundMessage(R, res, query, ids) {
   const sug = (res.suggestions || []).slice(0, 5);
   const lines = [res.dimsOnly
-    ? `“${clip(query, 60)}” narrows it down but doesn't name a card — add the card's name, e.g. \`elsa ${clip(query, 30)}\`.`
-    : `No card or product matched “${clip(query, 60)}”.`];
+    ? `“${escMd(clip(query, 60))}” narrows it down but doesn't name a card — add the card's name, e.g. \`elsa ${codeSafe(clip(query, 30))}\`.`
+    : `No card or product matched “${escMd(clip(query, 60))}”.`];
   // What someone probably meant when the words aren't a card at all.
   const q = String(query || "").trim();
   if (/^(?:\d{5}(?:-\d{4})?|[a-z]\d[a-z] ?\d[a-z]\d|[a-z]{1,2}\d[a-z\d]? ?\d[a-z]{2})$/i.test(q)) {
     lines.push(`Looks like a postal code — for events near there, try ${cmdMention(ids, "events")} \`${clip(q, 12)}\`.`);
   } else if (R.resolveSet && R.resolveSet(q) >= 0 && /\S/.test(q)) {
-    lines.push(`For a whole set, try ${cmdMention(ids, "set")} \`${clip(q, 30)}\`.`);
+    lines.push(`For a whole set, try ${cmdMention(ids, "set")} \`${codeSafe(clip(q, 30))}\`.`);
   }
   if (!sug.length && lines.length === 1) lines.push(`Card names work best on their own — \`mowgli\`, \`elsa enchanted\`, \`azurite box\`. ${cmdMention(ids, "help")} shows everything it can do.`);
   const embed = { title: "No match", color: 0x6b6480, description: lines.join("\n") };
