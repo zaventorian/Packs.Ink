@@ -66,13 +66,21 @@ async function proxyImage(request, prefix, origin) {
 
   if (!res.ok) return new Response("Upstream error", { status: res.status });
 
+  // fetch() follows redirects. One that LEFT the intended host would serve
+  // somebody else's bytes under packs.ink (review, 2026-10-06).
+  if (res.url && new URL(res.url).origin !== new URL(origin).origin) {
+    return new Response("Upstream error", { status: 502 });
+  }
+
   // This is an IMAGE proxy. Whatever the upstream path resolves to is served
-  // under the packs.ink origin, so anything that is not an image (an HTML
-  // page, say) must never come back through here — with a text/html type it
-  // would render as first-party content. Upstream art is image/* (a few CDNs
-  // say octet-stream for AVIF, which is why that one is tolerated).
+  // under the packs.ink origin, so anything that is not a RASTER image must
+  // never come back through here: text/html would render as first-party
+  // content, and image/svg+xml carries script that runs on packs.ink (where
+  // the sign-in session lives) when opened directly. So the type is required
+  // and must be one of the formats the card art actually uses (a few CDNs say
+  // octet-stream for AVIF, which is why that one is tolerated).
   const type = res.headers.get("Content-Type") || "";
-  if (type && !/^(image\/|application\/octet-stream)/i.test(type)) {
+  if (!/^(image\/(jpeg|jpg|png|webp|avif|gif)|application\/octet-stream)\b/i.test(type)) {
     return new Response("Upstream error", { status: 502 });
   }
 
@@ -85,6 +93,8 @@ async function proxyImage(request, prefix, origin) {
     "Cache-Control": `public, max-age=${IMG_CACHE_SECONDS}, immutable`,
     "Access-Control-Allow-Origin": "*",
     "X-Content-Type-Options": "nosniff",
+    // An image needs none of this; a document opened from here gets nothing.
+    "Content-Security-Policy": "default-src 'none'; sandbox",
   });
   if (type) headers.set("Content-Type", type);
 
