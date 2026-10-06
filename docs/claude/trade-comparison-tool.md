@@ -21,6 +21,17 @@ The trade is **persisted in the `trades` table keyed by a token**, not stuffed i
 - **Open**: `App.initialUrlParams.tradeToken` (via `getTradeShareToken()`, captured in `useMemo` before the URL-cleanup effect runs) forces `view="market"`; `marketSub` inits to `"trade"`; `TradeView` fetches via `get_trade`, hydrates, and the App view-sync effect cleans the path to `/analytics`. Token is passed down as a **prop** (`shareToken`) — NOT re-read from the URL in the hydration effect, because the catalog loads async and the URL is cleaned before then. Legacy `?trade=` blobs still decode (`decodeTrade`).
 - **Analytics sub-tab routing**: `marketSub` lives in App, mirrored to `?a=<sub>` (added to `dirtyParams` so it's stripped when leaving Analytics). First sync uses `replaceState`, user tab clicks use `pushState` (Back/Forward step through tabs); a popstate handler syncs `marketSub` from `?a=`. This is why refresh keeps the tab. The `if(cur===want) return` guard in the sync effect prevents the popstate→setState→push loop.
 - **localStorage**: `packsink:trade:v1` (`{a,b,nameA,nameB}`) auto-saves the in-progress trade locally; a `?t=` share link takes precedence over it on load.
+- **Rate limits: per bucket, then a per-POOL backstop with a fair share (migration 190, 2026-10-06).**
+  `create_trade` and `_feedback_rate_limit()` (submit_feedback + reply_my_feedback) bucket a signed-in
+  caller by ACCOUNT and an anonymous one by address (`_rate_bucket`: `_client_ip()`, i.e. Cloudflare's
+  `cf-connecting-ip`, which a caller cannot forge; IPv6 folded to its /64). Per bucket: 30 trades / 10
+  feedback an hour. The global backstop counts signed-in and anonymous writes as two separate pools, and past
+  half its cap only buckets with fewer than 2 writes this hour get in, up to the hard cap (300 / 120, the old
+  global). Before 190 one pool held everybody, so 10 addresses (12 for feedback) locked the whole site out,
+  signed-in users included, for the rest of every hour; now filling a pool takes ~80 / 36 addresses, and an
+  anonymous attacker never reaches the signed-in pool. A refused attempt is never counted. The messages are
+  unchanged (the em dash is `chr(8212)` so the migration stays ASCII). Guarded by
+  `node scripts/test_anon_write_limits.mjs`.
 
 ### Promo sets are named by the PRINTED suffix (2026-09-18, Zaven)
 

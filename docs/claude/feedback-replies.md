@@ -36,8 +36,9 @@ the migration against the client (every RPC defined, every grant on the declared
   learned a reply had landed until they reloaded. After a `feedbackThreadsUnavailable` error it stops asking for the session.
 - **Opening the box lands on the newest unread thread**; the badge or the notice is why it was
   opened. Opening a thread marks it read.
-- **A follow-up reopens a resolved thread** and spends from the same per-IP (10/h) and global
-  (120/h) limits as a new note. `_feedback_rate_limit()` is 133's body, moved, not rewritten.
+- **A follow-up reopens a resolved thread** and spends from the same limits as a new note
+  (`_feedback_rate_limit()`: 10 an hour per account or address, then the per-pool backstop of
+  migration 190 — see `docs/claude/trade-comparison-tool.md`, which shares the scheme).
 - **The inbox marks sender activity seen when it LOADS**, up to the newest activity that load
   returned; the "New" chips stay up for that visit. An admin reply never touches
   `admin_seen_at` (a follow-up typed meanwhile hasn't been seen), and an admin's own

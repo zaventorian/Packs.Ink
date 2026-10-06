@@ -443,7 +443,7 @@ Guards: `scripts/test_market_index.mjs`.
 
 Full notes: `docs/claude/feedback-replies.md` (4 KB). **Read it before changing this area.**
 The footer feedback box was one-way.
-Guards: `scripts/test_feedback_threads.mjs`.
+Guards: `scripts/test_feedback_threads.mjs`, `scripts/test_anon_write_limits.mjs`.
 
 - ⚠ `packsink:feedback:` must never match `AUX_EVICTABLE_PREFIXES`.
 
@@ -644,8 +644,10 @@ Guards: `scripts/test_csp_headers.mjs`.
 
 Full notes: `docs/claude/trade-comparison-tool.md` (11 KB). **Read it before changing this area.**
 `TradeView` (Index.html).
-Guards: `scripts/test_promo_single_printing.mjs`.
+Guards: `scripts/test_promo_single_printing.mjs`, `scripts/test_anon_write_limits.mjs`.
 Covers: Shareable trade links (DB-backed); Promo sets are named by the PRINTED suffix.
+
+- ⚠ `create_trade`'s global backstop is per POOL (signed in vs anonymous) with a fair share (migration 190). Keep the two pools apart, or one anonymous abuser locks out every signed-in user again.
 
 - ⚠ A filled-in pid reaches the `cards` rows only when the script runs FROM `main`.
 - ⚠ Delete a retired `art` file only AFTER the rows point at TCGplayer
