@@ -1614,11 +1614,17 @@ async function writeCache(rows, latestDate, cardCount){
   //      state (theme/display prefs, graded:removed, trade draft, screener
   //      views, install prefs) — see AUX_EVICTABLE_PREFIXES.
   //   3. If still failing, give up and warn (next visit will retry).
-  try { localStorage.removeItem(CACHE_KEY); localStorage.setItem(CACHE_KEY, payload); return; }
+  // ⚠ Once this copy is written, drop the IndexedDB record: readCache reads IDB
+  // FIRST, so an IDB that refuses writes but still answers reads kept handing
+  // back its outdated catalog, which then flashed on screen on every re-probe
+  // and forced a full refetch each time (2026-10-06). If this write fails too,
+  // the old record stays: an outdated catalog beats none.
+  try { localStorage.removeItem(CACHE_KEY); localStorage.setItem(CACHE_KEY, payload); idbDel(CATALOG_IDB_KEY); return; }
   catch(e){ /* fall through */ }
   try {
     wipePriceDerivedAuxCaches();
     localStorage.setItem(CACHE_KEY, payload);
+    idbDel(CATALOG_IDB_KEY);
   } catch(e2){
     console.warn("cache write failed even after eviction:", e2?.message || e2);
   }
