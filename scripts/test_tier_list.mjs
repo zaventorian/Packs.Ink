@@ -162,6 +162,36 @@ const midx = T.tierCardIndex(many, codeOf);
 const big = T.tierCustomDecode(T.tierCustomEncode([[], [], [], [], [], many.map(r => r.card_id)], midx), midx);
 check("custom decode: capped at TIER_CUSTOM_MAX", big.pool.length, T.TIER_CUSTOM_MAX);
 
+// A device whose catalog predates a card (reveal season) used to DROP it on
+// its next edit, and the save carried the loss everywhere (2026-10-06).
+{
+  const full = {tiers: [["h223", "h5"], ["m1"], [], [], []], pool: ["p1", "crd_ünï/x"], title: "t", labels: null, t: 1};
+  const saved = T.tierCustomToStored(full, idx);
+  const old = T.tierCardIndex(craw.filter(r => !["h5", "h5x", "crd_ünï/x"].includes(r.card_id)), codeOf);
+  const seen = T.tierCustomFromStored(saved, old);
+  check("custom unknown: the old device counts what it can't show", seen.missing, 2);
+  const edited = {...seen, tiers: [seen.tiers[0], [], ["m1"], [], []], t: 2};
+  const back = T.tierCustomFromStored(T.tierCustomToStored(edited, old), idx);
+  check("custom unknown: an edit on the old device keeps the card it couldn't show, in its tier",
+    back.tiers, [["h223", "h5"], [], ["m1"], [], []]);
+  check("custom unknown: ...and an id-keyed card in the pool", back.pool, ["p1", "crd_ünï/x"]);
+  check("custom unknown: the stored counts include them", [T.tierCustomToStored(edited, old).n, T.tierCustomToStored(edited, old).rk], [5, 3]);
+  check("custom unknown: the long link keeps them too",
+    T.tierCustomDecode(T.tierParamsFrom("?" + T.tierCustomQuery(edited, old)).tc, idx).tiers[0], ["h223", "h5"]);
+  const added = T.tierWithAdded(seen);
+  check("custom unknown: adding a tier does not pull a pool card into it",
+    T.tierCustomFromStored(T.tierCustomToStored(added, old), idx).pool, ["p1", "crd_ünï/x"]);
+  const removed = T.tierWithRemoved({...seen, tiers: [[], ...seen.tiers.slice(0, 4)], labels: null,
+    unknown: seen.unknown.map(u => u.g >= 0 ? {...u, g: u.g + 1} : u)}, 0);
+  check("custom unknown: removing a tier above one moves it up with its tier",
+    T.tierCustomFromStored(T.tierCustomToStored(removed, old), idx).tiers[0], ["h223", "h5"]);
+  const gone = T.tierWithRemoved(seen, 0);
+  check("custom unknown: removing its own tier sends it to the pool",
+    T.tierCustomFromStored(T.tierCustomToStored(gone, old), idx).pool.includes("h5"), true);
+  check("custom unknown: copying keeps them (tierCustomClean)",
+    T.tierCustomFromStored(T.tierCustomToStored(T.tierCustomClean(seen, old), old), idx).tiers[0], ["h223", "h5"]);
+}
+
 const clist = {tiers: [["h223"], ["m1"], [], [], []], pool: ["p1", "h5"], title: "Favourite frogs", labels: ["GOAT", "A", "B", "C", "D"], t: 9};
 const cst = T.tierCustomToStored(clist, idx, {vis: "public"});
 check("custom store: counts and extras carried", [cst.n, cst.rk, cst.vis, cst.t, cst.labels], [4, 2, "public", 9, "GOAT_A_B_C_D"]);

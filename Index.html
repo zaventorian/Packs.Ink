@@ -42607,9 +42607,12 @@ const tierUnB64 = (s) => {
   } catch { return null; }
 };
 // groups = the five tiers, then the pool.
-const tierCustomEncode = (groups, idx) => {
+// `unknown` are tokens this device could not resolve (see tierCustomDecode),
+// written back at the end of the tier they came from.
+const tierCustomEncode = (groups, idx, unknown) => {
   const toks = [];
   let cur = null;
+  const poolAt = groups.length - 1;
   groups.forEach((g, gi) => {
     if(gi) toks.push("*");
     for(const id of g || []){
@@ -42621,17 +42624,29 @@ const tierCustomEncode = (groups, idx) => {
       if(code !== cur){ toks.push("_" + code); cur = code; }
       toks.push(e.key.slice(dash + 1));
     }
+    for(const u of unknown || []){
+      const at = (u.g < 0 || u.g >= poolAt) ? poolAt : u.g;
+      if(at !== gi) continue;
+      if(u.cur && u.cur !== cur){ toks.push("_" + u.cur); cur = u.cur; }
+      toks.push(u.tok);
+    }
   });
   while(toks.length && toks[toks.length - 1] === "*") toks.pop();
   return toks.join(".");
 };
 // Returns {tiers, pool, missing}: `missing` counts cards the catalog no longer
 // has, so the page can say so instead of quietly showing a shorter list.
+// ⚠ A token this device cannot resolve is KEPT (`unknown`), not dropped. A
+// device whose saved catalog predates a card (reveal season, or a catalog up
+// to a day old) used to lose that card on its next edit, and the save carried
+// the loss to the account and every other device (found 2026-10-06). Kept
+// with the tier it sat in (g = -1 for the pool), and written back by
+// tierCustomEncode until a catalog that knows the card decodes it.
 const tierCustomDecode = (str, idx, n) => {
   const k = n || TIER_COUNT;
   const groups = Array.from({length: k + 1}, () => []);
   let g = 0, cur = null, missing = 0, kept = 0;
-  const seen = new Set();
+  const seen = new Set(), unknown = [], seenTok = new Set();
   for(const tok of String(str || "").split(".")){
     if(!tok) continue;
     if(tok === "*"){ if(g < k) g++; continue; }
@@ -42639,13 +42654,21 @@ const tierCustomDecode = (str, idx, n) => {
     let e = null;
     if(tok[0] === "-"){ const id = tierUnB64(tok.slice(1)); e = id ? idx.byId.get(id) : null; }
     else if(cur) e = idx.byKey.get(cur + "-" + tok.toLowerCase());
-    if(!e){ missing++; continue; }
-    if(seen.has(e.id) || kept >= TIER_CUSTOM_MAX) continue;
+    if(!e){
+      missing++;
+      const key = (tok[0] === "-" ? "" : cur) + "|" + tok.toLowerCase();
+      if((tok[0] === "-" || cur) && !seenTok.has(key) && kept + unknown.length < TIER_CUSTOM_MAX){
+        seenTok.add(key);
+        unknown.push({g: g < k ? g : -1, cur: tok[0] === "-" ? null : cur, tok});
+      }
+      continue;
+    }
+    if(seen.has(e.id) || kept + unknown.length >= TIER_CUSTOM_MAX) continue;
     seen.add(e.id);
     kept++;
     groups[g].push(e.id);
   }
-  return {tiers: groups.slice(0, k), pool: groups[k], missing};
+  return {tiers: groups.slice(0, k), pool: groups[k], missing, unknown};
 };
 const tierCustomBlank = (n) => ({tiers: Array.from({length: n || TIER_COUNT}, () => []), pool: [], title: "", labels: null});
 // Unknown ids dropped, each card once across tiers + pool, capped.
@@ -42661,11 +42684,12 @@ const tierCustomClean = (list, idx) => {
   const spill = (list && Array.isArray(list.tiers) ? list.tiers.slice(n) : []).flat();
   const pool = [...(list && Array.isArray(list.pool) ? list.pool : []), ...spill].filter(keep);
   const labels = list && Array.isArray(list.labels) ? tierNormLabels(list.labels, n) : null;
-  return {tiers, pool, title: String((list && list.title) || "").slice(0, TIER_TITLE_MAX), labels};
+  const unknown = list && Array.isArray(list.unknown) && list.unknown.length ? list.unknown : undefined;
+  return {tiers, pool, title: String((list && list.title) || "").slice(0, TIER_TITLE_MAX), labels, unknown};
 };
 const tierCustomQuery = (list, idx) => {
   const q = new URLSearchParams();
-  q.set("tc", tierCustomEncode([...list.tiers, list.pool], idx));
+  q.set("tc", tierCustomEncode([...list.tiers, list.pool], idx, list.unknown));
   if(list.title) q.set("tn", list.title);
   const tt = tierLabelsParam(list.labels);
   if(tt) q.set("tt", tt);
@@ -42675,16 +42699,18 @@ const tierCustomQuery = (list, idx) => {
 // account state: vis = private | unlisted | public, fork = the slug it was
 // copied from, r = the account it was last confirmed on.
 const tierCustomToStored = (list, idx, extra) => {
-  const ranked = list.tiers.reduce((a, t) => a + t.length, 0);
-  return {...(extra || {}), code: tierCustomEncode([...list.tiers, list.pool], idx),
+  const unk = list.unknown || [];
+  const n = list.tiers.length;
+  const ranked = list.tiers.reduce((a, t) => a + t.length, 0) + unk.filter(u => u.g >= 0 && u.g < n).length;
+  return {...(extra || {}), code: tierCustomEncode([...list.tiers, list.pool], idx, unk),
     title: list.title || "", labels: tierLabelsParam(list.labels),
-    n: ranked + list.pool.length, rk: ranked, t: list.t || Date.now()};
+    n: list.tiers.reduce((a, t) => a + t.length, 0) + list.pool.length + unk.length, rk: ranked, t: list.t || Date.now()};
 };
 const tierCustomFromStored = (e, idx) => {
   if(!e) return {...tierCustomBlank(), missing: 0};
   const labels = tierParseLabels(e.labels);
   const d = tierCustomDecode(e.code, idx, tierCountOf(labels));
-  return {...tierCustomClean({tiers: d.tiers, pool: d.pool, title: e.title, labels}, idx), missing: d.missing, t: e.t};
+  return {...tierCustomClean({tiers: d.tiers, pool: d.pool, title: e.title, labels, unknown: d.unknown}, idx), missing: d.missing, t: e.t};
 };
 // Rename tier i (blank = back to its default letter), add a tier at the
 // bottom, or remove one (a custom list's pool takes its cards back; a chase
@@ -42704,9 +42730,13 @@ const tierWithRemoved = (l, i) => {
   const labels = l.tiers.map((_, k) => tierLabelOf(l, k)).filter((_, k) => k !== i);
   const out = {...l, tiers: l.tiers.filter((_, k) => k !== i), labels: tierNormLabels(labels, labels.length)};
   if(Array.isArray(l.pool)) out.pool = [...l.pool, ...l.tiers[i]];
+  // Cards this device can't show (tierCustomDecode) move with their tier too.
+  if(Array.isArray(l.unknown)) out.unknown = l.unknown.map(u =>
+    u.g === i ? {...u, g: -1} : u.g > i ? {...u, g: u.g - 1} : u);
   return out;
 };
 const tierLabelsOf = (l) => l.tiers.map((_, i) => tierLabelOf(l, i));
+const tierUnknownToPool = (u) => Array.isArray(u) ? u.map(x => ({...x, g: -1})) : u;
 const tierNewSlug = () => {
   const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   const b = new Uint8Array(10);
@@ -44121,7 +44151,8 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
   const fork = (keepRanking) => {
     const base = listRef.current;
     const next = keepRanking ? base
-      : {...base, tiers: base.tiers.map(() => []), pool: [...base.tiers.flat(), ...base.pool]};
+      : {...base, tiers: base.tiers.map(() => []), pool: [...base.tiers.flat(), ...base.pool],
+         unknown: tierUnknownToPool(base.unknown)};
     const slug = tierNewSlug();
     store.put(slug, tierCustomToStored({...next, t: Date.now()}, idx, {vis: "unlisted",
       fork: tierForkParent(source)}));
@@ -44220,7 +44251,8 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
   const reset = () => {
     const before = listRef.current;
     if(!ranked) return;
-    updateList(l => ({...l, tiers: l.tiers.map(() => []), pool: [...l.tiers.flat(), ...l.pool]}));
+    updateList(l => ({...l, tiers: l.tiers.map(() => []), pool: [...l.tiers.flat(), ...l.pool],
+      unknown: tierUnknownToPool(l.unknown)}));
     flashToast(_t("Every card is back in the pool"), 5000, {label: _t("Undo"), run: () => updateList(() => before)});
   };
   const setVis = (v) => {
@@ -44243,7 +44275,7 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
       <button type="button" class="tl-btn tl-btn--primary tl-btn--sm" onClick=${() => fork(false)}>${_t("Rank these cards yourself")}</button>
       ${ranked > 0 && html`<button type="button" class="tl-btn tl-btn--sm" onClick=${() => fork(true)}>${_t("Start from this ranking")}</button>`}
     </div>`}
-    ${list.missing > 0 && html`<p class="tl-warn">${_t("{n} cards in this list are no longer in the catalog and were left out.", {n: list.missing})}</p>`}
+    ${list.missing > 0 && html`<p class="tl-warn">${_t("{n} cards in this list aren't in the catalog on this device, so they aren't shown. They stay in the list.", {n: list.missing})}</p>`}
 
     <div class="tl-bar">
       <label class="tl-field tl-field--grow">
