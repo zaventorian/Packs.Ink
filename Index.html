@@ -25885,11 +25885,34 @@ function DisplayNameEditor({profile, onSave}){
   </div>`;
 }
 
+// Which token an unlisted collection link carries. Since migration 192 a link
+// is SCOPED: its token opens exactly the sections named (keys, any order), so
+// a Cards link sent last month does not open Graded unlisted today. Scoped
+// tokens come from get_my_collection_share_tokens() (an HMAC of the scope
+// under the base token, made server-side); without them (a database before
+// 192) the base token stands in, which opens every unlisted section and still
+// works for every link already sent.
+const COLLECTION_SHARE_SECTIONS = ["raw", "sealed", "graded"];
+function collectionShareToken(profile, keys){
+  const scope = COLLECTION_SHARE_SECTIONS.filter(k => (keys || []).includes(k)).join("+");
+  return (scope && profile?.collection_scope_tokens?.[scope]) || profile?.collection_share_token || "";
+}
+
+// The owner's scoped tokens, or null (the panel then falls back to the base).
+async function fetchCollectionScopeTokens(){
+  try {
+    const {data, error} = await sbClient.rpc("get_my_collection_share_tokens");
+    return (!error && data && typeof data === "object") ? data : null;
+  } catch { return null; }
+}
+
 // Collection-sharing controls inside the settings popover. Three per-section
 // visibility selects (raw / sealed / graded), copy-link buttons for whichever
 // of {public, unlisted} are currently in play, plus regenerate-link and
-// make-all-private actions. The single share_token covers any unlisted
-// section; rotating it is a single click to revoke a leaked URL.
+// make-all-private actions. The unlisted link opens the sections unlisted when
+// it is copied, and only those; with two or more unlisted, each row also
+// copies a link to that section alone. Regenerating the base token kills every
+// unlisted link at once, scoped or not.
 function CollectionSharingPanel({profile, onChange, onRegenerate}){
   const [savingSection, setSavingSection] = useState(null);
   const [regenBusy, setRegenBusy] = useState(false);
@@ -25909,7 +25932,9 @@ function CollectionSharingPanel({profile, onChange, onRegenerate}){
   const origin = IS_NATIVE_APP ? (SITE_ORIGIN + "/")
     : window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, "/");
   const publicUrl   = `${origin}?collection=${profile.user_id}`;
-  const unlistedUrl = `${origin}?collection=${profile.user_id}&token=${profile.collection_share_token||""}`;
+  const unlistedKeys = sections.filter(s => valueOf(s) === "unlisted").map(s => s.key);
+  const unlistedUrlFor = (keys) => `${origin}?collection=${profile.user_id}&token=${collectionShareToken(profile, keys)}`;
+  const unlistedUrl = unlistedUrlFor(unlistedKeys);
   const change = async (section, level) => {
     setErr(null); setSavingSection(section);
     const r = await onChange(section, level);
@@ -25951,16 +25976,21 @@ function CollectionSharingPanel({profile, onChange, onRegenerate}){
       ${_tRich("Choose who can see each section. **Private** = only you · **Unlisted** = anyone with the link · **Public** = visible from your profile to anyone.")}
     </div>
     ${sections.map(s => html`
-      <label key=${s.key} class="collection-sharing-row">
-        <span class="collection-sharing-label">${_t(s.label)}</span>
-        <select value=${valueOf(s)}
+      <div key=${s.key} class="collection-sharing-row">
+        <label class="collection-sharing-label" for=${"coll-share-" + s.key}>${_t(s.label)}</label>
+        <select id=${"coll-share-" + s.key} value=${valueOf(s)}
           disabled=${savingSection === s.key}
           onChange=${e => change(s.key, e.target.value)}>
           <option value="private">${_t("Private")}</option>
           <option value="unlisted">${_t("Unlisted (link only)")}</option>
           <option value="public">${_t("Public")}</option>
         </select>
-      </label>
+        ${unlistedKeys.length > 1 && valueOf(s) === "unlisted" && html`<button class="settings-action collection-sharing-copy1"
+          title=${_t("Copy link to this section")} aria-label=${_t("Copy link to this section") + " (" + _t(s.label) + ")"}
+          onClick=${()=>copy(unlistedUrlFor([s.key]), s.key)}>
+          ${uiIcon(copied === s.key ? "check" : "link", 14)}
+        </button>`}
+      </div>
     `)}
     ${(anyPublic || anyUnlisted) && html`<div class="collection-sharing-links">
       ${anyPublic && html`<button class="settings-action" onClick=${()=>copy(publicUrl, "public")}>
@@ -25969,6 +25999,7 @@ function CollectionSharingPanel({profile, onChange, onRegenerate}){
       ${anyUnlisted && html`<button class="settings-action" onClick=${()=>copy(unlistedUrl, "unlisted")}>
         ${copied === "unlisted" ? _t("✓ Copied") : _t("Copy unlisted link")}
       </button>`}
+      ${anyUnlisted && html`<div class="collection-sharing-hint">${_t("An unlisted link opens only the sections that were unlisted when you copied it.")}</div>`}
     </div>`}
     <div class="collection-sharing-actions">
       ${anyUnlisted && html`<button class="settings-action link" disabled=${regenBusy} onClick=${regen}>
@@ -65316,6 +65347,9 @@ function App(){
       if(!setRes.error && Array.isArray(setRes.data) && setRes.data[0]){
         prof = {...prof, collection_share_token: setRes.data[0].collection_share_token};
       }
+      const scopeTokens = await fetchCollectionScopeTokens();
+      if(cancelled) return;
+      prof = {...prof, collection_scope_tokens: scopeTokens};
       setProfile(prof);
       // Prompt for a display name if it's missing (typical for a fresh sign-in).
       if(!data || !data.display_name || !data.display_name.trim()){
@@ -65343,8 +65377,10 @@ function App(){
     // comes from the owner-gated RPC (it's revoked from the table API roles).
     const {data} = await sbClient.rpc("get_my_collection_settings");
     const row = Array.isArray(data) ? data[0] : null;
-    if(row) setProfile(p => ({...(p||{user_id:user.id}), ...row}));
-    else setProfile(p => ({...(p||{user_id:user.id}), [col]: level}));
+    // Scoped tokens are derived from the base one, so they follow a rotation.
+    const scopeTokens = await fetchCollectionScopeTokens();
+    if(row) setProfile(p => ({...(p||{user_id:user.id}), ...row, collection_scope_tokens: scopeTokens}));
+    else setProfile(p => ({...(p||{user_id:user.id}), [col]: level, collection_scope_tokens: scopeTokens}));
     return {ok:true};
   }, [user]);
 
@@ -65354,7 +65390,9 @@ function App(){
     if(!user) return {ok:false, error:"Not signed in"};
     const {data, error} = await sbClient.rpc("regenerate_collection_share_token");
     if(error) return {ok:false, error: error.message};
-    setProfile(p => ({...(p||{user_id:user.id}), collection_share_token: data}));
+    // null on failure, never the old map: an old scoped token is a dead link.
+    const scopeTokens = await fetchCollectionScopeTokens();
+    setProfile(p => ({...(p||{user_id:user.id}), collection_share_token: data, collection_scope_tokens: scopeTokens}));
     return {ok:true, token: data};
   }, [user]);
 
