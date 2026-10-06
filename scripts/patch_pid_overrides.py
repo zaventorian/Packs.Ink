@@ -13,6 +13,11 @@ fires when the column is populated in the DB. After this script runs:
 
 Re-run anytime the OVERRIDES list in Index.html changes.
 
+Every block runs even when an earlier one fails (one bad block must not cost
+the others their pids), and the script then exits NON-ZERO. It used to swallow
+every failure and exit 0 — and since load_lorcast.py nulls these pids nightly,
+a failed patch left those cards priceless on a green run.
+
 Usage:
     python scripts/patch_pid_overrides.py
 """
@@ -136,6 +141,10 @@ def main() -> None:
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
     sb = Supabase()
 
+    # Every block below records into this and carries on; main() exits non-zero
+    # at the end if anything is in it.
+    failed: list[str] = []
+
     print(f"Applying {len(OVERRIDES)} pid override(s)…")
     applied = 0
     already = 0
@@ -163,6 +172,7 @@ def main() -> None:
                 rows = sb.select("cards", columns="id,name,version,collector_number,tcgplayer_product_id", filters=filters)
             except Exception as e:
                 print(f"  ERR select {cand_name} #{cn}: {e}")
+                failed.append(f"override select {name} #{cn}")
                 rows = []
             if rows:
                 matched_rows = rows
@@ -183,6 +193,7 @@ def main() -> None:
                 applied += 1
             except Exception as e:
                 print(f"  ERR update {row['id']}: {repr(e)[:200]}")
+                failed.append(f"override update {name} #{cn}")
 
     print(f"\nApplied {applied}, already correct {already}, missing {missing}.")
 
@@ -250,6 +261,7 @@ def main() -> None:
         print(f"  upserted {len(synthetic_cards)} synthetic card(s).")
     except Exception as e:
         print(f"  upsert failed: {repr(e)[:300]}")
+        failed.append("synthetic cards upsert")
 
     # Connecting-art foils: the foil printing is a SEPARATE TCGPlayer SKU that
     # Lorcast doesn't index. Each needs a cards row carrying the FOIL pid so its
@@ -299,6 +311,7 @@ def main() -> None:
             print(f"  upserted {len(foil_rows)} connecting-foil row(s).")
     except Exception as e:
         print(f"  connecting-foil upsert failed: {repr(e)[:300]}")
+        failed.append("connecting-foil rows")
 
     # Gift-set oversized jumbo cards. Each carries the oversized TCGPlayer pid so
     # its Cold-Foil price flows through the matview; EXTRAS_MAP in Index.html
@@ -326,6 +339,7 @@ def main() -> None:
             print(f"  upserted {len(over_rows)} oversized row(s).")
     except Exception as e:
         print(f"  oversized upsert failed: {repr(e)[:300]}")
+        failed.append("oversized rows")
 
     # Promo reprints Lorcast doesn't index as a separate printing, but each is a
     # reprint of a Lorcast-indexed card. Clone the base row (by pid) and override
@@ -478,6 +492,7 @@ def main() -> None:
             print(f"  upserted {len(rp_rows)} promo-reprint row(s).")
     except Exception as e:
         print(f"  promo-reprint upsert failed: {repr(e)[:300]}")
+        failed.append("promo-reprint rows")
 
     print("\nRefreshing card_prices_latest matview...")
     try:
@@ -485,7 +500,13 @@ def main() -> None:
         print("  matview refreshed.")
     except Exception as e:
         print(f"  refresh failed: {e}\n  → run `select public.refresh_card_prices_latest();` in the Supabase SQL editor.")
+        failed.append("card_prices_latest refresh")
 
+    if failed:
+        msg = f"{len(failed)} step(s) failed: {', '.join(failed[:12])}" + (" ..." if len(failed) > 12 else "")
+        print(f"\nFAIL: {msg}")
+        print(f"::error title=patch_pid_overrides::{msg}")
+        sys.exit(1)
     print("\nDone.")
 
 
