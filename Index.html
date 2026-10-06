@@ -3134,6 +3134,15 @@ const RarityTag = ({rarity, hideText, klass}) => {
   </span>`;
 };
 
+// The face of an icon-only rarity CHIP (the button carries the name in its
+// title / aria-label). A rarity with no icon file rendered a blank, unlabelled
+// pill: Quest (2026-10-03) did exactly that at the end of the Screener's row.
+// It shows its name instead, and so will the next rarity anyone adds.
+const RarityChipFace = ({rarity}) => RARITY_ICONS[rarity]
+  ? html`<img class="chip-rarity-icon" src=${RARITY_ICONS[rarity]} alt="" aria-hidden="true"
+      onError=${e=>{ e.target.style.display="none"; }}/>`
+  : html`<span class="chip-rarity-text" aria-hidden="true">${_term("rarity", rarity)}</span>`;
+
 // Pointy-top hex frame shared by all the hex chips below. Inline SVG, no
 // extra HTTP request, theme-aware via the cost-hex-* CSS variables.
 const HexFrame = ({fill, stroke}) => html`<polygon
@@ -11508,8 +11517,7 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
           ${CARDS_RARITIES.map(r => html`<button key=${r} class=${"chip chip-rarity-only "+(filter.rarities.has(r)?"active":"")}
             title=${_term("rarity", r)} aria-label=${_term("rarity", r)}
             onClick=${()=>setFilter(f=>({...f,rarities:toggleSet(f.rarities,r)}))}>
-            ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt=${r}
-              onError=${e=>{ e.target.style.display="none"; }}/>`}
+            <${RarityChipFace} rarity=${r}/>
           </button>`)}
         </div>
       </div>
@@ -15842,8 +15850,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
             class=${"chip chip-rarity-only "+(filter.rarities.has(r)?"active":"")}
             title=${_term("rarity", r)} aria-label=${_term("rarity", r)}
             onClick=${()=>setFilter(f=>({...f,rarities:toggleSet(f.rarities,r)}))}>
-            ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt=${r}
-              onError=${e=>{ e.target.style.display="none"; }}/>`}
+            <${RarityChipFace} rarity=${r}/>
           </button>`)}
         </div>
         <div class="cards-quickfilter-sub">
@@ -23157,7 +23164,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
           <div class="cards-chipgroup">
             ${setRarities.map(r => html`<button key=${r} class=${"chip chip-rarity-only "+(rarityFilter.has(r)?"active":"")}
               title=${_term("rarity", r)} aria-label=${_term("rarity", r)} onClick=${()=>setRarityFilter(s => toggleSet(s, r))}>
-              ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt=${r} onError=${e=>{ e.target.style.display="none"; }}/>`}
+              <${RarityChipFace} rarity=${r}/>
             </button>`)}
           </div>
           <select class=${"setdet-price-band"+(priceBand?" active":"")} value=${priceBand}
@@ -29752,7 +29759,7 @@ const GradeFromCollectionModal = ({raw, collection, user, updateQty, onGradeOwne
       <div class="gfc-raritychips">
         ${CARDS_RARITIES.map(r => html`<button key=${r} class=${"chip chip-rarity-only "+(rarityFilter.has(r)?"active":"")}
           title=${_term("rarity", r)} aria-label=${_term("rarity", r)} onClick=${()=>toggleRarity(r)}>
-          ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt=${r} onError=${e=>{ e.target.style.display="none"; }}/>`}
+          <${RarityChipFace} rarity=${r}/>
         </button>`)}
       </div>
     </div>
@@ -40310,8 +40317,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           class=${"price-db-raritybtn price-db-raritybtn-icon"+(filterRarities.has(r)?" active":"")}
           title=${rarityLabel(r)} aria-label=${rarityLabel(r)}
           onClick=${()=>setFilterRarities(prev=>{ const n=new Set(prev); n.has(r)?n.delete(r):n.add(r); return n; })}>
-          ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt="" aria-hidden="true"
-            onError=${e=>{ e.target.style.display="none"; }}/>`}
+          <${RarityChipFace} rarity=${r}/>
         </button>`)}
         ${filterRarities.size > 0 && html`<button class="price-db-raritybtn clear"
           onClick=${()=>setFilterRarities(new Set())}>${_t("Clear")}</button>`}
