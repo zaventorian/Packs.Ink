@@ -1444,6 +1444,20 @@ const D = await mod("discord/src/data.js");
     if (r.kind !== "card" || !real(r.printing.f[r.fi]) || (real(p.f[0]) && r.fi !== 0)) bad.push(p.id);
   }
   ok(checked > 100 && !bad.length, `every listed printing opens on a listed finish, non-foil first when it is real (${checked} checked, bad: ${bad.slice(0, 3)})`);
+
+  // "Top Prize" / "Prize Wall" name a Challenge Promo VERSION, not just a
+  // finish: as plain foil words "let it go top prize" landed on The First
+  // Chapter's cold foil.
+  const finOf = (q) => { const r = card(q); return r ? { set: R.sets[r.printing.s].n, label: r.printing.f[r.fi][3], notes: r.notes } : {}; };
+  for (const [q, label] of [["let it go top prize", "Top Prize"], ["cinderella stouthearted top prize", "Top Prize"], ["cinderella prize wall", "Prize Wall"]]) {
+    const got = finOf(q);
+    ok(/\(C1\)/.test(got.set || "") && got.label === label, `"${q}" is the Challenge Promo's ${label} (${got.set} · ${got.label})`);
+  }
+  const plain = finOf("mowgli top prize");
+  ok(plain.label !== "Top Prize" && (plain.notes || []).some((n) => /No Top Prize printing/.test(n)), "a card with no Top Prize says so instead of pretending");
+  const sgTop = R.suggest("cinderella top prize", 10).filter((s) => s.kind === "card");
+  ok(sgTop.length && sgTop.every((s) => s.p.f[s.fi][3] === "Top Prize"), "suggestions for a named finish offer only that version");
+  eq(finOf("elsa spirit of winter foil").label === "Top Prize", false, "a plain foil word is still just a finish");
 }
 {
   // Graded tiers follow the SITE's split rule (gradedSplitTiers): a card's

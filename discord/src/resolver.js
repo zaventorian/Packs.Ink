@@ -50,10 +50,14 @@ const RARITY_FUZZ = ["enchanted", "legendary", "uncommon", "iconic"];
 
 const FINISH_WORDS = {
   foil: "foil", foils: "foil", "cold foil": "foil", holo: "foil", holofoil: "foil", rainbow: "foil", shiny: "foil",
-  "top prize": "foil",
   "non foil": "nonfoil", nonfoil: "nonfoil", nf: "nonfoil", normal: "nonfoil", regular: "nonfoil",
-  "not foil": "nonfoil", "no foil": "nonfoil", "prize wall": "nonfoil",
+  "not foil": "nonfoil", "no foil": "nonfoil",
 };
+// A NAMED finish is a version, not just "foil": "let it go top prize" means the
+// Challenge Promo's Top Prize, and as a plain foil word it landed on The First
+// Chapter's cold foil. It narrows to printings carrying that label (the index's
+// printingBadge, f[3]), and falls back to the plain finish when none does.
+const NAMED_FINISH_WORDS = { "top prize": ["Top Prize", "foil"], "prize wall": ["Prize Wall", "nonfoil"] };
 
 const GRADERS = { psa: "PSA", cgc: "CGC", bgs: "BGS", beckett: "BGS", tag: "TAG", sgc: "SGC", ace: "ACE" };
 
@@ -214,6 +218,7 @@ export function createResolver(index) {
   };
   for (const [w, r] of Object.entries(RARITY_WORDS)) put(w, "rarity", r);
   for (const [w, f] of Object.entries(FINISH_WORDS)) put(w, "finish", f);
+  for (const [w, nf] of Object.entries(NAMED_FINISH_WORDS)) put(w, "named", nf);
   for (const [w, t] of SEALED_WORDS) put(w, "sealed", t);
   for (const [w, r] of Object.entries(RANGE_WORDS)) put(w, "range", r);
   for (const ink of INKS) put(ink, "ink", ink);
@@ -234,11 +239,12 @@ export function createResolver(index) {
 
   // ── parse ─────────────────────────────────────────────────────────────
   function blankDims() {
-    return { rarity: null, finish: null, set: null, ink: null, sealed: null, range: null, number: null, grade: null, graded: false, newest: false };
+    return { rarity: null, finish: null, named: null, set: null, ink: null, sealed: null, range: null, number: null, grade: null, graded: false, newest: false };
   }
   function applyPhrase(dims, ph) {
     if (ph.type === "rarity") dims.rarity = ph.value;
     else if (ph.type === "finish") dims.finish = ph.value;
+    else if (ph.type === "named") { dims.named = ph.value[0]; dims.finish = ph.value[1]; }
     else if (ph.type === "set") dims.set = ph.value;
     else if (ph.type === "ink") dims.ink = ph.value;
     else if (ph.type === "sealed") dims.sealed = ph.value;
@@ -408,7 +414,8 @@ export function createResolver(index) {
   const printingOk = (p, dims) =>
     (dims.rarity == null || p.r === dims.rarity) &&
     (dims.set == null || p.s === dims.set) &&
-    (dims.number == null || numKey(p.no) === dims.number);
+    (dims.number == null || numKey(p.no) === dims.number) &&
+    (dims.named == null || p.f.some((f) => f[3] === dims.named));
 
   const isCollector = (dims) => !!(dims.rarity && CHASE.has(dims.rarity)) || !!dims.graded;
 
@@ -434,6 +441,7 @@ export function createResolver(index) {
     if (dims.number != null) narrow((p) => numKey(p.no) === dims.number, `No #${dims.number} printing of ${c.n}.`);
     if (dims.set != null) narrow((p) => p.s === dims.set, `${c.n} isn't in ${sets[dims.set]?.n}.`);
     if (dims.rarity) narrow((p) => p.r === dims.rarity, `No ${dims.rarity} version of ${c.n}.`);
+    if (dims.named) narrow((p) => p.f.some((f) => f[3] === dims.named), `No ${dims.named} printing of ${c.n}.`);
     // A variant named in the query ("text error", "two swords") picks it.
     const wordSet = new Set(words);
     const varHit = (p) => { if (!p.var) return false; const w = varWords(p.var); return w.length > 0 && w.every((t) => wordSet.has(t)); };
@@ -453,7 +461,9 @@ export function createResolver(index) {
     // first, and the original carries the longer history and the slab market.
     const best = [...ps].sort((a, b) => rank(b) - rank(a) || a.s - b.s)[0];
     let fi = defaultFinish(best);
-    if (dims.finish) {
+    const named = dims.named ? best.f.findIndex((f) => f[3] === dims.named) : -1;
+    if (named >= 0) fi = named;
+    else if (dims.finish) {
       const want = dims.finish === "foil" ? (f) => f[0] !== "N" : (f) => f[0] === "N";
       const k = best.f.findIndex(want);
       if (k >= 0) fi = k;
@@ -494,6 +504,7 @@ export function createResolver(index) {
     if (dims.set != null) tryFilter((r) => meta[r.i].sets.has(dims.set));
     if (dims.rarity) tryFilter((r) => meta[r.i].rar.has(dims.rarity));
     if (dims.ink) tryFilter((r) => meta[r.i].inks.has(dims.ink), `No ${dims.ink} card by that name.`);
+    if (dims.named) tryFilter((r) => cards[r.i].p.some((p) => p.f.some((f) => f[3] === dims.named)));
     return { list: out, failed };
   }
 
@@ -688,14 +699,15 @@ export function createResolver(index) {
     pool.sort((a, b) => b.top - a.top);
     for (const { rd, ranked } of pool) {
       const dims = rd.dims;
-      const specific = dims.rarity || dims.set != null || dims.number != null || dims.finish;
+      const specific = dims.rarity || dims.set != null || dims.number != null || dims.finish || dims.named;
       for (const r of ranked) {
         if (out.length >= limit) break;
         const c = cards[r.i];
         if (specific) {
           for (const p of c.p) {
             if (!printingOk(p, dims)) continue;
-            const fi = dims.finish ? p.f.findIndex(dims.finish === "foil" ? (f) => f[0] !== "N" : (f) => f[0] === "N") : -1;
+            const fi = dims.named ? p.f.findIndex((f) => f[3] === dims.named)
+              : dims.finish ? p.f.findIndex(dims.finish === "foil" ? (f) => f[0] !== "N" : (f) => f[0] === "N") : -1;
             pushCard(r.i, p, fi >= 0 ? fi : defaultFinish(p));
             if (out.length >= limit) break;
           }
