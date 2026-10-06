@@ -813,6 +813,8 @@ Covers: Headless deck-poster autoCopy; TournamentDetailView is deck tiles, not a
 Full notes: `docs/claude/cards-tile-magnify-button-enlarged-card.md` (3 KB). **Read it before changing this area.**
 Every `CardTileImpl` — browse mode AND deck-builder card browser — has a tiny `.tile-magnify-btn` (22×22, inline Lucide-style SVG circle+line) in the bottom-left of the image wrap.
 
+**⚠ A tile that opens on a click anywhere AND holds its own buttons/links is never `role="button"`** (axe nested-interactive, 2026-10-06). The wrapper keeps its onClick with `tabIndex -1`; its first child is `tileOpen(label)`, an empty handler-free button whose click bubbles to the wrapper, covering the tile but clipped and `pointer-events:none`, with the ring drawn by `.X:has(> .tile-open:focus-visible)`. The wrapper must be positioned. Card, movers, sealed movers, EV row, pins checklist, playmat, graded goal and deck-row tiles use it. Guarded by `node scripts/test_tile_open.mjs`.
+
 ## SPA navigation: `<a href>` not `<button>` so modifier-clicks work
 
 User complaint: "you can't ctrl+click or right-click open in new tab on links, tabs, etc". A `<button onClick={navigate}>` intercepts EVERY click — Ctrl/Cmd/Shift/Alt-click and middle-click silently fall through to the same SPA navigation instead of opening a new tab, and right-click context menu doesn't offer "Open in new tab".

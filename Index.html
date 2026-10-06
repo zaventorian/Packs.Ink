@@ -4481,6 +4481,27 @@ const keyActivate = (fn) => (e) => {
   if(e.target !== e.currentTarget) return;
   if(e.key === "Enter" || e.key === " "){ e.preventDefault(); fn(e); }
 };
+// The keyboard and screen-reader way into a tile that opens on a click ANYWHERE
+// in it (a card tile, a movers tile, an EV row) while also holding buttons and
+// links of its own. Such a tile used to BE the button — role="button" on the
+// wrapper — but a button may not contain other controls: a screen reader reads
+// the whole tile as one long name and some cannot reach the inner ones at all
+// (axe "nested-interactive", 2026-10-06). So the wrapper is a plain clickable box
+// and this is its button, first in the tile so Tab lands on it before the
+// tile's own controls.
+// ⚠ It has NO handler: its click bubbles to the wrapper's onClick, so the two can
+// never disagree about what opening the tile means (in the deck builder it adds
+// a copy, exactly as Enter on the tile did).
+// ⚠ It COVERS the tile (inset:0 — the wrapper must be positioned) so focusing it
+// scrolls the whole tile into view, but it is clipped to nothing and ignores the
+// pointer: a mouse or a finger still lands on the art, the links and the image's
+// context menu exactly as before. The focus ring is drawn on the tile by
+// `:has(> .tile-open:focus-visible)` rules in styles.css.
+// ⚠ The wrapper keeps tabIndex -1 and its keydown handler, so a CLICK still
+// focuses the tile as it always did (focus-within reveals, focus returning to
+// it when a modal closes, Enter after a click) — only Tab skips it now.
+// Guarded by scripts/test_tile_open.mjs.
+const tileOpen = (label) => html`<button type="button" class="tile-open" aria-label=${label}></button>`;
 const fmtUSD = (n, decimals=2) => {
   const v = Number(n);
   const body = Math.abs(v).toLocaleString(undefined, {minimumFractionDigits:decimals, maximumFractionDigits:decimals});
@@ -9077,7 +9098,7 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
     ? (group.foil ? "PRIZE FOIL" : "PRIZE WALL")
     : null;
   return html`<div class=${"card-tile"+(isSelected?" is-selected":"")+(checkboxEl?" card-tile--selectable":"")} onClick=${onClick}
-    role="button" tabIndex="0"
+    tabIndex="-1"
     onKeyDown=${e=>{
       // Only a key pressed ON the tile opens it. Enter on a button inside it
       // (the deck counter's "−", the magnifier) bubbled up here, had its own
@@ -9085,8 +9106,8 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
       // builder ADDS a copy.
       if(e.target !== e.currentTarget) return;
       if(e.key === "Enter" || e.key === " "){ e.preventDefault(); onClick && onClick(e); }
-    }}
-    aria-label=${productName}>
+    }}>
+    ${onClick && tileOpen(productName)}
     <div class="card-tile-img-wrap">
       ${img
         ? html`<img src=${img} alt=${productName} loading="lazy"/>`
@@ -17185,10 +17206,10 @@ function EVView({raw, sets, avgs, nc, setNc,
       ${rows.map(({setName, ev, deltas, box, diffVsBox}) => html`<div key=${setName}
         class=${"ev-row"+(openSetHistory?" ev-row-clickable":"")}
         onClick=${openSetHistory ? ()=>openSetHistory(setName) : null}
-        role=${openSetHistory ? "button" : null}
-        tabIndex=${openSetHistory ? 0 : null}
+        tabIndex=${openSetHistory ? -1 : null}
         onKeyDown=${openSetHistory ? (e)=>{ if(e.target===e.currentTarget && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); openSetHistory(setName);} } : null}
         title=${openSetHistory ? _t("Open price history for {set}", {set: setName}) : null}>
+        ${openSetHistory && tileOpen(_t("Open price history for {set}", {set: setName}))}
         <div class="ev-row-set">${setName}${PRERELEASE_SETS.has(setName) && html` <span class="ev-presale-tag" title=${_t(EV_PRESALE_TIP)}>${_t("Pre-sale")}</span>`} <span class="ev-row-set-hint">${extIcon()}</span>
           ${onSimulateSet && html`<button class="ev-row-simbtn"
             title=${_t("Simulate opening a {set} box", {set: setName})}
@@ -28774,9 +28795,10 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
             : shown.map(r => {
                 const qty = qtyOf(r);
                 return html`<div key=${r.tcgplayer_product_id} class=${"cb-row" + (qty > 0 ? "" : " is-missing")}
-                  role="button" tabIndex=${0} title=${_t("Where it came from, and your copies")}
+                  tabIndex=${-1} title=${_t("Where it came from, and your copies")}
                   onClick=${() => setDetail(r)}
                   onKeyDown=${e => { if(e.target === e.currentTarget && e.key === "Enter"){ e.preventDefault(); setDetail(r); } }}>
+                  ${tileOpen(r.name)}
                   <div class="cb-row-thumb">${r.image_url ? html`<img src=${r.image_url} alt="" loading="lazy"/>` : collectiblePh(r)}</div>
                   <div class="cb-row-meta">
                     <div class="cb-row-name">${r.name}</div>
@@ -29113,8 +29135,9 @@ const PlaymatsView = ({user, sealedCollection, sealedMeta, updateSealedQty, upda
     const bump = (d) => { const next = Math.max(0, Math.min(99, qty + d)); if(next !== qty) updateSealedQty(own, next); };
     const open = () => setDetail(playmatProduct(r));
     return html`<div key=${pid} class=${"gc-card gc-card-clickable playmat-card" + (qty > 0 ? " gc-card-owned" : "")}
-        tabIndex=${0} onClick=${open} title=${_t("Price history and details")}
+        tabIndex=${-1} onClick=${open} title=${_t("Price history and details")}
         onKeyDown=${e => { if(e.target === e.currentTarget && e.key === "Enter"){ e.preventDefault(); open(); } }}>
+      ${tileOpen(r.name)}
       <span class="playmat-card-photo">
         <${ProductPhoto} src=${photo.src} glyph="mat" size=${28} noCut=${photo.own}/>
         ${r.presale && html`<span class="playmat-badge">${_t("Pre-order")}</span>`}
@@ -31568,10 +31591,11 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                 const goalTargetSid = g.extras_bucket ? ("__extras:" + g.extras_bucket) : g.set_id;
                 const onGoalActivate = () => jumpToSection(goalTargetSid);
                 return html`<div key=${g.goal_id} class="gc-goal gc-goal-clickable"
-                  role="button" tabIndex="0"
+                  tabIndex="-1"
                   title=${_t("View {name} in the collection", {name: targetName || _t("set")})}
                   onClick=${onGoalActivate}
                   onKeyDown=${(e)=>{ if(e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")){ e.preventDefault(); onGoalActivate(); } }}>
+                  ${tileOpen(_t("View {name} in the collection", {name: g.display_name || targetName || _t("set")}))}
                   <div class="gc-goal-name">${g.display_name || targetName || _t("Goal")}</div>
                   <div class="gc-goal-sub muted">${targetName}${g.rarities?.length ? " · " + g.rarities.map(r => _term("rarity", r)).join(" · ") : " · " + _t("All rarities")}${g.printings?.length ? " · " + g.printings.join("/") : ""}</div>
                   <div class="gc-goal-progress">
@@ -45737,9 +45761,10 @@ const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
   const prBadge = printingBadge(card.printing, card.card_id);
   const wins = visibleWindows || MOVER_WINDOWS.slice(0,3);
   return html`<div class="mover-tile"
-    role="button" tabIndex=${0}
+    tabIndex=${-1}
     onClick=${onClick}
     onKeyDown=${e=>{ if(e.target === e.currentTarget && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); onClick && onClick(); } }}>
+    ${tileOpen(name)}
     <div class="mt-img-wrap">
       ${img
         ? html`<img src=${img} alt=${name} loading="lazy"/>`
@@ -45920,9 +45945,10 @@ const SealedMoverTile = ({row, activeWindow, visibleWindows, onClick}) => {
   const wins = visibleWindows || MOVER_WINDOWS.slice(0,3);
   const meta = _t(row.type_label) + (row.set_name ? " · " + _term("set", row.set_name) : "");
   return html`<div class="mover-tile mover-tile--sealed"
-    role="button" tabIndex=${0}
+    tabIndex=${-1}
     onClick=${onClick}
     onKeyDown=${e=>{ if(e.target === e.currentTarget && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); onClick && onClick(); } }}>
+    ${tileOpen(row.name || _t("Sealed"))}
     <div class="mt-img-wrap">
       <${ProductPhoto} src=${row.image} glyph="box" size=${30}/>
       ${url && html`<a class="mt-tcg-link" href=${url} target="_blank" rel="noopener nofollow sponsored"
@@ -61656,7 +61682,12 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard, defaultInk
               const hover = (e) => { if(big && onHoverCard) onHoverCard({src: proxyImg(big), x: e.clientX, y: e.clientY}); };
               return html`<div key=${g.card_id + "::" + (g.Printing || "")}
                 class=${"deck-quickadd-row" + (i === cursor ? " on" : "") + (qty > 0 ? " in-deck" : "") + (full ? " full" : "")}
-                role="button" tabIndex=${-1}
+                ${/* No role="button": the row holds its own − / + buttons, and a
+                      button may not contain controls (see tileOpen). The keyboard
+                      never needs the row — Enter in the search box adds the
+                      highlighted card, and the + inside it is the row's action for
+                      a screen reader. */""}
+                tabIndex=${-1}
                 title=${full ? _t("{name} — already at the limit of {n}", {name: g["Product Name"] || _t("card"), n: max})
                              : _t("Add {name} to the deck", {name: g["Product Name"] || _t("card")})}
                 onPointerEnter=${mouseHoverOnly((e) => { setCursor(i); hover(e); })}
@@ -63035,10 +63066,11 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
             <${CostInkShield} cost=${meta.cost} inkable=${meta.inkable !== false}/>
           </span>
           <span class="deck-row-name" title=${cardDisplayName(meta)}
-            role="button" tabIndex="0"
+            tabIndex="-1"
             onClick=${()=>openCardModal(item.card_id)}
             onKeyDown=${keyActivate(()=>openCardModal(item.card_id))}
             style=${{cursor:"pointer"}}>
+            ${tileOpen((meta["Product Name"] ? cardDisplayName(meta) : null) || _t("(unknown card)"))}
             ${inkSwatch}
             <span class="deck-row-name-text">${(meta["Product Name"] ? cardDisplayName(meta) : null) || _t("(unknown card)")}</span>
             ${buildVariantChevron(item, meta, "deck-variant-btn--row")}
