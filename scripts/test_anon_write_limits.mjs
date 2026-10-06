@@ -21,7 +21,7 @@ function latest(name){
   let best = null;
   for(const f of files){
     const s = readFileSync(new URL(f, dir), "utf8").replace(/\r\n/g, "\n");
-    const re = new RegExp("create or replace function public\\." + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\(", "gi");
+    const re = new RegExp("create\\s+(?:or\\s+replace\\s+)?function\\s+public\\." + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\(", "gi");
     let m;
     while((m = re.exec(s))){
       const open = s.indexOf("$$", m.index);

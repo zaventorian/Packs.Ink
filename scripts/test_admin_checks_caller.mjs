@@ -34,7 +34,7 @@ const ok = (name, cond) => { if(!cond) fails++; console.log(`${cond ? "  ok  " :
 const latest = new Map();          // name -> {file, body}
 for(const f of files){
   const s = code(read(f));
-  const re = /create\s+or\s+replace\s+function\s+public\.((?:is|can|has)_\w+)\s*\(\s*p_\w+\s+uuid\s*\)/gi;
+  const re = /create\s+(?:or\s+replace\s+)?function\s+public\.((?:is|can|has)_\w+)\s*\(\s*p_\w+\s+uuid\s*\)/gi;
   let m;
   while((m = re.exec(s))){
     const open = s.indexOf("$$", m.index), close = s.indexOf("$$", open + 2);
