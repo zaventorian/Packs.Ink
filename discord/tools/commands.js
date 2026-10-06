@@ -79,10 +79,10 @@ export const COMMANDS = [
     default_member_permissions: "32",
     options: [
       { type: 1, name: "daily", description: "Post the movers every day", options: reportOpts() },
-      { type: 1, name: "weekly", description: "Post the week's movers every Monday", options: reportOpts() },
+      { type: 1, name: "weekly", description: "Post the week's movers every Monday at 9 AM Central", options: reportOpts() },
       { type: 1, name: "send", description: "Post the latest report here, now", options: [
         { type: 3, name: "report", description: "Which report (default: daily)", choices: [
-          { name: "Daily movers", value: "daily" }, { name: "This week's movers", value: "weekly" }] }] },
+          { name: "Daily movers", value: "daily" }, { name: "Last weekly report", value: "weekly" }] }] },
       { type: 1, name: "off", description: "Stop the reports in a channel", options: [channelOpt()] },
       { type: 1, name: "status", description: "Which channels get reports" },
     ],

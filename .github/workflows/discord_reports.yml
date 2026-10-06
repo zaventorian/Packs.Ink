@@ -1,5 +1,8 @@
 name: Discord reports
 
+# The daily goes out in the evening once the day's prices land; the weekly on
+# Monday mornings, 9 AM Chicago (see the Monday crons below).
+#
 # Posts the movers report into every Discord channel that asked for one with
 # the bot's /reports command (rows in discord_report_subscriptions, migration
 # 173). The report is sectioned by kind of card (chase, base, promos, foils);
@@ -27,6 +30,13 @@ on:
   schedule:
     - cron: "20 21 * * *"   # after the 20:30 ETL and the 21:15 digest
     - cron: "20 23 * * *"   # the late-ETL retry
+    # The WEEKLY posts Monday morning, 9 AM - 3 PM Chicago (weekly_open in the
+    # script), never beside the daily. Two slots cover both clocks: 14:05 UTC
+    # is 9:05 CDT, 15:05 UTC is 9:05 CST. 17:05 is a retry in case GitHub
+    # runs the others late; a second run in the window posts nothing twice.
+    - cron: "5 14 * * 1"
+    - cron: "5 15 * * 1"
+    - cron: "5 17 * * 1"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -34,7 +44,7 @@ on:
         type: boolean
         default: true
       force_weekly:
-        description: "Treat today as a weekly-report day"
+        description: "Send the weekly report NOW to every weekly channel (even outside Monday morning, even if they already have it)"
         type: boolean
         default: false
 

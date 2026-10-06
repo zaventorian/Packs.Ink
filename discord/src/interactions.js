@@ -438,7 +438,7 @@ async function calendar(deps, kind = "all", region = "all") {
 // The Worker only records WHERE to post it; scripts/discord_reports.py posts.
 const CADENCE = {
   daily: "every day once the day's prices are in (about 4:20 PM US Central)",
-  weekly: "every Monday once the day's prices are in",
+  weekly: "every Monday morning at 9 AM US Central",
 };
 async function reports(it, deps) {
   if (!it.guild_id) return { content: "Reports post into a server channel — run this in a server.", embeds: [], components: [] };
@@ -496,7 +496,9 @@ async function reportSend(it, deps) {
   }
   const row = rows && rows[0];
   if (!row || !Array.isArray(row.embeds) || !row.embeds.length) {
-    return { content: `There's no ${cadence} report yet — one is built each day once the day's prices are in (about 4:20 PM US Central).`, embeds: [], components: [] };
+    return { content: cadence === "weekly"
+      ? "There's no weekly report yet — one goes out each Monday at 9 AM US Central."
+      : "There's no daily report yet — one is built each day once the day's prices are in (about 4:20 PM US Central).", embeds: [], components: [] };
   }
   return { embeds: row.embeds, components: [] };
 }

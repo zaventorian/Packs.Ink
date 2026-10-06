@@ -47,7 +47,8 @@ def at(day, hour, minute=0):
     return dt.datetime.combine(day, dt.time(hour, minute), tzinfo=UTC)
 
 
-EVENING = at(TODAY, 21, 20)       # when the report is meant to go out
+EVENING = at(TODAY, 21, 20)       # when the daily is meant to go out
+MORNING = at(TODAY, 14, 5)        # 9:05 AM Chicago (CDT): the weekly's slot
 
 
 def mover(cid, name, version, rarity, printing, pid, price, p1, p7, set_id="s_fab"):
@@ -237,11 +238,13 @@ def all_text(embeds):
 os.environ["DISCORD_BOT_TOKEN"] = "secret-bot-token-value"
 
 # ── 1. posts once to a daily + a weekly subscriber, stale row dropped, nobody pinged ──
-sb = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None},
-             {"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}])
+sb = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}])
+sbw = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}])
 disc = FakeDiscord()
 code, out = run(sb, disc)
-check(code == 0, "exit 0")
+codew, outw = run(sbw, disc, now=MORNING)
+out += outw
+check(code == 0 and codew == 0, "exit 0")
 check(len(disc.posts) == 2, f"two posts ({len(disc.posts)})")
 daily = next((p for p in disc.posts if p["url"].endswith("/channels/c1/messages")), {})
 weekly = next((p for p in disc.posts if p["url"].endswith("/channels/c2/messages")), {})
@@ -249,7 +252,7 @@ dtext, wtext = all_text(daily.get("json", {}).get("embeds", [])), all_text(weekl
 check("Stale" not in dtext and "Stale" not in wtext, "the stale mover is dropped")
 check(all(p["json"].get("allowed_mentions") == {"parse": []} for p in disc.posts), "posts never ping anyone")
 check("secret-bot-token-value" not in out, "the bot token is never printed")
-check(sum(1 for u in sb.updates if u[2].get("last_posted_on") == TODAY.isoformat()) == 2, "last_posted_on recorded")
+check(sum(1 for u in sb.updates + sbw.updates if u[2].get("last_posted_on") == TODAY.isoformat()) == 2, "last_posted_on recorded")
 
 # ── 2. the sections ──
 d_emb = daily["json"]["embeds"]
@@ -307,7 +310,7 @@ check(sum(rep.embed_chars(e) for e in w_emb) <= 6000, "the weekly fits Discord's
 # ── 5. Discord refuses the pictures -> the words still go out ──
 sb5 = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}])
 disc5 = FakeDiscord(refuse_files=True)
-run(sb5, disc5)
+run(sb5, disc5, now=MORNING)
 check(len(disc5.posts) == 2, f"a refused multipart post is re-sent once ({len(disc5.posts)})")
 plain = disc5.posts[-1] if disc5.posts else {}
 check(not plain.get("files") and "attachment://" not in all_text(plain.get("json", {}).get("embeds", [])),
@@ -324,7 +327,7 @@ check(art.market_chart([("x", [(TODAY, 0.0)], art.GOLD)], "t", "s") is None, "a 
 sb7 = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}],
              index_latest=TODAY - dt.timedelta(days=1))
 disc7 = FakeDiscord()
-run(sb7, disc7)
+run(sb7, disc7, now=MORNING)
 h7 = disc7.posts[0]["json"]["embeds"][0] if disc7.posts else {}
 check(not h7.get("fields") and "attachment://market.png" not in json.dumps(h7), "a stale index adds no pulse and no chart")
 check("biggest moves" in h7.get("description", ""), "the header still says what it is")
@@ -383,7 +386,76 @@ check(rep.qualifies({**cheap, "pct": 20.0, "usd": rep.dollar_move(6.0, 20.0)}, "
       "a card above the floor at both ends does")
 check(rep.REPORT_PRICE_COL == "low_today" and rep.REPORT_PCT_PREFIX == "pct_" and rep.REPORT_DAILY_COL == "low_price",
       "reports rank and quote TCGplayer's Low, as the site does")
-check(rep.digest.PRICE_COL == "market_today", "the shared digest (and the standing notes) still read NM Market")
+check(rep.digest.PRICE_COL == "market_today", "the shared digest still reads NM Market")
+
+# A note must be true of the price beside it (davidpineapple, 2026-10-05):
+# the line quotes Low, so Low has to agree with Market before anything prints.
+HIGH12, LOW12, NEAR6 = ("high", "near its 12-month high"), ("low", "cheapest in 12 months"), ("near-low", "near its 6-month low")
+check(rep.agreed_standing(HIGH12, None) is None, "Market near its high, Low in the middle: no note (the Cruella line)")
+check(rep.agreed_standing(HIGH12, HIGH12) == HIGH12, "both near the high: the note prints")
+check(rep.agreed_standing(None, LOW12) is None, "a Low-only low is a phantom listing, never 'cheapest'")
+check(rep.agreed_standing(LOW12, NEAR6) == NEAR6, "on a disagreement in strength the weaker claim prints")
+check(rep.agreed_standing(NEAR6, LOW12) == NEAR6, "...whichever side is weaker")
+check(rep.agreed_standing(HIGH12, LOW12) is None and rep.agreed_standing(LOW12, HIGH12) is None,
+      "opposite notes print nothing")
+check(rep.standing_note(HIGH12, -18.8) == "still near 12-mo high", "a faller near its high says 'still'")
+check(rep.standing_note(HIGH12, 12.0) == "near 12-mo high", "a riser near its high does not")
+check(rep.standing_note(LOW12, 4.0) == "still at a 12-mo low", "a riser at its low says 'still at a'")
+check(rep.standing_note(None, -5) == "", "no standing, no note")
+
+
+class SplitSb(FakeSb):
+    """Max Goof's Market history sits far below today (-> "near its high")
+    while his Low history does not."""
+    def select(self, table, columns="*", limit=None, filters=None, page_size=1000, order=None):
+        rows = super().select(table, columns, limit, filters, page_size, order)
+        if table == "prices_daily" and not (filters or {}).get("date", "").startswith("eq."):
+            for r in rows:
+                if r["tcgplayer_product_id"] == 21 and r["date"] != self.price_date.isoformat():
+                    r["market_price"] = 5.0
+        return rows
+
+
+with redirect_stdout(io.StringIO()):
+    split = rep.build_report(SplitSb([]), TODAY, "1d", session=FakeCdn())
+    plain_max = rep.build_report(FakeSb([]), TODAY, "1d", session=FakeCdn())
+NL = chr(10)
+
+
+def max_line(r):
+    return next((ln for e in r["embeds"] for ln in (e.get("description") or "").split(NL) if "Max Goof" in ln), "")
+
+
+check(max_line(split) and "high" not in max_line(split),
+      "a Market-only high puts no note on a line that quotes Low")
+check(max_line(plain_max), "the control report lists Max Goof too")
+
+
+def wk_posts(now, price_date=TODAY, force=False, last=None):
+    sbx = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": last}],
+                 price_date=price_date, index_latest=price_date)
+    dx = FakeDiscord()
+    with redirect_stdout(io.StringIO()):
+        rep.run(args(force_weekly=force), sb=sbx, session=dx, now=now)
+    return len(dx.posts)
+
+
+# ── the weekly's slot: Monday 9 AM - 3 PM Chicago, never beside the daily ──
+SUNDAY = TODAY - dt.timedelta(days=1)
+check(wk_posts(MORNING, SUNDAY) == 1, "Monday 9:05 AM Chicago on Sunday's prices posts the weekly")
+check(wk_posts(at(TODAY, 13, 55), SUNDAY) == 0, "8:55 AM Chicago is too early")
+check(wk_posts(at(TODAY, 19, 55), SUNDAY) == 1, "2:55 PM Chicago is still in the window")
+check(wk_posts(at(TODAY, 20, 5), SUNDAY) == 0, "3:05 PM Chicago is past it")
+check(wk_posts(EVENING) == 0, "the weekly never posts beside the evening daily")
+WINTER = dt.date(2026, 12, 7)     # a Monday on standard time (CST, UTC-6)
+check(wk_posts(at(WINTER, 14, 5), WINTER - dt.timedelta(days=1)) == 0, "in winter 14:05 UTC is 8:05 AM Chicago: too early")
+check(wk_posts(at(WINTER, 15, 5), WINTER - dt.timedelta(days=1)) == 1, "in winter 15:05 UTC is 9:05 AM Chicago: posts")
+check(wk_posts(MORNING, TODAY - dt.timedelta(days=4)) == 0, "a weekly on prices four days old does not post")
+check(wk_posts(MORNING, SUNDAY, last=SUNDAY.isoformat()) == 0, "a channel that already has this week's is skipped")
+check(wk_posts(EVENING, SUNDAY, force=True, last=SUNDAY.isoformat()) == 1,
+      "force_weekly sends it now, even outside the window and to a channel that had it")
+check(wk_posts(dt.datetime(2026, 10, 12, 14, 5, tzinfo=UTC), dt.date(2026, 10, 11), last="2026-10-05") == 1,
+      "the first Monday-morning weekly follows the last Monday-evening one")
 
 # ── 11. the old delivery rules, unchanged ──
 sb2 = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": TODAY.isoformat()}])
@@ -412,7 +484,8 @@ late = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_p
                {"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}])
 disc_late = FakeDiscord()
 run(late, disc_late, now=at(TODAY + dt.timedelta(days=1), 1, 45))
-check(len(disc_late.posts) == 2, f"a run after midnight still sends the day's daily and weekly reports ({len(disc_late.posts)})")
+check(len(disc_late.posts) == 1 and disc_late.posts[0]["url"].endswith("/channels/c1/messages"),
+      f"a run after midnight still sends the day's daily, and never the weekly ({len(disc_late.posts)})")
 check(all(u[2].get("last_posted_on") == TODAY.isoformat() for u in late.updates if "last_posted_on" in u[2]),
       "a late post records the price date it covers, not the day it was sent")
 check("Sep 28, 2026" in all_text(disc_late.posts[0]["json"]["embeds"]) if disc_late.posts else False,
@@ -450,7 +523,7 @@ yesterday = (TODAY - dt.timedelta(days=1)).isoformat()
 sb10 = FakeSb([], latest=[{"cadence": "daily", "price_date": yesterday, "files": []},
                           {"cadence": "weekly", "price_date": yesterday, "files": ["weekly/%s/market.png" % yesterday]}])
 st10 = FakeStorage()
-code10, out10 = run(sb10, st10)
+code10, out10 = run(sb10, st10, now=MORNING)
 check(code10 == 0 and "No servers have asked" in out10, "no subscribers still exits 0")
 kept = {rows[0]["cadence"]: rows[0] for (t, rows, oc) in sb10.upserts if t == rep.LATEST_TABLE}
 check(set(kept) == {"daily", "weekly"} and all(r["price_date"] == TODAY.isoformat() for r in kept.values()),
@@ -467,12 +540,12 @@ check(not st10.posts, "keeping a report posts nothing to Discord")
 
 sb11 = FakeSb([], latest=[{"cadence": "daily", "price_date": TODAY.isoformat(), "files": []},
                           {"cadence": "weekly", "price_date": TODAY.isoformat(), "files": []}])
-run(sb11, FakeStorage())
+run(sb11, FakeStorage(), now=MORNING)
 check(not sb11.upserts, "a report already kept today is not built or kept again")
 
 sb12 = FakeSb([], latest=[])
 st12 = FakeStorage(fail=True)
-run(sb12, st12)
+run(sb12, st12, now=MORNING)
 wk12 = next((rows[0] for (t, rows, oc) in sb12.upserts if t == rep.LATEST_TABLE and rows[0]["cadence"] == "weekly"), {})
 check(wk12 and not any((e.get("image") or {}).get("url", "") for e in wk12["embeds"]) and wk12["files"] == [],
       "if a picture can't be stored, the kept report is the plain one (no broken picture)")
@@ -480,6 +553,11 @@ check(wk12 and not any((e.get("image") or {}).get("url", "") for e in wk12["embe
 sb13 = FakeSb([], latest=[])
 run(sb13, FakeStorage(), post=False)
 check(not sb13.upserts, "a dry run keeps nothing")
+
+sb15 = FakeSb([], latest=[])
+run(sb15, FakeStorage())
+check({rows[0]["cadence"] for (t, rows, oc) in sb15.upserts if t == rep.LATEST_TABLE} == {"daily"},
+      "the evening run keeps only the daily: /reports send weekly stays Monday's report")
 
 _, out14 = run(FakeSb([]), FakeStorage())
 check("migration 175" in out14, "before migration 175 it says so and carries on")
