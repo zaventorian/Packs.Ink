@@ -86,6 +86,73 @@ f = sweep("lp-pins", boom, {"count": 41, "items": ["ursula-deceiver-pin"]}, comp
 check("fetch failure is reported", kinds(f), ["source_error"])
 check("...and names the exception", "getaddrinfo failed" in f[0]["name"], True)
 
+print("\n== fetch retries a server FAILURE, never a REFUSAL ==")
+# Both directions are silent in production: without the retry a one-off 500
+# turns the run red for nothing (it did, 2026-10-06); with a retry on 403 the
+# watcher hammers the rate-sensitive host it is supposed to leave alone.
+import io  # noqa: E402
+import urllib.error  # noqa: E402
+import urllib.request  # noqa: E402
+
+
+class _Resp(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _fake_open(script):
+    """urlopen stand-in that raises/returns each scripted step in turn."""
+    calls = []
+
+    def opener(req, timeout=None):
+        step = script[len(calls)]
+        calls.append(step)
+        if isinstance(step, BaseException):
+            raise step
+        return _Resp(step.encode())
+    return opener, calls
+
+
+def _http(code):
+    return urllib.error.HTTPError("https://x.test/", code, "x", {}, None)
+
+
+def _fetch_with(script):
+    opener, calls = _fake_open(script)
+    saved_open, saved_sleep = urllib.request.urlopen, W.time.sleep
+    urllib.request.urlopen, W.time.sleep = opener, (lambda s: None)
+    try:
+        try:
+            return W.fetch("https://x.test/"), len(calls)
+        except Exception as e:  # noqa: BLE001
+            return type(e).__name__ + ":" + str(getattr(e, "code", "")), len(calls)
+    finally:
+        urllib.request.urlopen, W.time.sleep = saved_open, saved_sleep
+
+
+check("a 500 then a page reads the page", _fetch_with([_http(500), "ok"]), ("ok", 2))
+check("two 503s then a page reads the page",
+      _fetch_with([_http(503), _http(503), "ok"]), ("ok", 3))
+check("three 500s give up and raise", _fetch_with([_http(500)] * 3), ("HTTPError:500", 3))
+check("a dropped connection is retried",
+      _fetch_with([ConnectionResetError("reset"), "ok"]), ("ok", 2))
+check("a DNS failure is retried",
+      _fetch_with([urllib.error.URLError("getaddrinfo failed"), "ok"]), ("ok", 2))
+check("a 403 is NOT retried", _fetch_with([_http(403), "ok"]), ("HTTPError:403", 1))
+check("a 429 is NOT retried", _fetch_with([_http(429), "ok"]), ("HTTPError:429", 1))
+check("a 404 is NOT retried", _fetch_with([_http(404), "ok"]), ("HTTPError:404", 1))
+check("one timeout is retried", _fetch_with([TimeoutError("t"), "ok"]), ("ok", 2))
+check("a second timeout gives up (the gallery waits 180s a try)",
+      _fetch_with([TimeoutError("t"), TimeoutError("t"), "ok"]), ("TimeoutError:", 2))
+check("a connect timeout counts as a timeout",
+      _fetch_with([urllib.error.URLError(TimeoutError("t")), TimeoutError("t"), "ok"]),
+      ("TimeoutError:", 2))
+check("a timeout after a 500 still gets its one retry",
+      _fetch_with([_http(500), TimeoutError("t"), "ok"]), ("ok", 3))
+
 print("\n== an un-baselined source asks to be baselined, once ==")
 f = sweep("lp-pins", lambda: {"a-pin": "a-pin"}, None, compare=None)
 check("exactly one finding", len(f), 1)

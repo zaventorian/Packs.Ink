@@ -145,10 +145,50 @@ STOPWORDS = {"lorcana", "league", "pin", "lore", "counter", "disney", "the", "a"
 
 # ---------------------------------------------------------------- fetch + parse
 
+# A server that FAILED is asked again; a server that REFUSED is not. The run
+# went red for a day (2026-10-06) on one HTTP 500 from the official gallery,
+# which read fine an hour later, and a watcher that is red for no reason is the
+# one everyone learns to ignore. But a 403 / 404 / 429 is an answer, not a blip:
+# retrying lorcanaplayer's challenge page is exactly the defeat-the-block the
+# note above rules out, and it spends requests on the host that counts them.
+TRANSIENT_HTTP = {500, 502, 503, 504}
+RETRY_WAITS = (10, 30)  # seconds before the 2nd and 3rd attempt
+# ⚠ A timeout gets ONE retry, not two: the gallery waits 180s per attempt and
+# the job has 15 minutes, so three of them is most of the run.
+TIMEOUT_RETRIES = 1
+
+
+def _transient(e: BaseException) -> str | None:
+    """'timeout', 'transient', or None (fail now)."""
+    if isinstance(e, urllib.error.HTTPError):  # before URLError: it is a subclass
+        return "transient" if e.code in TRANSIENT_HTTP else None
+    reason = getattr(e, "reason", e)
+    if isinstance(e, TimeoutError) or isinstance(reason, TimeoutError):
+        return "timeout"
+    if isinstance(e, (urllib.error.URLError, ConnectionError)):
+        return "transient"
+    return None
+
+
 def fetch(url: str, timeout: int = 120) -> str:
     req = urllib.request.Request(url, headers=UA)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read().decode("utf-8", "ignore")
+    timeouts = 0
+    for attempt in range(len(RETRY_WAITS) + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read().decode("utf-8", "ignore")
+        except OSError as e:  # HTTPError ⊂ URLError ⊂ OSError; TimeoutError too
+            kind = _transient(e)
+            if kind == "timeout":
+                timeouts += 1
+            if (kind is None or attempt == len(RETRY_WAITS)
+                    or timeouts > TIMEOUT_RETRIES):
+                raise
+            wait = RETRY_WAITS[attempt]
+            print(f"  {url}: {type(e).__name__}: {e} -- retrying in {wait}s",
+                  file=sys.stderr)
+            time.sleep(wait)
+    raise AssertionError("unreachable")
 
 
 def sitemap_locs(body: str) -> list[str]:
