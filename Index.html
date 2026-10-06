@@ -40899,6 +40899,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             const openThisRow = () => openModal(r.card_id, isSealedRow ? r._sealedProduct : null, r._variant);
             return html`<tr key=${key} class=${isSel ? "price-db-row-sel" : ""}>
               <td class="td-check"><input type="checkbox" checked=${isSel}
+                aria-label=${_t("Select {name}", {name: [r.name, r.version].filter(Boolean).join(" - ") || r.display_type || ""})}
                 onChange=${() => toggleSelect(key)}/></td>
               ${user && !watchlistsUnavailable && !showGraded && (() => {
                 const wk = rowWatchKey(r);
@@ -66668,9 +66669,12 @@ function App(){
   // styles.css), which takes it from 80px to 36 and leaves row 2 19px of SPARE at
   // full 8.5px type. If a NINTH ever lands here, something has to leave the nav.
   // The third element is a SHORT label for the chip only: "Price Graphing" is the
-  // one label that wraps to two lines, and it is still the title + aria-label, so
-  // hover and a screen reader say the full name (the SetHeading rule — never drop
-  // the real name out of reach just because the visible text got shorter).
+  // one label that wraps to two lines, and it is still the title, so hover and a
+  // screen reader (as the description) say the full name (the SetHeading rule —
+  // never drop the real name out of reach just because the visible text got
+  // shorter). ⚠ No aria-label on a tab: the visible label IS its name, so a voice
+  // user saying "click Graphs" reaches it. An aria-label of "Price Graphing" over
+  // "Graphs" (and "Scan a card (beta)" over "BETA Scan") broke that (WCAG 2.5.3).
   const TABS_BOTTOM = [["screener","Screener"],["history","Price Graphing","Graphs"],["market","Analytics"],["calendar","Calendar"]];
   const renderTab = ([v,l,short]) => {
     // The scanner is a modal, but /scan opens it (LANDED_ON_SCAN), so the tab
@@ -66680,14 +66684,14 @@ function App(){
       class=${"nav-tab nav-tab--scan"+(scanOpen?" active":"")}
       href="/scan"
       onClick=${navHandler(openScan)}
-      title=${_t("Scan a card with your camera (beta)")} aria-label=${_t("Scan a card (beta)")}>
+      title=${_t("Scan a card with your camera (beta)")}>
       <span class="nav-tab-icon">${NAV_ICONS.scan}<span class="nav-tab-beta" aria-hidden="true">${_t("BETA")}</span></span>
       <span class="nav-tab-label">${_t(l)}</span>
     </a>`;
     return html`<a key=${v} class=${"nav-tab"+(view===v?" active":"")}
       href=${VIEW_PATHS[v] || "/"}
       onClick=${navHandler(()=>onTabClick(v))}
-      title=${_t(l)} aria-label=${_t(l)}>
+      title=${_t(l)}>
       <span class="nav-tab-icon">${NAV_ICONS[v]}</span>
       <span class="nav-tab-label">${_t(short || l)}</span>
     </a>`;
