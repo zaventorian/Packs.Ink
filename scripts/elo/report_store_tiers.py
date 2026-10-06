@@ -121,8 +121,10 @@ def fetch_events(since: str, until: str | None = None) -> list[dict]:
         offset += 1000
 
 
-# Who sat down, as opposed to who registered. Kept identical to the client's
-# RPH_PLAYED_FILTER and to played() in scrape_event_attendance.py. The standing
+# Who sat down, as opposed to who registered. Kept identical to the `played`
+# generated column the client filters on (migration 188; checked by
+# scripts/test_attendance_privacy.mjs) and to played() in
+# scrape_event_attendance.py. The standing
 # test is gte.0 rather than a not-null because PostgREST spells negation inside
 # an or() group as a `not.` prefix on the column — a standing is a positive
 # integer or absent, so this is the same set with no syntax to get wrong.

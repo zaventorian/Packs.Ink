@@ -20,6 +20,17 @@
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger.** Claude applies migrations itself, drops included (Zaven, 2026-09-30: *"im fine with claude having access to do everything"*) — see "Running SQL" under Ops for the two routes. A file is STAGED only when something outside the database has to happen first.
+- **`supabase/189_attendance_anon_columns.sql`** — **STAGED 2026-10-06, apply after the client from the same
+  commit is LIVE** (deployed + edge purged; give open tabs a day). It revokes the table-wide SELECT on
+  `rph_event_attendance` from anon / authenticated and grants back only `event_id, person_key, played,
+  registration_status`. Applied before that client ships, the live Store Status tab 42501s (it still selects
+  `best_identifier, rph_user_id` and filters on the standings). Rollback is one line in its header.
+- ~~`supabase/188_attendance_person_key.sql`~~ — **APPLIED 2026-10-06** through the connector. Additive:
+  `private` schema + `private.server_secrets` (random 32 bytes, no API role can read it), and on
+  `rph_event_attendance` a trigger-filled `person_key` (HMAC of the old client key) and a stored generated
+  `played`. Verified live: 28,975 rows keyed, 2,635 distinct people under both keys and 2,635 distinct pairs
+  (a bijection), `played` equals the old filter on every row, and the Store Status pivot over the old and new
+  reads agree on all 107 stores. Run against PGlite first (43 checks, 188 and 189 both twice).
 - **`supabase/187_starter_deck_foil_rekey.sql`** — **STAGED 2026-10-06: apply RIGHT AFTER the deploy** that
   ships the Starter Deck Foil client change (EXTRAS_MAP `printing:"Holofoil"`). Moves the 12 Starter Deck Foil
   collection entries from Cold Foil to Holofoil (47 rows, 9 users on the day; a Holofoil row made in between

@@ -35280,8 +35280,9 @@ function EloUpcomingSCs({canViewStore, canScout, onStoreClick, onPlayerClick, on
 // Every number is CALCULATED from public, anon-readable tables — nothing
 // store-level is stored anywhere:
 //   • lorcana_events_history → one row per event a store has run.
-//   • rph_event_attendance   → one row per person per event, carrying their
-//     final standing and match record.
+//   • rph_event_attendance   → one row per person per event. The tab reads it
+//     by pseudonym only: person_key and played (migration 188), never the
+//     name, the account id or the standing (189 takes those away from anon).
 //
 // Tickets and Fans are RPH's own definitions and both are about PLAYERS, not
 // registrants: Event Tickets is "the total number of players across all events",
@@ -35331,17 +35332,13 @@ function eloSeasonSetLabel(season){
   return best || season;
 }
 
-// Who sat down, as opposed to who merely registered. Applied server-side so a
-// phone is never shipped the no-shows; mirrors played() in
-// scripts/elo/scrape_event_attendance.py. registration_status is deliberately
-// not part of it — that is about the registration, not the attendance.
-//
-// The standing test is written `gte.0` rather than a not-null: PostgREST spells
-// negation inside an or() group as a `not.` PREFIX on the column, which reads
-// nothing like the standalone form and is easy to get subtly wrong. A standing
-// is a positive integer or absent, so `gte.0` is the same set with no syntax to
-// get wrong. Keep it identical to PLAYED in scripts/elo/report_store_tiers.py.
-const RPH_PLAYED_FILTER = "(final_place_in_standings.gte.0,matches_won.gt.0,matches_lost.gt.0,matches_drawn.gt.0)";
+// Who sat down, as opposed to who merely registered, is the `played` column:
+// migration 188 stores the old filter (a standing, or any recorded match) as a
+// generated column, so the tab filters on it without being able to read the
+// standings themselves. Applied server-side so a phone is never shipped the
+// no-shows. registration_status is deliberately not part of it — that is about
+// the registration, not the attendance. Keep it identical to PLAYED in
+// scripts/elo/report_store_tiers.py (test_attendance_privacy.mjs checks).
 
 // ── Events where nobody has a recorded result ───────────────────────────────
 // Not every store runs its pairings through RPH. Seven Out Cards took 19
@@ -35367,9 +35364,15 @@ const rphCompleteReg = (a) => {
   return !st || st === "COMPLETE";
 };
 
-// Distinct-person key. rph_user_id is the stable account id and the right thing
-// to count on; guests come through without one, so the display name stands in.
-const rphPersonKey = (a) => a.rph_user_id != null
+// Distinct-person key. The server hands out person_key (migration 188): an
+// HMAC, under a secret the browser never sees, of exactly the key below — the
+// stable account id, or a guest's folded display name — so one person is one
+// key and the counts are unchanged, but nobody can turn a name into a key and
+// look them up. The fallback is that old key, for rows that carry the raw
+// columns (the guard's fixtures, a database without 188).
+const rphPersonKey = (a) => a.person_key
+  ? "k:" + a.person_key
+  : a.rph_user_id != null
   ? "u:" + a.rph_user_id
   : "n:" + String(a.best_identifier || "").trim().toLowerCase();
 
@@ -35400,10 +35403,13 @@ async function fetchEloStoreActivity(){
   if(trackedIds.size) histParams.store_id = "in.(" + Array.from(trackedIds).join(",") + ")";
   const [events, played, scans, sets] = await Promise.all([
     sbFetchAll("lorcana_events_history", histParams, null),
+    // Ordered by every column it reads: rows that tie on all of them are
+    // indistinguishable, so range pagination returns the same multiset however
+    // the planner breaks the tie.
     sbFetchAll("rph_event_attendance", {
-      select: "event_id,rph_user_id,best_identifier",
-      or: RPH_PLAYED_FILTER,
-      order: "event_id.asc,best_identifier.asc",
+      select: "event_id,person_key",
+      played: "is.true",
+      order: "event_id.asc,person_key.asc",
     }, null),
     // Which events have been looked at, so "no attendance" and "not scraped
     // yet" stay distinguishable instead of both reading as a quiet week.
@@ -35468,9 +35474,9 @@ async function fetchEloAttendanceFor(eventIds){
   for(let i = 0; i < eventIds.length; i += 200){
     const chunk = eventIds.slice(i, i + 200);
     const rows = await sbFetchAll("rph_event_attendance", {
-      select: "event_id,rph_user_id,best_identifier,registration_status",
+      select: "event_id,person_key,registration_status",
       event_id: "in.(" + chunk.join(",") + ")",
-      order: "event_id.asc,best_identifier.asc",
+      order: "event_id.asc,person_key.asc,registration_status.asc",
     }, null);
     out.push(...rows);
   }

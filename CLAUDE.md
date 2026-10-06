@@ -1344,8 +1344,9 @@ Guards: `scripts/elo/test_manual_merges.py`.
 
 Full notes: `docs/claude/chicagoland-elo.md` (14 KB). **Read it before changing this area.**
 `EloView`'s inner tabs are `leaderboard | tournaments | stores | upcoming | scout`, mirrored to `?sub=<tab>` (plus `?p=`/`?e=`/`?store=` for the player / event / store-report leaf views) — the KEYS are unchanged; only the labels read **Tournament Results** and **Store Status** now.
-Guards: `scripts/elo/test_attendance_targets.py`, `scripts/test_elo_store_activity.mjs`.
+Guards: `scripts/elo/test_attendance_targets.py`, `scripts/test_elo_store_activity.mjs`, `scripts/test_attendance_privacy.mjs`.
 
+- ⚠ The client reads `rph_event_attendance` by pseudonym only (`person_key`, `played`; migration 188). Never select a name, account id or standing there: migration 189 (STAGED) takes them away from anon.
 - ⚠ `.elo-innertabs` is `flex-wrap:nowrap` + `overflow-x:auto`, and must stay that way (2026-09-12).
 - ⚠ History and attendance refresh on `discover_scs.yml`'s DAILY schedule — and until 2026-09-10 attendance was refreshed by nobody.
 
