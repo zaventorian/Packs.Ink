@@ -40,6 +40,17 @@ Idempotent: upserts on (event_id, best_identifier), and skips events already in
 rph_event_attendance_scans unless --refresh, or they started inside
 --recheck-days. An event that genuinely had nobody still gets a scan row, so "no
 attendance" and "never scraped" stay distinct.
+
+A COMPLETE re-read also deletes the event's rows it no longer contains (a player
+renamed between two reads, a withdrawn registration), or one person would count
+as two tickets. Only after a complete read, never after a failed or partial one,
+never on an empty read of an event we hold rows for, and never more than half an
+event's roster at once (that is a broken read, not a roster change).
+
+Exit status: every run with unreadable events leaves a ::warning::; a run where
+FAIL_ERROR_SHARE of the reads failed on network/5xx errors (at least
+FAIL_ERROR_MIN of them) exits 1 after writing what it could. 403/404 rosters
+(withdrawn, private) are permanent and only ever warn.
 """
 from __future__ import annotations
 import argparse, datetime, json, sys, time, urllib.request, urllib.error
@@ -58,6 +69,20 @@ except Exception:
 REG = "https://api.ravensburgerplay.com/api/v2/events/{eid}/registrations/"
 PAGE = 100
 FLUSH_EVERY = 50        # events per write batch — see flush() in main()
+
+# A re-read may remove at most this much of an event's held roster. A rename or a
+# withdrawal moves a row or two; losing most of a roster is a broken read (a
+# pagination change, an API returning a stub), so it is held back and warned.
+STALE_MAX_SHARE = 0.5
+STALE_MAX_ABS = 3
+DELETE_CHUNK = 50
+# Network/5xx read failures that make the run RED: at least this many, and at
+# least this share of the events attempted. Below that the next run retries them
+# (an unreadable event gets no scan row); above it RPH, or our way to it, is down
+# and every Store Status number is going stale. 403/404 never count: those
+# rosters are withdrawn or private for good, and would turn the run red forever.
+FAIL_ERROR_MIN = 5
+FAIL_ERROR_SHARE = 0.25
 
 
 def _hdr(extra: dict | None = None) -> dict:
@@ -113,7 +138,76 @@ def _post(table: str, rows: list[dict], conflict: str) -> None:
                 time.sleep(1.5 * (attempt + 1))
 
 
-def http_json(url: str, retries: int = 3):
+def _delete(path: str) -> None:
+    req = urllib.request.Request(f"{SUPABASE_URL}/rest/v1/{path}",
+                                 headers=_hdr({"Prefer": "return=minimal"}), method="DELETE")
+    for attempt in range(5):
+        try:
+            with urllib.request.urlopen(req, timeout=90) as r:
+                _ = r.read()
+            return
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or attempt == 4:
+                raise SystemExit(f"delete failed [{e.code}]: {e.read().decode('utf-8', 'ignore')[:300]}")
+        except Exception as e:
+            if attempt == 4:
+                raise SystemExit(f"delete failed after retries: {e}")
+        time.sleep(1.5 * (attempt + 1))
+
+
+def _pg_quote(v: str) -> str:
+    """One item of a PostgREST in.(...) list. Always quoted, so a comma, period,
+    colon or paren in a player's name stays inside it; `"` and `\\` escaped."""
+    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def held_identifiers(eids: list[int]) -> dict[int, set[str]]:
+    """The best_identifiers we already hold for these events."""
+    out: dict[int, set[str]] = {}
+    for i in range(0, len(eids), 100):
+        ids = ",".join(str(e) for e in eids[i:i + 100])
+        off = 0
+        while True:
+            page = _get(f"rph_event_attendance?select=event_id,best_identifier"
+                        f"&event_id=in.({ids})&order=event_id.asc,best_identifier.asc"
+                        f"&limit=1000&offset={off}")
+            for r in page:
+                out.setdefault(r["event_id"], set()).add(r["best_identifier"])
+            if len(page) < 1000:
+                break
+            off += 1000
+    return out
+
+
+def resync_plan(read: dict[int, set[str]], held: dict[int, set[str]]):
+    """From complete reads and the rows we hold, decide what a re-read removes.
+
+    Returns (deletes {eid: [identifier]}, held_back [eid], untrusted_empty [eid]).
+    An empty read of an event we hold rows for deletes nothing (one bad response
+    must not wipe a roster); neither does one that would drop more than
+    STALE_MAX_SHARE of the roster (or STALE_MAX_ABS rows, whichever is more)."""
+    deletes: dict[int, list[str]] = {}
+    held_back: list[int] = []
+    untrusted_empty: list[int] = []
+    for eid, new in read.items():
+        old = held.get(eid, set())
+        if not new:
+            if old:
+                untrusted_empty.append(eid)
+            continue
+        stale = old - new
+        if not stale:
+            continue
+        if len(stale) > max(STALE_MAX_ABS, int(len(old) * STALE_MAX_SHARE)):
+            held_back.append(eid)
+            continue
+        deletes[eid] = sorted(stale)
+    return deletes, held_back, untrusted_empty
+
+
+def http_json(url: str, retries: int = 3, why: dict | None = None):
+    """JSON from RPH, or None. When `why` is given, a None says which kind:
+    "gone" (403/404: withdrawn or private, permanent) or "error" (anything else)."""
     for i in range(retries):
         try:
             req = urllib.request.Request(url, headers=HDR)
@@ -121,10 +215,14 @@ def http_json(url: str, retries: int = 3):
                 return json.loads(r.read().decode("utf-8", "ignore"))
         except urllib.error.HTTPError as e:
             if e.code in (403, 404):
+                if why is not None:
+                    why["reason"] = "gone"
                 return None          # event withdrawn / roster not public
         except Exception:
             pass
         time.sleep(0.5 * (i + 1))
+    if why is not None:
+        why["reason"] = "error"
     return None
 
 
@@ -184,7 +282,7 @@ def target_events(refresh: bool, limit: int | None, recheck_days: int = 0,
     return out[:limit] if limit else out
 
 
-def scrape_one(eid: int) -> list[dict] | None:
+def scrape_one(eid: int, why: dict | None = None) -> list[dict] | None:
     """Every registration for one event, or None if we could not read it.
 
     None and [] MUST stay distinct. Collapsing a failed read into an empty list
@@ -196,7 +294,7 @@ def scrape_one(eid: int) -> list[dict] | None:
     """
     rows, page = [], 1
     while True:
-        d = http_json(REG.format(eid=eid) + "?" + urlencode({"page_size": PAGE, "page": page}))
+        d = http_json(REG.format(eid=eid) + "?" + urlencode({"page_size": PAGE, "page": page}), why=why)
         if d is None:
             return None
         for reg in (d.get("results") or []):
@@ -257,30 +355,53 @@ def main() -> None:
         return
 
     total_rows = total_played = 0
-    unreadable: list[int] = []
+    unreadable: list[tuple[int, str]] = []
     pend_rows: list[dict] = []
     pend_scans: list[dict] = []
+    pend_read: dict[int, set[str]] = {}       # complete reads this batch
+    stats = {"deleted": 0}
+    held_back: list[int] = []
+    untrusted: list[int] = []
 
     def flush() -> None:
-        """Rows BEFORE scans, always. The scan row is what makes a re-run skip an
-        event, so recording it first would let an interrupted flush mark an
-        event done whose attendance never landed — invisible, and only fixable
-        with --refresh over everything."""
+        """Rows BEFORE stale-row deletes BEFORE scans, always. The scan row is
+        what makes a re-run skip an event, so recording it first would let an
+        interrupted flush mark an event done whose attendance never landed (or
+        whose stale rows were never removed) — invisible, and only fixable with
+        --refresh over everything."""
+        held = held_identifiers(list(pend_read)) if pend_read else {}
+        deletes, back, empty = resync_plan(pend_read, held)
+        held_back.extend(back)
+        untrusted.extend(empty)
+        if empty:
+            # An empty read of an event we hold rows for is not trusted: its scan
+            # row must not start saying "looked, nobody there".
+            skip = set(empty)
+            pend_scans[:] = [r for r in pend_scans if r["event_id"] not in skip]
         if args.dry_run:
-            pend_rows.clear(); pend_scans.clear(); return
+            stats["deleted"] += sum(len(v) for v in deletes.values())
+            pend_rows.clear(); pend_scans.clear(); pend_read.clear(); return
         _post("rph_event_attendance", pend_rows, "event_id,best_identifier")
+        for eid, idents in deletes.items():
+            for i in range(0, len(idents), DELETE_CHUNK):
+                chunk = ",".join(_pg_quote(v) for v in idents[i:i + DELETE_CHUNK])
+                _delete(f"rph_event_attendance?event_id=eq.{eid}"
+                        f"&best_identifier={quote('in.(' + chunk + ')', safe='')}")
+            stats["deleted"] += len(idents)
         _post("rph_event_attendance_scans", pend_scans, "event_id")
-        pend_rows.clear(); pend_scans.clear()
+        pend_rows.clear(); pend_scans.clear(); pend_read.clear()
 
     for n, ev in enumerate(events, 1):
         eid = ev["event_id"]
-        rows = scrape_one(eid)
+        why: dict = {}
+        rows = scrape_one(eid, why)
         if rows is None:
             # No scan row: the event stays "not yet scraped", so it shows up in
             # the Gap column and a later run retries it, instead of being
-            # silently booked as an event nobody came to.
-            unreadable.append(eid)
+            # silently booked as an event nobody came to. Nothing is deleted.
+            unreadable.append((eid, why.get("reason", "error")))
             continue
+        pend_read[eid] = {r["best_identifier"] for r in rows}
         n_played = sum(1 for r in rows if played(r))
         total_rows += len(rows); total_played += n_played
         pend_rows.extend(rows)
@@ -302,13 +423,33 @@ def main() -> None:
     print()
     print(f"\n  {total_rows} registrations, {total_played} of them played "
           f"({total_rows - total_played} registered without playing)")
+    if stats["deleted"]:
+        verb = "would delete" if args.dry_run else "deleted"
+        print(f"  {verb} {stats['deleted']} stale registration row(s) a complete re-read no longer has")
+    if held_back:
+        msg = (f"{len(held_back)} event(s) whose re-read would drop most of the held roster; "
+               f"nothing deleted: {', '.join(str(e) for e in held_back[:20])}")
+        print(f"  {msg}\n::warning title=attendance re-read held back::{msg}")
+    if untrusted:
+        msg = (f"{len(untrusted)} event(s) read back EMPTY although we hold rows for them; "
+               f"rows and scan kept: {', '.join(str(e) for e in untrusted[:20])}")
+        print(f"  {msg}\n::warning title=attendance empty re-read::{msg}")
+    errored = [e for e, why in unreadable if why != "gone"]
+    gone = [e for e, why in unreadable if why == "gone"]
     if unreadable:
-        print(f"  {len(unreadable)} event(s) could NOT be read and were left unscanned "
-              f"(they stay in the Gap column for a later run): "
-              f"{', '.join(str(e) for e in unreadable[:20])}"
-              + (" ..." if len(unreadable) > 20 else ""))
+        msg = (f"{len(unreadable)} event(s) could NOT be read and were left unscanned "
+               f"({len(errored)} network/server errors, {len(gone)} withdrawn or private): "
+               f"{', '.join(str(e) for e, _ in unreadable[:20])}"
+               + (" ..." if len(unreadable) > 20 else ""))
+        print(f"  {msg} - they stay in the Gap column for a later run")
+        print(f"::warning title=attendance unreadable::{msg}")
     if args.dry_run:
         print("  --dry-run: nothing written")
+    if len(errored) >= FAIL_ERROR_MIN and len(errored) >= FAIL_ERROR_SHARE * len(events):
+        msg = (f"{len(errored)} of {len(events)} roster reads failed on network/server errors "
+               f"(>= {FAIL_ERROR_SHARE:.0%}); everything readable was written")
+        print(f"::error title=attendance scrape::{msg}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
