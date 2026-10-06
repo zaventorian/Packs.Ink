@@ -9,11 +9,18 @@ the same day overwrites that day's prices rather than duplicating.
 Usage:
     python etl_tcgcsv_daily.py [--date YYYY-MM-DD]
 
-Default date is "today" in UTC. Use --date to ingest a specific day.
+The snapshot is filed under the UTC day TCGCSV PUBLISHED it (its own
+last-updated.txt stamp), not the UTC day the run happens on. The retries after
+midnight UTC (01:00 cron-job.org, the GitHub fallback cron that lands as late as
+~07:30) are on the next calendar day while TCGCSV still serves the previous
+evening's file. When the stamp can't be read, the newest 20:15 UTC cutoff that has
+passed stands in for it. --date files under an explicit day instead (and never
+re-fetches a day that already has rows).
 """
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -38,6 +45,82 @@ USER_AGENT = "PacksInk/1.0 (+https://packs.ink) python-requests"
 # yesterday's file, so the row it writes under today's date holds the
 # PREVIOUS evening's snapshot.
 PUBLISH_CUTOFF_UTC = (20, 15)
+
+# TCGCSV's own stamp of its newest publish ("2026-10-05T20:05:57+0000"). It says
+# which day the file being served belongs to, which the UTC clock cannot.
+LAST_UPDATED_URL = "https://tcgcsv.com/last-updated.txt"
+
+
+def parse_publish_stamp(text: str | None) -> datetime | None:
+    """TCGCSV's last-updated stamp as an aware UTC datetime, or None."""
+    s = (text or "").strip()
+    if not s:
+        return None
+    s = re.sub(r"([+-]\d\d)(\d\d)$", r"\1:\2", s)   # "+0000" -> "+00:00"
+    try:
+        ts = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
+
+
+def fetch_publish_time() -> datetime | None:
+    """When TCGCSV published the file it is serving now, or None if unknown.
+    One tiny request; a failure here only costs the fallback date rule."""
+    try:
+        r = requests.get(LAST_UPDATED_URL, headers={"User-Agent": USER_AGENT}, timeout=30)
+        r.raise_for_status()
+        ts = parse_publish_stamp(r.text)
+    except requests.RequestException as e:
+        print(f"  WARN: couldn't read {LAST_UPDATED_URL} ({e}); dating by the "
+              f"{PUBLISH_CUTOFF_UTC[0]:02d}:{PUBLISH_CUTOFF_UTC[1]:02d} UTC cutoff")
+        return None
+    if ts is None:
+        print(f"  WARN: unreadable stamp from {LAST_UPDATED_URL}: {r.text[:80]!r}")
+    return ts
+
+
+def publish_cutoff(day: date) -> datetime:
+    return datetime(day.year, day.month, day.day,
+                    PUBLISH_CUTOFF_UTC[0], PUBLISH_CUTOFF_UTC[1], tzinfo=timezone.utc)
+
+
+def snapshot_for(now: datetime, published_at: datetime | None) -> date:
+    """The day the file TCGCSV is serving right now belongs to.
+
+    With TCGCSV's stamp, that is the UTC day it was published - so the 01:00 UTC
+    retry and a GitHub cron landing hours late still file the previous evening's
+    publish under the previous evening, and a late publish is filed under its own
+    day instead of on top of the next one. Without the stamp (or with one from the
+    future, which no real publish is), the newest 20:15 UTC cutoff that has passed
+    stands in for it."""
+    if published_at is not None and published_at <= now + timedelta(hours=1):
+        return published_at.astimezone(timezone.utc).date()
+    shifted = now - timedelta(hours=PUBLISH_CUTOFF_UTC[0], minutes=PUBLISH_CUTOFF_UTC[1])
+    return shifted.astimezone(timezone.utc).date()
+
+
+def publish_window_start(snapshot: date, published_at: datetime | None) -> datetime:
+    """Rows for `snapshot` written before this moment predate the newest file
+    for that day: TCGCSV's own stamp when it is that day's, else the cutoff."""
+    if published_at is not None and published_at.astimezone(timezone.utc).date() == snapshot:
+        return published_at
+    return publish_cutoff(snapshot)
+
+
+def needs_refetch(snapshot: date, auto_snapshot: date, written: datetime | None,
+                  published_at: datetime | None) -> bool:
+    """Rows already exist for `snapshot`; should this run fetch again anyway?
+
+    Only for the day TCGCSV is serving (an explicit --date backfill must never
+    re-fetch: TCGCSV serves only its newest file, so it would overwrite that
+    day's history with another day's numbers), and only when the stored rows
+    were written before that file was published."""
+    if snapshot != auto_snapshot:
+        return False
+    return written is None or written < publish_window_start(snapshot, published_at)
 
 
 def _parse_ts(val: str | None) -> datetime | None:
@@ -204,16 +287,23 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    snapshot = (
-        date.fromisoformat(args.date)
-        if args.date
-        else datetime.now(timezone.utc).date()
-    )
+    now = datetime.now(timezone.utc)
+    published_at = fetch_publish_time()
+    auto_snapshot = snapshot_for(now, published_at)
+    snapshot = date.fromisoformat(args.date) if args.date else auto_snapshot
 
     load_dotenv()
     sb = Supabase()
 
-    print(f"Snapshot date: {snapshot}")
+    if published_at is not None:
+        print(f"Snapshot date: {snapshot} (TCGCSV's newest file was published "
+              f"{published_at:%Y-%m-%d %H:%M} UTC)")
+    else:
+        print(f"Snapshot date: {snapshot} (publish time unknown; dated by the "
+              f"{PUBLISH_CUTOFF_UTC[0]:02d}:{PUBLISH_CUTOFF_UTC[1]:02d} UTC cutoff)")
+    if snapshot != auto_snapshot:
+        print(f"  NOTE: --date {snapshot} differs from the day TCGCSV is serving "
+              f"({auto_snapshot}); a fetch would file THAT file under {snapshot}.")
 
     # Idempotency check: skip the fetch when this date's rows are already the
     # best data available, so the several cron retries per day don't re-fetch
@@ -228,19 +318,16 @@ def main() -> None:
     # UTC run became a no-op — so the freshest publish was discarded daily and
     # the whole series ran a day behind.
     #
-    # So skip only if the stored rows were written AFTER today's publish
-    # window. Earlier ones get re-fetched and overwritten once it opens. If
-    # that re-fetch is byte-identical to the prior day (TCGCSV published
-    # late), the duplicate-snapshot guard below returns without writing,
-    # leaving inserted_at pre-cutoff so the next cron firing tries again.
-    publish_cutoff = datetime(
-        snapshot.year,
-        snapshot.month,
-        snapshot.day,
-        PUBLISH_CUTOFF_UTC[0],
-        PUBLISH_CUTOFF_UTC[1],
-        tzinfo=timezone.utc,
-    )
+    # So skip only if the stored rows were written AFTER that day's publish
+    # (TCGCSV's own stamp, else the 20:15 cutoff). Earlier ones get re-fetched
+    # and overwritten. If that re-fetch is byte-identical to the prior day,
+    # the duplicate-snapshot guard below returns without writing, leaving
+    # inserted_at pre-publish so the next cron firing tries again.
+    #
+    # The DATE is the other half (see snapshot_for): runs after midnight UTC
+    # used to file the previous evening's file under the new day, leaving the
+    # real day a hole - and a late publish could claim the next day with a
+    # post-cutoff stamp, locking that day's real file out.
     if not args.force:
         try:
             existing = sb.select(
@@ -256,24 +343,16 @@ def main() -> None:
             )
             if existing:
                 written = _parse_ts(existing[0].get("inserted_at"))
-                now = datetime.now(timezone.utc)
-                # Only ever re-fetch the CURRENT UTC date. TCGCSV serves only
-                # today's prices, so re-fetching an explicit --date backfill
-                # would overwrite that day's history with today's numbers.
-                stale_claim = (
-                    snapshot == now.date()
-                    and now >= publish_cutoff
-                    and (written is None or written < publish_cutoff)
-                )
-                if stale_claim:
+                if needs_refetch(snapshot, auto_snapshot, written, published_at):
                     seen = f"{written:%Y-%m-%d %H:%M}" if written else "unknown time"
+                    start = publish_window_start(snapshot, published_at)
                     print(
                         f"Snapshot {snapshot} exists but was written {seen} UTC, "
-                        f"before the {publish_cutoff:%H:%M} UTC publish window "
-                        "— re-fetching to pick up today's file."
+                        f"before its {start:%Y-%m-%d %H:%M} UTC publish "
+                        "— re-fetching to pick up that file."
                     )
                 else:
-                    print(f"Today's snapshot ({snapshot}) is already loaded. Skipping fetch.")
+                    print(f"Snapshot {snapshot} is already loaded. Skipping fetch.")
                     _refresh_matviews(sb)
                     return
         except Exception as e:

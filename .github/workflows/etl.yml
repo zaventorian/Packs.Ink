@@ -14,9 +14,10 @@ permissions:
 #   - The cron entries below are a safety net: if cron-job.org has an outage,
 #     these still fire (just less promptly). One late ETL + one late selfheal
 #     per day is enough to keep the site self-healing.
-#   - The script is idempotent: if today's prices_daily is already written,
-#     it skips the fetch and only refreshes matviews. So cron-job.org and
-#     GH cron firing the same job back-to-back is harmless.
+#   - The script is idempotent: if TCGCSV's newest file is already written
+#     (under the day TCGCSV published it), it skips the fetch and only
+#     refreshes matviews. So cron-job.org and GH cron firing the same job
+#     back-to-back is harmless, and so is a retry after midnight UTC.
 #   - "TCGCSV hasn't published yet" exits 0 (not failure), so we don't email
 #     on every miss before 20:00 UTC.
 #   - CONCURRENT runs are NOT harmless: two runs refreshing matviews at once
@@ -33,11 +34,14 @@ concurrency:
 
 on:
   schedule:
-    # Safety-net ETL fallback (cron-job.org is primary). 01:30 UTC = 8:30 PM CDT
-    # — late enough in the day that if cron-job.org missed every earlier slot,
-    # this still catches today's TCGCSV snapshot before midnight UTC. Offset 30
-    # min off cron-job.org's 01:00 ping so the two don't queue behind each other
-    # daily when GH cron happens to be on time.
+    # Safety-net ETL fallback (cron-job.org is primary). 01:30 UTC = 8:30 PM CDT,
+    # ~5h after TCGCSV's ~20:00 UTC publish — but already the NEXT UTC calendar
+    # day (and GitHub has landed this cron as late as ~07:30 UTC). That is fine
+    # only because etl_tcgcsv_daily.py dates a snapshot by TCGCSV's own publish
+    # stamp (last-updated.txt), not by the clock: this run files the previous
+    # evening's file under the previous evening. Offset 30 min off cron-job.org's
+    # 01:00 ping so the two don't queue behind each other daily when GH cron
+    # happens to be on time.
     - cron: "30 1 * * *"
     # Safety-net matview selfheal fallback. 06:30 UTC = 1:30 AM CDT — likewise
     # offset from cron-job.org's 06:00 selfheal ping.
