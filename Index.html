@@ -26481,7 +26481,7 @@ function buildCollectionCsv(collection, raw){
 // chart on the Home panel — fetches prices_daily for every owned sealed
 // product, rolls up via the shared computeCollectionValueHistory helper,
 // then renders the same line-chart shape used by Graded.
-const SealedValueChart = ({sealedCollection, sealedPrices, rangeKey, setRangeKey}) => {
+const SealedValueChart = ({sealedCollection, sealedMeta, sealedPrices, rangeKey, setRangeKey}) => {
   const [historyRows, setHistoryRows] = useState(null);
   const [state, setState] = useState({loading: false, error: null});
 
@@ -26515,7 +26515,17 @@ const SealedValueChart = ({sealedCollection, sealedPrices, rangeKey, setRangeKey
     return () => { cancelled = true; };
   }, [ownedKey, rangeKey]);
 
-  const valueSeries = useMemo(() => historyRows ? computeCollectionValueHistory(historyRows, owned, null) : null, [historyRows, owned]);
+  // Each item counts from the day it was acquired, exactly as the home panel's
+  // sealed line does. Without it the two charts drew different histories and
+  // different range changes for the same dated items (review, 2026-10-06).
+  const acquired = useMemo(() => {
+    const m = new Map();
+    for(const [pid, meta] of Object.entries(sealedMeta || {})){
+      if(meta && meta.acquired_date) m.set(sealedPricePid(pid) + "|Normal", meta.acquired_date);
+    }
+    return m;
+  }, [sealedMeta]);
+  const valueSeries = useMemo(() => historyRows ? computeCollectionValueHistory(historyRows, owned, null, acquired) : null, [historyRows, owned, acquired]);
   const chartSeries = useMemo(() => {
     if(!valueSeries || !valueSeries.length) return [];
     return [{
@@ -27712,7 +27722,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
     </div>
 
     ${onOpenPins && html`<p class="sealed-coll-pins-note">${_t("Pins and lore counters have their own tab now:")}${" "}<a href=${pinsHref || collectionSectionHref("pins", null)} onClick=${navHandler(onOpenPins)}>${_t("Pins & Counters")} →</a></p>`}
-    ${!readOnly && html`<${SealedValueChart} sealedCollection=${sealedCollection} sealedPrices=${sealedPrices}
+    ${!readOnly && html`<${SealedValueChart} sealedCollection=${sealedCollection} sealedMeta=${sealedMeta} sealedPrices=${sealedPrices}
       rangeKey=${chartRange} setRangeKey=${setChartRange}/>`}
 
     <div class="graded-collection-body">
