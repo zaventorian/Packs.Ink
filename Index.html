@@ -6281,8 +6281,8 @@ function addUnsoldSlabsToSeries(series, sales, slots, valueOf, fallbackDates, kn
   });
 }
 // Range start / today, as the flat-line anchor for the no-sales-in-window case.
-const portfolioFallbackDates = (days) => [
-  localYmdDaysAgo(days),
+const portfolioFallbackDates = (since) => [
+  since,
   localYmd(),
 ];
 
@@ -6417,7 +6417,8 @@ async function fetchCollectionPriceHistory(productIds, sinceDate, opts){
     source: "eq.tcgcsv",
     grade: "eq.raw",
     tcgplayer_product_id: "in.(" + b.join(",") + ")",
-    date: "gte." + sinceDate,
+    // `dates` (collectionRangeDates) samples a long range instead of every day.
+    date: (opts && opts.dates) ? "in.(" + opts.dates.join(",") + ")" : "gte." + sinceDate,
     order: "tcgplayer_product_id.asc,printing.asc,date.asc",
   });
   try {
@@ -6465,9 +6466,9 @@ async function fetchCollectionPriceSeeds(keys, sinceDate){
   return out.flat().map(r => ({...r, date: sinceDate}));
 }
 
-async function fetchSealedValueHistory(pids, sinceDate, matPids){
+async function fetchSealedValueHistory(pids, sinceDate, matPids, dates){
   const [rows, seeds] = await Promise.all([
-    fetchCollectionPriceHistory(pids, sinceDate),
+    fetchCollectionPriceHistory(pids, sinceDate, dates ? {dates} : undefined),
     fetchCollectionPriceSeeds([...new Set(pids.map(Number))].map(pid => ({pid, printing: "Normal"})), sinceDate),
   ]);
   // Seeds go FIRST: the rollup groups rows per product in array order and walks
@@ -26518,13 +26519,12 @@ const SealedValueChart = ({sealedCollection, sealedMeta, sealedPrices, rangeKey,
 
   useEffect(() => {
     if(!owned.size){ setHistoryRows([]); return; }
-    const days = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
-    const since = localYmdDaysAgo(days);
+    const since = collectionRangeSince(rangeKey);
     const pids = Array.from(new Set(Array.from(owned.keys()).map(k => parseInt(k.split("|")[0],10))));
     const matPids = Object.keys(sealedCollection || {}).filter(isPlaymatPid).map(sealedPricePid);
     let cancelled = false;
     setState({loading: true, error: null});
-    fetchSealedValueHistory(pids, since, matPids)
+    fetchSealedValueHistory(pids, since, matPids, collectionRangeDates(rangeKey, since))
       .then(rows => { if(!cancelled){ setHistoryRows(rows); setState({loading:false, error:null}); } })
       .catch(e => { if(!cancelled) setState({loading:false, error: String(e?.message || e)}); });
     return () => { cancelled = true; };
@@ -26556,7 +26556,6 @@ const SealedValueChart = ({sealedCollection, sealedMeta, sealedPrices, rangeKey,
   const rangeDelta   = (startValue != null && startValue > 0) ? (currentValue - startValue) : null;
   const rangeDeltaPct= (startValue != null && startValue > 0) ? ((currentValue - startValue) / startValue * 100) : null;
   const deltaColor   = rangeDelta == null ? "var(--text-muted)" : rangeDelta >= 0 ? "var(--green)" : "var(--red)";
-  const rangeLabel   = (COLLECTION_RANGES.find(r => r.key === rangeKey) || {}).label || rangeKey;
 
   // When you don't own any sealed items the chart has nothing to draw —
   // render a thin placeholder strip so the panel is still discoverable.
@@ -26576,7 +26575,7 @@ const SealedValueChart = ({sealedCollection, sealedMeta, sealedPrices, rangeKey,
         ${rangeDelta != null && html`<span class="gvc-delta" style=${{color:deltaColor}}>
           ${rangeDelta >= 0 ? "+" : "−"}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})}
           <span style=${{opacity:0.8}}>(${rangeDeltaPct >= 0 ? "+" : ""}${rangeDeltaPct.toFixed(1)}%)</span>
-          <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>${_t("past {range}", {range: rangeLabel})}</span>
+          <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>${collectionRangePhrase(rangeKey)}</span>
         </span>`}
       </div>
       <div class="panel-range-buttons">
@@ -29270,10 +29269,10 @@ const GradedValueChart = ({items, cardById, priceByKey, knownBuckets, splitTiers
 
   const slotsKey = useMemo(() => slots.map(s => `${s.pid}|${s.printing}|${s.grader}|${s.grade}|${s.qty}`).sort().join(","), [slots]);
 
-  const rangeDays = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
+  const rangeSince = collectionRangeSince(rangeKey, GRADED_SALES_EARLIEST_DATE);
   useEffect(() => {
     if(!slots.length){ setHistoryRows([]); return; }
-    const since = localYmdDaysAgo(rangeDays);
+    const since = rangeSince;
     let cancelled = false;
     setState({loading: true, error: null});
     fetchGradedSalesFor(slots, since)
@@ -29290,7 +29289,7 @@ const GradedValueChart = ({items, cardById, priceByKey, knownBuckets, splitTiers
     return (valueBasis) => (s) =>
       gradedRowValue(priceByKey.get(`${s.pid}|${s.printing}|${s.grader}|${s.grade}`), valueBasis);
   }, [priceByKey]);
-  const fallbackDates = useMemo(() => portfolioFallbackDates(rangeDays), [rangeDays]);
+  const fallbackDates = useMemo(() => portfolioFallbackDates(rangeSince), [rangeSince]);
 
   const lastSeries = useMemo(() => historyRows
     ? addUnsoldSlabsToSeries(computeSalesValueHistory(historyRows, slots, knownBuckets),
@@ -29315,7 +29314,6 @@ const GradedValueChart = ({items, cardById, priceByKey, knownBuckets, splitTiers
   const rangeDelta   = (startValue != null && startValue > 0) ? (currentValue - startValue) : null;
   const rangeDeltaPct= (startValue != null && startValue > 0) ? ((currentValue - startValue) / startValue * 100) : null;
   const deltaColor   = rangeDelta == null ? "var(--text-muted)" : rangeDelta >= 0 ? "var(--green)" : "var(--red)";
-  const rangeLabel   = (COLLECTION_RANGES.find(r => r.key === rangeKey) || {}).label || rangeKey;
 
   if(!slots.length) return null;
   return html`<div class="graded-value-chart">
@@ -29326,7 +29324,7 @@ const GradedValueChart = ({items, cardById, priceByKey, knownBuckets, splitTiers
         ${rangeDelta != null && html`<span class="gvc-delta" style=${{color:deltaColor}}>
           ${rangeDelta >= 0 ? "+" : "−"}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})}
           <span style=${{opacity:0.8}}>(${rangeDeltaPct >= 0 ? "+" : ""}${rangeDeltaPct.toFixed(1)}%)</span>
-          <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>${_t("past {range}", {range: rangeLabel})}</span>
+          <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>${collectionRangePhrase(rangeKey)}</span>
         </span>`}
       </div>
       <div class="panel-range-buttons">
@@ -46300,17 +46298,44 @@ const MoversBanner =({title, subtitle, controls, cards, onTileClick, activeWindo
   </section>`;
 };
 
-// Range options for the collection-value chart. Each maps to "days back".
-// `all` falls through to fetching the full year (the ETL archive starts
-// 2024-02-08, but we cap fetch at 365 days for cost — anything beyond gets
-// summarized via the existing 1Y mover delta instead).
+// Range options for the collection-value charts. Each maps to "days back";
+// `all` (days null) reaches back to the first price on file, 2024-02-08 (graded:
+// the first recorded sale). It used to stop at 365 days, the same as 1Y.
+//   `sampleDays`: fetch one day in N instead of every day. The full history
+// daily is 3.35M price rows for the largest collection (2,909 products,
+// 2026-10-06) — 1Y alone is 1.8M — while weekly is 475k. The last
+// COLLECTION_DAILY_TAIL days stay daily so the chart's end is today's value,
+// and forward-fill carries each item between samples.
 const COLLECTION_RANGES = [
   {key:"1m",  label:"1M",  days:30},
   {key:"3m",  label:"3M",  days:90},
   {key:"6m",  label:"6M",  days:180},
   {key:"1y",  label:"1Y",  days:365},
-  {key:"all", label:"All", days:365},
+  {key:"all", label:"All", days:null, sampleDays:7},
 ];
+const COLLECTION_DAILY_TAIL = 14;
+const GRADED_SALES_EARLIEST_DATE = "2023-06-19";
+const collectionRange = (key) => COLLECTION_RANGES.find(r => r.key === key) || COLLECTION_RANGES[1];
+const collectionRangeSince = (key, earliest = EARLIEST_DATA_DATE) => {
+  const r = collectionRange(key);
+  return r.days ? localYmdDaysAgo(r.days) : earliest;
+};
+// The days a range fetches prices for, ascending, or null for every day.
+const collectionRangeDates = (key, since) => {
+  const r = collectionRange(key);
+  if(!r.sampleDays) return null;
+  const out = [];
+  for(let n = 0; ; n += (n < COLLECTION_DAILY_TAIL ? 1 : r.sampleDays)){
+    const d = localYmdDaysAgo(n);
+    if(d <= since) break;
+    out.push(d);
+  }
+  out.push(since);
+  return out.reverse();
+};
+// "past 1M", but "all time" rather than "past All".
+const collectionRangePhrase = (key) => key === "all"
+  ? _t("all time") : _t("past {range}", {range: collectionRange(key).label});
 
 // Eye / eye-off glyphs (Lucide-style line icons) used by the collection
 // panel's "hide my value" privacy toggle.
@@ -46738,8 +46763,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     if(!user || owned.map.size === 0){ setHistoryState({loading:false, error:null}); return; }
     if(historyRows) return; // already fetched this range this session
     const productIds = Array.from(new Set(Array.from(owned.map.keys()).map(k => parseInt(k.split("|")[0],10))));
-    const days = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
-    const since = localYmdDaysAgo(days);
+    const since = collectionRangeSince(rangeKey);
     let cancelled = false;
     setHistoryState({loading:true, error:null});
     // Seeds first (see fetchCollectionPriceSeeds): the rollup walks each key's
@@ -46748,7 +46772,8 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
       const bar = k.indexOf("|");
       return {pid: parseInt(k.slice(0, bar), 10), printing: k.slice(bar + 1)};
     });
-    Promise.all([fetchCollectionPriceSeeds(seedKeys, since), fetchCollectionPriceHistory(productIds, since)])
+    const dates = collectionRangeDates(rangeKey, since);
+    Promise.all([fetchCollectionPriceSeeds(seedKeys, since), fetchCollectionPriceHistory(productIds, since, dates ? {dates} : undefined)])
       .then(([seeds, hist]) => [...(seeds || []), ...hist])
       .then(rows => {
         if(cancelled) return;
@@ -46840,12 +46865,11 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   const sealedOwnedKey = useMemo(() => Array.from(sealedOwned.keys()).sort().join(","), [sealedOwned]);
   useEffect(() => {
     if(!showSealed || !sealedOwned.size){ setSealedHistoryRows(null); return; }
-    const days = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
-    const since = localYmdDaysAgo(days);
+    const since = collectionRangeSince(rangeKey);
     const pids = Array.from(new Set(Array.from(sealedOwned.keys()).map(k => parseInt(k.split("|")[0],10))));
     const matPids = Object.keys(sealedCollection || {}).filter(isPlaymatPid).map(sealedPricePid);
     let cancelled = false;
-    fetchSealedValueHistory(pids, since, matPids)
+    fetchSealedValueHistory(pids, since, matPids, collectionRangeDates(rangeKey, since))
       .then(rows => { if(!cancelled) setSealedHistoryRows(rows); })
       .catch(() => { if(!cancelled) setSealedHistoryRows([]); });
     return () => { cancelled = true; };
@@ -46908,10 +46932,10 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   const gradedSlotsKey = useMemo(() => gradedSlots.map(s => `${s.pid}|${s.printing}|${s.grader}|${s.grade}|${s.qty}`).sort().join(","), [gradedSlots]);
   // Pull the user's individual graded SALES — drives the graded value line.
   const [gradedSalesRows, setGradedSalesRows] = useState(null);
-  const gradedRangeDays = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
+  const gradedRangeSince = collectionRangeSince(rangeKey, GRADED_SALES_EARLIEST_DATE);
   useEffect(() => {
     if(!(gradedPremium && showGraded && gradedSlots.length)){ setGradedSalesRows(null); return; }
-    const since = localYmdDaysAgo(gradedRangeDays);
+    const since = gradedRangeSince;
     let cancelled = false;
     fetchGradedSalesFor(gradedSlots, since)
       .then(rows => { if(!cancelled) setGradedSalesRows(rows); })
@@ -46941,8 +46965,8 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     return addUnsoldSlabsToSeries(
       computeSalesValueHistory(gradedSalesRows, gradedSlots, gradedKnownBucketsMap),
       gradedSalesRows, gradedSlots, gradedRollupValue,
-      portfolioFallbackDates(gradedRangeDays), gradedKnownBucketsMap);
-  }, [gradedSalesRows, gradedSlots, gradedRollupValue, gradedRangeDays, gradedKnownBucketsMap]);
+      portfolioFallbackDates(gradedRangeSince), gradedKnownBucketsMap);
+  }, [gradedSalesRows, gradedSlots, gradedRollupValue, gradedRangeSince, gradedKnownBucketsMap]);
   const gradedLatestValue = useMemo(() => (gradedValueSeries && gradedValueSeries.length) ? gradedValueSeries[gradedValueSeries.length-1].value : 0, [gradedValueSeries]);
 
   // Multi-series chart. Each {date,value} series → one line. Toggled-off
@@ -47057,7 +47081,6 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   </aside>`;
 
   const deltaColor = rangeDelta == null ? "var(--text-muted)" : rangeDelta >= 0 ? "var(--green)" : "var(--red)";
-  const rangeLabel = (COLLECTION_RANGES.find(r => r.key === rangeKey) || {}).label || rangeKey;
 
   return html`<aside class=${"collection-panel"+(minimized?" is-min":"")}>
     <div class="panel-header">
@@ -47073,7 +47096,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
       ${!hideValue && rangeDelta != null && html`<div class="panel-value-delta" style=${{color:deltaColor}}>
         ${rangeDelta >= 0 ? "+" : "−"}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
         <span style=${{opacity:0.8}}>(${rangeDeltaPct >= 0 ? "+" : ""}${rangeDeltaPct.toFixed(2)}%)</span>
-        <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>${_t("past {range}", {range: rangeLabel})}</span>
+        <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>${collectionRangePhrase(rangeKey)}</span>
       </div>`}
     </div>
     ${!minimized && html`<div>

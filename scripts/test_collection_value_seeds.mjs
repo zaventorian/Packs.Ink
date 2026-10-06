@@ -57,7 +57,7 @@ check("a seed dated before the set's release + 1 day is dropped",
 
 console.log("\n== wiring ==");
 check("the home cards chart fetches seeds with the history and puts them FIRST",
-  /Promise\.all\(\[fetchCollectionPriceSeeds\(seedKeys, since\), fetchCollectionPriceHistory\(productIds, since\)\]\)\s*\n\s*\.then\(\(\[seeds, hist\]\) => \[\.\.\.\(seeds \|\| \[\]\), \.\.\.hist\]\)/.test(src), true);
+  /Promise\.all\(\[fetchCollectionPriceSeeds\(seedKeys, since\), fetchCollectionPriceHistory\(productIds, since, dates \? \{dates\} : undefined\)\]\)\s*\n\s*\.then\(\(\[seeds, hist\]\) => \[\.\.\.\(seeds \|\| \[\]\), \.\.\.hist\]\)/.test(src), true);
 const sealed = grab("async function fetchSealedValueHistory(", "\n}");
 check("both sealed charts seed every sealed item (fetchSealedValueHistory)",
   /fetchCollectionPriceSeeds\(\[\.\.\.new Set\(pids\.map\(Number\)\)\]\.map\(pid => \(\{pid, printing: "Normal"\}\)\), sinceDate\)/.test(sealed)
@@ -70,6 +70,34 @@ const panel = grab("const CollectionPanel = ", "const deltaColor =");
 check("the pill is the chart's own change (last point minus first)",
   /const rangeDelta = \(combinedStartValue != null && combinedStartValue > 0\) \? \(combinedEndValue - combinedStartValue\)/.test(panel), true);
 check("...never the headline minus the chart", /combinedCurrentValue - combinedStartValue/.test(panel), false);
+
+// "All" used to be 365 days, the same as 1Y (Zaven, 2026-10-06: extend it). It
+// reaches back to the first price on file, sampled weekly (the full history
+// daily is 3.35M rows for the largest collection), with the last two weeks daily.
+console.log("\n== the All range ==");
+const { localYmd, localYmdDaysAgo } = new Function(
+  grab("const localYmd = (d = new Date()) =>", "const setDataPartial").replace(/const setDataPartial$/, "") +
+  "\nreturn {localYmd, localYmdDaysAgo};")();
+const rangeSrc = grab("const COLLECTION_RANGES = [", "const collectionRangePhrase = ");
+const R = new Function("localYmd", "localYmdDaysAgo", "EARLIEST_DATA_DATE",
+  rangeSrc.replace(/const collectionRangePhrase = $/, "") +
+  "\nreturn {COLLECTION_RANGES, collectionRangeSince, collectionRangeDates, GRADED_SALES_EARLIEST_DATE};")(
+  localYmd, localYmdDaysAgo, "2024-02-08");
+check("All reaches back to the first price on file", R.collectionRangeSince("all"), "2024-02-08");
+check("...and graded All to the first recorded sale", R.collectionRangeSince("all", R.GRADED_SALES_EARLIEST_DATE), "2023-06-19");
+check("1Y is still 365 days", R.collectionRangeSince("1y"), localYmdDaysAgo(365));
+check("a daily range fetches every day (no date list)", R.collectionRangeDates("1y", localYmdDaysAgo(365)), null);
+const d = R.collectionRangeDates("all", "2024-02-08");
+check("the All dates start at the range start", d[0], "2024-02-08");
+check("...end today", d[d.length - 1], localYmd());
+check("...ascend with no repeats", d.every((x, i) => i === 0 || x > d[i - 1]), true);
+check("...are daily for the last two weeks", d.slice(-14), Array.from({length: 14}, (_, i) => localYmdDaysAgo(13 - i)));
+const gap = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 864e5);
+check("...weekly before that", d.slice(1, -14).every((x, i, a) => i === 0 || gap(a[i - 1], x) === 7), true);
+check("...about 150 dates for the whole history (a URL-sized list)", d.length > 120 && d.length < 200, true);
+check("the price fetch filters on the list when given one",
+  /date: \(opts && opts\.dates\) \? "in\.\(" \+ opts\.dates\.join\(","\) \+ "\)" : "gte\." \+ sinceDate/.test(src), true);
+check("no range still reads a fixed 365 for All", /\{key:"all", label:"All", days:365\}/.test(src), false);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);
