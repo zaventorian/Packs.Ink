@@ -13,7 +13,7 @@ class FakeSB:
             {"deck_id": "d2", "card_id": r.deck_enc("crd_other"), "printing": "Normal", "quantity": 4},
         ]
         s.ver = [{"deck_id": "d2", "version": 1, "cards": [{"card_id": r.deck_enc("crd_prestage_x_1"), "quantity": 4}]}]
-    def select(s, t, columns=None, filters=None): return s.deck if t == "deck_cards" else s.ver
+    def select(s, t, columns=None, filters=None, order=None, **kw): return s.deck if t == "deck_cards" else s.ver
     def update(s, t, match, patch):
         rows = s.deck if t == "deck_cards" else s.ver
         for x in rows:

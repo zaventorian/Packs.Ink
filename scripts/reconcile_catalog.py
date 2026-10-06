@@ -239,7 +239,7 @@ def latest_prices(sb: Supabase, pids: set[int], days: int) -> dict[int, dict]:
                 "tcgplayer_product_id": f"in.({','.join(str(p) for p in chunk)})",
                 "date": f"gte.{cutoff}",
             },
-            order="tcgplayer_product_id.asc,date.asc",
+            order="tcgplayer_product_id.asc,date.asc,printing.asc",
         )
         for r in rows:
             pid = r["tcgplayer_product_id"]
@@ -665,7 +665,7 @@ def collect_findings(sb: Supabase, ack: dict | None = None, today: str | None = 
     cards_by_name: dict[str, list[dict]] = {}
     for r in sb.select("cards",
                        columns="name,version,collector_number,set_id,tcgplayer_product_id",
-                       order="set_id.asc"):
+                       order="set_id.asc,id.asc"):
         disp = (r.get("name") or "") + (f" - {r['version']}" if r.get("version") else "")
         cards_by_name.setdefault(norm_name(disp), []).append(r)
     bound_groups = {r["tcgplayer_group_id"] for r in sets_rows
@@ -725,7 +725,7 @@ def collect_findings(sb: Supabase, ack: dict | None = None, today: str | None = 
     # 5. card_prices_latest is an INNER JOIN on the pid, so a null one means the
     #    card can never show a price no matter how well TCGplayer lists it.
     for r in sb.select("cards", columns="name,version,collector_number,set_id,tcgplayer_product_id",
-                       filters={"tcgplayer_product_id": "is.null"}, order="set_id.asc"):
+                       filters={"tcgplayer_product_id": "is.null"}, order="set_id.asc,id.asc"):
         sname = set_name.get(r.get("set_id"), r.get("set_id") or "?")
         if sname in CARD_NO_PID_SKIP_SETS:
             continue
@@ -1148,7 +1148,7 @@ def _probe_pids(sb: Supabase, pids: list[int], days: int) -> int:
         for r in sb.select("cards",
                            columns="id,name,version,collector_number,set_id,tcgplayer_product_id",
                            filters={"tcgplayer_product_id": in_list},
-                           order="tcgplayer_product_id.asc")
+                           order="tcgplayer_product_id.asc,id.asc")
     }
     by_sealed = {
         r["tcgplayer_product_id"]: r

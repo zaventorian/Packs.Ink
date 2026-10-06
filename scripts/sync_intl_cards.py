@@ -255,7 +255,8 @@ def main() -> int:
 
     existing: dict[tuple[str, str], dict] = {}
     try:
-        for r in sb.select("card_localizations", columns="card_id,lang,image_url,match_how,source"):
+        for r in sb.select("card_localizations", columns="card_id,lang,image_url,match_how,source",
+                           order="card_id.asc,lang.asc"):
             existing[(r["card_id"], r["lang"])] = r
     except Exception as e:  # pre-179 database
         print(f"  card_localizations unreadable ({e}); treating as empty")
