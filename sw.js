@@ -75,6 +75,13 @@ self.addEventListener('activate', (event) => {
 // 404, which the next online revalidation overwrites.
 const cacheable = (res) => res && (res.ok || res.type === 'opaque');
 
+// Standalone documents served at a dot-free path. A navigation to one must
+// never replace the offline app shell (/Index.html): /picks and /box were
+// missing from this list, so opening either one made it the page every route
+// showed offline (review, 2026-10-06). scripts/test_sw_shell_pages.mjs fails
+// when build_dist ships a standalone .html page that is not listed here.
+const NON_SHELL_PAGES = ['/privacy', '/swiss', '/ticker', '/lab/swiss', '/picks', '/box'];
+
 // The cross-origin hosts the site loads images from. A fetch() from a service
 // worker is checked against connect-src, not img-src, so every one of these
 // must be in connect-src in _headers — scripts/test_csp_headers.mjs holds this
@@ -202,8 +209,7 @@ self.addEventListener('fetch', (event) => {
           // dot-check covers every file-ish path (privacy.html, swiss.html,
           // ticker.html, robots.txt, sitemap.xml, manifest.json, …); SPA
           // routes are dot-free.
-          if (res.ok && !url.pathname.includes('.') &&
-              !['/privacy', '/swiss', '/ticker', '/lab/swiss'].includes(url.pathname)) {
+          if (res.ok && !url.pathname.includes('.') && !NON_SHELL_PAGES.includes(url.pathname)) {
             const copy = res.clone();
             caches.open(CACHE_VERSION).then((c) => c.put('/Index.html', copy));
           }
