@@ -6,6 +6,7 @@ Usage:
     python ingest.py --urls https://tcg.ravensburgerplay.com/events/198237 ...
 
 Idempotent: re-running skips events that already have matches recorded.
+Exits 1 when any event fails to ingest.
 """
 import argparse, json, re, sqlite3, sys, time, urllib.request, urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -453,6 +454,11 @@ def main():
             counts[status] += 1
 
     print(f"\nDone. ok={counts['ok']} queue={counts['queue']} skip={counts['skip']} err={counts['err']}")
+    # Non-zero on any failed event. ingest_event turns an exception into "err",
+    # so without this a failed --ids one-off inside refresh_elo.py ended green.
+    # (refresh_elo runs the season-sheet ingest soft, so this can't cost a week.)
+    if counts["err"]:
+        sys.exit(f"{counts['err']} event(s) failed to ingest - see the ERR lines above")
 
 
 if __name__ == "__main__":

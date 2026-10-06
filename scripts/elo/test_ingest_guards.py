@@ -147,6 +147,61 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     quiet(ing.ingest_event, 8, store="Shop", season="Set Y")
     check("platform kept", row(db, 8, "platform")[0], "rph-manual")
 
+    # ------------------------------------------------------------------ 2.
+    print("\na failed ingest exits non-zero")
+
+    def main_rc(*argv):
+        sys.argv = ["ingest.py", *argv, "--workers", "1"]
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf):
+                ing.main()
+        except SystemExit as e:
+            return (1 if e.code and not isinstance(e.code, int) else (e.code or 0)), buf.getvalue()
+        return 0, buf.getvalue()
+
+    rc, out = main_rc("--ids", "999")                 # RPH 404s it -> err
+    check("--ids with an event that errors exits 1", rc, 1)
+    check("...and reports it", "ERR " in out, True)
+    rc, _ = main_rc("--ids", "8")                     # queued again: not a failure
+    check("--ids with nothing failing exits 0", rc, 0)
+    rc, _ = main_rc("--ids", "8", "999")
+    check("one failure among several still exits 1", rc, 1)
+
+# ---------------------------------------------------------------------- 3.
+print("\nrefresh_elo: which ingest failures stop the refresh")
+sys.path.insert(0, str(HERE.parent))
+import refresh_elo as rf  # noqa: E402
+
+calls: list[tuple[str, list[str]]] = []
+real_run_soft = rf.run_soft
+rf.run = lambda cmd, cwd=None: calls.append(("run", [str(c) for c in cmd]))
+rf.run_soft = lambda cmd, cwd=None: calls.append(("soft", [str(c) for c in cmd]))
+rf.one_off_season = lambda: "Set X Fall 2026"
+sys.argv = ["refresh_elo.py", "--skip-storage", "--ids", "123", "456"]
+quiet(rf.main)
+
+
+def mode_of(fragment):
+    hit = [kind for kind, cmd in calls if fragment in " ".join(cmd)]
+    return hit[0] if hit else None
+
+
+check("the season-sheet ingest is SOFT (a permanent no-op seed; one RPH flake "
+      "there must not cost the week)", mode_of("ingest.py --xlsx"), "soft")
+check("a hand-added --ids ingest is HARD (someone asked for it; a failure goes red)",
+      mode_of("ingest.py --ids 123 456"), "run")
+check("discovery stays soft", mode_of("discover_store_scs.py"), "soft")
+check("the recompute stays hard", mode_of("elo.py"), "run")
+
+print("\nrefresh_elo: a soft failure leaves a trace in the run")
+buf = io.StringIO()
+with redirect_stdout(buf):
+    real_run_soft([sys.executable, "-c", "import sys; sys.exit(3)"])
+out = buf.getvalue()
+check("a GitHub ::warning:: annotation", "::warning" in out, True)
+check("it says the refresh continued", "continu" in out, True)
+
 if failures:
     print(f"\n{len(failures)} check(s) FAILED")
     sys.exit(1)

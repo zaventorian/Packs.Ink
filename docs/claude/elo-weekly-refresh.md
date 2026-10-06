@@ -50,6 +50,11 @@ exactly), overridable with `--season-label`.
   for the current set still exits 0. If this bites again, the fix is a floor check in
   `refresh_elo.py` (current set has ≥1 event, or ≥1 new event in the last N days), not more
   discovery.
+- **A soft step that fails now leaves a `::warning::` on the run** (2026-10-06), and
+  `ingest.py` exits 1 when any event errors. So the season-sheet ingest is `run_soft` (one
+  RPH flake there must not cost the week) while the hand-added `--ids` ingest stays `run`:
+  a one-off that fails turns the dispatch red instead of ending green with nothing ingested.
+  Guarded by `python scripts/elo/test_ingest_guards.py`.
 
 ### Set Championships are recognised by RPH's template, not only the title (2026-09-10)
 
