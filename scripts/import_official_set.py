@@ -33,7 +33,7 @@ Usage:
 """
 from __future__ import annotations
 
-import argparse, io, os, re, sys, requests
+import argparse, hashlib, io, os, re, sys, requests
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -191,7 +191,9 @@ def main():
                                         "Content-Type": "image/jpeg", "x-upsert": "true"}, data=jpg, timeout=60)
             if not up.ok:
                 print(f"  {label} UPLOAD FAIL {up.status_code}"); continue
-            url = f"{sb.url}/storage/v1/object/public/{BUCKET}/{path}"
+            # ?v= busts packsink-img-v1, which survives deploys and keys on the URL:
+            # without it a stand-in overwritten in place keeps serving the old crop.
+            url = f"{sb.url}/storage/v1/object/public/{BUCKET}/{path}?v={hashlib.md5(jpg).hexdigest()[:8]}"
             final.append({"id": f"crd_prestage_{tag}_{cn}", "set_id": args.set_id, "collector_number": str(cn),
                           "name": m["name"], "version": m["version"], "rarity": m["rarity"], "ink": m["ink"],
                           "inks": m["inks"], "cost": m["cost"], "inkable": m["inkable"], "card_type": m["card_type"],
