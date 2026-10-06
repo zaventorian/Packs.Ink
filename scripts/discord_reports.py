@@ -117,6 +117,23 @@ SET_DISPLAY_NAMES = {
     "Hunny Rescue – Illumineer's Quest": "Illumineer's Quest: The Great Hunny Rescue",
 }
 C1_SET = "Challenge Promo"
+# Index.html's PROMO_RARITY_SETS (display names): every card in these sets is a
+# Promo on the site whatever rarity Lorcast printed. price_movers carries the
+# PRINTED rarity, so without this a Promo Set 2 "Enchanted" read as a chase card
+# and a Magical Places Promos "Rare" as a base card. Pinned by the test.
+PROMO_RARITY_SETS = {
+    "Promo Set 1", "Promo Set 2", "Promo Set 3",
+    "Lorcana Challenge Promo (C1)",
+    "D23 Collection",
+    "Lorcana Challenge Promo (C2)",
+    "Lorcana Challenge Promo (C3)",
+    "Magical Places Promos",
+    "Curator's Collection: Heroines",
+    "Curator's Collection: Beauty and the Beast",
+    "Promo Set 4",
+    "PD1",
+    "Ravensburger Play Hub Promos",
+}
 
 # ── sections ────────────────────────────────────────────────────────────────
 CHASE_RARITIES = {"Enchanted", "Epic", "Iconic"}
@@ -256,6 +273,16 @@ def bucket_of(row):
     if (row.get("printing") or "Normal") in ("Normal", "Non-Foil"):
         return "base"
     return "foil"
+
+
+def site_rarity(row, sets):
+    """The row with the rarity the SITE shows (buildRow's PROMO_RARITY_SETS
+    override, as the home movers banners apply it to price_movers): a card in
+    a promo-only set is a Promo, whatever was printed on it."""
+    name = set_display(sets.get(row.get("set_id"), ""))
+    if name in PROMO_RARITY_SETS and row.get("rarity") not in ("Promo", "Quest"):
+        return {**row, "rarity": "Promo"}
+    return row
 
 
 def dollar_move(price, pct):
@@ -962,9 +989,10 @@ def build_report(sb, price_date, window, session=requests, now=None):
     sets_meta = load_sets(sb)
     sets = {sid: m["name"] for sid, m in sets_meta.items()}
     now = now or dt.datetime.now(dt.timezone.utc)
-    cands = fetch_candidates(sb, window)
+    cands = [site_rarity(r, sets) for r in fetch_candidates(sb, window)]
     eb = fetch_ebay(sb, price_date, window, now=now)
     tracked, ebay = eb if eb is not None else (set(), [])
+    ebay = [site_rarity(r, sets) for r in ebay]
     ranked = sectioned([r for r in cands if r.get("card_id") not in tracked], window, ebay)
     fresh = {}
     for key in SECTION_ORDER:

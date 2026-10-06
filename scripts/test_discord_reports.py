@@ -128,7 +128,7 @@ class FakeSb:
         if table == "card_prices_latest":
             return [{"price_date": self.price_date.isoformat()}]
         if table == "sets":
-            return [dict(s) for s in SETS]
+            return [dict(s) for s in SETS + getattr(self, "sets_extra", [])]
         if table == "raw_sales_rollup":
             return [dict(r) for r in self.ebay.get("roll", [])]
         if table == "cards":
@@ -392,6 +392,21 @@ check("https://www.tcgplayer.com/product/${productId}/?Language=English" in tcg
 block = html[html.index("const SET_DISPLAY_NAMES"):html.index("};", html.index("const SET_DISPLAY_NAMES"))]
 site = dict(re.findall(r'"([^"]+)":\s*"([^"]+)"', block))
 check(site == rep.SET_DISPLAY_NAMES, f"SET_DISPLAY_NAMES matches Index.html ({site})")
+pblock = html[html.index("const PROMO_RARITY_SETS"):html.index("]);", html.index("const PROMO_RARITY_SETS"))]
+check(set(re.findall(r'"([^"]+)"', pblock)) == rep.PROMO_RARITY_SETS, "PROMO_RARITY_SETS matches Index.html")
+# A card in a promo-only set is a Promo, whatever Lorcast printed on it: a Promo
+# Set 2 "Enchanted" was reported as chase, a Magical Places "Rare" as a base card.
+promo_sb = FakeSb([], movers=MOVERS + [
+    mover("x_p3", "Elsa", "Spirit of Winter", "Enchanted", "Holofoil", 61, 300.0, 12.0, 12.0, set_id="s_p3"),
+    mover("x_dis", "Stitch", "Rock Star", "Rare", "Normal", 62, 40.0, 15.0, 15.0, set_id="s_epcot")])
+promo_sb.sets_extra = [{"id": "s_epcot", "name": "EPCOT Festival of the Arts", "released_at": "2025-02-01"}]
+with redirect_stdout(io.StringIO()):
+    prep = rep.build_report(promo_sb, TODAY, "1d", session=FakeCdn(), now=EVENING)
+sec = {(e.get("author") or {}).get("name", "").split(" ·")[0]: e.get("description", "") for e in prep["embeds"]}
+check("Spirit of Winter" in sec.get("★ PROMOS", "") and "Spirit of Winter" not in sec.get("✦ CHASE", ""),
+      "a promo-set card printed Enchanted is a promo, not chase")
+check("Rock Star" in sec.get("★ PROMOS", "") and "Rock Star" not in sec.get("◆ BASE CARDS", ""),
+      "a Magical Places Promos card printed Rare is a promo, not a base card")
 # A card that started the window under the floor is not news, however far it
 # climbed (the home banners' rule): $0.50 -> $6.00 is "+1100%" off one listing.
 cheap = {"rarity": "Super Rare", "printing": "Normal", "pct": 1100.0, "price": 6.0,
