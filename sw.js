@@ -48,11 +48,21 @@ const CORE_ASSETS = [
   '/Logos/packs-ink-logo-sm.png?v=5'
 ];
 
+// What the app cannot boot offline without. These are cached all-or-nothing:
+// if one fails (a flaky connection mid-update) the INSTALL fails, so the
+// working worker and its cache stay in charge and the browser retries the
+// update later. Swallowing every failure let a new worker activate without the
+// shell, delete the old cache on activate, and then the controllerchange
+// reload landed on nothing offline (review, 2026-10-06). The rest (icons,
+// manifest, wordmark) stays best-effort.
+const coreRequired = (a) => a === '/' || a.startsWith('/vendor/') || a.startsWith('/styles.css');
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) =>
-      Promise.all(CORE_ASSETS.map((a) => cache.add(a).catch(() => null)))
-    )
+    caches.open(CACHE_VERSION).then((cache) => Promise.all([
+      cache.addAll(CORE_ASSETS.filter(coreRequired)),
+      ...CORE_ASSETS.filter((a) => !coreRequired(a)).map((a) => cache.add(a).catch(() => null)),
+    ]))
   );
   self.skipWaiting();
 });
