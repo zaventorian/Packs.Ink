@@ -91,6 +91,30 @@ for (const t of Object.keys(THEMES)) {
 ok("dark themes override --on-accent (white fails on their bright gold)",
   [...DARK].every(t => tok(block(THEMES[t]), "--on-accent")));
 
+// ── 2b. gold TEXT on the light themes' surfaces ────────────────────────────
+// The light gold (#8a6d1b) measured 4.43:1 on Parchment's own background and
+// 3.6:1 on a hovered panel (axe, 2026-10-06): every gold link, active nav
+// label and active chip was under the line. #775e17 (Sunrise and Daydream,
+// whose panels are darker and purple-tinted: #715916) clears it on the darkest
+// surface gold text is drawn on: a panel (--bg-surface) over a hovered row
+// (--bg-surface-hover) over the page. The active chip is --btn-active-text on
+// --btn-active-bg over the page.
+console.log("\n== gold text (light themes) ==");
+for (const t of Object.keys(THEMES).filter(t => !DARK.has(t))) {
+  const solid = parse(get(t, "--bg-solid"));
+  const accent = parse(get(t, "--accent"));
+  for (const bgName of ["--bg-solid", "--bg-card", "--bg-modal"]) {
+    const c = contrast(accent, over(parse(get(t, bgName)), solid));
+    ok(`${t}: --accent on ${bgName} ${c.toFixed(2)}:1 >= 4.5`, c >= 4.5);
+  }
+  const deep = over(parse(get(t, "--bg-surface")), over(parse(get(t, "--bg-surface-hover")), solid));
+  const cd = contrast(accent, deep);
+  ok(`${t}: --accent on a hovered panel ${cd.toFixed(2)}:1 >= 4.5`, cd >= 4.5);
+  const chip = over(parse(get(t, "--btn-active-bg")), solid);
+  const cc = contrast(parse(get(t, "--btn-active-text")), chip);
+  ok(`${t}: active chip text ${cc.toFixed(2)}:1 >= 4.5`, cc >= 4.5);
+}
+
 // ── 3. no accent-filled rule goes back to a literal white ──────────────────
 console.log("\n== accent fills ==");
 const BG = /background(?:-color)?\s*:\s*var\(--accent\)/;
@@ -101,6 +125,15 @@ for (const m of css.matchAll(/([^{}]*)\{([^{}]*)\}/g)) {
 }
 ok("no rule pairs background:var(--accent) with a literal white text colour",
   offenders.length === 0, offenders.slice(0, 8).join(" | "));
+// ...nor with a literal DARK one: right on the dark themes' bright gold, about
+// 3:1 on the light themes' dark gold (13 rules + one inline style, 2026-10-06).
+const DARKFG = /(?<![-\w])color\s*:\s*#(?:[0-2][0-9a-f]{5}|000)\b/i;
+const darkOffenders = [];
+for (const m of css.matchAll(/([^{}]*)\{([^{}]*)\}/g)) {
+  if (/background(?:-color)?\s*:\s*var\(--accent\b/.test(m[2]) && DARKFG.test(m[2])) darkOffenders.push(m[1].trim().split("\n").pop().slice(0, 80));
+}
+ok("no rule pairs an accent fill with a literal dark text colour",
+  darkOffenders.length === 0, darkOffenders.slice(0, 8).join(" | "));
 ok("the treatment is in use (the sweep didn't just delete the rules)",
   (css.match(/color:var\(--on-accent\)/g) || []).length > 50);
 
