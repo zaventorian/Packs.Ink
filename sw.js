@@ -151,7 +151,18 @@ self.addEventListener('fetch', (event) => {
   // they still fall through to the skip below.
   // Someone else's image: see SW_IMAGE_HOSTS.
   if (req.destination === 'image' && url.origin !== self.location.origin && !swImageHost(url.hostname)) return;
-  if (req.destination === 'image' || url.hostname.endsWith('lorcast.io')) {
+  // ⚠ Our own image proxies are images whatever the request says. The offline
+  // image downloader fetch()es them (destination ''), which used to fall into
+  // the generic same-origin branch below: each one was stored in the
+  // per-deploy cache AND, by the downloader, in IMG_CACHE — "All cards" held
+  // ~270 MB twice until the next deploy (review, 2026-10-06).
+  const proxied = url.origin === self.location.origin && /^\/(tcg-)?img-proxy\//.test(url.pathname);
+  // Lorcast art is content-addressed (a re-render gets a new ?<stamp>), so a
+  // cached copy of a versioned /img-proxy/ URL is final: no background
+  // re-fetch, which was a Worker invocation per view. TCGplayer photos are
+  // NOT (a placeholder is swapped at the same URL), so they keep revalidating.
+  const immutableHit = proxied && url.pathname.startsWith('/img-proxy/') && url.search.length > 1;
+  if (req.destination === 'image' || proxied || url.hostname.endsWith('lorcast.io')) {
     // ⚠ The cache is keyed by URL, not by request mode. Supabase-storage art
     // (prestaged cards, Coconut, collectibles) is the one card art NOT routed
     // through a same-origin proxy, so a plain <img> caches an OPAQUE response
@@ -172,6 +183,7 @@ self.addEventListener('fetch', (event) => {
         // versioned cache (icons, wordmark) also satisfy image requests.
         caches.match(req).then((hit) => {
           const cached = hit && hit.type === 'opaque' && (req.mode === 'cors' || corsable) ? null : hit;
+          if (cached && immutableHit) return cached;
           const fetchPromise = fetch(netReq)
             .catch((err) => (netReq === req ? Promise.reject(err) : fetch(req)))
             .then((res) => {
