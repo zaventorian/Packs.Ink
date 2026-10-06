@@ -60946,12 +60946,26 @@ function parseDeckText(text, raw){
     asked[e.card_id] = (asked[e.card_id]||0) + e.quantity;
     capOf[e.card_id] = e.cap; nameOf[e.card_id] = e.name;
   }
+  // ⚠ The limit is per CARD, not per printing: "4 Cinderella - Ballroom
+  // Sensation" plus "4 Cinderella - Ballroom Sensation (2-205)" (its
+  // Enchanted) imported 8 with nothing said, and the tournament bulk upload
+  // stores what this returns (review, 2026-10-06). Printings share their
+  // family's limit in the order the list names them.
   const trimmed = [];
-  const out = Object.entries(asked).map(([cid, q]) => {
-    const kept = Math.min(capOf[cid], q);
-    if(kept < q) trimmed.push(`${q}× ${nameOf[cid]} → ${kept}`);
-    return {card_id: cid, quantity: kept};
-  });
+  const out = [];
+  const fam = {};
+  for(const [cid, q] of Object.entries(asked)){
+    const key = cardFamilyKey(nameOf[cid]);
+    const f = fam[key] || (fam[key] = {cap: capOf[cid], left: capOf[cid], asked: 0, name: nameOf[cid]});
+    f.asked += q;
+    const kept = Math.min(f.left, q);
+    f.left -= kept;
+    if(kept > 0) out.push({card_id: cid, quantity: kept});
+  }
+  for(const f of Object.values(fam)){
+    const kept = f.cap - f.left;
+    if(kept < f.asked) trimmed.push(`${f.asked}× ${f.name} → ${kept}`);
+  }
   return {entries: out, unmatched, trimmed, mismatched, coconut};
 }
 

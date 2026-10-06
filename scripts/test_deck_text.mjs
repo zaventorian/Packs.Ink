@@ -143,6 +143,12 @@ ok("(set-cn) is trusted when the name matches nothing", parseDeckText("1 Snow Qu
 const over = parseDeckText("5 Tipo - Growing Son\n2 Tipo - Growing Son", rows);
 ok("over the limit is trimmed", over.entries, [{card_id: "tipo", quantity: 4}]);
 ok("...and reported once, with the asked total", over.trimmed, ["7× Tipo - Growing Son → 4"]);
+// The limit is per CARD: a base printing and its Enchanted share it (2026-10-06).
+const twoPrintings = parseDeckText("4 Elsa - Snow Queen\n4 Elsa - Snow Queen (1-207)", rows);
+ok("two printings of one card share its limit (first named keeps it)", twoPrintings.entries, [{card_id: "elsa", quantity: 4}]);
+ok("...and the trim is reported for the card", twoPrintings.trimmed, ["8× Elsa - Snow Queen → 4"]);
+ok("split 2 + 2 across printings is untouched", parseDeckText("2 Elsa - Snow Queen\n2 Elsa - Snow Queen (1-207)", rows).entries,
+   [{card_id: "elsa", quantity: 2}, {card_id: "elsa-en", quantity: 2}]);
 ok("a card whose text lifts the cap is not trimmed", parseDeckText("12 Microbots", rows).entries,
    [{card_id: "microbot", quantity: 12}]);
 
