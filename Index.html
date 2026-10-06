@@ -6428,12 +6428,44 @@ async function fetchCollectionPriceHistory(productIds, sinceDate, opts){
 // is exactly what forward-fill would have carried had the window reached back.
 // Only the mats: every other sealed product has daily prices, so its first
 // in-window row already sits at the window's start. `matPids` are TCGplayer ids.
+// Each owned (product, printing)'s newest priced row from BEFORE `sinceDate`,
+// re-dated to sinceDate (migration 186). The value charts fetch prices from the
+// range start only, so an item not priced inside the range (a promo last
+// priced months ago) was missing from the chart entirely and one priced
+// sparsely joined it part-way, while the headline counted both: owning a
+// $5,999.99 Elsa last priced in June read "+$5,999.99 (+150,000%) past 1M"
+// (review, 2026-10-06). Batches of 250 (~0.2-0.4s each) in parallel, under the
+// anon statement timeout. null = couldn't ask (no 186, a timeout): the caller
+// then behaves as before; [] = asked, nothing priced earlier.
+const PRICE_SEED_BATCH = 250;
+async function fetchCollectionPriceSeeds(keys, sinceDate){
+  if(!keys || !keys.length) return [];
+  const batches = [];
+  for(let i = 0; i < keys.length; i += PRICE_SEED_BATCH) batches.push(keys.slice(i, i + PRICE_SEED_BATCH));
+  let failed = false;
+  const out = await Promise.all(batches.map(b =>
+    Promise.resolve(sbClient.rpc("latest_raw_prices_before", {
+      p_pids: b.map(k => k.pid), p_printings: b.map(k => k.printing), p_before: sinceDate}))
+      .then(r => { if(!r || r.error){ failed = true; return []; } return Array.isArray(r.data) ? r.data : []; },
+            () => { failed = true; return []; })));
+  if(failed) return null;
+  return out.flat().map(r => ({...r, date: sinceDate}));
+}
+
 async function fetchSealedValueHistory(pids, sinceDate, matPids){
-  const rows = await fetchCollectionPriceHistory(pids, sinceDate);
+  const [rows, seeds] = await Promise.all([
+    fetchCollectionPriceHistory(pids, sinceDate),
+    fetchCollectionPriceSeeds([...new Set(pids.map(Number))].map(pid => ({pid, printing: "Normal"})), sinceDate),
+  ]);
+  // Seeds go FIRST: the rollup groups rows per product in array order and walks
+  // them oldest to newest.
+  if(seeds) return [...seeds, ...rows];
+  // Without migration 186: the playmats-only seed it replaced (their history
+  // has a months-long hole, so they were the urgent case).
   const want = new Set(pids.map(Number));
   const mats = [...new Set((matPids || []).map(Number))].filter(p => want.has(p));
   if(!mats.length) return rows;
-  const seeds = await Promise.all(mats.map(pid =>
+  const matSeeds = await Promise.all(mats.map(pid =>
     sbClient.from("prices_daily").select("tcgplayer_product_id,printing,date,low_price")
       .eq("source", "tcgcsv").eq("grade", "raw").eq("printing", "Normal")
       .eq("tcgplayer_product_id", pid).lt("date", sinceDate)
@@ -6441,9 +6473,7 @@ async function fetchSealedValueHistory(pids, sinceDate, matPids){
       .order("date", {ascending: false}).limit(1)
       .then(r => (r && !r.error && r.data && r.data[0]) ? {...r.data[0], date: sinceDate} : null,
             () => null)));
-  // Seeds go FIRST: the rollup groups rows per product in array order and walks
-  // them oldest to newest.
-  return [...seeds.filter(Boolean), ...rows];
+  return [...matSeeds.filter(Boolean), ...rows];
 }
 
 // djb2-style hash for the (sorted) owned-products string. The full key
@@ -46680,7 +46710,14 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     const since = new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10);
     let cancelled = false;
     setHistoryState({loading:true, error:null});
-    fetchCollectionPriceHistory(productIds, since)
+    // Seeds first (see fetchCollectionPriceSeeds): the rollup walks each key's
+    // rows in array order, oldest to newest.
+    const seedKeys = Array.from(owned.map.keys()).map(k => {
+      const bar = k.indexOf("|");
+      return {pid: parseInt(k.slice(0, bar), 10), printing: k.slice(bar + 1)};
+    });
+    Promise.all([fetchCollectionPriceSeeds(seedKeys, since), fetchCollectionPriceHistory(productIds, since)])
+      .then(([seeds, hist]) => [...(seeds || []), ...hist])
       .then(rows => {
         if(cancelled) return;
         setHistoryCache(c => ({...c, [ownedProductsKey]: {...(c[ownedProductsKey]||{}), [rangeKey]: rows}}));
@@ -46716,7 +46753,8 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   }, [raw, setsMeta]);
   // Forward-fill in computeCollectionValueHistory means a card that wasn't
   // priced during the range start still contributes from its most recent
-  // prior snapshot.
+  // prior snapshot. (Only true since the fetch above seeds that snapshot; it
+  // used to fetch from the range start alone.)
   const freshSeries = useMemo(() => {
     if(!historyRows) return null;
     return computeCollectionValueHistory(historyRows, owned.map, productEarliestDate);
@@ -46938,18 +46976,21 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     (showCards ? cardLatestValue : 0) +
     (showSealed ? sealedLatestValue : 0) +
     (showGraded ? gradedLatestValue : 0);
-  // Combined start value (sum across enabled sections' first datapoint) for
-  // the range-delta pill. If only one section is on, use that section's
-  // own start so the delta matches what users expect.
-  const combinedStartValue = (() => {
-    let s = 0, anyHadData = false;
-    if(showCards && valueSeries?.length){ s += valueSeries[0].value; anyHadData = true; }
-    if(showSealed && sealedValueSeries?.length){ s += sealedValueSeries[0].value; anyHadData = true; }
-    if(showGraded && gradedValueSeries?.length){ s += gradedValueSeries[0].value; anyHadData = true; }
-    return anyHadData ? s : null;
+  // The range pill is the CHART's own change: each enabled section's last point
+  // minus its first. It used to be the headline minus the chart's first point,
+  // and the headline counts things the chart leaves out (a pre-release card,
+  // whose inflated pre-order prices the chart drops on purpose; anything
+  // priced too sparsely to have a row in range), so they read as gains.
+  const {start: combinedStartValue, end: combinedEndValue} = (() => {
+    let start = 0, end = 0, any = false;
+    for(const [on, series] of [[showCards, valueSeries], [showSealed, sealedValueSeries], [showGraded, gradedValueSeries]]){
+      if(!on || !series || !series.length) continue;
+      start += series[0].value; end += series[series.length - 1].value; any = true;
+    }
+    return any ? {start, end} : {start: null, end: null};
   })();
-  const rangeDelta = (combinedStartValue != null && combinedStartValue > 0) ? (combinedCurrentValue - combinedStartValue) : null;
-  const rangeDeltaPct = (combinedStartValue != null && combinedStartValue > 0) ? ((combinedCurrentValue - combinedStartValue) / combinedStartValue * 100) : null;
+  const rangeDelta = (combinedStartValue != null && combinedStartValue > 0) ? (combinedEndValue - combinedStartValue) : null;
+  const rangeDeltaPct = (combinedStartValue != null && combinedStartValue > 0) ? ((combinedEndValue - combinedStartValue) / combinedStartValue * 100) : null;
 
   if(!user) return html`<aside class="collection-panel">
     <div class="panel-header">
