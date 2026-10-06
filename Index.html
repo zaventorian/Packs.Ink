@@ -5535,7 +5535,7 @@ function writeJsonCache(key, data){
 function readJsonCacheIdb(key, ttlMs){
   return idbGet(IDB_JSONCACHE_PREFIX + key).then(o => {
     if(!o || typeof o.t !== "number") return null;
-    return {data: o.data, stale: Date.now() - o.t > ttlMs};
+    return {data: o.data, stale: Date.now() - o.t > ttlMs, t: o.t};
   });
 }
 function writeJsonCacheIdb(key, data){
@@ -16113,6 +16113,7 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
   // Home-page quick-search handoff: pre-seed the smart-search and (when set)
   // open the chosen card's detail modal once `raw` is loaded.
   const [pendingSearch, setPendingSearch] = useState(null);
+  const missingCardRef = useRef(null);  // see the retry effect below
   useEffect(() => {
     if(incomingSearch == null && incomingOpenCardId == null) return;
     // A ?card=<id> cold load reaches here before the catalog: consuming now
@@ -16128,9 +16129,25 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       // side the link named. Pid-less rows (Format Coconut) group on their own.
       const g = groupFromCardParam(incomingOpenCardId, raw);
       if(g) setSelectedGroup(g);
+      else missingCardRef.current = {id: incomingOpenCardId, until: Date.now() + 60000};
     }
     onConsumedIncomingCardsSearch && onConsumedIncomingCardsSearch();
   }, [incomingSearch, incomingOpenCardId, raw, onConsumedIncomingCardsSearch]);
+  // A ?card= link to a card newer than the SAVED catalog finds nothing on the
+  // replayed rows, and the id above is consumed either way (holding it would
+  // re-apply the incoming search on every later row change). The fresh fetch
+  // lands seconds later with the card in it, so the id is remembered for a
+  // minute and tried again whenever the rows change — a shared link to a
+  // just-revealed card otherwise landed on /cards with no card open.
+  useEffect(() => {
+    const m = missingCardRef.current;
+    if(!m || !raw || !raw.length) return;
+    if(Date.now() > m.until){ missingCardRef.current = null; return; }
+    const g = groupFromCardParam(m.id, raw);
+    if(!g) return;
+    missingCardRef.current = null;
+    setSelectedGroup(prev => prev || g);
+  }, [raw]);
   // ── Shareable card URLs ──────────────────────────────────────────────
   // The open modal is mirrored to ?card=<id> ("card" is registered in
   // dirtyParams + VIEW_OWNED.cards). Opening pushes a history entry so the
@@ -54416,6 +54433,9 @@ const HomePanelModal = ({panelKey, label, node, cta, onClose, onNavAway}) => {
 // the day's prices had been detected, a full multi-page refetch) landed.
 // `epoch` is the priceEpoch the rows were fetched under: a later epoch
 // means newer prices exist and the rows stay up while they are refetched.
+// `at` is when the rows left the server (a network fetch's start, or the
+// write time of the stored copy), so App can tell whether they predate a
+// catalog refresh — see the stale-catalog branch of loadFromSupabase.
 // What the movers area shows before its first rows exist (a first visit, or
 // storage that was cleared): the shape of two banners, so the page reads as
 // loading rather than empty. Only ever on screen until the first fetch lands —
@@ -54430,6 +54450,17 @@ const MoversSkeleton = ({rows = 2}) => html`<div class="movers-skel" role="statu
   </div>`)}
 </div>`;
 let _homeMoversMem = null;
+// What a FULL catalog refetch (the one a saved catalog past its TTL takes
+// instead of the freshness probe) owes the rest of the page: `wipe` when it
+// brought newer prices than the saved copy, as the probe does; `bump` the
+// priceEpoch only when Home's movers on screen left the server before the
+// refetch started (`mem.at`). Bumping regardless refetched all ~6 pages of
+// movers a second time for every visitor back after a day or more.
+const staleCatalogRefresh = (cached, maxPriceDate, mem, fetchAt) => {
+  const newer = !!(cached && cached.rows && cached.rows.length && cached.stale && maxPriceDate
+    && (!cached.latestDate || maxPriceDate > cached.latestDate));
+  return {wipe: newer, bump: newer && !!mem && (mem.at || 0) < fetchAt};
+};
 const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, openAnalyticsTool, openEventFinder, finderOpen, onEventArtistClick, layout, homeEdit}) => {
   // Resolved home layout (set in App from the settings popover): which panels
   // are on, which column each sits in, and their order within that column.
@@ -54692,11 +54723,12 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
     if(cached && hadCache){
       setState(prev => (prev && prev.rows && prev.rows.length) ? prev : {rows: cached.data, loading:false, error:null});
       if(!cached.stale && priceEpoch === 0){
-        _homeMoversMem = {rows: cached.data, epoch: priceEpoch};
+        _homeMoversMem = {rows: cached.data, epoch: priceEpoch, at: cached.t || 0};
         return;
       }
       // Fall through and background-refresh.
     }
+    const fetchedAt = Date.now();
     sbFetchAll("price_movers", {select: "card_id,set_id,name,version,rarity,ink,collector_number,image_small,image_normal,tcgplayer_product_id,printing,low_today,low_prev,low_7d,low_30d,low_90d,low_180d,low_365d,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,abs_pct_1d,market_today,market_prev,market_7d,market_30d,market_90d,market_180d,market_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d", order: "abs_pct_1d.desc.nullslast"})
       // MUST paginate — see the Screener fetch above. PostgREST's 1000-row cap
       // ignores .limit(), and since migration 120 that would drop ~4,800 of
@@ -54732,7 +54764,7 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
             image_normal: lorcastToProxy(r.image_normal),
           }));
           setState({rows, loading:false, error:null});
-          _homeMoversMem = {rows, epoch: priceEpoch};
+          _homeMoversMem = {rows, epoch: priceEpoch, at: fetchedAt};
           writeJsonCacheIdb(CACHE_KEY, rows);
         }
       });
@@ -66288,6 +66320,7 @@ function App(){
     }
 
     // 2. Fetch fresh in background (or as the initial load).
+    const catalogFetchAt = Date.now();
     try {
       setLoadProgress({loaded:0,total:3,current:"Fetching sets"});
       // Slim columns — heavy text fields (text/flavor_text) are fetched on
@@ -66381,6 +66414,19 @@ function App(){
         if(p && p.price_date && (!maxPriceDate || p.price_date > maxPriceDate)) maxPriceDate = p.price_date;
       }
       setCatalogPriceDate(maxPriceDate);
+      // A saved catalog past its TTL skips the probe above and lands here, so
+      // the probe's "newer prices exist" handling has to happen here too. It
+      // didn't: the home movers memo is keyed on priceEpoch, and an installed
+      // app resumed after more than a day refetched the catalog but kept
+      // yesterday's movers for the rest of the page's life.
+      // ⚠ Bump only when the movers on screen PREDATE this fetch. A visitor
+      // back after a few days lands on Home while the catalog loads, and Home
+      // fetches today's movers itself in that window; bumping regardless
+      // fetched all ~6 pages of them a second time (measured: 12 requests
+      // against 6).
+      const refreshed = staleCatalogRefresh(cached, maxPriceDate, _homeMoversMem, catalogFetchAt);
+      if(refreshed.wipe) wipePriceDerivedAuxCaches();
+      if(refreshed.bump) setPriceEpoch(n => n + 1);
       writeCache(allRows, maxPriceDate, cardsRows.length);
       // The rows on screen ARE what was just cached — record that, or the next
       // re-probe reads them back and swaps in an identical copy.
