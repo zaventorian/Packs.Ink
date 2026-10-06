@@ -292,9 +292,9 @@ export async function cardPayload(res, { view, range, query }, deps) {
     (c.gs > 0 || p.g > 0 || wantGrade) ? settle(D.gradedRollup(db, gt.cardId)) : null,
     p.raw ? settle(D.rawRollup(db, gt.cardId)) : null,
   ]);
-  const single = (gradedAll || []).some((r) => !r.printing);
   const rawSingle = (rawRows || []).some((r) => !r.printing);
-  const forPrinting = D.gradedRowsFor(gradedAll || [], gt.bucket);
+  const catalog = D.catalogBucketsFor(c, gt.cardId);
+  const forPrinting = D.gradedRowsFor(gradedAll || [], gt, catalog);
   let graded = D.topGradedTiers(forPrinting, 6);
   let grade = null;
   if (wantGrade) {
@@ -310,7 +310,7 @@ export async function cardPayload(res, { view, range, query }, deps) {
     R, res, price, graded, view: grade && view === "chart" ? "graded" : view, range, query,
     raw: D.rawRowFor(rawRows || [], printingStr),
     rawTarget: { cardId: gt.cardId, bucket: rawSingle ? "" : gt.bucket },
-    grade, gradedTarget: { cardId: gt.cardId, bucket: single ? "" : gt.bucket },
+    grade, gradedTarget: { cardId: gt.cardId, bucket: D.gradedChartBucket(gradedAll || [], gt, catalog, grade) },
     origin: deps.origin, inkColors: deps.index.inkColors, playSet: deps.index.playSet,
     priceDate: deps.index.priceDate,
   });

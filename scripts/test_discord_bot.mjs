@@ -1445,6 +1445,79 @@ const D = await mod("discord/src/data.js");
   }
   ok(checked > 100 && !bad.length, `every listed printing opens on a listed finish, non-foil first when it is real (${checked} checked, bad: ${bad.slice(0, 3)})`);
 }
+{
+  // Graded tiers follow the SITE's split rule (gradedSplitTiers): a card's
+  // sales split by printing only when the catalog carries two printings. The
+  // shapes below are the live rollup's (2026-10-06).
+  const D = await mod("discord/src/data.js");
+  const byId = (id) => { for (const c of index.cards) for (const p of c.p) if (p.id === id) return { c, p }; return null; };
+  const roll = (id, rows) => rows.map(([printing, grade, sale_count, last_sold_price]) =>
+    ({ card_id: id, printing, grader: "PSA", grade: String(grade), sale_count, last_sold_price, avg_last_5: last_sold_price, last_sold_date: "2026-09-01" }));
+  const tierOf = (rows, g) => rows.find((r) => String(r.grade) === String(g));
+  const cat = (c, id) => (typeof D.catalogBucketsFor === "function" ? D.catalogBucketsFor(c, id) : undefined);
+  const chartB = (...a) => (typeof D.gradedChartBucket === "function" ? D.gradedChartBucket(...a) : "missing");
+
+  // ⚠ A foil-only Challenge Promo is ONE market. Invited to the Ball's only
+  // PSA 9 sales are three mislabelled "Non-Foil": reading the curated split
+  // flag alone dropped the tier from the card altogether.
+  const lig = card("let it go c1");
+  if (lig) {
+    const { c, p } = byId(lig.printing.id);
+    const gt = D.gradedTarget(p, p.f[lig.fi][0]);
+    const catalog = cat(c, gt.cardId);
+    eq(catalog && catalog.get(gt.cardId) && catalog.get(gt.cardId).size, 1, "the pid-less placeholder does not make a foil-only C1 card two-sided");
+    const itb = roll(gt.cardId, [["Foil", 10, 1, 6006.86], ["Non-Foil", 10, 10, 3000], ["Unknown", 10, 2, 5999], ["Non-Foil", 9, 3, 1547]]);
+    const got = D.gradedRowsFor(itb, gt, catalog);
+    eq(tierOf(got, 10) && tierOf(got, 10).last_sold_price, 6006.86, "foil-only C1: PSA 10 is the card's own Foil row");
+    eq(tierOf(got, 9) && tierOf(got, 9).last_sold_price, 1547, "foil-only C1: a tier with only mislabelled Non-Foil sales still shows");
+    eq(chartB(itb, gt, catalog, { grader: "PSA", grade: "10" }), "", "foil-only C1: the graded chart draws every sale of the tier");
+  }
+  // A genuinely two-sided C1 card keeps the split, in both directions.
+  const cin = index.cards.flatMap((c) => c.p.map((p) => ({ c, p }))).find(({ c, p }) => c.n === "Cinderella - Stouthearted" && /\(C1\)/.test(R.sets[p.s].n));
+  ok(!!cin, "the fixture carries Cinderella - Stouthearted (C1)");
+  if (cin) {
+    const rows = roll(cin.p.id, [["Foil", 10, 86, 5500], ["Non-Foil", 10, 127, 550], ["Unknown", 10, 14, 600], ["Non-Foil", 9, 24, 107.4]]);
+    const catalog = cat(cin.c, cin.p.id);
+    const foil = D.gradedRowsFor(rows, D.gradedTarget(cin.p, "H"), catalog);
+    const nf = D.gradedRowsFor(rows, D.gradedTarget(cin.p, "N"), catalog);
+    ok(tierOf(foil, 10) && tierOf(foil, 10).last_sold_price === 5500 && !tierOf(foil, 9), "two-sided C1: the Top Prize never borrows the Prize Wall's PSA 9");
+    ok(tierOf(nf, 10) && tierOf(nf, 10).last_sold_price === 550 && tierOf(nf, 9) && tierOf(nf, 9).last_sold_price === 107.4, "two-sided C1: the Prize Wall reads its own tiers");
+    ok(![...foil, ...nf].some((r) => r.printing === "Unknown"), "two-sided C1: an unlabelled sale is never either printing");
+    eq(chartB(rows, D.gradedTarget(cin.p, "H"), catalog, { grader: "PSA", grade: "10" }), "Foil", "two-sided C1: the graded chart keeps only the foil's sales");
+  }
+  // ⚠ The BASE of a named-variant card reads "Normal" (the site's
+  // canonicalGradedSlot): base Genie - On the Job is an Enchanted holofoil, and
+  // reading it as "Foil" found 2 stray sales instead of 370.
+  const genie = byId("crd_ae7e91462bfc4861bbf97e99ed53a1c1");
+  const swords = byId("crd_ae7e91462bfc4861bbf97e99ed53a1c1::variant::two-swords-variant");
+  ok(genie && swords, "the fixture carries Genie - On the Job #209 and its Two Swords clone");
+  if (genie && swords) {
+    const rows = roll(genie.p.id, [["Foil", 10, 2, 1125], ["Normal", 10, 370, 1150], ["Two Swords", 10, 28, 2295], ["Normal", 8, 20, 105.5]]);
+    const gt = D.gradedTarget(genie.p, "H");
+    eq(gt.bucket, "Non-Foil", "base Genie #209 reads the Normal bucket");
+    const base = D.gradedRowsFor(rows, gt, cat(genie.c, gt.cardId));
+    eq(tierOf(base, 10) && tierOf(base, 10).sale_count, 370, "base Genie PSA 10 is the 370-sale Normal tier");
+    eq(tierOf(base, 8) && tierOf(base, 8).last_sold_price, 105.5, "base Genie PSA 8 (Normal only) shows");
+    const sg = D.gradedTarget(swords.p, "H");
+    eq(sg.cardId, genie.p.id, "the Two Swords clone reads its base card");
+    const sw = D.gradedRowsFor(rows, sg, cat(swords.c, sg.cardId));
+    ok(sw.length === 1 && sw[0].printing === "Two Swords", "Two Swords keeps only its own sales (never the base's PSA 8 by a fallback)");
+  }
+  // End to end: "/price let it go c1 psa 9" leads with the PSA 9 sale.
+  if (lig) {
+    const { handleInteraction } = await mod("discord/src/interactions.js");
+    const sent = [], pending = [];
+    const rows = roll(lig.printing.id, [["Foil", 10, 132, 6500], ["Non-Foil", 10, 2, 75.39], ["Unknown", 10, 8, 622], ["Non-Foil", 9, 3, 1547]]);
+    const db = { hasService: false, async get(t) { return t === "graded_sales_rollup" ? rows : []; }, async all() { return []; }, async rpc() { return []; } };
+    await handleInteraction({ type: 2, token: "g9", application_id: "123", data: { type: 1, name: "price", options: [{ type: 3, name: "name", value: "let it go c1 psa 9" }] } },
+      { R, index, db, origin: "https://bot.example", appId: "123", assets: null, log: () => {},
+        fetch: async (u, init) => { sent.push(init.body instanceof FormData ? JSON.parse(init.body.get("payload_json")) : JSON.parse(init.body)); return new Response("{}"); },
+        waitUntil: (pr) => pending.push(pr) });
+    await Promise.all(pending.splice(0));
+    const d = sent[0] && sent[0].embeds && sent[0].embeds[0] ? sent[0].embeds[0].description : "";
+    ok(/\*\*\$1,547\*\* last PSA 9 sale/.test(d) && !/No PSA 9 sales/.test(d), `"/price let it go c1 psa 9" leads with that sale (${d.split("\n").slice(0, 3).join(" | ")})`);
+  }
+}
 
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

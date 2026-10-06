@@ -7,6 +7,11 @@ const SITE_ORIGIN = "https://packs.ink";
 const _t = (s, v) => !v ? s : String(s).replace(/\{(\w+)\}/g, (m, k) => (v[k] != null ? v[k] : m));
 const _term = (kind, v) => v;
 // ---- site ----
+const SPLIT_PRINTING_CARD_IDS = new Set([
+  "crd_ae7e91462bfc4861bbf97e99ed53a1c1",  // Genie - On the Job (Enchanted #209): Normal vs Two Swords
+  "crd_b5e74b533270492982dff9472aee8664",  // Peter Pan - Pirate's Bane (Enchanted #215): Normal vs Text Error
+]);
+// ---- site ----
 const GRADED_FOIL_PRINTINGS = new Set(["foil", "cold foil", "holofoil", "holo"]);
 // ---- site ----
 const GRADED_NONFOIL_PRINTINGS = new Set(["normal", "non-foil", "nonfoil"]);
@@ -25,6 +30,22 @@ const rawSaleMatch = (rows, printing) => {
   if(single) return single;
   const b = gradedSlotBucket(printing);
   return b ? (rows.find(r => r.printing === b) || null) : null;
+};
+// ---- site ----
+const SPLIT_CARD_PRINTING_OPTIONS = {
+  "crd_ae7e91462bfc4861bbf97e99ed53a1c1": ["Normal", "Two Swords"],   // Genie - On the Job (Ench #209)
+  "crd_b5e74b533270492982dff9472aee8664": ["Normal", "Text Error"],   // Peter Pan - Pirate's Bane (Ench #215)
+};
+// ---- site ----
+const canonicalGradedSlot = (cardId, printing) => {
+  if(cardId && cardId.includes("::variant::")){
+    const base = cardId.split("::variant::")[0];
+    if(SPLIT_PRINTING_CARD_IDS.has(base)){
+      const variant = (SPLIT_CARD_PRINTING_OPTIONS[base] || []).find(p => p !== "Normal");
+      return {card_id: base, printing: variant || printing || "Normal"};
+    }
+  }
+  return {card_id: cardId, printing: printing || "Normal"};
 };
 // ---- site ----
 const EXTRAS_SET_NAME = "Extras & Oddities";
@@ -632,6 +653,83 @@ const amazonSearchUrl = (query, dept) =>
   `&i=${encodeURIComponent(dept || AMAZON_DEPT_DEFAULT)}` +
   `&tag=${AMAZON_TAG}&linkCode=ll2`;
 // ---- site ----
+function gradedCatalogBuckets(rawRows){
+  const m = new Map();
+  for(const r of (rawRows || [])){
+    if(!r || !r.card_id || r.tcgplayer_product_id == null) continue;
+    let s = m.get(r.card_id); if(!s){ s = new Set(); m.set(r.card_id, s); }
+    s.add(gradedSlotBucket(r.tcg_printing) || "Non-Foil");
+  }
+  return m;
+}
+// ---- site ----
+const GRADED_FOIL_AXIS = new Set(["Foil", "Non-Foil"]);
+// ---- site ----
+function gradedSplitTiers(rows, catalogBuckets){
+  const s = new Set();
+  for(const r of (rows || [])){
+    if(r.grade == null || !r.printing) continue;
+    const b = gradedSlotBucket(r.printing);          // null for "Unknown"
+    const onFoilAxis = b == null || GRADED_FOIL_AXIS.has(b);
+    if(onFoilAxis && catalogBuckets && (catalogBuckets.get(r.card_id)?.size || 0) < 2) continue;
+    s.add(`${r.card_id}|${(r.grader||"").toLowerCase()}|${r.grade}`);
+  }
+  return s;
+}
+// ---- site ----
+function makeGradedPrintingLookup(priceByKey, splitTiers){
+  const LADDER = ["Normal", "Holofoil", "Cold Foil"];
+  const MISS = {row: null, split: false, exact: false};
+  return (pid, cardId, grader, grade, stored) => {
+    if(!priceByKey || pid == null) return MISS;
+    const gk = (grader||"").toLowerCase();
+    const split = !!splitTiers?.has(`${cardId}|${gk}|${grade}`);
+    const want = stored || "Normal";
+    const wantB = gradedSlotBucket(want) || "Non-Foil";
+    const at = (pr) => priceByKey.get(pid + "|" + pr + "|" + grader + "|" + grade) || null;
+    for(const pr of [want, ...LADDER]){
+      // On a split card the ladder may only walk rungs that mean the same
+      // market — Holofoil and Cold Foil are both "Foil", Normal is not.
+      if(split && (gradedSlotBucket(pr) || "Non-Foil") !== wantB) continue;
+      const p = at(pr);
+      if(!p) continue;
+      const rb = gradedSlotBucket(p.rollup_printing);
+      // A row carrying the OTHER side's label can never price this slot, even
+      // on a rung whose own name matched (priceByKey writes Non-Foil tiers
+      // under "Normal" too, which is the exact hop that caused the report).
+      if(split && rb && rb !== wantB) continue;
+      return {row: p, split, exact: !split || rb === wantB};
+    }
+    return {row: null, split, exact: false};
+  };
+}
+// ---- site ----
+function buildGradedPriceIndex(rollup, cardById, keyOf){
+  const m = new Map();
+  const PRINTINGS = ["Normal", "Holofoil", "Cold Foil", "Foil", "Non-Foil"];
+  const SYN = {"Foil": ["Foil", "Holofoil", "Cold Foil"], "Non-Foil": ["Non-Foil", "Normal"], "Cold Foil": ["Cold Foil"]};
+  const val = (r) => r.avg_last_5 != null ? Number(r.avg_last_5)
+                   : r.last_sold_price != null ? Number(r.last_sold_price) : null;
+  const rowOf = (r, meta, v) => ({ebay_avg_1d: v, ebay_avg_30d: v, ebay_avg_7d: v,
+    last_sold_price: r.last_sold_price, avg_last_5: r.avg_last_5,
+    last_sold_date: r.last_sold_date, sale_count: r.sale_count, rollup_printing: r.printing || "",
+    grader: (r.grader||"").toLowerCase(), grade: r.grade,
+    tcgplayer_product_id: meta ? meta.tcgplayer_product_id : null});
+  for(const pass of [1, 2]){
+    for(const r of (rollup||[])){
+      const specific = !!r.printing && r.printing !== "Unknown";
+      if(specific !== (pass === 2)) continue;
+      const meta = cardById ? cardById.get(r.card_id) : null;
+      const id = keyOf(r, meta); const v = val(r);
+      if(id == null || v == null) continue;
+      const grader = (r.grader||"").toLowerCase();
+      for(const pr of (pass === 1 ? PRINTINGS : (SYN[r.printing] || [r.printing])))
+        m.set(id + "|" + pr + "|" + grader + "|" + r.grade, rowOf(r, meta, v));
+    }
+  }
+  return m;
+}
+// ---- site ----
 const CARD_DELTA_WINDOWS = [
   {key:"1d", label:"1D", days:1},
   {key:"1w", label:"1W", days:7},
@@ -1134,4 +1232,4 @@ const revealSetLabel = (cards) => {
   for(const [s, k] of n){ if(k > topN){ top = s; topN = k; } }
   return (top && topN * 2 > (cards || []).length) ? top : null;
 };
-export { AMAZON_ASIN_BY_SET, AMAZON_DEPT_DEFAULT, AMAZON_PUZZLE_ASINS, AMAZON_SEALED_RULES, AMAZON_TAG, CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_REGIONS, CAL_D, CAL_EST_SUFFIX, CARD_DELTA_WINDOWS, COLLECTOR_NUMBER_OVERRIDES, CONNECTING_FOILS, EXTRAS_MAP, EXTRAS_SET_NAME, GRADED_FOIL_PRINTINGS, GRADED_NONFOIL_PRINTINGS, INKS, MAINLINE_SETS, NEW_PULL_START, PRICE_STANDING_HIGH, PRICE_STANDING_LOW, PRICE_STANDING_MIN_POINTS, PRICE_STANDING_MIN_SPAN_RATIO, PRICE_STANDING_MIN_SPREAD, PRICE_STANDING_NEAR_LOW, PRICE_STANDING_WINDOWS, PRODUCT_RELEASE_DATES, PROMO_RARITY_SETS, PULL, PULL_V2, QUEST_SETS, REVEAL_EXCLUDED_SETS, REVEAL_MAX_CARDS, REVEAL_WINDOW_HOURS, SC_GEO_COUNTRIES, SC_GEO_TIMEOUT_MS, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, SC_POSTAL_FORMATS, SEALED_DISPLAY_TYPE_FOR, SET_CADENCE_DAYS, SET_DISPLAY_NAMES, SET_LGS_WEEKDAY, SET_ORDER, SET_RELEASE_DATES, SET_RELEASE_LABELS, SET_RELEASE_PHASES, SET_RETAIL_LAG_DAYS, SUPPRESSED_CARD_IDS, TCG_AFFILIATE_BASE, TCG_PID_OVERRIDES, UPCOMING_SET_NAMES, _CAL_REGION_BY_CC, _amznNorm, _calKindRank, _calPhaseRank, _calSetKey, _calSetPhase, amazonForSealed, amazonSearchUrl, amazonUrl, calAddDays, calEndOf, calEstimated, calEventFullLabel, calEventSubtitle, calEventTitle, calRegionOf, calStoreEventName, calTodayYmd, calUTCToYmd, calYmdParts, calYmdToUTC, calendarEstimatedSetEntries, calendarMergeEvents, calendarProductEntries, calendarSetEntries, calendarSetEstimates, calendarSort, calendarUpcoming, cleanSealedName, computeSeriesDeltas, deriveSealedDisplayType, getPull, gradedSlotBucket, haversineMi, normalizeRarity, pick, priceStanding, rawSaleMatch, revealRotation, revealSetLabel, scLocalTime12, scNormalizePostal, scPlaceLabel, scPostalCandidates, scPostalShape, scRankPlaces, scZippo, searchNorm, seriesPricedOn, simPack, tcgSetSearchUrl, tcgUrl, wPick };
+export { AMAZON_ASIN_BY_SET, AMAZON_DEPT_DEFAULT, AMAZON_PUZZLE_ASINS, AMAZON_SEALED_RULES, AMAZON_TAG, CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_REGIONS, CAL_D, CAL_EST_SUFFIX, CARD_DELTA_WINDOWS, COLLECTOR_NUMBER_OVERRIDES, CONNECTING_FOILS, EXTRAS_MAP, EXTRAS_SET_NAME, GRADED_FOIL_AXIS, GRADED_FOIL_PRINTINGS, GRADED_NONFOIL_PRINTINGS, INKS, MAINLINE_SETS, NEW_PULL_START, PRICE_STANDING_HIGH, PRICE_STANDING_LOW, PRICE_STANDING_MIN_POINTS, PRICE_STANDING_MIN_SPAN_RATIO, PRICE_STANDING_MIN_SPREAD, PRICE_STANDING_NEAR_LOW, PRICE_STANDING_WINDOWS, PRODUCT_RELEASE_DATES, PROMO_RARITY_SETS, PULL, PULL_V2, QUEST_SETS, REVEAL_EXCLUDED_SETS, REVEAL_MAX_CARDS, REVEAL_WINDOW_HOURS, SC_GEO_COUNTRIES, SC_GEO_TIMEOUT_MS, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, SC_POSTAL_FORMATS, SEALED_DISPLAY_TYPE_FOR, SET_CADENCE_DAYS, SET_DISPLAY_NAMES, SET_LGS_WEEKDAY, SET_ORDER, SET_RELEASE_DATES, SET_RELEASE_LABELS, SET_RELEASE_PHASES, SET_RETAIL_LAG_DAYS, SPLIT_CARD_PRINTING_OPTIONS, SPLIT_PRINTING_CARD_IDS, SUPPRESSED_CARD_IDS, TCG_AFFILIATE_BASE, TCG_PID_OVERRIDES, UPCOMING_SET_NAMES, _CAL_REGION_BY_CC, _amznNorm, _calKindRank, _calPhaseRank, _calSetKey, _calSetPhase, amazonForSealed, amazonSearchUrl, amazonUrl, buildGradedPriceIndex, calAddDays, calEndOf, calEstimated, calEventFullLabel, calEventSubtitle, calEventTitle, calRegionOf, calStoreEventName, calTodayYmd, calUTCToYmd, calYmdParts, calYmdToUTC, calendarEstimatedSetEntries, calendarMergeEvents, calendarProductEntries, calendarSetEntries, calendarSetEstimates, calendarSort, calendarUpcoming, canonicalGradedSlot, cleanSealedName, computeSeriesDeltas, deriveSealedDisplayType, getPull, gradedCatalogBuckets, gradedSlotBucket, gradedSplitTiers, haversineMi, makeGradedPrintingLookup, normalizeRarity, pick, priceStanding, rawSaleMatch, revealRotation, revealSetLabel, scLocalTime12, scNormalizePostal, scPlaceLabel, scPostalCandidates, scPostalShape, scRankPlaces, scZippo, searchNorm, seriesPricedOn, simPack, tcgSetSearchUrl, tcgUrl, wPick };
