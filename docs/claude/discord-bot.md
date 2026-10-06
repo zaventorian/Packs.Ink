@@ -388,6 +388,16 @@ Zaven: *"lets use low, like we do on the site"*, and on /card: the price lines a
     (`qualifies`), the home banners' rule: on Low, a $0.50 -> $6.00 card read "+1100%"
     and led the base section in the first preview. The shared digest
     (`discord_digest.PRICE_COL`) stays on Market.
+  - **⚠ A promo we track eBay sales for never moves by TCGplayer in a report**
+    (2026-10-05, Zaven: *"for those cards, we should use the ebay sales data and ignore
+    the tcgp for changes in price"*). Any card in `raw_sales_rollup` leaves the
+    TCGplayer candidates (`fetch_ebay`); it comes back only when it SOLD on eBay inside
+    the window, moved by the average of its last 5 eBay sales now against the same
+    average at the window's start (`ebay_moves`, the site's "Avg of last 5"), and the
+    line says "eBay avg of last 5 sales · N sold this week". A split card's unlabelled
+    ("Unknown") sales never stand for either printing, a baseline needs 3 sales, and
+    no standing note is judged for these rows. What prompted it: Golden Mickey's single
+    $200,000 TCGplayer listing led the Promos section at "+1233%".
   - **⚠ A report's standing note must hold on BOTH Low and Market**
     (`agreed_standing`, 2026-10-05). Judged on Market alone beside a quoted Low, the
     first weekly printed "Cruella ... -48.2% ... near 12-mo high" (Low $299.99 ->

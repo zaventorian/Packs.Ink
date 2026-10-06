@@ -196,10 +196,12 @@ def fresh_enough(price_date, now):
 
 
 def drop_stale(sb, rows, price_date):
-    """Keep only movers whose Low is really today's."""
-    pids = sorted({r["tcgplayer_product_id"] for r in rows if r.get("tcgplayer_product_id")})
+    """Keep only movers whose Low is really today's. An eBay row passes: it is
+    there because the card sold inside the window."""
+    keep = {id(r) for r in rows if r.get("ebay")}
+    pids = sorted({r["tcgplayer_product_id"] for r in rows if r.get("tcgplayer_product_id") and not r.get("ebay")})
     if not pids:
-        return []
+        return [r for r in rows if id(r) in keep]
     live = sb.select(
         "prices_daily",
         columns=f"tcgplayer_product_id,printing,{REPORT_DAILY_COL}",
@@ -210,6 +212,9 @@ def drop_stale(sb, rows, price_date):
     today = {(r["tcgplayer_product_id"], r.get("printing") or "Normal"): r.get(REPORT_DAILY_COL) for r in live}
     out = []
     for r in rows:
+        if id(r) in keep:
+            out.append(r)
+            continue
         v = today.get((r.get("tcgplayer_product_id"), r.get("printing") or "Normal"))
         mine = r.get(REPORT_PRICE_COL)
         if v is not None and mine is not None and abs(float(v) - float(mine)) < 0.005:
@@ -269,10 +274,15 @@ def rank(rows, key):
     return sorted(rows, key=lambda r: -abs(r[by]))
 
 
-def sectioned(rows, window):
-    """price_movers rows -> {section: [ranked, floored rows]} with pct / usd / price."""
+def sectioned(rows, window, ebay=()):
+    """price_movers rows -> {section: [ranked, floored rows]} with pct / usd / price.
+    `ebay` rows arrive already priced (ebay_rows) and face the same floors."""
     pct_col = REPORT_PCT_PREFIX + window
     out = {k: [] for k in SECTION_ORDER}
+    for row in ebay:
+        key = bucket_of(row)
+        if key and qualifies(row, key):
+            out[key].append(row)
     for r in rows:
         p, price = r.get(pct_col), r.get(REPORT_PRICE_COL)
         if p is None or price is None or float(p) == 0:
@@ -285,6 +295,122 @@ def sectioned(rows, window):
         if key and qualifies(row, key):
             out[key].append(row)
     return {k: rank(v, k) for k, v in out.items()}
+
+
+# ── promos we track eBay sales for ──────────────────────────────────────────
+# TCGplayer barely trades these, so its Low is one asking price: Golden Mickey's
+# "+1233%" to $200,000 led the Promos section on 2026-10-05. Zaven: "for those
+# cards, we should use the ebay sales data and ignore the tcgp for changes in
+# price." Any card in raw_sales_rollup leaves the TCGplayer movers entirely, and
+# comes back only when it SOLD on eBay inside the window: its move is the
+# average of its last 5 eBay sales now against the same average at the start of
+# the window — the site's "Avg of last 5", so a report and a card page agree.
+EBAY_MIN_BEFORE = 3            # a baseline of one or two sales is not a price
+EBAY_FOIL = {"foil", "cold foil", "holofoil", "holo"}
+EBAY_NONFOIL = {"normal", "non-foil", "nonfoil"}
+
+
+def sale_pkey(printing, split, foil_split):
+    """graded_sale_pkey() in SQL, the bucket raw_sales_rollup groups by:
+    '' = the card has one market; 'Unknown' = a split card's sale nobody
+    labelled, which can never stand for either printing."""
+    if split:
+        return printing or "Unknown"
+    if foil_split:
+        return "Foil" if (printing or "").lower() in EBAY_FOIL else "Non-Foil"
+    return ""
+
+
+def catalog_bucket(printing):
+    """Index.html's gradedSlotBucket: which bucket a catalog printing reads."""
+    s = (printing or "").lower().strip()
+    if not s or s == "unknown":
+        return None
+    if s in EBAY_FOIL:
+        return "Foil"
+    if s in EBAY_NONFOIL:
+        return "Non-Foil"
+    return s
+
+
+def ebay_moves(sales, flags, price_date, days):
+    """{(card_id, bucket): move} for every bucket that sold inside the window
+    and has a real baseline before it. Pure — the test drives it directly."""
+    groups = {}
+    for s in sales:
+        cid, price, day = s.get("card_id"), s.get("sale_price"), s.get("sold_date")
+        if not cid or price is None or not day:
+            continue
+        f = flags.get(cid) or {}
+        key = (cid, sale_pkey(s.get("printing"), f.get("split_printing"), f.get("foil_split")))
+        if key[1] == "Unknown":
+            continue
+        d = dt.date.fromisoformat(str(day)[:10])
+        if d > price_date:
+            continue
+        groups.setdefault(key, []).append((d, str(s.get("scraped_at") or ""), float(price)))
+    start = price_date - dt.timedelta(days=days)
+    out = {}
+    for key, rows in groups.items():
+        rows.sort()
+        sold = [r for r in rows if r[0] > start]
+        before = [r for r in rows if r[0] <= start][-5:]
+        if not sold or len(before) < EBAY_MIN_BEFORE:
+            continue
+        now = [r[2] for r in rows[-5:]]
+        avg_now, avg_was = sum(now) / len(now), sum(r[2] for r in before) / len(before)
+        if avg_was <= 0 or avg_now == avg_was:
+            continue
+        out[key] = {"now": avg_now, "was": avg_was, "sold": len(sold), "n": len(now),
+                    "pct": (avg_now / avg_was - 1) * 100}
+    return out
+
+
+def ebay_rows(moves, flags, catalog):
+    """Report rows for the moves: one per catalog printing the bucket stands for
+    (Index.html's rawSaleMatch — '' matches any printing, else the printing's
+    own bucket), carrying the eBay numbers in place of TCGplayer's."""
+    buckets = {}
+    for cid, b in moves:
+        buckets.setdefault(cid, set()).add(b)
+    out = []
+    for r in catalog:
+        cid = r.get("card_id")
+        have = buckets.get(cid)
+        if not have:
+            continue
+        b = "" if "" in have else catalog_bucket(r.get("printing"))
+        m = moves.get((cid, b))
+        if not m:
+            continue
+        out.append({**r, "pct": m["pct"], "usd": m["now"] - m["was"], "price": m["now"],
+                    "ebay": {"sold": m["sold"], "n": m["n"]}})
+        moves = {k: v for k, v in moves.items() if k != (cid, b)}   # one row per bucket
+    return out
+
+
+def fetch_ebay(sb, price_date, window):
+    """(card ids we track on eBay, report rows), or None when the eBay tables
+    can't be read — the report then runs on TCGplayer alone, as before."""
+    try:
+        roll = sb.select("raw_sales_rollup", columns="card_id", order="card_id.asc,printing.asc")
+        ids = sorted({r["card_id"] for r in roll if r.get("card_id")})
+        if not ids:
+            return set(), []
+        inlist = "in.(" + ",".join('"' + i.replace('"', "") + '"' for i in ids) + ")"
+        flags = {r["id"]: r for r in sb.select("cards", columns="id,split_printing,foil_split",
+                                               filters={"id": inlist}, order="id.asc")}
+        sales = sb.select("raw_sales", columns="card_id,printing,sale_price,sold_date,scraped_at",
+                          filters={"card_id": inlist, "excluded": "is.false",
+                                   "sold_date": f"lte.{price_date.isoformat()}"},
+                          order="card_id.asc,sold_date.asc,item_id.asc")
+        catalog = sb.select("price_movers", columns="card_id,name,version,rarity,set_id,printing,tcgplayer_product_id",
+                            filters={"card_id": inlist}, order="card_id.asc,printing.asc")
+    except Exception as e:
+        print(f"  (eBay sales unavailable, promos stay on TCGplayer: {type(e).__name__}: {str(e)[:160]})")
+        return None
+    moves = ebay_moves(sales, flags, price_date, digest.WINDOW_DAYS[window])
+    return set(ids), ebay_rows(moves, flags, catalog)
 
 
 def card_title(row, set_name=""):
@@ -368,12 +494,22 @@ def arrow(row):
     return "▲" if row["pct"] > 0 else "▼"
 
 
+def ebay_note(row, weekly):
+    """What an eBay row's price is: the average of its last N eBay sales, and
+    how many sold in the window — a move made by one sale should say so."""
+    e = row["ebay"]
+    span = "this week" if weekly else "today"
+    return f"eBay avg of last {e['n']} sales · {e['sold']} sold {span}"
+
+
 def daily_line(row, key, sets, standing):
     title = card_title(row, sets.get(row.get("set_id"), ""))
     url = tcg_url(row.get("tcgplayer_product_id"), row.get("printing"))
     link = f"[{title}]({url})" if url else title
     note = standing_note(standing, row["pct"])
     tail = f" · *{note}*" if note else ""
+    if row.get("ebay"):
+        tail = f" · *{ebay_note(row, False)}*"
     return f"{arrow(row)} **{lead_number(row, key)}** {link} · {fmt_money(row['price'])}{tail}"
 
 
@@ -384,6 +520,8 @@ def weekly_line(row, key, sets, standing):
     link = f"[{title}]({url})" if url else title
     other = fmt_pct(row["pct"]) if SECTIONS[key]["rank"] == "usd" else fmt_money(row["usd"], sign=True)
     detail = f"{fmt_money(row['price'])} ({other}) · {row.get('rarity') or ''}"
+    if row.get("ebay"):
+        detail = f"{fmt_money(row['price'])} ({other}) · {ebay_note(row, True)}"
     if set_raw:
         detail += f" · {set_display(set_raw)}"
     note = standing_note(standing, row["pct"])
@@ -763,7 +901,10 @@ def build_report(sb, price_date, window, session=requests, now=None):
     weekly = window != "1d"
     sets_meta = load_sets(sb)
     sets = {sid: m["name"] for sid, m in sets_meta.items()}
-    ranked = sectioned(fetch_candidates(sb, window), window)
+    cands = fetch_candidates(sb, window)
+    eb = fetch_ebay(sb, price_date, window)
+    tracked, ebay = eb if eb is not None else (set(), [])
+    ranked = sectioned([r for r in cands if r.get("card_id") not in tracked], window, ebay)
     fresh = {}
     for key in SECTION_ORDER:
         want = SECTIONS[key]["lines"][window]
@@ -774,7 +915,8 @@ def build_report(sb, price_date, window, session=requests, now=None):
     look = {}
     for key in SECTION_ORDER:
         for r in fresh[key][:STANDING_PER_SECTION]:
-            look[key_of(r)] = r
+            if not r.get("ebay"):
+                look[key_of(r)] = r
     since = (price_date - dt.timedelta(days=digest.HISTORY_DAYS)).isoformat()
     pids = sorted({k[0] for k in look if k[0]})
     hist = {}
