@@ -253,13 +253,20 @@
 <link rel="stylesheet" href="styles.css?v=530">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
-     Each PNG is ~3-5 KB so the cost is negligible. -->
-<link rel="preload" as="image" href="Logos/inks/AMBER.png"/>
-<link rel="preload" as="image" href="Logos/inks/AMETHYST.png"/>
-<link rel="preload" as="image" href="Logos/inks/EMERALD.png"/>
-<link rel="preload" as="image" href="Logos/inks/RUBY.png"/>
-<link rel="preload" as="image" href="Logos/inks/SAPPHIRE.png"/>
-<link rel="preload" as="image" href="Logos/inks/STEEL.png"/>
+     Each PNG is ~3-5 KB so the cost is negligible. FIRST VISIT ONLY: once the
+     service worker controls the page Chrome refuses a parser preload ("cross-
+     world service worker resource mismatch"), fetches each icon again and logs
+     a warning per ink chip — 128 of them on the home page (2026-10-06). -->
+<script>
+(function(){
+  try { if(navigator.serviceWorker && navigator.serviceWorker.controller) return; } catch(e){}
+  ["AMBER","AMETHYST","EMERALD","RUBY","SAPPHIRE","STEEL"].forEach(function(n){
+    var l = document.createElement("link");
+    l.rel = "preload"; l.as = "image"; l.href = "Logos/inks/" + n + ".png";
+    document.head.appendChild(l);
+  });
+})();
+</script>
 </head>
 <body>
 <!--
