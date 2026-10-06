@@ -941,6 +941,8 @@ const PRODUCT_RELEASE_DATES = [
    notes: "Standalone co-op scenario box, $59.99. The two included decks are Lorcana-legal; the scenario deck is not."},
   {title: "Attack of the Vine! Collection Starter Set", subtitle: "Rapunzel Edition", on: "2026-09-04"},
   {title: "Hyperia City Beast Gift Box", on: "2026-11-13"},
+  {title: "The Great Hunny Rescue Playmat", on: "2026-11-13",
+   notes: "Playmat using the Great Hunny Rescue art, planned for select Ravensburger sites. Announced Oct 5, 2026; not on TCGplayer yet."},
 ];
 // ---- site ----
 const haversineMi = (la1, lo1, la2, lo2) => {
