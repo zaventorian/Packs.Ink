@@ -2,13 +2,14 @@
 status: draft
 date: 2026-10-05
 slug: hyperia-city-gallery-242
+replaces: 2026-10-04-hyperia-city-gallery-216
 ---
 
 # Hyperia City: the official gallery now lists 242 cards, with two Iconics
 
 **Summary.** The official card gallery now shows 242 cards for Hyperia City, up
-from 216 yesterday. It now carries 18 Epics, 18 Enchanteds and two Iconics,
-Mickey Mouse - Best in Town and Cinderella - Unintentional Icon.
+from 111 a few days ago and 216 yesterday. It now carries 18 Epics,
+18 Enchanteds and two Iconics, Mickey Mouse - Best in Town and Cinderella - Unintentional Icon.
 
 ## What changed
 
@@ -41,4 +42,6 @@ game stores on October 16 and wide retail on October 23.
 - **Not confirmed:** that 242 is the final count. Every ink now has three Epics
   and three Enchanteds, which looks complete, but the gallery has not said so
   and this draft does not claim a total.
-- No prices are quoted: none of these cards has a TCGplayer market price yet.
+- No prices are quoted. Every Hyperia City card is now matched to its TCGplayer
+  listing, but none has a market price yet; they should start appearing as
+  pre-orders sell.
