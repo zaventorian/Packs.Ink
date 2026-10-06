@@ -142,6 +142,25 @@ def sync_match_result(conn, row, p1, p2):
     return True
 
 
+# An UPSERT, never INSERT OR REPLACE. REPLACE deletes the old row and inserts a
+# new one, so every column not listed here went back to its default on each
+# re-pull: `notes` (the mark that keeps verify_results --repair off an event a
+# person corrected), `platform`, `is_ignored`, `ingested_at`. RPH's own fields
+# follow RPH; a metadata field the caller doesn't know (None) keeps what we hold.
+UPSERT_EVENT_SQL = """
+    INSERT INTO events (event_id, name, store, location, event_date, season, num_players, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(event_id) DO UPDATE SET
+      name        = excluded.name,
+      store       = COALESCE(excluded.store, events.store),
+      location    = COALESCE(excluded.location, events.location),
+      event_date  = COALESCE(excluded.event_date, events.event_date),
+      season      = COALESCE(excluded.season, events.season),
+      num_players = COALESCE(excluded.num_players, events.num_players),
+      status      = COALESCE(excluded.status, events.status)
+"""
+
+
 def ingest_event(event_id, store=None, location=None, event_date=None, season=None):
     """Pull one event + all its rounds and write to DB. Idempotent at event level."""
     conn = db()
@@ -189,9 +208,7 @@ def ingest_event(event_id, store=None, location=None, event_date=None, season=No
         if not all_rounds:
             with conn:
                 conn.execute(
-                    """INSERT OR REPLACE INTO events
-                       (event_id, name, store, location, event_date, season, num_players, status)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    UPSERT_EVENT_SQL,
                     (event_id, name, store, location, event_date, season, num_players, status),
                 )
             return event_id, "queue", f"{name} (no rounds yet — queued for refresh)"
@@ -215,9 +232,7 @@ def ingest_event(event_id, store=None, location=None, event_date=None, season=No
         # write everything in one transaction
         with conn:
             conn.execute(
-                """INSERT OR REPLACE INTO events
-                   (event_id, name, store, location, event_date, season, num_players, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                UPSERT_EVENT_SQL,
                 (event_id, name, store, location, event_date, season, num_players, status),
             )
 
