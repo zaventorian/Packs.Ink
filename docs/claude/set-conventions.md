@@ -24,6 +24,7 @@
 | `review_due` | a **scheduled review** came due — see below |
 | `pop_stale` | **PSA population data is over a week old** — see below |
 | `scrape_stale` | **a feed refreshed from Zaven's own machine has gone quiet** (2026-09-30): `graded_sales` with nothing scraped for 3 days, or no tournament newer than 14 days. `STALE_FEEDS` in `reconcile_catalog.py`; the key carries the date, like `pop_stale` |
+| `scanner_stale` | **the card scanner's index names cards that no longer exist** (2026-10-06): `scanner/index.json` ships with a deploy, and when `retire_prestaged.py` hands a stand-in to Lorcast's row the stand-in's id leaves `cards` but stays in the index. The live index held 95 retired Hyperia City stand-ins for four days. Keyed `index<IDXV>:<count>`; the rebuild steps travel with the alert |
 
 **⚠ A red run cannot get redder, so new findings are called out separately (2026-09-30).** The watch sat red from 9/24 to 9/30 on the same twelve findings, and a thirteenth would have sent the identical failure email. Each run now restores the previous run's report from `actions/cache` (`--prev`), prints a "NEW since the last run" block, rewrites the body of ONE tracking issue ("Catalog watch: open findings") with the whole open list, and **comments on it only when something is new** — GitHub emails that comment, with the finding's name in it. No previous report (first run, evicted cache) means nothing is called new. The calendar watch is its own job in the same workflow, so a red catalog job no longer hides it.
 
