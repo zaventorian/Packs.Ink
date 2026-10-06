@@ -5960,7 +5960,7 @@ function computeSalesValueHistory(sales, ownedSlots, knownBuckets){
   // valued by forward-fill from each slot's last known sale. Without this the
   // endpoint lands on whatever the window's last sale date happens to be, and
   // acquired-date gating against that shifting date can move the headline.
-  const today = new Date().toISOString().slice(0,10);
+  const today = localYmd();
   if(dates[dates.length-1] < today) dates.push(today);
   const valueByDate = Object.fromEntries(dates.map(d=>[d,0]));
   for(const s of ownedSlots){
@@ -5986,7 +5986,7 @@ function computeSalesValueHistoryAvg5(sales, ownedSlots, knownBuckets){
   for(const s of ownedSlots){ const ser = seriesFor(s); if(ser) for(const r of ser) dateSet.add(r.date); }
   const dates = Array.from(dateSet).sort();
   if(!dates.length) return [];
-  const today = new Date().toISOString().slice(0,10);
+  const today = localYmd();
   if(dates[dates.length-1] < today) dates.push(today);
   const valueByDate = Object.fromEntries(dates.map(d=>[d,0]));
   for(const s of ownedSlots){
@@ -6269,8 +6269,8 @@ function addUnsoldSlabsToSeries(series, sales, slots, valueOf, fallbackDates, kn
 }
 // Range start / today, as the flat-line anchor for the no-sales-in-window case.
 const portfolioFallbackDates = (days) => [
-  new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10),
-  new Date().toISOString().slice(0,10),
+  localYmdDaysAgo(days),
+  localYmd(),
 ];
 
 // Per-sealed-pid Δ% rollup. Mirrors computeGradedDeltas + the raw
@@ -10177,7 +10177,7 @@ const GradedPrivateSaleModal = ({cardId, cardName, onClose, onAdded}) => {
   const [grader, setGrader] = useState("PSA");
   const [grade, setGrade]   = useState("10");
   const [price, setPrice]   = useState("");
-  const [date, setDate]     = useState(()=> new Date().toISOString().slice(0,10));
+  const [date, setDate]     = useState(()=> localYmd());
   const [note, setNote]     = useState("");
   const [busy, setBusy]     = useState(false);
   const submit = async () => {
@@ -10210,7 +10210,7 @@ const GradedPrivateSaleModal = ({cardId, cardName, onClose, onAdded}) => {
       <div class="gs-modal-fields">
         <label>${_t("Sale price")}<input type="number" step="0.01" min="0" value=${price}
           onInput=${e=>setPrice(e.target.value)} placeholder="$"/></label>
-        <label>${_t("Sale date")}<input type="date" value=${date} max=${new Date().toISOString().slice(0,10)}
+        <label>${_t("Sale date")}<input type="date" value=${date} max=${localYmd()}
           onInput=${e=>setDate(e.target.value)}/></label>
       </div>
       <div class="gs-modal-cardpick">
@@ -11325,7 +11325,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           </div>
           ${rangeKey === "custom" && html`<input type="date" class="custom-date-input"
             value=${customStart}
-            max=${new Date().toISOString().slice(0,10)}
+            max=${localYmd()}
             onChange=${e=>setCustomStart(e.target.value)}/>`}
           <label class="checkbox-group" title=${_t("Hide data points from before this set's Local Game Store release.")}>
             <input type="checkbox" checked=${hidePreorders} onChange=${e=>setHidePreorders(e.target.checked)}/>
@@ -25106,7 +25106,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
       </div>
       ${rangeKey === "custom" && html`<input type="date" class="custom-date-input"
         value=${customStart}
-        max=${new Date().toISOString().slice(0,10)}
+        max=${localYmd()}
         onChange=${e=>setCustomStart(e.target.value)}/>`}
       ${(mode === "card" || compareCards.some(c => c.kind === "card")) && html`<label class="checkbox-group" title=${_t("Pre-release prices are wildly inflated (often 10-20× the real post-release floor). Default ON hides those days for every card individually using its set's release date. Uncheck to include them anyway.")}>
         <input type="checkbox" checked=${hidePreorders} onChange=${e=>setHidePreorders(e.target.checked)}/>
@@ -26504,7 +26504,7 @@ const SealedValueChart = ({sealedCollection, sealedPrices, rangeKey, setRangeKey
   useEffect(() => {
     if(!owned.size){ setHistoryRows([]); return; }
     const days = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
-    const since = new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10);
+    const since = localYmdDaysAgo(days);
     const pids = Array.from(new Set(Array.from(owned.keys()).map(k => parseInt(k.split("|")[0],10))));
     const matPids = Object.keys(sealedCollection || {}).filter(isPlaymatPid).map(sealedPricePid);
     let cancelled = false;
@@ -29248,7 +29248,7 @@ const GradedValueChart = ({items, cardById, priceByKey, knownBuckets, splitTiers
   const rangeDays = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
   useEffect(() => {
     if(!slots.length){ setHistoryRows([]); return; }
-    const since = new Date(Date.now() - rangeDays*24*3600*1000).toISOString().slice(0,10);
+    const since = localYmdDaysAgo(rangeDays);
     let cancelled = false;
     setState({loading: true, error: null});
     fetchGradedSalesFor(slots, since)
@@ -46662,9 +46662,15 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
       if(qty <= 0) continue;
       const r = byKey[k];
       if(!r || !r.tcgplayer_product_id) continue;
+      ownedRows.push({row:r, qty});
+      // A CUSTOM_VARIANTS clone (Genie Two Swords, Peter Pan Text Error) keeps
+      // its base card's product id and printing but has no price of its own,
+      // so the headline and the Collection tab count it $0 — while the chart,
+      // keyed on (product, printing), priced it as the base Enchanted. Owning
+      // only the variant read "-$280 (-100%)" (review, 2026-10-06).
+      if(r.isCustomVariant) continue;
       const pk = r.tcgplayer_product_id + "|" + r.tcg_printing;
       map.set(pk, (map.get(pk)||0) + qty);
-      ownedRows.push({row:r, qty});
     }
     return {map, ownedRows};
   }, [raw, collection, user]);
@@ -46707,7 +46713,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     if(historyRows) return; // already fetched this range this session
     const productIds = Array.from(new Set(Array.from(owned.map.keys()).map(k => parseInt(k.split("|")[0],10))));
     const days = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
-    const since = new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10);
+    const since = localYmdDaysAgo(days);
     let cancelled = false;
     setHistoryState({loading:true, error:null});
     // Seeds first (see fetchCollectionPriceSeeds): the rollup walks each key's
@@ -46809,7 +46815,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   useEffect(() => {
     if(!showSealed || !sealedOwned.size){ setSealedHistoryRows(null); return; }
     const days = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
-    const since = new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10);
+    const since = localYmdDaysAgo(days);
     const pids = Array.from(new Set(Array.from(sealedOwned.keys()).map(k => parseInt(k.split("|")[0],10))));
     const matPids = Object.keys(sealedCollection || {}).filter(isPlaymatPid).map(sealedPricePid);
     let cancelled = false;
@@ -46879,7 +46885,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   const gradedRangeDays = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
   useEffect(() => {
     if(!(gradedPremium && showGraded && gradedSlots.length)){ setGradedSalesRows(null); return; }
-    const since = new Date(Date.now() - gradedRangeDays*24*3600*1000).toISOString().slice(0,10);
+    const since = localYmdDaysAgo(gradedRangeDays);
     let cancelled = false;
     fetchGradedSalesFor(gradedSlots, since)
       .then(rows => { if(!cancelled) setGradedSalesRows(rows); })

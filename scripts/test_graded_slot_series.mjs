@@ -25,6 +25,8 @@ function grab(startMarker, endMarker) {
 }
 
 const code = [
+  // The value functions name "today" in the viewer's own timezone (localYmd).
+  grab("const localYmd = (d = new Date()) =>", "const setDataPartial"),
   grab("const GRADED_FOIL_PRINTINGS", "// Screener badge label"),
   grab("function makeGradedSlotSeries", "\n// Roll up individual graded sales"),
   grab("function computeSalesValueHistory(sales", "\n// Avg-of-last-5 variant"),
@@ -32,7 +34,15 @@ const code = [
   grab("function addUnsoldSlabsToSeries", "\n// Range start / today"),
 ].join("\n");
 
-const mod = new Function(code + "\nreturn {gradedSlotBucket, makeGradedSlotSeries, gradedKnownBuckets, computeSalesValueHistory, makeGradedRollupValue, addUnsoldSlabsToSeries, gradedSplitTiers, gradedCatalogBuckets, makeGradedPrintingLookup, gradedPriceNote};")();
+// A slab acquired "today" in Tokyo was worth $0 until UTC caught up, and a US
+// evening chart gained a point dated tomorrow (review, 2026-10-06): "today" is
+// the viewer's calendar day, never the UTC one.
+if (/new Date\(\)\.toISOString\(\)\.slice\(0, ?10\)/.test(code)) {
+  console.error("FAIL: a graded value function names today by the UTC day; use localYmd()");
+  process.exit(1);
+}
+
+const mod = new Function(code + "\nreturn {localYmd, gradedSlotBucket, makeGradedSlotSeries, gradedKnownBuckets, computeSalesValueHistory, makeGradedRollupValue, addUnsoldSlabsToSeries, gradedSplitTiers, gradedCatalogBuckets, makeGradedPrintingLookup, gradedPriceNote};")();
 const { gradedSlotBucket, makeGradedSlotSeries, gradedKnownBuckets, computeSalesValueHistory, makeGradedRollupValue, addUnsoldSlabsToSeries, gradedSplitTiers, gradedCatalogBuckets, makeGradedPrintingLookup, gradedPriceNote } = mod;
 
 let fails = 0;
@@ -102,7 +112,7 @@ eq("acquired_date gates the earlier date", q.find(p=>p.date==="2026-07-01").valu
 eq("qty multiplies after acquisition",  q.find(p=>p.date==="2026-07-08").value, 300);
 
 // ── today-anchoring: every range's series ends on the same date ──
-const todayYMD = new Date().toISOString().slice(0,10);
+const todayYMD = mod.localYmd();  // the viewer's day, as the function uses
 eq("series is anchored at today", hist[hist.length-1].date, todayYMD);
 eq("today's value = last sale forward-filled", hist[hist.length-1].value, 452.5);
 
