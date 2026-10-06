@@ -141,7 +141,7 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
 - **`/reports`** stores (server, channel, cadence) in
   `discord_report_subscriptions` (**migration 173, APPLIED 2026-09-28**) through the service
   key; `scripts/discord_reports.py` posts the report through the bot token,
-  daily and on Mondays for weekly. The movers data, the standing maths and the
+  daily in the evening and weekly on Monday mornings. The movers data, the standing maths and the
   freshness rules come from `discord_digest.py`; the LAYOUT is the report's
   own (see "The channel report's layout" below). It drops a mover whose
   "today" is not today (`drop_stale`). A 403/404 is written to `last_error`, which
@@ -159,6 +159,14 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
     many runs a day are safe: nothing posts twice, and no day-old report is sent
     the next evening. The embed title carries its date, so a post after midnight
     is still clearly that day's.
+  - **The weekly posts Monday MORNING, 9 AM - 3 PM Chicago** (`weekly_open`, Zaven
+    2026-10-05: "I don't want it to overlap w/the daily one"), on Sunday's prices, so
+    it covers Monday-Sunday. Monday crons at 14:05 / 15:05 UTC hit 9:05 in CDT and in
+    CST; 17:05 is a retry. The window shuts before Monday's prices land, and the
+    evening runs only open the daily, so the two never post together. A Monday with
+    no run inside the window posts no weekly: Actions -> Discord reports ->
+    `force_weekly` (and `dry_run` off) sends it now to every weekly channel, even
+    ones that already had it.
 - **Secrets live in GitHub**: `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`,
   `DISCORD_BOT_TOKEN` (all set 2026-09-28). The deploy syncs the first two into
   the Worker, plus, for `/reports`, the repo's own `SUPABASE_SERVICE_KEY`, reused
@@ -278,8 +286,11 @@ client still showing one gets "Unknown command." (guarded). The resolver's
   skipped. Infinity events can appear and say so. The breakdown, the most
   played cards and the events come to ~4,300 of the 6,000 characters.
 - **`/reports send`** (server managers) posts the latest daily or weekly report
-  in the channel, now. `discord_reports.py` keeps both every day it runs with
-  `--post`, **whether or not any channel subscribes** (`store_latest`), in
+  in the channel, now. `discord_reports.py` keeps each one when it may post it, with
+  `--post`, **whether or not any channel subscribes** (`store_latest`) — the daily
+  each evening, the weekly ONLY in its Monday window, so `/reports send weekly` is
+  exactly the last Monday report (until 2026-10-05 it was seven days rebuilt every
+  evening). Kept in
   `discord_report_latest` (**migration 175, APPLIED 2026-09-30**), built once a day per
   cadence. Its pictures go to the public `discord-reports` bucket under
   `<cadence>/<price date>/`, because Discord caches an image by URL; yesterday's
@@ -375,8 +386,15 @@ Zaven: *"lets use low, like we do on the site"*, and on /card: the price lines a
     stale check compares today's `low_price`, and the weekly picture strips draw the
     Low trend. **⚠ A section's price floor now holds at BOTH ends of the window**
     (`qualifies`), the home banners' rule: on Low, a $0.50 -> $6.00 card read "+1100%"
-    and led the base section in the first preview. The standing notes and the shared
-    digest (`discord_digest.PRICE_COL`) stay on Market.
+    and led the base section in the first preview. The shared digest
+    (`discord_digest.PRICE_COL`) stays on Market.
+  - **⚠ A report's standing note must hold on BOTH Low and Market**
+    (`agreed_standing`, 2026-10-05). Judged on Market alone beside a quoted Low, the
+    first weekly printed "Cruella ... -48.2% ... near 12-mo high" (Low $299.99 ->
+    $155.33 while Market sat flat at $200.16), and a reader asked how that could be.
+    Requiring Low to agree makes the note true of the price beside it; requiring
+    Market keeps one phantom Low listing out of "cheapest in 12 months" and Worth a
+    look. A note against the move says so: "still near 12-mo high" on a faller.
 - **`/card` with a drawn tile prints no prices** — no Low/Market line, no 1D/1W/1M, no
   other finish. The tile carries them. Without a tile (no TCGplayer listing, a graded
   ask, an eBay-led promo) the text lines are still there.

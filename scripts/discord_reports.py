@@ -4,7 +4,7 @@ asked for it with the bot's /reports command.
 
     python scripts/discord_reports.py                 # dry run: what would post where
     python scripts/discord_reports.py --post          # actually post
-    python scripts/discord_reports.py --post --force-weekly
+    python scripts/discord_reports.py --post --force-weekly   # the weekly, now, to every weekly channel
     python scripts/discord_reports.py --preview out/  # dry run + write each report to out/
 
 One post per subscribed channel, through the bot's own account
@@ -34,6 +34,8 @@ with the digest about a card; the LAYOUT is the report's own (2026-09-28):
 
 Operationally:
 
+  * The weekly posts on MONDAY MORNING, 9 AM-3 PM Chicago (weekly_open), on
+    Sunday's prices — never beside the daily, which posts in the evening.
   * DRY RUN BY DEFAULT, like the digest. `--post` is the deliberate act.
   * No bot token, or migration 173 not applied: a clean exit 0 that says so —
     the workflow stays green until the feature is switched on.
@@ -69,6 +71,7 @@ import re
 import sys
 import time
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -86,6 +89,16 @@ WINDOW = {"daily": "1d", "weekly": "7d"}
 # day's prices from about 20:30 UTC; runs after midnight (a late schedule, the
 # 01:00 ETL retry) still owe that day's report, and by noon it is stale.
 LATE_GRACE_HOURS = 12
+# The weekly goes out on Monday MORNING, Chicago time (Zaven, 2026-10-05), so
+# it never lands beside the daily, which posts once the evening prices are in
+# (~4:20 PM Central). It covers Monday-Sunday: at 9 AM the newest prices are
+# Sunday's. The window closes at 3 PM, before Monday's prices land, so a late
+# or retried run can never post it next to the daily. A Monday with no run in
+# the window posts no weekly; the workflow's force_weekly sends one by hand.
+WEEKLY_TZ = ZoneInfo("America/Chicago")
+WEEKLY_FIRST_HOUR = 9
+WEEKLY_LAST_HOUR = 15          # exclusive
+WEEKLY_MAX_LAG_DAYS = 2        # Sunday's prices, or Saturday's if Sunday's ETL failed
 
 # ── links: the site's tcgUrl, exactly (test_discord_reports.py checks Index.html) ──
 TCG_AFFILIATE_BASE = "https://partner.tcgplayer.com/c/7285926/1780961/21018"
@@ -152,16 +165,26 @@ def load_subscriptions(sb):
 
 
 def due(sub, today, force_weekly=False):
-    """Is this subscription owed a post today?"""
+    """Is this subscription owed a post for price date `today`? WHEN a cadence
+    may post at all is fresh_enough / weekly_open's business, not this."""
     last = sub.get("last_posted_on")
     last = dt.date.fromisoformat(str(last)[:10]) if last else None
     if sub["cadence"] == "daily":
         return last != today
     if sub["cadence"] == "weekly":
-        if today.weekday() != 0 and not force_weekly:   # Mondays
-            return False
-        return last is None or (today - last).days >= 6
+        # force_weekly is a person asking for it now: it posts even to a
+        # channel that already has this week's.
+        return force_weekly or last is None or (today - last).days >= 6
     return False
+
+
+def weekly_open(price_date, now):
+    """May the weekly post at `now` (UTC)? Monday 9 AM - 3 PM Chicago, on
+    prices no older than the weekend."""
+    local = now.astimezone(WEEKLY_TZ)
+    if local.weekday() != 0 or not (WEEKLY_FIRST_HOUR <= local.hour < WEEKLY_LAST_HOUR):
+        return False
+    return (local.date() - price_date).days <= WEEKLY_MAX_LAG_DAYS
 
 
 def fresh_enough(price_date, now):
@@ -301,7 +324,40 @@ def short_standing(st):
 
 
 def is_worth(st):
-    return bool(st) and st[0] in ("low", "near-low")
+    return bool(st) and st[0] in CHEAP_TONES
+
+
+CHEAP_TONES = ("low", "near-low")
+
+
+def agreed_standing(market, low):
+    """The note a line may carry. A line QUOTES TCGplayer's Low, and the note
+    used to be judged on NM Market alone, so one cheap listing printed "-48%
+    ... near 12-mo high" (Cruella: Low $299.99 -> $155.33 while Market sat
+    flat at $200.16 — davidpineapple, 2026-10-05). A note now prints only when
+    the Low history says the same thing, so it is true of the price beside it;
+    Market still has to agree too, so one phantom Low listing can never read
+    "cheapest in 12 months" or reach Worth a look. When the two disagree in
+    strength, the weaker claim is printed."""
+    if not market or not low:
+        return None
+    if market[0] == "high":
+        return market if low[0] == "high" else None
+    if market[0] in CHEAP_TONES and low[0] in CHEAP_TONES:
+        return low if (low[0] == "near-low" and market[0] == "low") else market
+    return None
+
+
+def standing_note(st, pct):
+    """The short note, with "still" when it runs against the move: a card down
+    15% this week can still be near its 12-month high, and should say so."""
+    note = short_standing(st)
+    if not note:
+        return ""
+    against = (st[0] == "high" and pct < 0) or (st[0] in CHEAP_TONES and pct > 0)
+    if not against:
+        return note
+    return "still " + note if note.startswith("near ") else "still at a " + note
 
 
 def lead_number(row, key):
@@ -316,7 +372,7 @@ def daily_line(row, key, sets, standing):
     title = card_title(row, sets.get(row.get("set_id"), ""))
     url = tcg_url(row.get("tcgplayer_product_id"), row.get("printing"))
     link = f"[{title}]({url})" if url else title
-    note = short_standing(standing)
+    note = standing_note(standing, row["pct"])
     tail = f" · *{note}*" if note else ""
     return f"{arrow(row)} **{lead_number(row, key)}** {link} · {fmt_money(row['price'])}{tail}"
 
@@ -330,7 +386,7 @@ def weekly_line(row, key, sets, standing):
     detail = f"{fmt_money(row['price'])} ({other}) · {row.get('rarity') or ''}"
     if set_raw:
         detail += f" · {set_display(set_raw)}"
-    note = short_standing(standing)
+    note = standing_note(standing, row["pct"])
     tail = f" · **{note}**" if note else ""
     return f"{arrow(row)} **{lead_number(row, key)}** {link}\n*{detail}*{tail}"
 
@@ -724,15 +780,18 @@ def build_report(sb, price_date, window, session=requests, now=None):
     hist = {}
     for i in range(0, len(pids), 40):
         hist.update(digest.fetch_history(sb, pids[i:i + 40], since))
-    standing = {k: digest.price_standing(hist.get(k, [])) for k in look}
-    # The picture strips draw each card's LOW trend, matching the price beside it.
+    # Low history: the picture strips draw each card's LOW trend, matching the
+    # price beside it, and a standing note has to hold on it too. Without it,
+    # agreed_standing prints no note at all.
     low_hist = {}
-    if weekly:
-        for i in range(0, len(pids), 40):
-            try:
-                low_hist.update(digest.fetch_history(sb, pids[i:i + 40], since, col=REPORT_DAILY_COL))
-            except Exception as e:  # a missing trend line must never cost the report
-                print(f"  (low history unavailable: {str(e)[:160]})")
+    for i in range(0, len(pids), 40):
+        try:
+            low_hist.update(digest.fetch_history(sb, pids[i:i + 40], since, col=REPORT_DAILY_COL))
+        except Exception as e:  # a missing trend line must never cost the report
+            print(f"  (low history unavailable: {str(e)[:160]})")
+    standing = {k: agreed_standing(digest.price_standing(hist.get(k, [])),
+                                   digest.price_standing(low_hist.get(k, [])))
+                for k in look}
 
     worth = []
     if weekly:
@@ -896,9 +955,12 @@ def stored_embeds(report, urls):
     return out
 
 
-def store_latest(sb, price_date, report_for, session=requests):
-    """Keep today's daily and weekly report for /reports send. Built once a day
-    per cadence (this job runs several times a day). The pictures go to a
+def store_latest(sb, price_date, report_for, session=requests, cadences=("daily", "weekly")):
+    """Keep the report each cadence last went out with, for /reports send: the
+    daily whenever a daily may post, the weekly only when the weekly may — so
+    "/reports send weekly" is exactly Monday's report, not seven days rebuilt
+    every evening. Built once per price date per cadence (this job runs
+    several times a day). The pictures go to a
     public bucket under a DATED path: Discord caches an image by its URL, so
     yesterday's chart must not come back under today's."""
     have = load_latest(sb)
@@ -907,7 +969,7 @@ def store_latest(sb, price_date, report_for, session=requests):
         return 0
     stored = 0
     base = f"{sb.url}/storage/v1/object"
-    for cadence in ("daily", "weekly"):
+    for cadence in cadences:
         old = have.get(cadence) or {}
         if str(old.get("price_date") or "")[:10] == price_date.isoformat():
             continue
@@ -955,9 +1017,17 @@ def run(args, sb=None, session=requests, now=None):
     if not price_date:
         print("No price date available; refusing to post.")
         return 0
-    if not fresh_enough(price_date, now) and not args.allow_stale:
-        print(f"Newest price date is {price_date}, too old at {now:%Y-%m-%d %H:%M} UTC — today's ETL has not landed yet. Skipping.")
+    open_now = []
+    if fresh_enough(price_date, now) or args.allow_stale:
+        open_now.append("daily")
+    if weekly_open(price_date, now) or args.force_weekly:
+        open_now.append("weekly")
+    if not open_now:
+        print(f"Newest price date is {price_date} at {now:%Y-%m-%d %H:%M} UTC: no daily is due "
+              "(today's ETL has not landed) and it is outside the weekly's Monday 9 AM-3 PM "
+              "Chicago window. Skipping.")
         return 0
+    print(f"Open now: {', '.join(open_now)} (price date {price_date}).")
 
     built = {}
 
@@ -969,14 +1039,14 @@ def run(args, sb=None, session=requests, now=None):
     # Kept whether or not any channel subscribes: /reports send posts it.
     if args.post:
         try:
-            store_latest(sb, price_date, report_for, session=session)
+            store_latest(sb, price_date, report_for, session=session, cadences=open_now)
         except Exception as e:   # never let it cost a subscriber their post
             print(f"  could not store the latest report ({type(e).__name__}: {str(e)[:200]})")
     if not subs and not preview:
         print("No servers have asked for reports. Exiting 0.")
         return 0
 
-    owed = [s for s in subs if due(s, price_date, args.force_weekly)]
+    owed = [s for s in subs if s["cadence"] in open_now and due(s, price_date, args.force_weekly)]
     if preview:
         for cadence in ("daily", "weekly"):
             rep = report_for(cadence)
@@ -987,7 +1057,7 @@ def run(args, sb=None, session=requests, now=None):
             else:
                 print(f"  preview {cadence}: nothing cleared the floors")
     if not owed:
-        print(f"All {len(subs)} subscriptions already have today's report.")
+        print(f"Nothing owed: every {'/'.join(open_now)} subscription already has its report.")
         return 0
     reports = {cadence: report_for(cadence) for cadence in sorted({s["cadence"] for s in owed})}
 
@@ -1036,7 +1106,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--post", action="store_true", help="actually post (default is a dry run)")
     ap.add_argument("--allow-stale", action="store_true", help="post even when today's prices have not landed")
-    ap.add_argument("--force-weekly", action="store_true", help="treat today as a weekly-report day")
+    ap.add_argument("--force-weekly", action="store_true",
+                    help="post the weekly now to every weekly channel, even outside Monday morning")
     ap.add_argument("--preview", metavar="DIR", help="also write both reports (JSON + pictures) to DIR")
     args = ap.parse_args()
     try:
