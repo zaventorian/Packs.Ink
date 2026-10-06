@@ -20,6 +20,11 @@
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger.** Claude applies migrations itself, drops included (Zaven, 2026-09-30: *"im fine with claude having access to do everything"*) — see "Running SQL" under Ops for the two routes. A file is STAGED only when something outside the database has to happen first.
+- **`supabase/187_starter_deck_foil_rekey.sql`** — **STAGED 2026-10-06: apply RIGHT AFTER the deploy** that
+  ships the Starter Deck Foil client change (EXTRAS_MAP `printing:"Holofoil"`). Moves the 12 Starter Deck Foil
+  collection entries from Cold Foil to Holofoil (47 rows, 9 users on the day; a Holofoil row made in between
+  keeps the larger count). Before the deploy the live client still keys these as Cold Foil, so applying it
+  early shows those owners' tiles as unowned until the deploy lands.
 - ~~`supabase/186_latest_raw_prices_before.sql`~~ — **APPLIED 2026-10-06** through the connector. Additive:
   `latest_raw_prices_before(pids, printings, before)`, one index probe per key, used by
   `fetchCollectionPriceSeeds` to seed the value charts with each owned item's price going into the range.

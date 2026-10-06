@@ -131,22 +131,24 @@ const COLLECTOR_NUMBER_OVERRIDES = {
   "set_e0eb34fc0fbb446886f84c34381d4dce|43":  "4",  // Rapunzel - Gifted with Healing
 };
 // ---- site ----
+const STARTER_DECK_FOIL = {variantLabel:"Starter Deck Foil", printing:"Holofoil"};
+// ---- site ----
 const EXTRAS_MAP = {
-  // Wilds Unknown starter-deck-exclusive foils
-  678236: {originSet:"Wilds Unknown",        variantLabel:"Starter Deck Exclusive Foil"}, // Buzz Lightyear - On the Way
-  678237: {originSet:"Wilds Unknown",        variantLabel:"Starter Deck Exclusive Foil"}, // Mrs. Incredible - Super Stretchy
-  678238: {originSet:"Wilds Unknown",        variantLabel:"Starter Deck Exclusive Foil"}, // Jack-Jack Parr - Incredible Potential
-  690204: {originSet:"Wilds Unknown",        variantLabel:"Starter Deck Exclusive Foil"}, // Jessie - Lively Cowgirl
-  // Fabled starter-deck-exclusive foils
-  647652: {originSet:"Fabled",               variantLabel:"Starter Deck Exclusive Foil"}, // Ariel - Singing Mermaid
-  647681: {originSet:"Fabled",               variantLabel:"Starter Deck Exclusive Foil"}, // Max Goof - Rebellious Teen
-  649224: {originSet:"Fabled",               variantLabel:"Starter Deck Exclusive Foil"}, // Powerline - World's Greatest Rock Star
-  650077: {originSet:"Fabled",               variantLabel:"Starter Deck Exclusive Foil"}, // Mulan - Considerate Diplomat
-  // Whispers in the Well starter-deck-exclusive foils
-  653916: {originSet:"Whispers in the Well", variantLabel:"Starter Deck Exclusive Foil"}, // Judy Hopps - Uncovering Clues
-  657892: {originSet:"Whispers in the Well", variantLabel:"Starter Deck Exclusive Foil"}, // Megara - Secret Keeper
-  657893: {originSet:"Whispers in the Well", variantLabel:"Starter Deck Exclusive Foil"}, // Robin Hood - Ephemeral Archer
-  657894: {originSet:"Whispers in the Well", variantLabel:"Starter Deck Exclusive Foil"}, // Simba - King in the Making
+  // Wilds Unknown Starter Deck Foils
+  678236: {originSet:"Wilds Unknown",        ...STARTER_DECK_FOIL}, // Buzz Lightyear - On the Way
+  678237: {originSet:"Wilds Unknown",        ...STARTER_DECK_FOIL}, // Mrs. Incredible - Super Stretchy
+  678238: {originSet:"Wilds Unknown",        ...STARTER_DECK_FOIL}, // Jack-Jack Parr - Incredible Potential
+  690204: {originSet:"Wilds Unknown",        ...STARTER_DECK_FOIL}, // Jessie - Lively Cowgirl
+  // Fabled Starter Deck Foils
+  647652: {originSet:"Fabled",               ...STARTER_DECK_FOIL}, // Ariel - Singing Mermaid
+  647681: {originSet:"Fabled",               ...STARTER_DECK_FOIL}, // Max Goof - Rebellious Teen
+  649224: {originSet:"Fabled",               ...STARTER_DECK_FOIL}, // Powerline - World's Greatest Rock Star
+  650077: {originSet:"Fabled",               ...STARTER_DECK_FOIL}, // Mulan - Considerate Diplomat
+  // Whispers in the Well Starter Deck Foils
+  653916: {originSet:"Whispers in the Well", ...STARTER_DECK_FOIL}, // Judy Hopps - Uncovering Clues
+  657892: {originSet:"Whispers in the Well", ...STARTER_DECK_FOIL}, // Megara - Secret Keeper
+  657893: {originSet:"Whispers in the Well", ...STARTER_DECK_FOIL}, // Robin Hood - Ephemeral Archer
+  657894: {originSet:"Whispers in the Well", ...STARTER_DECK_FOIL}, // Simba - King in the Making
   // Gift-set oversized jumbo cards (TFC + Into the Inklands gift sets). Their
   // TCGCSV listing is the Cold Foil printing; excludeFromBaseSet keeps the jumbo
   // out of its origin set so only the normal print shows there.
@@ -1232,4 +1234,4 @@ const revealSetLabel = (cards) => {
   for(const [s, k] of n){ if(k > topN){ top = s; topN = k; } }
   return (top && topN * 2 > (cards || []).length) ? top : null;
 };
-export { AMAZON_ASIN_BY_SET, AMAZON_DEPT_DEFAULT, AMAZON_PUZZLE_ASINS, AMAZON_SEALED_RULES, AMAZON_TAG, CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_REGIONS, CAL_D, CAL_EST_SUFFIX, CARD_DELTA_WINDOWS, COLLECTOR_NUMBER_OVERRIDES, CONNECTING_FOILS, EXTRAS_MAP, EXTRAS_SET_NAME, GRADED_FOIL_AXIS, GRADED_FOIL_PRINTINGS, GRADED_NONFOIL_PRINTINGS, INKS, MAINLINE_SETS, NEW_PULL_START, PRICE_STANDING_HIGH, PRICE_STANDING_LOW, PRICE_STANDING_MIN_POINTS, PRICE_STANDING_MIN_SPAN_RATIO, PRICE_STANDING_MIN_SPREAD, PRICE_STANDING_NEAR_LOW, PRICE_STANDING_WINDOWS, PRODUCT_RELEASE_DATES, PROMO_RARITY_SETS, PULL, PULL_V2, QUEST_SETS, REVEAL_EXCLUDED_SETS, REVEAL_MAX_CARDS, REVEAL_WINDOW_HOURS, SC_GEO_COUNTRIES, SC_GEO_TIMEOUT_MS, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, SC_POSTAL_FORMATS, SEALED_DISPLAY_TYPE_FOR, SET_CADENCE_DAYS, SET_DISPLAY_NAMES, SET_LGS_WEEKDAY, SET_ORDER, SET_RELEASE_DATES, SET_RELEASE_LABELS, SET_RELEASE_PHASES, SET_RETAIL_LAG_DAYS, SPLIT_CARD_PRINTING_OPTIONS, SPLIT_PRINTING_CARD_IDS, SUPPRESSED_CARD_IDS, TCG_AFFILIATE_BASE, TCG_PID_OVERRIDES, UPCOMING_SET_NAMES, _CAL_REGION_BY_CC, _amznNorm, _calKindRank, _calPhaseRank, _calSetKey, _calSetPhase, amazonForSealed, amazonSearchUrl, amazonUrl, buildGradedPriceIndex, calAddDays, calEndOf, calEstimated, calEventFullLabel, calEventSubtitle, calEventTitle, calRegionOf, calStoreEventName, calTodayYmd, calUTCToYmd, calYmdParts, calYmdToUTC, calendarEstimatedSetEntries, calendarMergeEvents, calendarProductEntries, calendarSetEntries, calendarSetEstimates, calendarSort, calendarUpcoming, canonicalGradedSlot, cleanSealedName, computeSeriesDeltas, deriveSealedDisplayType, getPull, gradedCatalogBuckets, gradedSlotBucket, gradedSplitTiers, haversineMi, makeGradedPrintingLookup, normalizeRarity, pick, priceStanding, rawSaleMatch, revealRotation, revealSetLabel, scLocalTime12, scNormalizePostal, scPlaceLabel, scPostalCandidates, scPostalShape, scRankPlaces, scZippo, searchNorm, seriesPricedOn, simPack, tcgSetSearchUrl, tcgUrl, wPick };
+export { AMAZON_ASIN_BY_SET, AMAZON_DEPT_DEFAULT, AMAZON_PUZZLE_ASINS, AMAZON_SEALED_RULES, AMAZON_TAG, CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_REGIONS, CAL_D, CAL_EST_SUFFIX, CARD_DELTA_WINDOWS, COLLECTOR_NUMBER_OVERRIDES, CONNECTING_FOILS, EXTRAS_MAP, EXTRAS_SET_NAME, GRADED_FOIL_AXIS, GRADED_FOIL_PRINTINGS, GRADED_NONFOIL_PRINTINGS, INKS, MAINLINE_SETS, NEW_PULL_START, PRICE_STANDING_HIGH, PRICE_STANDING_LOW, PRICE_STANDING_MIN_POINTS, PRICE_STANDING_MIN_SPAN_RATIO, PRICE_STANDING_MIN_SPREAD, PRICE_STANDING_NEAR_LOW, PRICE_STANDING_WINDOWS, PRODUCT_RELEASE_DATES, PROMO_RARITY_SETS, PULL, PULL_V2, QUEST_SETS, REVEAL_EXCLUDED_SETS, REVEAL_MAX_CARDS, REVEAL_WINDOW_HOURS, SC_GEO_COUNTRIES, SC_GEO_TIMEOUT_MS, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, SC_POSTAL_FORMATS, SEALED_DISPLAY_TYPE_FOR, SET_CADENCE_DAYS, SET_DISPLAY_NAMES, SET_LGS_WEEKDAY, SET_ORDER, SET_RELEASE_DATES, SET_RELEASE_LABELS, SET_RELEASE_PHASES, SET_RETAIL_LAG_DAYS, SPLIT_CARD_PRINTING_OPTIONS, SPLIT_PRINTING_CARD_IDS, STARTER_DECK_FOIL, SUPPRESSED_CARD_IDS, TCG_AFFILIATE_BASE, TCG_PID_OVERRIDES, UPCOMING_SET_NAMES, _CAL_REGION_BY_CC, _amznNorm, _calKindRank, _calPhaseRank, _calSetKey, _calSetPhase, amazonForSealed, amazonSearchUrl, amazonUrl, buildGradedPriceIndex, calAddDays, calEndOf, calEstimated, calEventFullLabel, calEventSubtitle, calEventTitle, calRegionOf, calStoreEventName, calTodayYmd, calUTCToYmd, calYmdParts, calYmdToUTC, calendarEstimatedSetEntries, calendarMergeEvents, calendarProductEntries, calendarSetEntries, calendarSetEstimates, calendarSort, calendarUpcoming, canonicalGradedSlot, cleanSealedName, computeSeriesDeltas, deriveSealedDisplayType, getPull, gradedCatalogBuckets, gradedSlotBucket, gradedSplitTiers, haversineMi, makeGradedPrintingLookup, normalizeRarity, pick, priceStanding, rawSaleMatch, revealRotation, revealSetLabel, scLocalTime12, scNormalizePostal, scPlaceLabel, scPostalCandidates, scPostalShape, scRankPlaces, scZippo, searchNorm, seriesPricedOn, simPack, tcgSetSearchUrl, tcgUrl, wPick };
