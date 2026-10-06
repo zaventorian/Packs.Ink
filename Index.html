@@ -47371,7 +47371,10 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, panelNa
         //   reprinted in a Core-legal set is Core-legal regardless of which
         //   printing the user happened to add to the deck.
         const cardMetaById = new Map();
-        const setsByProductName = new Map();
+        // The two maps checkDeckLegality takes, built the way DecksView builds
+        // them: every catalog row per card_id, and every set per card family.
+        const cardRowsById = {};
+        const setsByFamily = {};
         if(raw && raw.length){
           for(const r of raw){
             const inks = r.inks && r.inks.length ? r.inks : (r.ink ? [r.ink] : []);
@@ -47379,10 +47382,10 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, panelNa
             if(r.card_id && !cardMetaById.has(r.card_id)){
               cardMetaById.set(r.card_id, {inks, name, set: r.Set});
             }
+            if(r.card_id) (cardRowsById[r.card_id] = cardRowsById[r.card_id] || []).push(r);
             if(name && r.Set){
-              let bag = setsByProductName.get(name);
-              if(!bag){ bag = new Set(); setsByProductName.set(name, bag); }
-              bag.add(r.Set);
+              const key = cardFamilyKey(name);
+              (setsByFamily[key] = setsByFamily[key] || new Set()).add(r.Set);
             }
           }
         }
@@ -47410,44 +47413,28 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, panelNa
             for(const {deckId, rows} of rpcResults) cardsByDeck[deckId] = await decDeckCards(rows);
           }
         }
-        const coreSets = new Set(typeof computeCoreSets === "function" ? computeCoreSets() : []);
         const computedInks = {};
         const formatByDeck = {};
         for(const d of decks){
           const cards = cardsByDeck[d.id] || [];
           const inkSet = new Set();
-          let totalQty = 0;
-          let allInCore = cards.length > 0;
           let anyCardKnown = false;
           for(const dc of cards){
-            totalQty += (dc.quantity || 0);
             const meta = cardMetaById.get(dc.card_id);
             if(!meta) continue;
             anyCardKnown = true;
             for(const i of meta.inks) inkSet.add(i);
-            // Reprint-aware Core check: card is Core-legal if ANY of its
-            // printings (across the catalog) sits in a Core set, not just
-            // the specific printing in this deck.
-            const allSetsForCard = setsByProductName.get(meta.name) || new Set([meta.set]);
-            let hasCorePrinting = false;
-            for(const s of allSetsForCard){ if(coreSets.has(s)){ hasCorePrinting = true; break; } }
-            if(!hasCorePrinting) allInCore = false;
           }
           computedInks[d.id] = inkSet;
-          // Legality: >=60 cards AND <=2 inks. (60 is the minimum; over is OK.)
-          // If we couldn't resolve any cards for this deck, fall back to "infinity"
-          // so we don't silently hide the tag.
-          let fmt;
-          if(!anyCardKnown){
-            fmt = "infinity";
-          } else if(totalQty < 60 || inkSet.size > 2){
-            fmt = "invalid";
-          } else if(allInCore){
-            fmt = "core";
-          } else {
-            fmt = "infinity";
-          }
-          formatByDeck[d.id] = fmt;
+          // ONE rulebook. This tag used to come from a private copy of the
+          // rules that had drifted: it looked reprints up by exact name ("HeiHei"
+          // vs "Heihei" read Infinity), had no copy limit (5 copies read Core),
+          // no Gather-the-Party exemption (a legal Hunny deck read invalid) and
+          // let a promo re-legalise a rotated card (review, 2026-10-06). With no
+          // card resolvable at all, say Infinity rather than hide the tag.
+          formatByDeck[d.id] = anyCardKnown
+            ? checkDeckLegality({cards, coconut_card: d.coconut_card}, cardRowsById, setsByFamily).format
+            : "infinity";
         }
 
         const creatorIds = Array.from(new Set([...decks.map(d => d.user_id), ...tierRows.map(t => t.user_id)]));
