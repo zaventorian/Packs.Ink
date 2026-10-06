@@ -412,6 +412,19 @@ export function createResolver(index) {
 
   const isCollector = (dims) => !!(dims.rarity && CHASE.has(dims.rarity)) || !!dims.graded;
 
+  // The finish a card opens on when nobody named one: the first that is a real
+  // TCGplayer product or carries a price. The index sorts non-foil first, and
+  // on a Challenge Promo (C1) card that exists only as the Top Prize foil (Let
+  // It Go, Dragon Fire, Invited to the Ball, Elsa's Ice Palace) the non-foil is
+  // the catalog's pid-less, unpriced placeholder: "/card let it go c1" opened
+  // on "Prize Wall · No TCGplayer price yet" and quoted two mislabelled
+  // non-foil PSA 10 sales ($75) for a ~$5,000 slab. A card with nothing
+  // listed or priced keeps index 0, as before.
+  const defaultFinish = (p) => {
+    const k = ((p && p.f) || []).findIndex((f) => f[1] != null || f[4] != null || f[5] != null);
+    return k >= 0 ? k : 0;
+  };
+
   function pickPrinting(c, dims, notes, words = []) {
     let ps = c.p;
     const narrow = (pred, what) => {
@@ -439,7 +452,7 @@ export function createResolver(index) {
     // On a tie the ORIGINAL printing wins: sets are ordered oldest mainline
     // first, and the original carries the longer history and the slab market.
     const best = [...ps].sort((a, b) => rank(b) - rank(a) || a.s - b.s)[0];
-    let fi = 0;
+    let fi = defaultFinish(best);
     if (dims.finish) {
       const want = dims.finish === "foil" ? (f) => f[0] !== "N" : (f) => f[0] === "N";
       const k = best.f.findIndex(want);
@@ -610,7 +623,8 @@ export function createResolver(index) {
     let m = q.match(/^c\|([^|\s]+)(?:\|([NCHF]))?$/);
     if (m && byCardId.has(m[1])) {
       const { i, p } = byCardId.get(m[1]);
-      const fi = m[2] ? Math.max(0, p.f.findIndex((f) => f[0] === m[2])) : 0;
+      const k = m[2] ? p.f.findIndex((f) => f[0] === m[2]) : -1;
+      const fi = k >= 0 ? k : defaultFinish(p);
       return { kind: "card", card: cards[i], index: i, printing: p, fi, dims: {}, notes: [], score: 1, exact: true, alts: sameCharAlts(i), basis: "play" };
     }
     m = q.match(/^s\|(\d+)$/);
@@ -681,8 +695,8 @@ export function createResolver(index) {
         if (specific) {
           for (const p of c.p) {
             if (!printingOk(p, dims)) continue;
-            const fi = dims.finish ? p.f.findIndex(dims.finish === "foil" ? (f) => f[0] !== "N" : (f) => f[0] === "N") : 0;
-            pushCard(r.i, p, fi >= 0 ? fi : 0);
+            const fi = dims.finish ? p.f.findIndex(dims.finish === "foil" ? (f) => f[0] !== "N" : (f) => f[0] === "N") : -1;
+            pushCard(r.i, p, fi >= 0 ? fi : defaultFinish(p));
             if (out.length >= limit) break;
           }
         } else {
@@ -889,7 +903,7 @@ export function createResolver(index) {
   }
 
   return {
-    resolve, suggest, findInText, parse, cardLabel, suggestLabel, sealedLabel, finishLabel, sameCharAlts, resolveSet, suggestSets,
+    resolve, suggest, findInText, parse, cardLabel, suggestLabel, sealedLabel, finishLabel, sameCharAlts, resolveSet, suggestSets, defaultFinish,
     pickPrinting: (i, dims = {}, words = []) => pickPrinting(cards[i], dims, [], words),
     cardKey, sealedKey, cards, sets, sealed, byCardId, sealedByPid, newestMainIdx, meta,
   };

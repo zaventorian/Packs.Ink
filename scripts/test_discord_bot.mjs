@@ -1415,5 +1415,36 @@ const D = await mod("discord/src/data.js");
   ok(many.embeds[0].image.url.startsWith(O), "withUploads never mutates the payload it was handed");
 }
 
+// ── 10. review fixes (2026-10-06) ───────────────────────────────────────
+// Each block names the reply it kept from going out wrong.
+{
+  // A Challenge Promo (C1) card that exists only as the Top Prize foil carries
+  // a pid-less, unpriced non-foil placeholder FIRST (the index sorts non-foil
+  // first). "/card let it go c1" opened on it: "Prize Wall · No TCGplayer price
+  // yet", and two mislabelled non-foil PSA 10 sales ($75) for a ~$5,000 slab.
+  const lig = card("let it go c1");
+  const ligF = lig && lig.printing.f[lig.fi];
+  ok(lig && /\(C1\)/.test(R.sets[lig.printing.s].n) && ligF && ligF[1] != null && ligF[0] !== "N",
+    `"let it go c1" opens on the listed Top Prize foil, not the placeholder (${JSON.stringify(ligF)})`);
+  if (lig) {
+    const bare = R.resolve("c|" + lig.printing.id);
+    eq(bare.kind === "card" && bare.fi, lig.fi, "a key with no finish opens on the same listed finish");
+    const sg = R.suggest("let it go c1", 10).find((s) => s.kind === "card" && s.p.id === lig.printing.id);
+    ok(sg && sg.value.endsWith("|" + ligF[0]), `the C1 suggestion hands back the listed finish (${sg && sg.value})`);
+  }
+  // Everywhere: when ANY finish of a printing is listed or priced, the default
+  // one is; and a card whose non-foil is real still opens on its non-foil.
+  let checked = 0;
+  const bad = [];
+  for (const c of index.cards) for (const p of c.p) {
+    const real = (f) => f[1] != null || f[4] != null || f[5] != null;
+    if (!p.f.some(real)) continue;
+    const r = R.resolve("c|" + p.id);
+    checked++;
+    if (r.kind !== "card" || !real(r.printing.f[r.fi]) || (real(p.f[0]) && r.fi !== 0)) bad.push(p.id);
+  }
+  ok(checked > 100 && !bad.length, `every listed printing opens on a listed finish, non-foil first when it is real (${checked} checked, bad: ${bad.slice(0, 3)})`);
+}
+
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
