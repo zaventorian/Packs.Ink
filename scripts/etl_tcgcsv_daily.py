@@ -278,7 +278,8 @@ def detect_duplicate_snapshot(
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--date", help="Snapshot date YYYY-MM-DD (default: today UTC)")
+    ap.add_argument("--date", help="Snapshot date YYYY-MM-DD (default: the UTC day TCGCSV "
+                                   "published the file it is serving)")
     ap.add_argument(
         "--force",
         action="store_true",
