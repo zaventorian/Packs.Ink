@@ -353,7 +353,7 @@ def main() -> None:
                     )
                 else:
                     print(f"Snapshot {snapshot} is already loaded. Skipping fetch.")
-                    _refresh_matviews(sb)
+                    _refresh_matviews(sb, snapshot.isoformat())
                     return
         except Exception as e:
             print(f"  (idempotency probe failed, continuing with fetch: {e})")
@@ -420,11 +420,80 @@ def main() -> None:
         on_conflict="tcgplayer_product_id,date,printing,source,grade",
     )
 
-    _refresh_matviews(sb)
+    _refresh_matviews(sb, snapshot.isoformat())
     print("\nDone.")
 
 
-def _refresh_matviews(sb: "Supabase") -> None:
+# The market index outlives the RPC's 120s HTTP read timeout; the server keeps
+# going after the client gives up. After a timeout (or a gateway 5xx) the ETL
+# waits up to this long, re-reading the index, before calling it stale.
+MARKET_INDEX_WAIT_S = 8 * 60
+MARKET_INDEX_POLL_S = 30
+# NEVER 128 or 130: re-running 128 brings back the flat coverage floor that
+# empties every narrow scope, and 130's in-body timeout pin cannot work (131).
+MARKET_INDEX_HINT = ("supabase/131_market_index_timeout_pin.sql, then "
+                     "`select public.refresh_market_index();` (never re-run 128 or 130)")
+
+
+def _market_index_newest(sb: "Supabase") -> tuple[str | None, str | None]:
+    """(newest date in the all-cards index, error text). Read from the data
+    rather than trusted from the RPC's HTTP result."""
+    try:
+        rows = sb.select("market_index_latest", columns="date", limit=1,
+                         filters={"scope": "eq.all"}, order="date.desc")
+    except Exception as e:
+        return None, str(e)[:200]
+    return ((rows[0].get("date") if rows else None), None)
+
+
+def _server_may_still_be_running(err: Exception) -> bool:
+    """A client timeout / dropped connection / gateway 5xx says nothing about
+    the refresh itself; a 4xx means it never ran."""
+    if isinstance(err, (requests.Timeout, requests.ConnectionError)):
+        return True
+    m = re.search(r"failed \((\d{3})\)", str(err))
+    return bool(m) and m.group(1).startswith("5")
+
+
+def _refresh_market_index(sb: "Supabase", expected: str | None) -> None:
+    """Refresh the market indices and report whether they now hold `expected`.
+
+    OPTIONAL, on purpose — see _refresh_matviews. Prints a WARN, never exits."""
+    err: Exception | None = None
+    try:
+        sb.rpc("refresh_market_index")
+    except Exception as e:
+        err = e
+
+    def fresh(d: str | None) -> bool:
+        return d is not None and (expected is None or d >= expected)
+
+    newest, read_err = _market_index_newest(sb)
+    if err is not None and not fresh(newest) and _server_may_still_be_running(err):
+        print(f"  refresh_market_index call ended early ({type(err).__name__}); "
+              f"waiting up to {MARKET_INDEX_WAIT_S // 60} min for the server to finish...")
+        for _ in range(MARKET_INDEX_WAIT_S // MARKET_INDEX_POLL_S):
+            time.sleep(MARKET_INDEX_POLL_S)
+            newest, read_err = _market_index_newest(sb)
+            if fresh(newest):
+                break
+
+    if fresh(newest) and (expected is not None or err is None):
+        note = " (the HTTP call gave up first; the server finished it)" if err is not None else ""
+        print(f"Market index current through {newest}{note}.")
+        return
+    why = []
+    if err is not None:
+        why.append(f"refresh_market_index: {str(err)[:200]}")
+    if read_err:
+        why.append(f"market_index_latest unreadable: {read_err}")
+    elif expected is not None:
+        why.append(f"newest index date {newest or 'none'}, expected {expected}")
+    print(f"WARN: market index not current ({'; '.join(why)}). "
+          f"Optional, so the run continues. If it persists, run {MARKET_INDEX_HINT}.")
+
+
+def _refresh_matviews(sb: "Supabase", expected_date: str | None = None) -> None:
     """Refresh the price matviews. Exits non-zero if any REQUIRED refresh fails
     (matview staleness is a real failure worth alerting on, unlike the
     duplicate-snapshot skip)."""
@@ -452,15 +521,10 @@ def _refresh_matviews(sb: "Supabase") -> None:
     # site still prices every card correctly, it just can't say "vs market" for
     # a day. Failing the whole ETL over that would train us to ignore its
     # alerts, and this refresh is the slowest one on the site (full history over
-    # ~3M rows), so it is also the likeliest to trip a timeout.
-    try:
-        sb.rpc("refresh_market_index")
-        print("Refreshed via refresh_market_index().")
-    except Exception as e:
-        print(
-            "WARN: refresh_market_index failed (run supabase/128_market_index.sql "
-            f"to enable): {e}"
-        )
+    # ~3M rows), so it is also the likeliest to trip a timeout — which it does
+    # daily against the 120s HTTP read timeout while the server finishes it, so
+    # it is judged by what the index holds afterwards, not by the HTTP result.
+    _refresh_market_index(sb, expected_date)
 
     if refresh_failures:
         sys.exit(
