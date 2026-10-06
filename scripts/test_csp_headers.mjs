@@ -136,7 +136,7 @@ for (const [i, policy] of pagePolicies.entries()) {
   const sameOrigin = sw.indexOf("if (url.origin === self.location.origin) {\n    event.respondWith(\n      caches.match(req)");
   check(cGuard > swr && swr > sameOrigin && sameOrigin > 0, "the connect-host guard sits on the final cross-origin branch, after the same-origin one");
   const early = sw.indexOf("!swImageHost(url.hostname)) return;");
-  const branch = sw.indexOf("if (req.destination === 'image' || url.hostname.endsWith('lorcast.io'))");
+  const branch = sw.indexOf("if (req.destination === 'image' || proxied || url.hostname.endsWith('lorcast.io'))");
   check(early > 0 && branch > early, "sw.js leaves a foreign image host to the browser BEFORE its image branch",
     "the early return must come first, or the catch-all at the end of the fetch handler re-fetches it.");
 }
