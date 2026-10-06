@@ -168,9 +168,17 @@ def held_identifiers(eids: list[int]) -> dict[int, set[str]]:
         ids = ",".join(str(e) for e in eids[i:i + 100])
         off = 0
         while True:
-            page = _get(f"rph_event_attendance?select=event_id,best_identifier"
-                        f"&event_id=in.({ids})&order=event_id.asc,best_identifier.asc"
-                        f"&limit=1000&offset={off}")
+            path = (f"rph_event_attendance?select=event_id,best_identifier"
+                    f"&event_id=in.({ids})&order=event_id.asc,best_identifier.asc"
+                    f"&limit=1000&offset={off}")
+            for attempt in range(4):        # a read; one blip mustn't kill the run
+                try:
+                    page = _get(path)
+                    break
+                except Exception:
+                    if attempt == 3:
+                        raise
+                    time.sleep(1.5 * (attempt + 1))
             for r in page:
                 out.setdefault(r["event_id"], set()).add(r["best_identifier"])
             if len(page) < 1000:
