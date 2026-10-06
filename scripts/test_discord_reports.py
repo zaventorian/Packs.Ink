@@ -40,6 +40,7 @@ def check(cond, msg):
 
 
 TODAY = dt.date(2026, 9, 28)      # a Monday
+SUN = TODAY - dt.timedelta(days=1)   # the weekly's prices: never Monday's own (weekly_open)
 UTC = dt.timezone.utc
 
 
@@ -250,7 +251,8 @@ os.environ["DISCORD_BOT_TOKEN"] = "secret-bot-token-value"
 
 # ── 1. posts once to a daily + a weekly subscriber, stale row dropped, nobody pinged ──
 sb = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}])
-sbw = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}])
+sbw = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}],
+             price_date=SUN, index_latest=SUN)
 disc = FakeDiscord()
 code, out = run(sb, disc)
 codew, outw = run(sbw, disc, now=MORNING)
@@ -263,7 +265,8 @@ dtext, wtext = all_text(daily.get("json", {}).get("embeds", [])), all_text(weekl
 check("Stale" not in dtext and "Stale" not in wtext, "the stale mover is dropped")
 check(all(p["json"].get("allowed_mentions") == {"parse": []} for p in disc.posts), "posts never ping anyone")
 check("secret-bot-token-value" not in out, "the bot token is never printed")
-check(sum(1 for u in sb.updates + sbw.updates if u[2].get("last_posted_on") == TODAY.isoformat()) == 2, "last_posted_on recorded")
+check([u[2].get("last_posted_on") for u in sb.updates + sbw.updates if u[2].get("last_posted_on")]
+      == [TODAY.isoformat(), SUN.isoformat()], "last_posted_on records each report's price date")
 
 # ── 2. the sections ──
 d_emb = daily["json"]["embeds"]
@@ -300,7 +303,7 @@ check(rep.tcg_url(649228, "Normal").endswith("%3FLanguage%3DEnglish"), "a Normal
 
 # ── 4. the weekly: pulse, pictures, worth a look ──
 w_emb = weekly["json"]["embeds"]
-check(w_emb[0]["title"] == "Lorcana week in review · Sep 22–28, 2026", f"weekly title ({w_emb[0]['title']})")
+check(w_emb[0]["title"] == "Lorcana week in review · Sep 21–27, 2026", f"weekly title ({w_emb[0]['title']})")
 fields = [f["name"] for f in w_emb[0].get("fields", [])]
 check(fields[:3] == ["Whole market", "Chase cards", "Sealed"], f"weekly header carries the market pulse ({fields})")
 check("🔥 Hottest set" in fields and "Fabled" in json.dumps(w_emb[0], ensure_ascii=False), "the hottest set is named")
@@ -319,7 +322,8 @@ check(worth and "**−" in worth["description"] and "%" in worth["description"].
 check(sum(rep.embed_chars(e) for e in w_emb) <= 6000, "the weekly fits Discord's 6000-character cap")
 
 # ── 5. Discord refuses the pictures -> the words still go out ──
-sb5 = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}])
+sb5 = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}],
+             price_date=SUN, index_latest=SUN)
 disc5 = FakeDiscord(refuse_files=True)
 run(sb5, disc5, now=MORNING)
 check(len(disc5.posts) == 2, f"a refused multipart post is re-sent once ({len(disc5.posts)})")
@@ -336,7 +340,7 @@ check(art.market_chart([("x", [(TODAY, 0.0)], art.GOLD)], "t", "s") is None, "a 
 
 # ── 7. a stale market index -> no pulse, not yesterday's market as today's ──
 sb7 = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}],
-             index_latest=TODAY - dt.timedelta(days=1))
+             price_date=SUN, index_latest=SUN - dt.timedelta(days=1))
 disc7 = FakeDiscord()
 run(sb7, disc7, now=MORNING)
 h7 = disc7.posts[0]["json"]["embeds"][0] if disc7.posts else {}
@@ -467,6 +471,20 @@ check(wk_posts(EVENING, SUNDAY, force=True, last=SUNDAY.isoformat()) == 1,
       "force_weekly sends it now, even outside the window and to a channel that had it")
 check(wk_posts(dt.datetime(2026, 10, 12, 14, 5, tzinfo=UTC), dt.date(2026, 10, 11), last="2026-10-05") == 1,
       "the first Monday-morning weekly follows the last Monday-evening one")
+# ⚠ From November (CST) the ETL lands ~14:40 Chicago, INSIDE the window: an
+# ETL-triggered run on Monday's own prices must not rebuild and post the weekly
+# beside the daily.
+NOV = dt.date(2026, 11, 9)        # a Monday on standard time
+check(wk_posts(at(NOV, 20, 40), NOV) == 0, "a CST Monday afternoon on Monday's own prices does not post the weekly")
+check(wk_posts(at(NOV, 20, 40), NOV - dt.timedelta(days=1)) == 1, "...on Sunday's prices it still does")
+check(not rep.weekly_open(NOV, at(NOV, 20, 40)) and rep.weekly_open(NOV - dt.timedelta(days=1), at(NOV, 20, 40)),
+      "weekly_open: the weekend's prices, never Monday's")
+# A weekly forced on a Tuesday must not cost the channel the next Monday's,
+# and a Monday whose price date moves Saturday -> Sunday never posts twice.
+check(wk_posts(MORNING, SUNDAY, last=(TODAY - dt.timedelta(days=6)).isoformat()) == 1,
+      "a weekly forced last Tuesday does not suppress this Monday's")
+check(wk_posts(MORNING, SUNDAY, last=(SUNDAY - dt.timedelta(days=1)).isoformat()) == 0,
+      "a weekly sent this morning on Saturday's prices is not re-sent on Sunday's")
 
 # ── 11. the old delivery rules, unchanged ──
 sb2 = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": TODAY.isoformat()}])
@@ -530,31 +548,33 @@ _, out9 = run(sb9, disc9, post=False)
 check(not disc9.posts and "DRY RUN" in out9, "a dry run posts nothing")
 
 # ── /reports send: the latest report is kept, with its pictures stored ──
-yesterday = (TODAY - dt.timedelta(days=1)).isoformat()
-sb10 = FakeSb([], latest=[{"cadence": "daily", "price_date": yesterday, "files": []},
-                          {"cadence": "weekly", "price_date": yesterday, "files": ["weekly/%s/market.png" % yesterday]}])
+yesterday = (SUN - dt.timedelta(days=7)).isoformat()    # last week's weekly
+sb10 = FakeSb([], price_date=SUN, index_latest=SUN,
+              latest=[{"cadence": "daily", "price_date": yesterday, "files": []},
+                      {"cadence": "weekly", "price_date": yesterday, "files": ["weekly/%s/market.png" % yesterday]}])
 st10 = FakeStorage()
 code10, out10 = run(sb10, st10, now=MORNING)
 check(code10 == 0 and "No servers have asked" in out10, "no subscribers still exits 0")
 kept = {rows[0]["cadence"]: rows[0] for (t, rows, oc) in sb10.upserts if t == rep.LATEST_TABLE}
-check(set(kept) == {"daily", "weekly"} and all(r["price_date"] == TODAY.isoformat() for r in kept.values()),
-      f"both reports are kept for /reports send even with no subscribers ({sorted(kept)})")
+check(set(kept) == {"weekly"} and all(r["price_date"] == SUN.isoformat() for r in kept.values()),
+      f"Monday morning keeps the weekly for /reports send even with no subscribers ({sorted(kept)})")
 check(all((t, oc) == (rep.LATEST_TABLE, "cadence") for (t, _, oc) in sb10.upserts), "kept one row per cadence")
 wk = kept.get("weekly", {})
 pics = [(e.get("image") or {}).get("url", "") for e in wk.get("embeds", [])]
-check(wk.get("files") and all(u.startswith("https://example.supabase.co/storage/v1/object/public/discord-reports/weekly/" + TODAY.isoformat() + "/") for u in pics if u),
+check(wk.get("files") and all(u.startswith("https://example.supabase.co/storage/v1/object/public/discord-reports/weekly/" + SUN.isoformat() + "/") for u in pics if u),
       f"the weekly report's pictures point at their stored, dated copies ({[u for u in pics if u][:2]})")
 check(not any(u.startswith("attachment://") for e in wk.get("embeds", []) for u in [(e.get("image") or {}).get("url", ""), (e.get("thumbnail") or {}).get("url", "")]),
       "a kept report has no attachment:// left in it")
 check(st10.deleted and st10.deleted[0][1] == {"prefixes": ["weekly/%s/market.png" % yesterday]}, "yesterday's pictures are deleted once today's are kept")
 check(not st10.posts, "keeping a report posts nothing to Discord")
 
-sb11 = FakeSb([], latest=[{"cadence": "daily", "price_date": TODAY.isoformat(), "files": []},
-                          {"cadence": "weekly", "price_date": TODAY.isoformat(), "files": []}])
+sb11 = FakeSb([], price_date=SUN, index_latest=SUN,
+              latest=[{"cadence": "daily", "price_date": SUN.isoformat(), "files": []},
+                      {"cadence": "weekly", "price_date": SUN.isoformat(), "files": []}])
 run(sb11, FakeStorage(), now=MORNING)
 check(not sb11.upserts, "a report already kept today is not built or kept again")
 
-sb12 = FakeSb([], latest=[])
+sb12 = FakeSb([], latest=[], price_date=SUN, index_latest=SUN)
 st12 = FakeStorage(fail=True)
 run(sb12, st12, now=MORNING)
 wk12 = next((rows[0] for (t, rows, oc) in sb12.upserts if t == rep.LATEST_TABLE and rows[0]["cadence"] == "weekly"), {})

@@ -99,6 +99,12 @@ WEEKLY_TZ = ZoneInfo("America/Chicago")
 WEEKLY_FIRST_HOUR = 9
 WEEKLY_LAST_HOUR = 15          # exclusive
 WEEKLY_MAX_LAG_DAYS = 2        # Sunday's prices, or Saturday's if Sunday's ETL failed
+WEEKLY_MIN_LAG_DAYS = 1        # never Monday's own: that is the daily's report
+# A weekly is owed when the last one went out at least this many days of prices
+# ago. In one Monday window the price date can only move Saturday -> Sunday (a
+# late ETL), so 3 never posts twice; 6 let a weekly forced on a Tuesday cost
+# the channel the next Monday's.
+WEEKLY_REPEAT_DAYS = 3
 
 # ── links: the site's tcgUrl, exactly (test_discord_reports.py checks Index.html) ──
 TCG_AFFILIATE_BASE = "https://partner.tcgplayer.com/c/7285926/1780961/21018"
@@ -174,17 +180,19 @@ def due(sub, today, force_weekly=False):
     if sub["cadence"] == "weekly":
         # force_weekly is a person asking for it now: it posts even to a
         # channel that already has this week's.
-        return force_weekly or last is None or (today - last).days >= 6
+        return force_weekly or last is None or (today - last).days >= WEEKLY_REPEAT_DAYS
     return False
 
 
 def weekly_open(price_date, now):
-    """May the weekly post at `now` (UTC)? Monday 9 AM - 3 PM Chicago, on
-    prices no older than the weekend."""
+    """May the weekly post at `now` (UTC)? Monday 9 AM - 3 PM Chicago, on the
+    weekend's prices. ⚠ Never on MONDAY's: from November (CST) the ETL lands
+    ~14:40 Chicago, inside the window, and an ETL-triggered run would rebuild
+    the weekly from Monday's prices and post it beside the daily."""
     local = now.astimezone(WEEKLY_TZ)
     if local.weekday() != 0 or not (WEEKLY_FIRST_HOUR <= local.hour < WEEKLY_LAST_HOUR):
         return False
-    return (local.date() - price_date).days <= WEEKLY_MAX_LAG_DAYS
+    return WEEKLY_MIN_LAG_DAYS <= (local.date() - price_date).days <= WEEKLY_MAX_LAG_DAYS
 
 
 def fresh_enough(price_date, now):
