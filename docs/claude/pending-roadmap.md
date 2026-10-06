@@ -20,6 +20,12 @@
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger.** Claude applies migrations itself, drops included (Zaven, 2026-09-30: *"im fine with claude having access to do everything"*) — see "Running SQL" under Ops for the two routes. A file is STAGED only when something outside the database has to happen first.
+- ~~`supabase/185_security_hardening.sql`~~ — **APPLIED 2026-10-06** through the connector, from a database
+  security review: the tier-list view counter returns before writing a mark for a slug that isn't an openable
+  list; `scout_event_meta` is service-role only (its callers are definer functions and the edge function's
+  service client); `scan-samples` objects capped at 1 MB (real max 506 KB over 3,546); TRUNCATE / REFERENCES /
+  TRIGGER / MAINTAIN revoked from anon + authenticated on all 81 public relations and in postgres's default
+  privileges. Verified live: 0 relations left with TRUNCATE, normal grants intact, public reads 200.
 - ~~`supabase/184_tier_list_hardening.sql`~~ — **APPLIED 2026-10-06** through the connector. From a review of
   the Tier List maker: the 500-list cap no longer fails edits (only new lists), `forked_from` names a
   parent only while it is public, an owner cannot like their own list, views count once per list per
