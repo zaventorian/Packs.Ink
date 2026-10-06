@@ -1460,6 +1460,43 @@ const D = await mod("discord/src/data.js");
   eq(finOf("elsa spirit of winter foil").label === "Top Prize", false, "a plain foil word is still just a finish");
 }
 {
+  // ⚠ /events in a busy metro: each list stopped at 1,000 characters and THEN
+  // added "…and N more stores within 100 mi", up to ~1,037 — over Discord's
+  // 1,024 for a field, which gets the whole reply refused. Swept over line
+  // lengths so some length lands right at the old edge.
+  const place = { city: "Chicago", state: "IL", lat: 41.8781, lng: -87.6298 };
+  let worst = 0;
+  for (let nameLen = 8; nameLen <= 48; nameLen++) {
+    const nm = (i) => (`Store ${i} ` + "x".repeat(60)).slice(0, nameLen);
+    const other = Array.from({ length: 150 }, (_, i) => ({ next_start: "2026-10-04T17:00:00Z", store_id: i, store_name: nm(i), name: "Weekly", kind: "other",
+      distance_mi: i, dow: (i % 7), local_time: "18:00", gameplay_format: "Core Constructed", occurrences: [{ event_id: 1000000 + i }] }));
+    const sc = Array.from({ length: 150 }, (_, i) => ({ next_start: `2026-11-${String(1 + (i % 28)).padStart(2, "0")}T17:00:00Z`, store_name: nm(i), kind: "sc",
+      distance_mi: i, gameplay_format: "Core Constructed", occurrences: [{ event_id: 2000000 + i, start_datetime: "2026-11-04T17:00:00Z", registered_user_count: 12, capacity: 32, cost_cents: 2500, currency: "USD" }] }));
+    for (const k of ["all", "sc", "other"]) {
+      const m = E.eventsMessage({ place, byKind: { sc, prerelease: [], other }, radius: 100, kind: k, query: "60614" });
+      for (const f of m.embeds[0].fields) worst = Math.max(worst, f.value.length);
+    }
+  }
+  ok(worst <= 1024, `/events never builds a field over Discord's 1,024 (longest ${worst})`);
+
+  // ⚠ /meta's three embeds together: long event names, deck links and the ten
+  // most-played cards' affiliate links passed Discord's 6,000-character cap,
+  // and the whole reply was refused. Player and deck names full of markdown
+  // characters double in length when escaped ("[OSA] Moluk_x").
+  const longRow = (k) => ({ place: "Top 8", place_rank: k, player_name: "[_]".repeat(14) + k, deck_id: "d" + k,
+    deck_name: "[*]".repeat(20), deck_inks: ["Amber", "Amethyst"], deck_visibility: "unlisted", deck_share_token: "t".repeat(22) });
+  const busy = { decks: 64, events: 8, sinceSet: "Attack of the Vine!", from: "2026-07-17",
+    breakdown: Array.from({ length: 8 }, (_, k) => ({ key: "Amber/Amethyst" + k, inks: ["Amber", "Amethyst"], n: 20 - k, t4: 4, wins: 2 })),
+    recent: Array.from({ length: 3 }, (_, k) => ({ id: "t" + k, name: "Disney Lorcana Challenge ".repeat(12) + k, date: "2026-09-12", players: 900, format: "core",
+      top: [1, 2, 3, 4].map(longRow) })) };
+  const mm = E.metaMessage({ R, index, meta: busy });
+  const tot = mm.embeds.reduce((n, e) => n + (e.title || "").length + (e.description || "").length + ((e.footer && e.footer.text) || "").length +
+    (e.fields || []).reduce((k, f) => k + f.name.length + f.value.length, 0), 0);
+  ok(tot <= 6000, `/meta stays under Discord's 6,000 characters with long names (${tot})`);
+  ok(mm.embeds[2].fields && mm.embeds[2].fields.length >= 1 && /\[[^\]]+\]\(https?:/.test(mm.embeds[1].description), "/meta still carries its events and its card list");
+  checkMessage(mm, "meta, long names");
+}
+{
   // Graded tiers follow the SITE's split rule (gradedSplitTiers): a card's
   // sales split by printing only when the catalog carries two printings. The
   // shapes below are the live rollup's (2026-10-06).
