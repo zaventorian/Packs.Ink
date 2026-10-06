@@ -22,6 +22,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { stripIndexHtml, stripCssComments } from "./strip_comments.mjs";
+import { spawnSync } from "node:child_process";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const out = join(repo, "dist");
@@ -105,6 +106,20 @@ const indexSrc = readFileSync(join(repo, "Index.html"), "utf8");
 for (const marker of ["/img-proxy", "/tcg-img-proxy"]) {
   if (!indexSrc.includes(marker)) {
     console.error(`build_dist: Index.html no longer references ${marker} — worker route is stale, refusing to build.`);
+    process.exit(1);
+  }
+}
+
+// The scanner's index, models and wasm live in a cache that SURVIVES deploys and
+// is served by exact URL, so bytes that changed under an unchanged ?v= reach no
+// returning user, ever. build_dist copies scanner/ straight off disk, so a
+// rebuilt index sitting uncommitted in a checkout shipped under the old version
+// (found 2026-10-06, with the main checkout in exactly that state). Refuse.
+{
+  const r = spawnSync(process.execPath, [join(repo, "scripts", "test_scanner_asset_cache.mjs")], {encoding: "utf8"});
+  if (r.status !== 0) {
+    console.error((r.stdout || "") + (r.stderr || ""));
+    console.error("build_dist: scanner assets changed without a version bump (see above) — refusing to build.");
     process.exit(1);
   }
 }
