@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -1121,20 +1122,30 @@ def build_report(sb, price_date, window, session=requests, now=None):
             "plain": plain}
 
 
-def post(token, channel_id, report, session=requests):
+def report_nonce(sub, price_date):
+    """Discord's nonce for one (channel, cadence, price date). Sent with
+    enforce_nonce, a second post of the same report inside Discord's dedupe
+    window (a few minutes) gets the first message back instead of a duplicate:
+    a post that timed out on our side but landed, then went again. ≤25 chars."""
+    key = f"{sub['channel_id']}|{sub['cadence']}|{price_date.isoformat()}"
+    return hashlib.sha1(key.encode()).hexdigest()[:25]
+
+
+def post(token, channel_id, report, session=requests, nonce=None):
     """Post one report; a report whose attachments Discord refuses is re-sent
     without them, so the words still arrive."""
     url = f"{API}/channels/{channel_id}/messages"
     auth = {"Authorization": f"Bot {token}"}
+    once = {"nonce": nonce, "enforce_nonce": True} if nonce else {}
 
     def as_json(embeds):
         return session.post(url, headers={**auth, "Content-Type": "application/json"},
-                            json={"embeds": embeds, "allowed_mentions": {"parse": []}}, timeout=30)
+                            json={"embeds": embeds, "allowed_mentions": {"parse": []}, **once}, timeout=30)
 
     files = report.get("files") or []
     if not files:
         return as_json(report["embeds"])
-    payload = {"embeds": report["embeds"], "allowed_mentions": {"parse": []},
+    payload = {"embeds": report["embeds"], "allowed_mentions": {"parse": []}, **once,
                "attachments": [{"id": i, "filename": n} for i, (n, _) in enumerate(files)]}
     r = session.post(url, headers=auth, data={"payload_json": json.dumps(payload)},
                      files={f"files[{i}]": (n, b, "image/png") for i, (n, b) in enumerate(files)},
@@ -1232,6 +1243,19 @@ def store_latest(sb, price_date, report_for, session=requests, cadences=("daily"
     return stored
 
 
+def record(sb, match, patch, tries=3):
+    """Write a subscription's bookkeeping, retried: a post that went out but
+    was never recorded is posted AGAIN by the next run. Never raises."""
+    for i in range(tries):
+        try:
+            sb.update(TABLE, match, {**patch, "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()})
+            return True
+        except Exception as e:
+            print(f"  (could not record it, try {i + 1}/{tries}: {type(e).__name__}: {str(e)[:160]})")
+            time.sleep(0.5 * (i + 1))
+    return False
+
+
 def run(args, sb=None, session=requests, now=None):
     token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
     if args.post and not token:
@@ -1303,20 +1327,27 @@ def run(args, sb=None, session=requests, now=None):
             print(f"  DRY RUN {where}: {rep['embeds'][0]['title']} — {len(rep['embeds'])} embeds, "
                   f"{len(rep['files'])} pictures")
             continue
-        r = post(token, s["channel_id"], rep, session=session)
         match = {"guild_id": s["guild_id"], "channel_id": s["channel_id"], "cadence": s["cadence"]}
-        if r.status_code < 300:
+        # ⚠ One channel's timeout must never end the run for every other one.
+        try:
+            r = post(token, s["channel_id"], rep, session=session, nonce=report_nonce(s, price_date))
+            status = r.status_code
+        except Exception as e:
+            status, reason = None, f"could not reach Discord ({type(e).__name__})"
+        if status is not None and status < 300:
             posted += 1
-            sb.update(TABLE, match, {"last_posted_on": price_date.isoformat(), "last_error": None,
-                                     "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()})
+            # Recorded straight away (and retried): a post nobody wrote down
+            # goes out again next run.
+            if not record(sb, match, {"last_posted_on": price_date.isoformat(), "last_error": None}):
+                print(f"::warning::posted {where} but could not record it; the next run may post it again")
             print(f"  posted {where}")
         else:
             failed += 1
             # The bot's own words about why — never the token, never the URL.
-            reason = {403: "the bot can't post in that channel (missing access or permission)",
-                      404: "that channel no longer exists"}.get(r.status_code, f"Discord said HTTP {r.status_code}")
-            sb.update(TABLE, match, {"last_error": reason[:300],
-                                     "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()})
+            if status is not None:
+                reason = {403: "the bot can't post in that channel (missing access or permission)",
+                          404: "that channel no longer exists"}.get(status, f"Discord said HTTP {status}")
+            record(sb, match, {"last_error": reason[:300]})
             print(f"  FAILED {where}: {reason}")
         time.sleep(0.4)   # well under Discord's per-route rate limits
     print(f"Done: {posted} posted, {failed} failed, {len(owed) - posted - failed} skipped.")

@@ -557,6 +557,58 @@ errs = [u for u in sb8.updates if u[2].get("last_error")]
 check(errs and "can't post" in errs[0][2]["last_error"], "a 403 is recorded in last_error")
 check(not any(u[2].get("last_posted_on") for u in sb8.updates), "a failed post is not marked posted")
 
+# ⚠ One channel's timeout must never end the run for the others, and a post
+# that went out is recorded even when the first write of it fails — a post
+# nobody wrote down goes out again next run.
+class FlakyDiscord(FakeDiscord):
+    def post(self, url, *a, **kw):
+        if "/channels/c_dead/" in url:
+            raise rep.requests.Timeout("read timed out")
+        return super().post(url, *a, **kw)
+
+
+sbt = FakeSb([{"guild_id": "g", "channel_id": "c_dead", "cadence": "daily", "last_posted_on": None},
+              {"guild_id": "g", "channel_id": "c_live", "cadence": "daily", "last_posted_on": None}])
+dt_ = FlakyDiscord()
+try:
+    code_t, out_t = run(sbt, dt_)
+except Exception as e:      # the old loop let it escape
+    code_t, out_t = None, f"raised {type(e).__name__}"
+check(code_t == 0 and len(dt_.posts) == 1 and dt_.posts[0]["url"].endswith("/channels/c_live/messages"),
+      f"a channel that times out does not stop the next one ({out_t[-120:]})")
+check(any(u[1]["channel_id"] == "c_dead" and "could not reach Discord" in (u[2].get("last_error") or "") for u in sbt.updates),
+      "the timed-out channel's last_error says so")
+check(any(u[1]["channel_id"] == "c_live" and u[2].get("last_posted_on") == TODAY.isoformat() for u in sbt.updates),
+      "the next channel's post is recorded")
+
+
+class FlakyUpdateSb(FakeSb):
+    fail_updates = 1
+
+    def update(self, table, match, patch, params=None):
+        if self.fail_updates:
+            self.fail_updates -= 1
+            raise RuntimeError("Update discord_report_subscriptions failed (503)")
+        return super().update(table, match, patch, params)
+
+
+sbu = FlakyUpdateSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}])
+try:
+    code_u, _ = run(sbu, FakeDiscord())
+except Exception as e:
+    code_u = f"raised {type(e).__name__}"
+check(code_u == 0 and any(u[2].get("last_posted_on") == TODAY.isoformat() for u in sbu.updates),
+      f"a failed first write of last_posted_on is retried, not lost ({code_u})")
+
+# Every post carries a nonce Discord dedupes on (enforce_nonce): one per
+# channel + cadence + price date, the same on a text-only re-send.
+nonces = [p["json"].get("nonce") for p in disc.posts]
+check(all(n and len(n) <= 25 for n in nonces) and len(set(nonces)) == len(nonces)
+      and all(p["json"].get("enforce_nonce") is True for p in disc.posts),
+      f"each report post carries its own enforce_nonce nonce ({nonces})")
+check(len(disc5.posts) == 2 and disc5.posts[0]["json"].get("nonce") == disc5.posts[1]["json"].get("nonce"),
+      "the text-only re-send of a report carries the same nonce")
+
 sb9 = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}])
 disc9 = FakeDiscord()
 _, out9 = run(sb9, disc9, post=False)
