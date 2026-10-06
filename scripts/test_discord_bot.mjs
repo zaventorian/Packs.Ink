@@ -1497,6 +1497,22 @@ const D = await mod("discord/src/data.js");
   checkMessage(mm, "meta, long names");
 }
 {
+  // ⚠ A /card (Components V2) that Discord refuses gets the embed retry even
+  // when nothing was uploaded; it used to drop straight to plain text and lose
+  // the picture.
+  const { handleInteraction } = await mod("discord/src/interactions.js");
+  const sent = [], pending = [];
+  const nullDb = { hasService: false, async get() { return []; }, async all() { return []; }, async rpc() { return []; } };
+  await handleInteraction({ type: 2, token: "v2", application_id: "123", data: { type: 1, name: "card", options: [{ type: 3, name: "name", value: "mowgli" }] } },
+    { R, index, db: nullDb, origin: "https://bot.example", appId: "123", assets: null, log: () => {},
+      fetch: async (u, init) => { const b = init.body instanceof FormData ? JSON.parse(init.body.get("payload_json")) : JSON.parse(init.body); sent.push({ b, multipart: init.body instanceof FormData });
+        return new Response("{}", { status: b.flags === 32768 ? 400 : 200 }); },
+      waitUntil: (p) => pending.push(p) });
+  await Promise.all(pending.splice(0));
+  ok(sent.length === 2 && !sent[0].multipart && sent[0].b.flags === 32768 && sent[1].b.embeds && sent[1].b.embeds[0] && !sent[1].b.flags && !sent[1].b.content,
+    `a refused V2 /card with nothing uploaded is retried as the embed, not plain text (${sent.map((s) => (s.b.flags ? "V2" : s.b.embeds && s.b.embeds.length ? "embed" : "text")).join(" -> ")})`);
+}
+{
   // Graded tiers follow the SITE's split rule (gradedSplitTiers): a card's
   // sales split by printing only when the catalog carries two printings. The
   // shapes below are the live rollup's (2026-10-06).

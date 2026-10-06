@@ -154,7 +154,10 @@ async function patchOriginal(it, deps, payload, { update = false } = {}) {
   if (deps.log) deps.log("patch failed", r.status, (await r.text().catch(() => "")).slice(0, 800));
   // The upload is the new risk, so if it was refused for any reason the reply
   // goes again exactly as it was before uploads existed: the picture as a link.
-  if (up) {
+  // ⚠ A refused Components V2 reply gets the same embed retry whether or not
+  // it uploaded anything — without one it used to skip straight to plain
+  // text, and a /card with a linked picture lost its picture for good.
+  if (up || (layout !== "embed" && r.status === 400)) {
     r = await send("PATCH", orig, plainBody);
     if (r.ok) return;
     if (deps.log) deps.log("patch without upload failed", r.status);
