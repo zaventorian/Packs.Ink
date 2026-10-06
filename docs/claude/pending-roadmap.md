@@ -20,6 +20,13 @@
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger.** Claude applies migrations itself, drops included (Zaven, 2026-09-30: *"im fine with claude having access to do everything"*) — see "Running SQL" under Ops for the two routes. A file is STAGED only when something outside the database has to happen first.
+- ~~`supabase/184_tier_list_hardening.sql`~~ — **APPLIED 2026-10-06** through the connector. From a review of
+  the Tier List maker: the 500-list cap no longer fails edits (only new lists), `forked_from` names a
+  parent only while it is public, an owner cannot like their own list, views count once per list per
+  viewer (user, or hashed IP via `_client_ip()`) per day in `custom_tier_list_view_marks`, and
+  `tier_lists` loses anon writes and TRUNCATE. Run against PGlite with RLS first (26 checks). It changed
+  no live rows (2 lists, no copies, likes or views yet). Verified live by an anon REST probe on a
+  nonexistent slug (two calls, one mark; probe row deleted after).
 - ~~`supabase/178_challenge_c3_set.sql`~~ — **APPLIED 2026-09-30** via `scripts/sql.py`. The C3 set row; its two
   cards are inserted by `patch_pid_overrides.py` on the next daily metadata run from `main`.
 - ~~`supabase/177_admin_exec_sql.sql`~~ — **APPLIED 2026-09-30** through the connector. The service-role-only
