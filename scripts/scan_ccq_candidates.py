@@ -58,6 +58,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.parse
 import urllib.request
@@ -90,23 +91,23 @@ INCLUDE = (
 # "CCQ - PARALELO 1") carry the word CCQ but qualify nobody. Zaven, 2026-10-03:
 # not CCQs, never add them. Dropped here so they are not even proposed.
 EXCLUDE = (
-    "side event",
-    "-side",
-    "side)",
-    "side-event",
     "paralelo",
     "parallel",
     "practice",
     "mock",
     "watch party",
 )
+# "side" as a WORD: "(RHS-CCQ-SIDE)", "CCQ Side Event", "side-event". A bare
+# substring test ("-side", "side)") also matched a real qualifier at a store
+# called Westside, Seaside or Bayside, and dropped it unseen (review, 2026-10-06).
+SIDE_RE = re.compile(r"\bside\b")
 # Titles that hedge. Kept (they are usually real) but flagged in the note, so
 # whoever reviews knows the STORE was unsure, not us.
 HEDGES = ("possible", "maybe", "tentative", "tbc", "tbd")
 # Titles naming some OTHER championship's qualifier (a national league, not the
 # official Challenge track). Blocks auto-publish only; still proposed.
 NOT_OFFICIAL = ("german championship", "national championship", "league championship",
-                "-side", "side)", "side event", "legendz")
+                "legendz")
 AUTO_MIN_CAPACITY = 128
 
 
@@ -200,7 +201,7 @@ def local_end_day(ev, start_day):
 
 def auto_publish_ok(ev, row) -> bool:
     low = (ev.get("name") or "").lower()
-    if any(h in low for h in HEDGES) or any(n in low for n in NOT_OFFICIAL):
+    if any(h in low for h in HEDGES) or any(n in low for n in NOT_OFFICIAL) or SIDE_RE.search(low):
         return False
     if (ev.get("capacity") or 0) < AUTO_MIN_CAPACITY:
         return False
@@ -217,7 +218,7 @@ def _now_iso():
 def to_row(ev) -> dict | None:
     title = (ev.get("name") or "").strip()
     low = title.lower()
-    if any(bad in low for bad in EXCLUDE):
+    if any(bad in low for bad in EXCLUDE) or SIDE_RE.search(low):
         return None
     day = local_day(ev)
     if not day:
