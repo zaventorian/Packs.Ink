@@ -250,7 +250,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=527">
+<link rel="stylesheet" href="styles.css?v=528">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1397,8 +1397,18 @@ const wipePriceDerivedAuxCaches = () => {
   // Deferred a microtask: the AUX-version-bump call below runs before the IDB
   // helpers' consts initialize (TDZ); by microtask time the module has fully
   // evaluated. idbDel resolves (never rejects) on any failure.
+  //
+  // EXPIRED, not deleted: the record keeps its rows with t = 0, so the next
+  // reader shows them as stale and refetches behind them. Deleted, a Home or
+  // Screener that mounted after the wipe had nothing to show and sat on
+  // "Loading movers…" for the whole multi-page fetch — once every ETL day.
   Promise.resolve().then(() => {
-    for(const k of IDB_JSONCACHE_WIPE_KEYS) idbDel(IDB_JSONCACHE_PREFIX + k);
+    for(const k of IDB_JSONCACHE_WIPE_KEYS){
+      const key = IDB_JSONCACHE_PREFIX + k;
+      idbGet(key).then(o => {
+        if(o && typeof o.t === "number" && o.t !== 0) idbSet(key, {...o, t: 0});
+      });
+    }
   });
 };
 try {
@@ -1502,13 +1512,31 @@ const CACHE_MIN_ROWS = 4000;
 // deleted to hand its ~2.5MB back to the aux caches. localStorage remains
 // the write fallback when IDB is unavailable.
 const CATALOG_IDB_KEY = "catalog";
+const CATALOG_REPLAY_MIN_VERSION = 57;  // v57 added cardCount; every key since shares the row shape
+const catalogKeyVersion = (k) => {
+  const m = /:v(\d+)$/.exec(String(k || ""));
+  return m ? parseInt(m[1], 10) : -1;
+};
 async function readCache(){
   try {
     const rec = await idbGet(CATALOG_IDB_KEY);
-    if(rec && rec.v === CACHE_KEY && typeof rec.t === "number" &&
-       Array.isArray(rec.rows) && rec.rows.length >= CACHE_MIN_ROWS){
-      return {rows: rec.rows, stale: Date.now() - rec.t > CACHE_MAX_AGE_MS, latestDate: rec.latestDate || null,
-              cardCount: typeof rec.cardCount === "number" ? rec.cardCount : null};
+    if(rec && typeof rec.t === "number" && Array.isArray(rec.rows) && rec.rows.length >= CACHE_MIN_ROWS){
+      if(rec.v === CACHE_KEY){
+        return {rows: rec.rows, stale: Date.now() - rec.t > CACHE_MAX_AGE_MS, latestDate: rec.latestDate || null,
+                cardCount: typeof rec.cardCount === "number" ? rec.cardCount : null};
+      }
+      // A catalog saved under an EARLIER CACHE_KEY is still shown while the
+      // new one loads, and marked stale so the fetch always runs. Treating it
+      // as missing put every returning visitor on the full-screen "Loading the
+      // card database" card after each bump, and the key moves several times
+      // a month (v57 → v65 in under three weeks). The bumps change content —
+      // a synthetic row, a label — not the row shape, and the fresh rows
+      // replace these within seconds. CATALOG_REPLAY_MIN_VERSION keeps a
+      // record from before the IndexedDB era (a different row shape) out.
+      if(catalogKeyVersion(rec.v) >= CATALOG_REPLAY_MIN_VERSION && catalogKeyVersion(rec.v) < catalogKeyVersion(CACHE_KEY)){
+        return {rows: rec.rows, stale: true, outdated: true, latestDate: rec.latestDate || null,
+                cardCount: typeof rec.cardCount === "number" ? rec.cardCount : null};
+      }
     }
   } catch {}
   // Legacy / no-IDB fallback: the old localStorage cache.
@@ -54332,6 +54360,26 @@ const HomePanelModal = ({panelKey, label, node, cta, onClose, onNavAway}) => {
   </div>`;
 };
 
+// The home movers rows, kept for the life of the page. HomeView unmounts on
+// every tab switch, and its rows lived only in component state, so each
+// return to Home painted "Loading movers…" until an async read (or, once
+// the day's prices had been detected, a full multi-page refetch) landed.
+// `epoch` is the priceEpoch the rows were fetched under: a later epoch
+// means newer prices exist and the rows stay up while they are refetched.
+// What the movers area shows before its first rows exist (a first visit, or
+// storage that was cleared): the shape of two banners, so the page reads as
+// loading rather than empty. Only ever on screen until the first fetch lands —
+// after that the stored rows are shown instead (see _homeMoversMem).
+const MoversSkeleton = ({rows = 2}) => html`<div class="movers-skel" role="status" aria-live="polite">
+  <span class="sr-only">${_t("Loading movers…")}</span>
+  ${Array.from({length: rows}, (_, b) => html`<div key=${b} class="movers-skel-banner" aria-hidden="true">
+    <div class="movers-skel-head"><span class="skel-bar" style=${{width: b ? 150 : 190}}></span><span class="skel-bar skel-bar--sub"></span></div>
+    <div class="movers-skel-track">${Array.from({length: 12}, (_, i) => html`<div key=${i} class="movers-skel-tile">
+      <span class="skel-card"></span><span class="skel-bar"></span><span class="skel-bar skel-bar--short"></span><span class="skel-bar skel-bar--sub"></span>
+    </div>`)}</div>
+  </div>`)}
+</div>`;
+let _homeMoversMem = null;
 const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, openAnalyticsTool, openEventFinder, finderOpen, onEventArtistClick, layout, homeEdit}) => {
   // Resolved home layout (set in App from the settings popover): which panels
   // are on, which column each sits in, and their order within that column.
@@ -54414,7 +54462,9 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
       });
     }
   };
-  const [state, setState] = useState({rows:null, loading:true, error:null});
+  const [state, setState] = useState(() => _homeMoversMem
+    ? {rows: _homeMoversMem.rows, loading:false, error:null}
+    : {rows:null, loading:true, error:null});
   const [selectedGroup, setSelectedGroup] = useState(null);
   // Tab hint threaded from graded mover tiles so the modal opens on its
   // Graded tab instead of the default Price History. null = let the modal
@@ -54579,14 +54629,22 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
     // origin quota, so the old localStorage write always failed silently.
     const CACHE_KEY = "packsink:movers:v1";
     (async () => {
-    // After a price refresh (priceEpoch > 0) the cache is by definition old,
-    // and its wipe may not have landed yet — go straight to the network.
-    const cached = priceEpoch > 0 ? null : await readJsonCacheIdb(CACHE_KEY, 12 * 60 * 60 * 1000);
+    // Already fetched this page-life for these prices: nothing to do.
+    if(_homeMoversMem && _homeMoversMem.epoch === priceEpoch) return;
+    // Anything on screen stays there. Otherwise show the stored copy, even an
+    // old one, and refetch behind it. After a price refresh (priceEpoch > 0)
+    // the stored copy is old by definition, so it is shown but always
+    // refetched — never treated as current.
+    const onScreen = !!(_homeMoversMem && _homeMoversMem.rows && _homeMoversMem.rows.length);
+    const cached = onScreen ? null : await readJsonCacheIdb(CACHE_KEY, 12 * 60 * 60 * 1000);
     if(cancelled) return;
-    const hadCache = !!(cached && Array.isArray(cached.data) && cached.data.length);
-    if(hadCache){
-      setState({rows: cached.data, loading:false, error:null});
-      if(!cached.stale) return;
+    const hadCache = onScreen || !!(cached && Array.isArray(cached.data) && cached.data.length);
+    if(cached && hadCache){
+      setState(prev => (prev && prev.rows && prev.rows.length) ? prev : {rows: cached.data, loading:false, error:null});
+      if(!cached.stale && priceEpoch === 0){
+        _homeMoversMem = {rows: cached.data, epoch: priceEpoch};
+        return;
+      }
       // Fall through and background-refresh.
     }
     sbFetchAll("price_movers", {select: "card_id,set_id,name,version,rarity,ink,collector_number,image_small,image_normal,tcgplayer_product_id,printing,low_today,low_prev,low_7d,low_30d,low_90d,low_180d,low_365d,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,abs_pct_1d,market_today,market_prev,market_7d,market_30d,market_90d,market_180d,market_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d", order: "abs_pct_1d.desc.nullslast"})
@@ -54624,6 +54682,7 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
             image_normal: lorcastToProxy(r.image_normal),
           }));
           setState({rows, loading:false, error:null});
+          _homeMoversMem = {rows, epoch: priceEpoch};
           writeJsonCacheIdb(CACHE_KEY, rows);
         }
       });
@@ -55405,7 +55464,7 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
           </button>
         </div>
         ${state.loading
-          ? html`<div>${newsMain}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>${_t("Loading movers…")}</div></div>`
+          ? html`<div>${newsMain}<${MoversSkeleton} rows=${2}/></div>`
           : state.error
             ? html`<div>${newsMain}<div style=${{padding:"40px 0",textAlign:"center",color:"var(--red)",fontSize:13}}>${state.error}</div></div>`
             : (!showUp && !showDown)
