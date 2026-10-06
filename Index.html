@@ -30,7 +30,7 @@
    you); the settings menu is what saves one. Keep I18N_VER in step with the
    ?v= the dictionaries were last changed under. */
 (function(){
-  var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="7", l=null;
+  var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="8", l=null;
   try{
     var q=new URLSearchParams(location.search).get("hl");
     l = (q && (OK[q]||q==="en")) ? q : localStorage.getItem("packsink:lang");
@@ -42440,14 +42440,25 @@ const tierClean = (list, pool) => {
 // being revealed: the day a lower-numbered chase card is added, every offset
 // silently points one card further along. A code with no base (links made the
 // first day, v523) still reads against the pool's first card.
+// ⚠ The base is the lowest RANKED card, not the pool's first: one character
+// holds an offset of 0-35, and a single low-numbered row in a chase pool (the
+// scanner index already holds two mis-rarity'd Hyperia City cards at #206 and
+// #212) put every real chase card 36+ past the pool's first and silently out
+// of the code. Every reader takes the base from the code, so any base works.
 const tierEncode = (tiers, pool) => {
   if(!pool.length) return "";
-  const base = pool[0].num;
+  const numOf = new Map(pool.map(p => [p.id, p.num]));
+  const ranked = tiers.flat().map(id => numOf.get(id)).filter(n => n != null);
+  const base = ranked.length ? Math.min(...ranked) : pool[0].num;
   const off = new Map(pool.map(p => [p.id, p.num - base]));
+  let lost = 0;
   const parts = tiers.map(t => t.map(id => {
     const o = off.get(id);
-    return (o != null && o >= 0 && o < 36) ? o.toString(36) : "";
+    if(o != null && o >= 0 && o < 36) return o.toString(36);
+    if(o != null) lost++;
+    return "";
   }).join(""));
+  if(lost) console.warn("[tierlist] " + lost + " ranked card(s) sit 36+ numbers past the lowest and are left out of the link");
   while(parts.length && !parts[parts.length - 1]) parts.pop();
   return parts.length ? base + "-" + parts.join(".") : "";
 };
@@ -42962,21 +42973,35 @@ const tierCustomFetchMine = async (uid) => {
     return data || [];
   } catch(e){ console.warn("[tierlist] load failed", e); return null; }
 };
+// ⚠ VISIBILITY IS SENT ONLY WHEN THIS DEVICE MEANS TO SET IT: on the list's
+// first save to this account (`r` is not this account), or after a local
+// create / fork / visibility button (`vd`, cleared once that value lands).
+// Sending the device's copy on every save let a device opened BEFORE the list
+// was made private publish it again by moving one card (found 2026-10-06).
+// Left out of the upsert, the column keeps what the account holds; a first
+// insert gets the table default, 'unlisted', which is also the client's.
+const tierCustomSendsVis = (uid, st) => !!st && (!!st.vd || st.r !== uid);
 const tierCustomSaveRemote = async (uid, slug, st) => {
   if(_tierCustomOff || !uid || !TIER_SLUG_RE.test(slug)) return false;
   try {
     const n = Math.min(st.n || 0, 400);
-    const {error} = await sbClient.from("custom_tier_lists").upsert({
+    const row = {
       slug, user_id: uid, title: st.title || "", labels: st.labels || "", code: st.code || "",
       card_count: n, ranked_count: Math.min(st.rk || 0, n),
-      visibility: TIER_VIS.includes(st.vis) ? st.vis : "unlisted",
       forked_from: st.fork && TIER_SLUG_RE.test(st.fork) ? st.fork : null,
       updated_at: new Date(st.t || Date.now()).toISOString(),
-    }, {onConflict: "slug"});
+    };
+    if(tierCustomSendsVis(uid, st)) row.visibility = TIER_VIS.includes(st.vis) ? st.vis : "unlisted";
+    const {error} = await sbClient.from("custom_tier_lists").upsert(row, {onConflict: "slug"});
     if(error){ tierCustomFail("save", error); return false; }
     return true;
   } catch(e){ console.warn("[tierlist] save failed", e); return false; }
 };
+// The parent a copy names in forked_from, which every reader of the copy can
+// see. Only a PUBLIC parent: an unlisted list's slug is its whole secret, and a
+// public copy of one published it (found 2026-10-06).
+const tierForkParent = (source) =>
+  source && source.kind === "remote" && source.row && source.row.visibility === "public" ? source.slug : null;
 const tierCustomDeleteRemote = async (uid, slug) => {
   if(_tierCustomOff || !uid) return false;
   try {
@@ -43032,6 +43057,21 @@ const openTierListSlug = (slug) => {
   try { window.dispatchEvent(new CustomEvent("packsink:open-tierlist", {detail: {slug}})); } catch {}
 };
 
+// Lists deleted on this device but maybe not yet on the account ({slug: uid}).
+// A delete made signed out, or one whose request failed, used to be undone by
+// the next sign-in merge, which rebuilt the list from the account's copy.
+// The merge now finishes those deletes instead, and a mark goes once the
+// account confirms the row is gone.
+const TIER_GONE_LS = "packsink:tierlist:gone:v1";
+const tierGoneRead = () => {
+  try { const v = JSON.parse(localStorage.getItem(TIER_GONE_LS) || "{}"); return v && typeof v === "object" ? v : {}; }
+  catch { return {}; }
+};
+const tierGoneSet = (slug, uid) => {
+  const g = tierGoneRead();
+  if(uid) g[slug] = uid; else delete g[slug];
+  try { localStorage.setItem(TIER_GONE_LS, JSON.stringify(g)); } catch {}
+};
 const tierCustomRead = () => {
   try {
     const v = JSON.parse(localStorage.getItem(TIER_CUSTOM_LS) || "null");
@@ -43057,9 +43097,15 @@ function useTierCustomStore(user){
   const [remote, setRemote] = useState(false);
   const timers = useRef({});
   const pending = useRef({});
-  const markSynced = (slug, who) => {
+  const markSynced = (slug, who, sent) => {
     dirty.current = true;
-    setStore(s => s.lists[slug] ? {lists: {...s.lists, [slug]: {...s.lists[slug], r: who}}} : s);
+    setStore(s => {
+      const e = s.lists[slug];
+      if(!e) return s;
+      // A visibility change made while this save was in flight stays pending.
+      const landed = sent && e.vd && sent.vis === e.vis;
+      return {lists: {...s.lists, [slug]: {...e, r: who, sf: 0, ...(landed ? {vd: 0} : {})}}};
+    });
   };
   useEffect(() => {
     setRemote(false);
@@ -43068,14 +43114,27 @@ function useTierCustomStore(user){
     tierCustomFetchMine(uid).then(rows => {
       if(cancelled || !rows) return;
       const local = tierCustomRead().lists;
+      const gone = tierGoneRead();
+      for(const [slug, who] of Object.entries(gone)){
+        if(who === uid && !rows.some(r => r.slug === slug)) tierGoneSet(slug, null);
+      }
+      rows = rows.filter(r => {
+        if(gone[r.slug] !== uid) return true;
+        tierCustomDeleteRemote(uid, r.slug).then(ok => { if(ok) tierGoneSet(r.slug, null); });
+        return false;
+      });
       const remoteBy = new Map(rows.map(r => [r.slug, r]));
       const merged = {};
       for(const r of rows){
         const rt = Date.parse(r.updated_at) || 0;
         const mine = local[r.slug];
         if(mine && (mine.t || 0) > rt){
-          merged[r.slug] = {...mine, r: uid, lk: r.like_count, vw: r.view_count};
-          tierCustomSaveRemote(uid, r.slug, mine);
+          // Newer cards and title win; visibility is the account's unless a
+          // change to it was made here and never reached the account.
+          const keep = {...mine, r: uid, lk: r.like_count, vw: r.view_count,
+            ...(mine.vd ? {} : {vis: r.visibility})};
+          merged[r.slug] = keep;
+          tierCustomSaveRemote(uid, r.slug, keep).then(ok => { if(ok) markSynced(r.slug, uid, keep); });
         } else {
           merged[r.slug] = {code: r.code || "", title: r.title || "", labels: r.labels || "", t: rt,
             vis: r.visibility, fork: r.forked_from || null, n: r.card_count, rk: r.ranked_count, r: uid,
@@ -43089,7 +43148,7 @@ function useTierCustomStore(user){
         merged[slug] = l;
         // Another account's list stays on the device, untouched.
         if(l.r) continue;
-        tierCustomSaveRemote(uid, slug, l).then(ok => { if(ok) markSynced(slug, uid); });
+        tierCustomSaveRemote(uid, slug, l).then(ok => { if(ok) markSynced(slug, uid, l); });
       }
       dirty.current = true;
       setStore({lists: merged});
@@ -43103,10 +43162,19 @@ function useTierCustomStore(user){
     const st = pending.current[slug];
     delete pending.current[slug];
     if(!st || !uid || _tierCustomOff) return Promise.resolve(false);
-    return tierCustomSaveRemote(uid, slug, st).then(ok => { if(ok) markSynced(slug, uid); return ok; });
+    return tierCustomSaveRemote(uid, slug, st).then(ok => {
+      if(ok) markSynced(slug, uid, st);
+      else if(!_tierCustomOff){
+        // `r` alone would keep saying "Saved" after the first success.
+        dirty.current = true;
+        setStore(s => s.lists[slug] ? {lists: {...s.lists, [slug]: {...s.lists[slug], sf: 1}}} : s);
+      }
+      return ok;
+    });
   }, [uid]);
   // Write one list (a partial patch over what is stored). Debounced per list.
-  const put = useCallback((slug, patch) => {
+  const put = useCallback((slug, patch0) => {
+    const patch = ("vis" in patch0 && !("r" in patch0)) ? {...patch0, vd: 1} : patch0;
     const prev = storeRef.current.lists[slug] || {};
     const next = {...prev, ...patch};
     storeRef.current = {lists: {...storeRef.current.lists, [slug]: next}};
@@ -43124,7 +43192,12 @@ function useTierCustomStore(user){
     const had = storeRef.current.lists[slug];
     dirty.current = true;
     setStore(s => { const lists = {...s.lists}; delete lists[slug]; return {lists}; });
-    if(uid && had) tierCustomDeleteRemote(uid, slug);
+    // Marked first: a delete that fails, or one made signed out, is finished by
+    // the next sign-in merge rather than undone by it.
+    const owner = (had && had.r) || uid;
+    if(had && owner) tierGoneSet(slug, owner);
+    // Another account's list is only deleted when that account signs in here.
+    if(uid && had && owner === uid) tierCustomDeleteRemote(uid, slug).then(ok => { if(ok) tierGoneSet(slug, null); });
   }, [uid]);
   useEffect(() => () => {
     for(const slug of Object.keys(pending.current)) flush(slug);
@@ -44040,7 +44113,7 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
     const slug = tierNewSlug();
     forkedRef.current = slug;
     store.put(slug, tierCustomToStored(next, idx, {vis: "unlisted",
-      fork: source.kind === "remote" ? source.slug : null}));
+      fork: tierForkParent(source)}));
     onOpenSlug(slug, true);
     flashToast(_t("This is your copy now — the original is untouched."), 4000);
   }, [own, source, idx, store, onOpenSlug]);
@@ -44051,7 +44124,7 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
       : {...base, tiers: base.tiers.map(() => []), pool: [...base.tiers.flat(), ...base.pool]};
     const slug = tierNewSlug();
     store.put(slug, tierCustomToStored({...next, t: Date.now()}, idx, {vis: "unlisted",
-      fork: source.kind === "remote" ? source.slug : null}));
+      fork: tierForkParent(source)}));
     onOpenSlug(slug, true);
     flashToast(keepRanking ? _t("Copied to My lists. Move cards to make it yours.")
       : _t("Copied to My lists with every card unranked. Rank them your way."), 4500);
@@ -44123,7 +44196,12 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
   const cards = idx.byId;
   const author = source.kind === "remote" ? (source.row.display_name || _t("Someone")) : null;
   const title = list.title || _t("Untitled tier list");
-  const shortLink = (own && onAccount && vis !== "private") || source.kind === "remote";
+  // ⚠ The short ?tid= link only once THIS list is confirmed on the account
+  // (`r`). Before its first save lands (offline, a failed save, or the first
+  // 900ms) the slug resolves for nobody else, and the copied link opened
+  // "private or deleted"; the long link carries the list itself and always works.
+  const confirmed = !!(entry && user && entry.r === user.id);
+  const shortLink = (own && onAccount && confirmed && vis !== "private") || source.kind === "remote";
   const shareUrl = shortLink ? tierCustomShortUrl(source.slug) : TIER_SITE + TIER_PATH + "?" + tierCustomQuery(list, idx);
   const ranked = list.tiers.reduce((a, t) => a + t.length, 0);
   const share = useTierShare({
@@ -44201,7 +44279,9 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
         aria-pressed=${like.on ? "true" : "false"}
         title=${user ? (like.on ? _t("Unlike this list") : _t("Like this list")) : _t("Sign in to like this list")}
         onClick=${toggleLike}>${uiIcon("heart", 15)} ${like.n}</button>`}
-      ${onAccount && entry && entry.r === user.id && html`<span class="tl-sync">${uiIcon("check", 13)} ${_t("Saved to your account")}</span>`}
+      ${onAccount && entry && entry.sf
+        ? html`<span class="tl-sync tl-sync--fail" role="status">${uiIcon("warn", 13)} ${_t("Not saved to your account. Your changes are on this device.")}</span>`
+        : onAccount && confirmed && html`<span class="tl-sync">${uiIcon("check", 13)} ${_t("Saved to your account")}</span>`}
       ${onAccount && entry && vis !== "private" && entry.lk != null && html`<span class="tl-stats">
         <span title=${_t("{n} likes", {n: entry.lk})}>${uiIcon("heart", 13)} ${entry.lk}</span>
         <span title=${_t("{n} views", {n: entry.vw || 0})}>${uiIcon("eye", 13)} ${entry.vw || 0}</span>

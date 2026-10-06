@@ -57,6 +57,18 @@ check("encode: nothing ranked is an empty code", T.tierEncode([[], [], [], [], [
 const raw2 = raw.concat([{Set: "Hyperia City", card_id: "c221", Rarity: "Enchanted", Number: "221", img_normal: "/img/221"}]);
 const pool2 = T.tierPools(raw2).get("Hyperia City");
 check("decode: a later, lower card does not shift an old link", T.tierDecode(enc, pool2), list.tiers);
+// One low-numbered row in the pool (the scanner index holds two mis-rarity'd
+// Hyperia City cards, #206 and #212) put #242 at offset 36, past what one
+// character holds, and the card silently fell out of the link (2026-10-06).
+const raw3 = raw.concat([{Set: "Hyperia City", card_id: "c206", Rarity: "Enchanted", Number: "206", img_normal: "/img/206"}]);
+const pool3 = T.tierPools(raw3).get("Hyperia City");
+const wide = [["c242", "c241"], [], [], [], []];
+const enc3 = T.tierEncode(wide, pool3);
+check("encode: a stray low card in the pool cannot push ranked cards out", T.tierDecode(enc3, pool3), wide);
+check("encode: ...the base is the lowest RANKED card", enc3, "241-10");
+check("encode: ...and the worker's preview decoder reads it", tierDecodeNums(enc3, 206)[0], [242, 241]);
+check("encode: a code made against the old pool still reads against the new",
+  T.tierDecode(T.tierEncode(list.tiers, pool), pool3), list.tiers);
 check("decode: unknown offsets ignored", T.tierDecode("z", pool)[0], []);
 check("decode: never more tiers than rows", T.tierDecode("0.1.2.3.4.5.6", pool).length, T.TIER_COUNT);
 
@@ -202,5 +214,60 @@ check("tiers: a six-tier chase list round-trips", T.tierFromStored({code: cpq.tl
 check("tiers: the worker reads the sixth tier of a chase link",
   tierDecodeNums(cpq.tl, 223, tierCountFromLabels(cpq.tt))[5], [223]);
 check("tiers: a first-day five-label link is still five", T.tierParseLabels("S_A_B_C_D").length, 5);
+
+// ── Custom lists on the account: privacy and deletes (2026-10-06) ──────────
+// Each of these failed silently: a list made private was published again by a
+// device holding an old copy; a copy of an unlisted list named its parent's
+// slug (its whole secret) to every reader; a delete made signed out was undone
+// by the next sign-in; and "Copy link" handed out a short link to a list the
+// account had never received. The hook needs a signed-in account to run, so the
+// decisions are run here and the wiring is pinned at source.
+const grabConst = (name) => {
+  const a = index.indexOf(`const ${name} = `);
+  if(a < 0) throw new Error("missing " + name);
+  const b = index.indexOf(";\n", a);
+  return index.slice(a, b + 1);
+};
+const ls = {};
+const ctx2 = vm.createContext({localStorage: {getItem: k => (k in ls ? ls[k] : null), setItem: (k, v) => { ls[k] = String(v); }}});
+vm.runInContext(["tierCustomSendsVis", "tierForkParent"].map(grabConst).join("\n")
+  + "\n" + index.slice(index.indexOf("const TIER_GONE_LS = "), index.indexOf("const tierCustomRead = () => {"))
+  + "\n;globalThis.S = {tierCustomSendsVis, tierForkParent, tierGoneRead, tierGoneSet};", ctx2);
+const S = ctx2.S;
+check("sync: a save from a device holding an OLD copy leaves visibility alone",
+  S.tierCustomSendsVis("u1", {r: "u1", vis: "public"}), false);
+check("sync: ...a visibility button pressed here is sent", S.tierCustomSendsVis("u1", {r: "u1", vd: 1}), true);
+check("sync: ...as is a list's first save to this account", S.tierCustomSendsVis("u1", {vis: "private"}), true);
+check("sync: ...or one last confirmed on another account", S.tierCustomSendsVis("u1", {r: "u2"}), true);
+check("fork: a public parent is named", S.tierForkParent({kind: "remote", slug: "abc", row: {visibility: "public"}}), "abc");
+check("fork: an unlisted parent is NOT (its slug is its secret)",
+  S.tierForkParent({kind: "remote", slug: "abc", row: {visibility: "unlisted"}}), null);
+check("fork: your own list names nothing", S.tierForkParent({kind: "own", slug: "abc"}), null);
+S.tierGoneSet("s1", "u1"); S.tierGoneSet("s2", "u2");
+check("deletes: marked per account", JSON.parse(JSON.stringify(S.tierGoneRead())), {s1: "u1", s2: "u2"});
+S.tierGoneSet("s1", null);
+check("deletes: a confirmed delete clears its mark", JSON.parse(JSON.stringify(S.tierGoneRead())), {s2: "u2"});
+ls["packsink:tierlist:gone:v1"] = "{not json";
+check("deletes: an unreadable mark store reads as empty", JSON.parse(JSON.stringify(S.tierGoneRead())), {});
+
+const hookSrc = index.slice(index.indexOf("function useTierCustomStore(user){"), index.indexOf("function TierCardViewer("));
+check("sync: a local visibility choice is flagged to send (a patch FROM the account is not)",
+  /\("vis" in patch0 && !\("r" in patch0\)\) \? \{\.\.\.patch0, vd: 1\}/.test(hookSrc), true);
+check("sync: the flag clears only when the value it carried has landed",
+  /const landed = sent && e\.vd && sent\.vis === e\.vis;/.test(hookSrc), true);
+check("sync: a newer local copy takes the ACCOUNT's visibility unless a change is pending",
+  /\.\.\.\(mine\.vd \? \{\} : \{vis: r\.visibility\}\)/.test(hookSrc), true);
+check("sync: the save only adds visibility when it should",
+  /if\(tierCustomSendsVis\(uid, st\)\) row\.visibility = /.test(index), true);
+check("deletes: remove marks the delete before asking the account",
+  hookSrc.indexOf("tierGoneSet(slug, owner)") > 0
+  && hookSrc.indexOf("tierGoneSet(slug, owner)") < hookSrc.indexOf("tierCustomDeleteRemote(uid, slug)"), true);
+check("deletes: the sign-in merge finishes marked deletes instead of rebuilding them",
+  /if\(gone\[r\.slug\] !== uid\) return true;\s*\n\s*tierCustomDeleteRemote\(uid, r\.slug\)/.test(hookSrc), true);
+check("sync: a failed save is shown, not covered by the old tick", /sf: 1/.test(hookSrc) && /sf: 0/.test(hookSrc), true);
+check("fork: both copy paths use tierForkParent", (index.match(/fork: tierForkParent\(source\)/g) || []).length, 2);
+check("fork: no copy path names a remote parent directly", /fork: source\.kind === "remote" \? source\.slug/.test(index), false);
+check("share: the short link waits for THIS list to be on the account",
+  /const shortLink = \(own && onAccount && confirmed && vis !== "private"\)/.test(index), true);
 if(fails){ console.log(`\n${fails} failure(s)`); process.exit(1); }
 console.log("\nall passed");
