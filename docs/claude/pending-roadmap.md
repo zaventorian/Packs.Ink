@@ -20,6 +20,12 @@
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger.** Claude applies migrations itself, drops included (Zaven, 2026-09-30: *"im fine with claude having access to do everything"*) — see "Running SQL" under Ops for the two routes. A file is STAGED only when something outside the database has to happen first.
+- ~~`supabase/191_admin_checks_caller_only.sql`~~ — **APPLIED 2026-10-06** through the connector.
+  `is_tournament_admin(uuid)` / `is_elo_admin(uuid)` return false for any id but the caller's when asked from
+  anon / authenticated (they are the only role checks that take a user id). Every caller already passes its
+  own id. Run against PGlite (22 checks, incl. RLS policies, a definer admin RPC and `can_scout`). Verified live
+  by a rolled-back probe: another account asking about the admin gets false, the admin about themself true,
+  `can_scout()` still true for them, server-side still true.
 - ~~`supabase/190_anon_write_fair_limits.sql`~~ — **APPLIED 2026-10-06** through the connector. Server-only:
   `_rate_bucket` (account when signed in, address otherwise, IPv6 per /64; an IPv4 bucket hashes exactly as
   before) and a `signed_in` column on `trade_create_events` / `feedback_submit_events`, so `create_trade` and

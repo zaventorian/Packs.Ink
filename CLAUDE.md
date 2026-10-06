@@ -909,6 +909,9 @@ Mirrors deck sharing but with three independent visibility axes (raw / sealed / 
 
 Full notes: `docs/claude/tournaments.md` (3 KB). **Read it before changing this area.**
 Admin-gated bulk-upload.
+Guards: `scripts/test_admin_checks_caller.mjs`.
+
+- ⚠ `is_tournament_admin(uuid)` / `is_elo_admin(uuid)` answer only for the caller (migration 191): pass `auth.uid()` / `user.id`, never another user's id.
 
 ## Deck view / edit modes
 
