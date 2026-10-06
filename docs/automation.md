@@ -15,7 +15,7 @@ the browser, the residential IP and the database); "CI" means GitHub Actions.
 | New set group on TCGplayer | CI catalog watch | Intake routine writes the set-row migration and applies it | nothing |
 | Spoilers: official gallery, duels.ink renders | CI source watch | Intake routine runs the importers | check the art once |
 | Pins and lore counters | CI source watch (lorcanaplayer) | Intake routine prepares the entry and the photo cut | approve the photo, say "push" |
-| Calendar: Challenges, qualifiers | CI calendar watch + CCQ scan | Intake routine fills in venue, map point and link, and lists each for a yes/no | confirm (a wrong date is the costly mistake) |
+| Calendar: Challenges, qualifiers | CI calendar watch + CCQ scan | Intake routine fills in venue, map point and link, and confirms every row that checks out | nothing (it reports what it confirmed and what it left) |
 | Graded eBay sales | Routine, daily | Routine | rule on held outliers |
 | Raw eBay sales (the promos TCGplayer can't price) | Routine, daily | Routine | rule on held outliers |
 | PSA population | Routine, weekly (new 2026-09-30) | Routine | sign in to collectors.com when the session lapses |
@@ -38,11 +38,12 @@ It may do on its own, because each is already guarded and reversible:
 - link a TCGplayer product to a card when the name and the printed number both match exactly one card;
 - apply a set-row migration for a new TCGplayer group;
 - run `import_duels_art.py --commit`, `import_official_set.py`, `link_calendar_events.py`;
-- add venue, coordinates and registration link to a calendar row (never `confirmed`);
+- add venue, coordinates and registration link to a calendar row;
+- confirm a calendar row that checks out (Zaven, 2026-10-03: *"if it looks legit, add it. I cannot manually approve these. If the listing changes, we can remove it."*). Checks out = the Ravensburger Play listing (or the organiser's page) is live and upcoming, names a qualifier or Challenge, and the date matches. Left unconfirmed, and named in the report: a side event at a CCQ (`SIDE`, `paralelo`, a prize-pack tournament on the same day as the main event), a duplicate of a row already on the calendar, a listing that is gone or cancelled. An event the official Challenge page lists that the calendar lacks is ADDED confirmed;
 - write a news draft.
 
 It prepares, and stops, for anything that changes the site's code or publishes
-something: a new promo row, a new pin or counter, a calendar confirmation. That
+something: a new promo row, a new pin or counter. That
 work lands as commits on a local `intake/<date>` branch with the guards run, and
 the report says what is waiting. Nothing is pushed or deployed until Zaven says
 "push".

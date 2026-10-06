@@ -311,6 +311,18 @@ const TCG_PID_OVERRIDES = {
   "Mr. Incredible - Super Strong|243": 721882,
   "Sven - Leaping Reindeer|243": 721891,
   "Violet Parr - Super Resilient|247": 721878,
+  // PD1 #17 (printed 17/PD1, sold in The Great Hunny Rescue) and Q3 #19-#27, the
+  // Vine encounter cards; TCGplayer listed them 2026-10-05, numbers read off its photos.
+  "The Beanstalk - Onward and Upward|17": 722667,
+  "Ming Lee - Made by the Vine|19": 722672,
+  "Vine Cluster - Aggressive Chomper|20": 722673,
+  "Vine Sprout - Flicker|21": 722674,
+  "4*Town - Made by the Vine|22": 722675,
+  "Vine Sprout - Bruiser|23": 722676,
+  "Accelerated Growth|24": 722678,
+  "Overwhelm|25": 722680,
+  "Catastrophic Rupture|26": 722681,
+  "Wild Growth|27": 722682,
   // Hyperia City: Lorcast misspells these two (TCGplayer: "Russell", "Magical Market"),
   // so the name check in link_preorder_pids refuses them. Keyed on Lorcast's spelling. 2026-10-05.
   "Russel - Finding Adventure|20": 722370,
