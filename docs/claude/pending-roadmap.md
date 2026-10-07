@@ -53,7 +53,8 @@
   `played`. Verified live: 28,975 rows keyed, 2,635 distinct people under both keys and 2,635 distinct pairs
   (a bijection), `played` equals the old filter on every row, and the Store Status pivot over the old and new
   reads agree on all 107 stores. Run against PGlite first (43 checks, 188 and 189 both twice).
-- **`supabase/187_starter_deck_foil_rekey.sql`** — **STAGED 2026-10-06: apply RIGHT AFTER the deploy** that
+- ~~`supabase/187_starter_deck_foil_rekey.sql`~~ — **APPLIED 2026-10-07 00:3x UTC, right after the v532 deploy;
+  verified: 47 rows / 9 users / 55 cards now Holofoil, none left on Cold Foil.** Written as STAGED: apply right after the deploy that
   ships the Starter Deck Foil client change (EXTRAS_MAP `printing:"Holofoil"`). Moves the 12 Starter Deck Foil
   collection entries from Cold Foil to Holofoil (47 rows, 9 users on the day; a Holofoil row made in between
   keeps the larger count). Before the deploy the live client still keys these as Cold Foil, so applying it
