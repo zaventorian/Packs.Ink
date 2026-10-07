@@ -2029,7 +2029,7 @@ const VIEW_SHARE_LABELS = {
   home: "the home page", screener: "the Screener", history: "Price Graphing",
   market: "Analytics", cards: "Cards", collection: "your Collection",
   decks: "Decks", faq: "How it works", elo: "the Elo board",
-  calendar: "the Lorcana Calendar",
+  calendar: "the Lorcana Calendar", gear: "Lorcana on Amazon", news: "News",
 };
 // ⚠ Declared HERE, beside the label that reads it, rather than next to
 // CAL_VIEW_MODES 40k lines below — shareUrlLabel is extracted and run by
@@ -2097,6 +2097,7 @@ const shareUrlLabel = () => {
     if(q.get("collection")) return "this collection";
     if(q.get("user"))       return "this creator";
     if(q.get("card"))       return "this card";
+    if(q.get("tid"))        return "this tier list";
     // A popped-out home section, after the leaf pages: those own the label
     // when both are in the URL, the same way an open deck beats a section.
     const panel = q.get("panel");
@@ -2108,7 +2109,10 @@ const shareUrlLabel = () => {
     const SUB = {
       decks:      () => DECK_SECTION_LABELS[q.get("s")] || null,
       collection: () => COLLECTION_SECTION_LABELS[q.get("c")] || null,
-      market:     () => MARKET_SUB_LABELS[q.get("a")] || null,
+      // A sub-tab with its own path (/ticker, /tierlist) carries no ?a=, and read
+      // as plain "Analytics".
+      market:     () => MARKET_SUB_LABELS[q.get("a")]
+        || MARKET_SUB_LABELS[{"/ticker": "ticker", "/tierlist": "tierlist"}[path]] || null,
       // "your filters" is the load-bearing half of a ?v= link — the mode alone
       // would describe a page the recipient won't recognise as what was sent.
       // Which VIEW, because the calendar is four different pages at one URL and
@@ -55984,7 +55988,10 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
     if(showNews) toks.push("reveals:" + newsSet + ":" + newsCount);
     return toks.join("\n");
   }, [newsTiles, freshCoconutKey, showNews, newsSet, newsCount]);
-  const newsFeedAside = (variant) => (panelCol["news"] != null && newsTiles.length > 0)
+  // `popped`: a /?panel=news link renders the feed even for a visitor who has
+  // News switched off, as every other popped-out panel does; gated on the
+  // layout it opened nothing while ?panel=news sat in the address.
+  const newsFeedAside = (variant, popped) => ((popped || panelCol["news"] != null) && newsTiles.length > 0)
     ? html`<${NewsFeed} key=${"news-"+variant} variant=${variant} tiles=${newsTiles} sig=${newsSig} sigPending=${newsSigPending}
         panelNav=${variant === "rail" ? panelTitleNav : null}/>`
     : null;
@@ -56104,7 +56111,7 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
   // the panel is switched off (panelCol is null) or it has no content.
   const panelNode = (key) => {
     switch(key){
-      case "news":       return newsFeedAside("rail");
+      case "news":       return newsFeedAside("rail", openPanel === "news");
       case "following":  return html`<${FollowingFeed} key="following" user=${user} onSignIn=${onSignIn}
         raw=${raw} openDeckById=${openDeckById} panelNav=${panelTitleNav}/>`;
       case "tournaments": return html`<${TournamentResultsBanner} key="tournaments" raw=${raw}
@@ -64133,7 +64140,9 @@ function OfflineImagesPanel({raw, collection, user}){
   const collUrls = useMemo(() => {
     if(!user || !collection) return [];
     const owned = new Set();
-    for(const k of Object.keys(collection)){ if(collection[k] > 0) owned.add(k.split(":")[0]); }
+    // lastIndexOf: a card id can hold a colon itself (extras:<pid>), and the
+    // first-colon split skipped every Extras & Oddities card's art.
+    for(const k of Object.keys(collection)){ if(collection[k] > 0) owned.add(k.slice(0, k.lastIndexOf(":"))); }
     if(!owned.size) return [];
     const s = new Set();
     for(const r of (raw || [])){
@@ -64511,6 +64520,10 @@ function App(){
   // `openCardId` opens that card's modal ON TOP of the filtered set — "the
   // Coconut cards page with this one already open". ⚠ It is set AFTER the
   // delete loop, which strips `card` along with every other leaf param.
+  // Remounts the Cards view when a set handoff arrives while it is already
+  // open: it reads ?set= only in its useState initializers, so the reveal
+  // strip's "See them" on /cards pushed the new address and changed nothing.
+  const [cardsKey, setCardsKey] = useState(0);
   const openCardsFilteredBySet = useCallback((setName, openCardId) => {
     try {
       const url = new URL(window.location.href);
@@ -64523,6 +64536,7 @@ function App(){
       window.history.pushState({view:"cards"}, "", url.toString());
     } catch {/* no-op */}
     setIncomingCardsOpenId(openCardId || null);
+    if(viewRef.current === "cards") setCardsKey(k => k + 1);
     setView("cards");
     setTabClickNonce(n => n + 1);
   }, []);
@@ -64549,6 +64563,11 @@ function App(){
     setTabClickNonce(n => n + 1);
     try {
       const u = new URL(window.location.href);
+      // Push the COLLECTION page itself. Pushed on the old path (a creator's
+      // /decks?user=C), the view sync then pushed /collection too: two entries,
+      // and the first Back press landed on the same creator page it left.
+      u.pathname = VIEW_PATHS.collection || "/collection";
+      for(const k of ["user", "deck", "tourney", "s", "f", "set", "c"]) u.searchParams.delete(k);
       u.searchParams.set("collection", userId);
       if(token) u.searchParams.set("token", token);
       else      u.searchParams.delete("token");
@@ -65199,8 +65218,12 @@ function App(){
       if(e.key === "/" && !typing){
         // Focus the most prominent visible search box (placeholder starts with
         // "Search" — covers "Search every card…", "Search sets…", etc.).
+        // In another language the placeholder is translated and loses its
+        // "Search" prefix ("カードを検索…"), so "/" found nothing; every one of
+        // those boxes is type=search, which is the test there.
         const box = Array.from(document.querySelectorAll("input")).find(
-          el => el.offsetParent !== null && /^search/i.test(el.placeholder || ""));
+          el => el.offsetParent !== null && (/^search/i.test(el.placeholder || "")
+            || (SITE_LANG !== "en" && el.type === "search")));
         if(box){ e.preventDefault(); box.focus(); if(box.select) box.select(); }
       } else if(e.key === "?" && !typing){
         e.preventDefault();
@@ -66179,6 +66202,14 @@ function App(){
     else if(owner && owner !== user.id) setAvatarCardId(null);
     try { localStorage.setItem("packsink:avatarOwner", user.id); } catch {}
     if(meta.collectionGoal && typeof meta.collectionGoal === "object") setCollectionGoal(normalizeGoal(meta.collectionGoal));
+    // A NEW account (nothing stored yet) takes this device's settings, as the
+    // comment above promises. Nothing here changes state for it, so the write
+    // effect below never fired, and a second device never got the theme, the
+    // tips setting or the collection goal until a preference was changed.
+    if(meta.themeMode === undefined && meta.theme === undefined){
+      sbClient.auth.updateUser({data: {themeMode, lightTheme, darkTheme, theme, tipsEnabled, eloPinned, eloAutopinned, avatarCardId, collectionGoal}})
+        .catch(e => console.error("user prefs first sync failed:", e));
+    }
     // Site language follows the ACCOUNT the way the theme does, with one rule:
     // a choice made on THIS device wins (it is newer than anything stored),
     // and a device that never chose adopts the account's. Adopting reloads,
@@ -66552,7 +66583,11 @@ function App(){
     // Wait for the real snapshot date: a firing is keyed on it, so judging
     // against a guessed one (the UTC day, which is tomorrow every evening in
     // the Americas) filed it under a day no other device would ever match.
-    const priceDate = lastRawPriceDate || lastEtlDate;
+    // The date of the snapshot the rules are judged ON: price_movers is rebuilt
+    // with card_prices_latest, so its date is lastEtlDate. prices_daily can be a
+    // day ahead while the matview refresh lags, and filing yesterday's numbers
+    // under today's key made the unique index drop the real run for that day.
+    const priceDate = lastEtlDate || lastRawPriceDate;
     if(!priceDate) return;
     let cancelled = false;
     (async () => {
@@ -67069,7 +67104,12 @@ function App(){
     sbClient.auth.signInWithOAuth({
       provider:"google",
       options:{
-        redirectTo: window.location.origin + window.location.pathname,
+        // The query string comes back too: without it "Sign in to favorite" on an
+        // unlisted deck (/decks?deck=X&token=Y) returned to Discover with the deck
+        // and its token gone, and a viewed collection, a trade link, a Screener
+        // view or a graph were lost the same way. Same host as the Site URL, so
+        // GoTrue accepts it; the implicit flow clears only the #hash on return.
+        redirectTo: window.location.origin + window.location.pathname + window.location.search,
         // Force Google to show its account chooser every time. Without this,
         // Google silently re-authenticates with whatever account the browser
         // is already signed into — so "Sign out" → "Sign in" just lands you
@@ -67862,7 +67902,7 @@ function App(){
         setCol: setHomePanelCol, move: moveHomePanel, setPair: setHomePanelPair,
         bannerOrder: homeBannerOrder, moveBanner: moveHomeBanner}}
       onEventArtistClick=${setIndyArtistPick}/>`}
-    ${viewsReady&&view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}
+    ${viewsReady&&view==="cards"&&html`<${CardsView} key=${cardsKey} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
       openDeckById=${openDeckById}
       sealedPrices=${sealedPrices}

@@ -321,6 +321,14 @@ export default {
       });
     }
 
+    // A route with a trailing slash (/decks/, /calendar/) would get the shell
+    // AT that path, and every relative URL in it (styles.css?v=, Logos/...,
+    // scanner.js) then resolves under /decks/ and 404s by the dot rule above:
+    // an unstyled page with broken images. Send it to the canonical path.
+    if (url.pathname.length > 1 && url.pathname.endsWith("/")) {
+      return Response.redirect(url.origin + (url.pathname.replace(/\/+$/, "") || "/") + url.search, 301);
+    }
+
     // SPA fallback. 200, not a redirect, so the original path survives in
     // window.location.pathname for the client router to parse (/decks,
     // /screener, ?deck=…&token=… and friends).

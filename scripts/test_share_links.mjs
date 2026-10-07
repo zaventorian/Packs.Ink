@@ -60,7 +60,8 @@ const PATH_TO_VIEW = {
   "/": "home", "/screener": "screener", "/price-graphing": "history",
   "/analytics": "market", "/cards": "cards", "/collection": "collection",
   "/decks": "decks", "/how-it-works": "faq", "/elo": "elo",
-  "/calendar": "calendar",
+  "/calendar": "calendar", "/ticker": "market", "/tierlist": "market",
+  "/gear": "gear", "/news": "news",
 };
 
 const moduleSrc = [
@@ -123,6 +124,11 @@ check("decks default section has no suffix", at("/decks"), "Decks");
 check("collection section", at("/collection", "?c=graded"), "your Collection · Graded");
 check("screener mode", at("/screener", "?m=sealed"), "the Screener · Sealed");
 check("analytics sub-tool", at("/analytics", "?a=swiss"), "Analytics · Swiss Odds");
+check("a sub-tool on its own path", at("/ticker", "?w=1d"), "Analytics · Stream Ticker");
+check("one tier list", at("/tierlist", "?tid=AbCdEf1234"), "this tier list");
+check("the tier list tab", at("/tierlist"), "Analytics · Tier List");
+check("gear", at("/gear"), "Lorcana on Amazon");
+check("news", at("/news"), "News");
 // The calendar is four different pages at one URL, and the map is the one
 // people send — so the toast has to say WHICH, or "Link to this page copied"
 // is the only feedback you get for the one link worth sharing.
