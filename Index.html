@@ -36,7 +36,7 @@
    language saved on the account still beats the guess at sign-in (only a
    STORED choice blocks that adoption). Cards follow it like any site language. */
 (function(){
-  var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="9", l=null;
+  var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="10", l=null;
   try{
     var q=new URLSearchParams(location.search).get("hl");
     if(q && (OK[q]||q==="en")) l=q;
@@ -1403,6 +1403,7 @@ const AUX_EVICTABLE_PREFIXES = [
                                // user state, as is packsink:homePanels (section visibility).
   "packsink:following:",
   "packsink:playmatPrices:",   // the Playmats tab's catalog + latest prices
+  "packsink:mktindex:",        // the Screener's vs Mkt index, refreshed by the same ETL
 ];
 const isPriceDerivedAuxKey = (k) =>
   typeof k === "string" && AUX_EVICTABLE_PREFIXES.some(p => k.startsWith(p));
@@ -27735,7 +27736,10 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
   // subsets so we don't need a second fetch for shorter ranges.
   useEffect(() => {
     if(!showDeltas || !ownedSealedPids.length){ setTileHistory(null); return; }
-    const since = new Date(Date.now() - 365*24*3600*1000).toISOString().slice(0,10);
+    // 372, not 365: the 1Y window anchors on the newest PRICE date, which is
+    // yesterday for most of the day (the ETL lands ~20:30 UTC), so a 365-day
+    // fetch stopped one day short of the 1Y baseline and blanked every 1Y Δ%.
+    const since = new Date(Date.now() - 372*24*3600*1000).toISOString().slice(0,10);
     let cancelled = false;
     fetchCollectionPriceHistory(ownedSealedPids, since)
       .then(rows => { if(!cancelled) setTileHistory(rows || []); })
@@ -38013,7 +38017,7 @@ const AlertsModal = ({alerts, alertEvents, alertOps, watchlists, cardNameFor, un
   </div>`;
 };
 
-function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn, onCompareCards, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, incomingScreenerView, onConsumedIncomingScreenerView, watchlists, watchlistOps, watchlistsUnavailable, onOpenAlerts}){
+function PriceDatabase({raw, sets, theme, priceEpoch = 0, user, collection, updateQty, onSignIn, onCompareCards, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, incomingScreenerView, onConsumedIncomingScreenerView, watchlists, watchlistOps, watchlistsUnavailable, onOpenAlerts}){
   // Decoded ONCE, before any state initialiser, and read by several of them.
   //
   // ⚠ showGraded / showSealed must come from here at INIT, not from an effect
@@ -38271,7 +38275,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     if(restoredModeHolds({preset, moverWin, priceMode, showGraded})) return;
     const w = moverWin || "pct_180d";
     if(preset === "all"){ setSortKey("set_rank"); setSortDesc(true); }   // newest set first
-    else if(preset === "top")                { setSortKey("low_today"); setSortDesc(true); }
+    else if(preset === "top")                { setSortKey("low"); setSortDesc(true); }
     else if(preset === "climbers")           { setSortKey(w); setSortDesc(true); }
     else if(preset === "droppers")           { setSortKey(w); setSortDesc(false); }
     // Movers means the biggest move EITHER way — the same absolute key raw
@@ -38279,6 +38283,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     else if(preset === "movers"){ setSortKey("abs_" + w); setSortDesc(true); }
     else if(preset === "recent")             { setSortKey("pct_30d"); setSortDesc(true); }
   }, [preset, showGraded, moverWin]);
+  // A preset the current mode doesn't have is never valid, however it got here.
+  // The flip effect below only checks on a CHANGE, and ?m=graded / ?m=sealed
+  // set the mode at init beside a preset read from localStorage, so a stored
+  // "buyouts" filtered graded rows by the raw BUY signal with no chip lit.
+  useEffect(() => {
+    if(!(showGraded ? GRADED_PRESETS : PRICE_DB_PRESETS).some(p => p[0] === preset)) setPreset("all");
+  }, [showGraded, preset]);
   // Reset the preset when flipping between raw / graded so we never land on
   // a preset the new mode doesn't recognize (e.g. "buyouts" in graded mode).
   const prevShowGraded = useRef(showGraded);
@@ -38726,7 +38737,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       });
     })();
     return () => { cancelled = true; };
-  }, []);
+    // priceEpoch: a resumed tab that learned of a new ETL wipes this cache and
+    // bumps the epoch. Without it a mounted Screener kept yesterday's prices and
+    // every delta for the life of the view, beside a card modal showing today's.
+  }, [priceEpoch]);
 
   // Sealed price history — lazy-fetched the first time the user flips
   // the Sealed toggle on, then cached for the session. Pulls 1y of
@@ -38746,7 +38760,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         .map(p => p.tcgplayer_product_id)
     )).filter(Number.isFinite);
     if(!pids.length){ setSealedHistory([]); return; }
-    const since = new Date(Date.now() - 365*24*3600*1000).toISOString().slice(0,10);
+    // 372, not 365: the 1Y window anchors on the newest PRICE date, which is
+    // yesterday for most of the day (the ETL lands ~20:30 UTC), so a 365-day
+    // fetch stopped one day short of the 1Y baseline and blanked every 1Y Δ%.
+    const since = new Date(Date.now() - 372*24*3600*1000).toISOString().slice(0,10);
     let cancelled = false;
     // {market:true}: the NM Market column and every mkt_pct_* window are
     // derived from market_price, which the default select leaves out — so
@@ -38920,16 +38937,33 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     });
   }, [state.rows, raw]);
 
-  // card_id -> enriched price_movers row. Premium graded mode joins rollup rows
-  // (keyed by card_id, not pid) onto this for name/set/rarity/ink/image.
-  const movRowByCardId = useMemo(() => {
+  // card_id -> every enriched price_movers row for that card (one per printing).
+  // Premium graded mode joins rollup rows (keyed by card_id, not pid) onto this
+  // for name/set/rarity/ink/image AND the Raw Low / Raw Mkt columns, so the
+  // graded tier has to pick the printing it is actually a slab of. Taking the
+  // first row put the foil's raw price on every tier: rows come back ordered
+  // by printing, and "Cold Foil" < "Holofoil" < "Normal", so a C1 Prize Wall
+  // Baymax PSA 10 read Raw Low $10,000 (the Top Prize) against its own $60.
+  const movRowsByCardId = useMemo(() => {
     const out = new Map();
     for(const r of (rawEnrichedRows || [])){
       if(r.card_id == null) continue;
-      if(!out.has(r.card_id)) out.set(r.card_id, r);
+      if(!out.has(r.card_id)) out.set(r.card_id, []);
+      out.get(r.card_id).push(r);
     }
     return out;
   }, [rawEnrichedRows]);
+  // The raw row a graded tier compares against: the same finish bucket when the
+  // tier names one, else the Normal printing (an unsplit tier is one market and
+  // the base printing is the honest comparison), else whatever the card has.
+  const rawRowForGraded = (cardId, tierPrinting) => {
+    const cand = movRowsByCardId.get(cardId);
+    if(!cand || !cand.length) return null;
+    const want = gradedSlotBucket(tierPrinting);
+    return (want && cand.find(x => (gradedSlotBucket(x.printing) || "Non-Foil") === want))
+        || cand.find(x => x.printing === "Normal")
+        || cand[0];
+  };
 
   // ── Market benchmark (migration 128) ────────────────────────────────────
   // Fetched once. null = the matviews aren't deployed here, which hides the
@@ -39004,10 +39038,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   }, [activeWatchlist]);
   // A remembered list id can outlive the list (deleted on another device).
   // Fall back to the first one rather than leaving the star pointed at nothing.
+  // With NO lists left (you deleted your last one), clear it: the star and the
+  // batch add only create "My watchlist" when the id is empty, so a dead id
+  // made every star click fail RLS with "Couldn't add that to the watchlist".
   useEffect(() => {
-    if(!watchlists || !watchlists.length) return;
+    if(!watchlists) return;
     if(activeWatchlist && watchlists.some(w => w.id === activeWatchlist)) return;
-    setActiveWatchlist(watchlists[0].id);
+    const next = watchlists.length ? watchlists[0].id : null;
+    if(next !== activeWatchlist) setActiveWatchlist(next);
   }, [watchlists, activeWatchlist]);
   const activeList = useMemo(
     () => (watchlists || []).find(w => w.id === activeWatchlist) || null,
@@ -39044,6 +39082,15 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const [watchOnly, setWatchOnly] = useState(false);
   useEffect(() => { if(!activeList) setWatchOnly(false); }, [activeList]);
 
+  // Inputs the filter reads only while a filter that needs them is on. Listed
+  // raw, starring a row (a new watchlist read) or + on a card in the modal (a
+  // new collection map) rebuilt `filtered`, and the windowed table below starts
+  // over at row 250 whenever `filtered` changes: you lost your place at row 600.
+  const watchKeysDep = watchOnly ? watchedKeys : null;
+  const watchCardsDep = watchOnly ? watchedCardIds : null;
+  const collDep = collFilter !== "all" ? collection : null;
+  const sealedCollDep = collFilter !== "all" ? sealedCollection : null;
+  const ownedGradedDep = collFilter !== "all" ? ownedGradedKeySet : null;
   const filtered = useMemo(() => {
     let rows = rawEnrichedRows;
     if(!rows) return [];
@@ -39133,16 +39180,30 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           return v == null ? null : Math.abs(v);
         }
         if(k === "price") return priceMode === "market" ? r.market_today : r.low_today;
+        // The Set header sorts on set_rank, which a sealed row doesn't carry:
+        // every row tied and nothing moved under a lit arrow. Same release-order
+        // rank the card branch uses (its setRank const is below, still in TDZ).
+        if(k === "set_rank"){
+          const i = MAINLINE_RELEASE_ORDER.indexOf(setNameById[r.set_id]);
+          return i >= 0 ? i : -1;
+        }
         return r[k];
       };
-      out.sort((a, b) => {
-        const av = getVal(a, sk);
-        const bv = getVal(b, sk);
-        if(sk === "name") return sd ? String(bv).localeCompare(String(av)) : String(av).localeCompare(String(bv));
+      const cmpS = (a, b, k, desc) => {
+        const av = getVal(a, k);
+        const bv = getVal(b, k);
+        if(k === "name") return desc ? String(bv).localeCompare(String(av)) : String(av).localeCompare(String(bv));
         if(av == null && bv == null) return 0;
         if(av == null) return 1;
         if(bv == null) return -1;
-        return sd ? bv - av : av - bv;
+        return desc ? bv - av : av - bv;
+      };
+      out.sort((a, b) => {
+        const c = cmpS(a, b, sk, sd);
+        if(c !== 0) return c;
+        // "Then sort by" (shift-click) applies here too, as it does on cards.
+        if(sortKey2 && sortKey2 !== sk) return cmpS(a, b, sortKey2, sortDesc2);
+        return 0;
       });
       return out;
     }
@@ -39157,7 +39218,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       // last_sold_date drive the two extra columns shown only in this mode.
       const synth = [];
       for(const g of (gradedRollup||[])){
-        const m = movRowByCardId.get(g.card_id);
+        const m = rawRowForGraded(g.card_id, g.printing);
         if(!m) continue;
         const grader = (g.grader||"").toLowerCase();
         synth.push({
@@ -39165,6 +39226,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           rarity: m.rarity, ink: m.ink, collector_number: m.collector_number,
           image_small: m.image_small, image_normal: m.image_normal,
           tcgplayer_product_id: m.tcgplayer_product_id,
+          // The raw printing behind Raw Low / Raw Mkt and the TCGplayer link
+          // (`printing` below is the grade label, which TCGplayer can't filter on).
+          _rawPrinting: m.printing,
           printing: ((g.grader||"").toUpperCase() + " " + g.grade),
           // Split-printing variant (Foil/Non-Foil/...) for cards where distinct
           // printings share a card_id (C1 Prize Wall vs Top Prize). "" for normal cards.
@@ -39484,8 +39548,8 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return 0;
     });
     return out;
-  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, floorAtStart, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes, gradedPop,
-    rawGradedHit, rawGradedTier, watchOnly, watchedKeys, watchedCardIds]);
+  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, floorAtStart, minPct, maxPct, pctWin, collFilter, sigFilter, collDep, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowsByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedDep, showSealed, sealedSynth, sealedCollDep, filterSealedTypes, gradedPop,
+    rawGradedHit, rawGradedTier, watchOnly, watchKeysDep, watchCardsDep]);
 
   // Plain click sets the primary sort; shift-click sets the tiebreaker applied
   // within equal primary values. A column can't be both, so promoting the
@@ -39966,7 +40030,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     }, {root: null, rootMargin: "600px 0px"});
     io.observe(el);
     return () => io.disconnect();
-  }, [filtered.length]);
+    // The sentinel unmounts once every row is shown ("Show all", or a full
+    // scroll) and mounts again when a re-sort resets the window; re-observe it
+    // then, or the table stops at 250 rows while saying "keep scrolling".
+  }, [filtered.length, filtered.length > visibleRows]);
 
   const [colsMenuOpen, setColsMenuOpen] = useState(false);
   const colsRef = useRef(null);
@@ -40072,7 +40139,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         ...PCT_KEYS.map(k => r[k]),
         ...(premiumGraded ? [] : PCT_KEYS.map(k => r["mkt_" + k])),
         ...(grCsv ? [r.gr_last, r.gr_avg5] : []),
-        tcgUrl(r.tcgplayer_product_id, r.printing) || "",
+        tcgUrl(r.tcgplayer_product_id, r.grader ? r._rawPrinting : r.printing) || "",
       ].map(esc).join(","));
     }
     const blob = new Blob([lines.join("\n")], {type: "text/csv"});
@@ -41017,7 +41084,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             const img = cardDisplayImage(r.card_id, r.image_small || r.image_normal);
             const key = screenerRowKey(r);
             const isSel = selected.has(key);
-            const tcg = tcgUrl(r.tcgplayer_product_id, r.printing);
+            const tcg = tcgUrl(r.tcgplayer_product_id, r.grader ? r._rawPrinting : r.printing);
             const isSealedRow = !!r._sealedProduct;
             const openThisRow = () => openModal(r.card_id, isSealedRow ? r._sealedProduct : null, r._variant);
             return html`<tr key=${key} class=${isSel ? "price-db-row-sel" : ""}>
@@ -41034,6 +41101,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                 return html`<td class="td-watch">
                   <button class=${"price-db-star"+(on?" on":elsewhere?" elsewhere":"")}
                     aria-pressed=${on ? "true" : "false"}
+                    aria-label=${_t("Watchlist: {name}", {name: [r.name, r.version].filter(Boolean).join(" - ") || r.display_type || ""})}
                     title=${on ? _t("On \"{list}\" — click to remove", {list: activeList ? activeList.name : _t("your list")})
                       : elsewhere ? _t("Already on another watchlist — click to add to \"{list}\" too", {list: activeList ? activeList.name : _t("this list")})
                       : _t("Add to watchlist")}
@@ -54852,7 +54920,7 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
       openScreenerWithFilter({
         preset: "all",
         moverWin: "pct_1d",
-        sortKey: "low_today", sortDesc: true,
+        sortKey: "low", sortDesc: true,
         priceMode: "low",
         showSealed: false,
         filterSet: NEWEST_SET || "",
@@ -63830,6 +63898,9 @@ function App(){
   const openGradedMoversInScreener = useCallback(() => {
     openScreenerWithFilter({
       showGraded: true,
+      // applyView only touches Sealed when the payload names it: a Screener last
+      // left in Sealed kept it, and the graded mutex then dropped you into Sealed.
+      showSealed: false,
       collFilter: "owned",
       preset: "movers",
       moverWin: "pct_7d",
@@ -67339,7 +67410,7 @@ function App(){
       eloPinned=${eloPinned} setEloPinned=${setEloPinned}
       openSetHistory=${openSetHistory} openScreenerSealed=${openScreenerSealed}
       onHome=${openHome}/>`}
-    ${viewsReady&&view==="screener"&&html`<${PriceDatabase} raw=${raw} sets=${sets} theme=${theme}
+    ${viewsReady&&view==="screener"&&html`<${PriceDatabase} raw=${raw} sets=${sets} theme=${theme} priceEpoch=${priceEpoch}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
       onCompareCards=${startCompareCards}
       sealedPrices=${sealedPrices} sealedCollection=${sealedCollection}
