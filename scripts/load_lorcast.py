@@ -60,6 +60,34 @@ def _is_quest_code(code: str | None) -> bool:
     return len(c) > 1 and c[0] == "Q" and c[1:].isdigit()
 
 
+# Lorcast's own typos, corrected against the printed card. Lorcast owns these
+# rows and this load runs daily, so a fix made in the database is undone the
+# next evening; it has to live here. Keyed on Lorcast's card id. Each field
+# names the value it REPLACES, so once Lorcast fixes the typo (or changes the
+# field to anything else) the entry stops applying and the run says it can go,
+# instead of overwriting a value it never saw. A correction to a NAME must be
+# matched by the TCG_PID_OVERRIDES keys (Index.html + patch_pid_overrides.py),
+# which are built from name + version.
+CARD_CORRECTIONS: dict[str, dict[str, tuple[str, str]]] = {
+    # Hyperia City #20: the card reads RUSSELL.
+    "crd_fa5f0ceced414c31a886670d84e5a6c7": {"name": ("Russel", "Russell")},
+    # Hyperia City #68: the card reads Magical Market.
+    "crd_ac48e83f0cec4636ae8d4db35632ba27": {"version": ("Magical Markey", "Magical Market")},
+}
+
+
+def apply_corrections(row: dict, stale: list[str] | None = None) -> dict:
+    """Apply CARD_CORRECTIONS to one transformed row, in place. A field that no
+    longer holds the value being corrected is left as Lorcast has it and
+    reported in `stale`."""
+    for field, (wrong, right) in (CARD_CORRECTIONS.get(row.get("id")) or {}).items():
+        if row.get(field) == wrong:
+            row[field] = right
+        elif stale is not None:
+            stale.append(f"{row['id']} {field}: Lorcast now says {row.get(field)!r} (we would write {right!r})")
+    return row
+
+
 def get_json(url: str) -> Any:
     last_err: Exception | None = None
     for attempt in range(3):
@@ -87,7 +115,8 @@ def transform_set(s: dict) -> dict:
     }
 
 
-def transform_card(c: dict, set_id: str, set_code: str | None = None) -> dict:
+def transform_card(c: dict, set_id: str, set_code: str | None = None,
+                   stale: list[str] | None = None) -> dict:
     imgs = (c.get("image_uris") or {}).get("digital") or {}
     raw_type = c.get("type")
     if isinstance(raw_type, list):
@@ -119,7 +148,7 @@ def transform_card(c: dict, set_id: str, set_code: str | None = None) -> dict:
     if illustrators and not isinstance(illustrators, list):
         illustrators = [illustrators]
 
-    return {
+    return apply_corrections({
         "id": c["id"],
         "set_id": set_id,
         "name": c["name"],
@@ -143,7 +172,7 @@ def transform_card(c: dict, set_id: str, set_code: str | None = None) -> dict:
         "image_small": imgs.get("small"),
         "image_normal": imgs.get("normal"),
         "image_large": imgs.get("large"),
-    }
+    }, stale)
 
 
 def main() -> None:
@@ -189,6 +218,7 @@ def main() -> None:
 
     all_card_rows: list[dict] = []
     missing_tcg = 0
+    stale: list[str] = []
 
     for s in sets:
         sid = s["id"]
@@ -205,11 +235,13 @@ def main() -> None:
         cards = cards_resp.get("results") if isinstance(cards_resp, dict) and "results" in cards_resp else cards_resp
         print(f"  {len(cards)} cards")
         for c in cards:
-            row = transform_card(c, sid, s.get("code"))
+            row = transform_card(c, sid, s.get("code"), stale)
             if row["tcgplayer_product_id"] is None:
                 missing_tcg += 1
             all_card_rows.append(row)
 
+    for line in stale:
+        print(f"  CARD_CORRECTIONS entry no longer applies, remove it: {line}")
     print(f"\nTotal cards: {len(all_card_rows)} (missing tcgplayer_id: {missing_tcg})")
     sb.upsert("cards", all_card_rows, on_conflict="id")
 
