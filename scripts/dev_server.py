@@ -29,6 +29,26 @@ import urllib.request
 # do_GET) — the dot-segment deny at the top of do_GET is what does that.
 PASSTHROUGH_FOLDERS = ("Logos", "vendor", "scanner", "i18n")
 
+# Language links, mirroring worker/lang_alias.mjs: /ja/decks?deck=... redirects
+# to /decks?deck=...&hl=ja (also /de/ /fr/ /it/ /en/, and /jp/ for Japanese).
+LANG_PREFIXES = {"ja": "ja", "jp": "ja", "de": "de", "fr": "fr", "it": "it", "en": "en"}
+
+
+def lang_alias_target(path, query):
+    """The redirect target (path + query) for a language-prefixed path, or None."""
+    seg, sep, rest = path.lstrip("/").partition("/")
+    if len(path) < 3 or path[0] != "/" or len(seg) != 2:
+        return None
+    lang = LANG_PREFIXES.get(seg.lower())
+    if not lang:
+        return None
+    # "/ja//evil.com" must not become the protocol-relative "//evil.com".
+    target = "/" + rest.lstrip("/\\")
+    kept = [p for p in query.split("&") if p and p != "hl" and not p.startswith("hl=")]
+    kept.append("hl=" + lang)
+    return target + "?" + "&".join(kept)
+
+
 
 class SPAHandler(http.server.SimpleHTTPRequestHandler):
     # MIME overrides checked before the platform map. Windows' mimetypes
@@ -87,6 +107,12 @@ class SPAHandler(http.server.SimpleHTTPRequestHandler):
         decoded = urllib.parse.unquote(url_path).replace("\\", "/")
         if any(seg.startswith(".") for seg in decoded.split("/") if seg):
             self.send_error(404)
+            return
+        target = lang_alias_target(url_path, parsed.query)
+        if target:
+            self.send_response(302)
+            self.send_header("Location", target)
+            self.end_headers()
             return
         if url_path.startswith("/img-proxy/"):
             return self._proxy_image("https://cards.lorcast.io/", url_path[len("/img-proxy/"):])
