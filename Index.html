@@ -5734,7 +5734,10 @@ async function fetchMarketIndexSeries(scope, scopeKey){
   } catch(e){
     if(MARKET_INDEX_MISSING.test(String(e?.message || e))) return null;
     console.warn("market index fetch:", e?.message || e);
-    return null;
+    // false = THIS fetch failed (a timeout, offline); null = the index isn't
+    // deployed. Price Graphing hides its benchmark picker for null, so a single
+    // network blip used to take the picker away for the session.
+    return false;
   }
 }
 
@@ -6810,6 +6813,10 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
   const pickPoints = (vbX) => series.map(s => {
     const valid = (s.data||[]).filter(p => Number.isFinite(p.y));
     if(!valid.length) return null;
+    // A series with no data at this date is left out rather than answering with
+    // its nearest point: hovering 2025 beside a card that starts in July 2026
+    // printed the card's July value under a "Mar 2025" heading.
+    if(vbX < xScale(valid[0].x) - 6 || vbX > xScale(valid[valid.length - 1].x) + 6) return null;
     let best = null, bestDist = Infinity;
     for(const p of valid){
       const px = xScale(p.x);
@@ -7295,14 +7302,14 @@ function buildCompareReportSvg({title, subtitle, items, series, tableSeries, col
 
   parts.push(`<line x1="40" x2="${W-40}" y1="${totalH-footerH}" y2="${totalH-footerH}" stroke="#e3e6ea"/>`);
   parts.push(`<text x="40" y="${totalH-12}" font-size="10" fill="#7a8088">${_xmlEscape(footerNote || "Unofficial fan site · not affiliated with Disney or Ravensburger")}</text>`);
-  parts.push(`<text x="${W-40}" y="${totalH-12}" font-size="10" fill="#7a8088" text-anchor="end">Source: TCGCSV / TCGplayer · Generated ${new Date().toISOString().slice(0,10)}</text>`);
+  parts.push(`<text x="${W-40}" y="${totalH-12}" font-size="10" fill="#7a8088" text-anchor="end">Source: TCGCSV / TCGplayer · Generated ${localYmd()}</text>`);
   parts.push('</svg>');
   return parts.join('');
 }
 
 async function exportCompareReportPng(reportArgs){
   const svgString = buildCompareReportSvg(reportArgs);
-  const filenameBase = "packs-ink-compare-" + new Date().toISOString().slice(0,10);
+  const filenameBase = "packs-ink-compare-" + localYmd();
   const svgBlob = new Blob([svgString], {type: "image/svg+xml;charset=utf-8"});
   const url = URL.createObjectURL(svgBlob);
   try {
@@ -7342,7 +7349,7 @@ async function exportCompareReportPng(reportArgs){
 
 function exportCompareReportSvg(reportArgs){
   const svgString = buildCompareReportSvg(reportArgs);
-  const filename = "packs-ink-compare-" + new Date().toISOString().slice(0,10) + ".svg";
+  const filename = "packs-ink-compare-" + localYmd() + ".svg";
   const blob = new Blob([svgString], {type: "image/svg+xml;charset=utf-8"});
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -24321,17 +24328,38 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
         // members' history and run the same algorithm the SQL does.
         if(c.watchlistId){
           const wl = (watchlists || []).find(w => w.id === c.watchlistId);
-          const pids = Array.from(new Set((wl ? wl.items : [])
-            .map(it => it.productId).filter(n => Number.isFinite(n))));
+          // Three inputs had drifted from migration 130, which this must
+          // reproduce exactly: it read Low (market_price was never selected, so
+          // the market-first rule fell through every time), it averaged in
+          // printings NOT on the list (the fetch is by pid; Elsa Cold Foil on the
+          // list brought her Normal along), and it kept pre-release days, which
+          // 130 drops so a basket doesn't open on a crash that never happened.
+          const want = new Set((wl ? wl.items : []).filter(it => Number.isFinite(it.productId))
+            .map(it => it.productId + "|" + (it.printing || "Normal")));
+          const pids = Array.from(new Set([...want].map(k => Number(k.split("|")[0]))));
           if(!pids.length) return Promise.resolve({id: c.card_id, rows: [], kind: "index"});
+          // pid -> first day the index may count it (released_at + 1), every
+          // dated set, cards and sealed, as 130's product_floor.
+          const relBySet = {};
+          for(const st of (setsMeta || [])) if(st && st.id && st.released_at) relBySet[st.id] = String(st.released_at).slice(0, 10);
+          const floorByPid = {};
+          const addFloor = (pid, setId) => {
+            const d = relBySet[setId]; if(pid == null || !d || floorByPid[pid] != null) return;
+            floorByPid[pid] = calAddDays(d, 1);
+          };
+          for(const r of (raw || [])) addFloor(r && r.tcgplayer_product_id, r && r.set_id);
+          for(const sp of (sealedPrices || [])) addFloor(sp && sp.tcgplayer_product_id, sp && sp.set_id);
           const since = "2024-02-08";   // earliest price data on file
-          return fetchCollectionPriceHistory(pids, since)
+          return fetchCollectionPriceHistory(pids, since, {market: true})
             .then(rows => {
               // Group by (pid, printing): a Cold Foil and its non-foil are
               // separate return series, exactly as they are server-side.
               const byKey = {};
               for(const r of (rows || [])){
                 const k = r.tcgplayer_product_id + "|" + (r.printing || "Normal");
+                if(!want.has(k)) continue;
+                const fl = floorByPid[r.tcgplayer_product_id];
+                if(fl && String(r.date).slice(0, 10) < fl) continue;
                 (byKey[k] = byKey[k] || []).push({
                   date: r.date,
                   market: r.market_price != null ? Number(r.market_price) : null,
@@ -24565,9 +24593,9 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
     if(u) return u;
     try { return localStorage.getItem("packsink:history:chartScale") || "abs"; } catch { return "abs"; }
   });
-  useEffect(() => {
-    try { localStorage.setItem("packsink:history:chartScale", chartScale); } catch {}
-  }, [chartScale]);
+  // A ?hs= link chooses the scale for this visit, never over the reader's own
+  // default: written straight through, opening someone's Log link changed it.
+  usePrefWrite("packsink:history:chartScale", chartScale, !!readUrlEnum("hs", ["abs","log","indexed"]));
   // ── Benchmark overlay (migration 128) ──────────────────────────────────
   // "off" | "all" | "set:<set_id>". Not persisted to localStorage: which set
   // you benchmarked against last is meaningless against a different graph.
@@ -24658,6 +24686,31 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
       image: null,
     };
   }, [indexLabel]);
+  // An index item that arrived by link was built without its catalog row (the
+  // link can land first), and nothing filled the component count in afterwards:
+  // the chip, the Type cell, the CSV and the report read "index" all session.
+  // Fetch the catalog when such an item is on the graph, then rebuild it.
+  const needIndexMeta = compareCards.some(c => c.kind === "index" && !c.watchlistId && c.sub === "index");
+  useEffect(() => {
+    if(!needIndexMeta || indexCatalog !== undefined) return;
+    let cancelled = false;
+    fetchMarketIndexLatest().then(rows => { if(!cancelled) setIndexCatalog(rows); });
+    return () => { cancelled = true; };
+  }, [needIndexMeta, indexCatalog]);
+  useEffect(() => {
+    if(!needIndexMeta || !Array.isArray(indexCatalog) || !indexCatalog.length) return;
+    setCompareCards(prev => {
+      let changed = false;
+      const next = prev.map(c => {
+        if(c.kind !== "index" || c.watchlistId || c.sub !== "index") return c;
+        const row = indexCatalog.find(r => r.scope === c.indexScope && (r.scope_key || "") === (c.indexKey || ""));
+        if(!row) return c;
+        changed = true;
+        return buildIndexCompareItem(row);
+      });
+      return changed ? next : prev;
+    });
+  }, [needIndexMeta, indexCatalog, buildIndexCompareItem]);
   // A watchlist graphed as its own index — the "custom index" case. Computed in
   // the browser from the members' price history, using buildCustomIndex, which
   // is checked against real PostgreSQL output by scripts/test_market_index.mjs.
@@ -25414,13 +25467,20 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
       // Points and dollars on one axis are two different measures pretending
       // to be one; only the Indexed scale puts them on common ground.
       const mixedIndex = !indexed && compareCards.some(c => c.kind === "index") && compareCards.some(c => c.kind !== "index");
+      // The report is a fixed WHITE document, so it takes the light column of
+      // the palette whatever theme the viewer is in (the dark column, tuned for
+      // #180a22, was being drawn on #fff). It draws a linear axis, so it does
+      // not claim "Log scale" either.
+      const reportColors = COMPARE_PALETTE.light;
+      const restyle = (arr) => arr.map((sr, i) => { const st = compareSeriesStyle(i, reportColors); return {...sr, color: st.color, dash: st.dash}; });
+      const reportScale = indexed ? scaleLabel : null;
       const reportArgs = {
         title: "Price Comparison Report",
-        subtitle: `${compareCards.length} product${compareCards.length===1?"":"s"} · ${priceLabel}${scaleLabel?" · "+scaleLabel:""} · Range: ${rangeLabel}`,
+        subtitle: `${compareCards.length} product${compareCards.length===1?"":"s"} · ${priceLabel}${reportScale?" · "+reportScale:""} · Range: ${rangeLabel}`,
         items: compareCards,
-        series: clipped,
-        tableSeries: priceClipped,
-        colors: paletteColors,
+        series: restyle(clipped),
+        tableSeries: restyle(priceClipped),
+        colors: reportColors,
         valueFmt: (indexed || pointsOnly) ? fmtIndexTick : null,
         footerNote: "packs.ink · Unofficial fan site, not affiliated with Disney or Ravensburger",
       };
@@ -25443,7 +25503,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
         const blob = new Blob([lines.join("\n")], {type:"text/csv"});
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a"); a.href = url;
-        a.download = "packs-ink-compare-" + new Date().toISOString().slice(0,10) + ".csv";
+        a.download = "packs-ink-compare-" + localYmd() + ".csv";
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
         URL.revokeObjectURL(url);
       };
@@ -25463,7 +25523,13 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
       const benchRows = benchKey ? benchSeries[benchKey] : undefined;
       const benchClipped = (indexed && Array.isArray(benchRows) && benchRows.length)
         ? (() => {
-            const inRange = startMs == null ? benchRows : benchRows.filter(p => p.x >= startMs);
+            // Rebased where the SUBJECTS start, not where the index starts. Each
+            // subject is rebased to 100 at its own first visible point, so a card
+            // first priced in July read against an index rebased in 2024 sat 25
+            // points under it and "lagged" a market it had actually beaten.
+            const firstSubjectX = plotted.reduce((m, sr) => Math.min(m, sr.data[0].x), Infinity);
+            const from = Math.max(startMs == null ? -Infinity : startMs, Number.isFinite(firstSubjectX) ? firstSubjectX : -Infinity);
+            const inRange = benchRows.filter(p => p.x >= from);
             const base = inRange.length ? inRange[0].y : null;
             if(!base) return null;
             // Read the label back off the menu, so a scope only has to be named
@@ -25852,7 +25918,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
           <div class="compare-picker-bar">
             <div class="compare-summary">
               ${compareCards.length === 0
-                ? html`<span class="muted" style=${{fontSize:12}}>${mode === "card" ? _t("Check off cards in the list to start graphing.") : mode === "sealed" ? _t("Check off sealed products in the list to start graphing.") : mode === "graded" ? _t("Check off graded sale tiers in the list to graph their eBay history.") : _t("Check off sets in the list to graph their EV per box.")}</span>`
+                ? html`<span class="muted" style=${{fontSize:12}}>${mode === "card" ? _t("Check off cards in the list to start graphing.") : mode === "sealed" ? _t("Check off sealed products in the list to start graphing.") : mode === "graded" ? _t("Check off graded sale tiers in the list to graph their eBay history.") : mode === "index" ? _t("Check off indices in the list to graph them.") : _t("Check off sets in the list to graph their EV per box.")}</span>`
                 : html`<span style=${{fontSize:12,fontWeight:600}}>${compareCards.length === 1 ? _t("1 product on the graph") : _t("{n} products on the graph", {n: compareCards.length})}</span>
                        <span class="muted" style=${{fontSize:11,marginLeft:8}}>· ${priceLabel} · ${rangeLabel}</span>`}
             </div>
@@ -25867,7 +25933,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
           </div>
 
           ${compareCards.length === 0
-            ? html`<div class="chart-empty large">${mode === "card" ? _t("Pick cards from the list to start graphing") : mode === "sealed" ? _t("Pick sealed products from the list to start graphing") : mode === "graded" ? _t("Pick graded sale tiers from the list — PSA / CGC / BGS / SGC / TAG by grade") : _t("Pick sets from the list — each one graphs its EV per box")}</div>`
+            ? html`<div class="chart-empty large">${mode === "card" ? _t("Pick cards from the list to start graphing") : mode === "sealed" ? _t("Pick sealed products from the list to start graphing") : mode === "graded" ? _t("Pick graded sale tiers from the list — PSA / CGC / BGS / SGC / TAG by grade") : mode === "index" ? _t("Pick indices from the list to graph them") : _t("Pick sets from the list — each one graphs its EV per box")}</div>`
             : html`<div>
                 ${previewItem && previewImg && html`<div class="history-card-preview">
                   <img class="history-preview-img" src=${previewImg} alt=${previewItem.name}/>
@@ -25936,6 +26002,8 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                     <span class="muted">${_t("vs")}</span>
                     <select value=${benchmark} onChange=${e=>{
                       const v = e.target.value;
+                      // A benchmark whose fetch failed is fetched again when picked.
+                      setBenchSeries(prev => prev[v] === false ? (({[v]: _x, ...rest}) => rest)(prev) : prev);
                       setBenchmark(v);
                       // Switch the scale rather than silently drawing a flat
                       // line at the foot of a dollar chart.
@@ -25948,7 +26016,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
                     </select>
                   </label>`}
                 </div>
-                ${benchKey && benchRows === null && html`<div class="muted" style=${{fontSize:11,marginBottom:6}}>
+                ${benchKey && benchRows === false && html`<div class="muted" style=${{fontSize:11,marginBottom:6}}>
                   ${_t("That benchmark couldn't be loaded right now — pick it again to retry.")}
                 </div>`}
                 ${/* A scope with too few cards to index returns an empty array
