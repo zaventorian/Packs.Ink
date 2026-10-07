@@ -4163,15 +4163,18 @@ const calendarProductEntries = (products) => {
 // the same annual "Gift Set" collapse into one. The derived list is a fallback
 // for what the table has not been told yet — not a peer of it.
 const _calSetKey = (e) => `${(e.set_name || e.title || "").toLowerCase().trim()}|${(e.subtitle || "").toLowerCase().trim()}`;
+// Products key on their own title: a derived product row has no set_name, so a
+// curated one whose Set field was filled keyed as "<set>|" and never replaced it.
+const _calProdKey = (e) => `${(e.title || "").toLowerCase().trim()}|${(e.subtitle || "").toLowerCase().trim()}`;
 const calendarMergeEvents = (derived, rows) => {
   const sets = new Map();
   const rest = [];
   const curatedProducts = new Set();
-  for(const r of rows || []) if(r && r.kind === "product") curatedProducts.add(_calSetKey(r));
+  for(const r of rows || []) if(r && r.kind === "product") curatedProducts.add(_calProdKey(r));
   for(const e of derived || []){
     if(!e) continue;
     if(e.kind === "set") sets.set(_calSetKey(e), e);
-    else if(!(e.kind === "product" && curatedProducts.has(_calSetKey(e)))) rest.push(e);
+    else if(!(e.kind === "product" && curatedProducts.has(_calProdKey(e)))) rest.push(e);
   }
   for(const r of rows || []){
     if(!r) continue;
@@ -4386,13 +4389,23 @@ const CAL_DEFAULT_EVENT_HOURS = 2;
 
 const calendarIcsUid = (ev) => `${String(ev.id || ev.event_id || ev.title || "event").replace(/[^A-Za-z0-9:._-]/g, "-")}@packs.ink`;
 
+// Export an event with a clock time only when it is ONE day long. Curated rows
+// carry starts_at but never ends_at, so a two-day CCQ took the timed branch and
+// left .ics / Google as a 2-hour event on Saturday: Sunday was gone. A multi-day
+// row exports as the all-day span the modal already shows ("Runs: 2 days").
+const calExportTimed = (ev) => {
+  if(!ev.starts_at || Number.isNaN(Date.parse(ev.starts_at))) return false;
+  if(ev.ends_at && !Number.isNaN(Date.parse(ev.ends_at))) return true;
+  return !(calYmdParts(CAL_D(ev.ends_on)) && CAL_D(ev.ends_on) > CAL_D(ev.starts_on));
+};
+
 // ⚠ DTEND is EXCLUSIVE for an all-day event: a one-day release is
 // DTSTART;VALUE=DATE:20260307 / DTEND;VALUE=DATE:20260308. Emitting the same
 // date for both is the classic .ics bug — Google renders it, Apple Calendar
 // drops the event entirely, and nothing reports an error either way.
 const icsEventLines = (ev, nowMs) => {
   const lines = ["BEGIN:VEVENT", `UID:${calendarIcsUid(ev)}`, `DTSTAMP:${icsStamp(nowMs)}`];
-  const timed = ev.starts_at && !Number.isNaN(Date.parse(ev.starts_at));
+  const timed = calExportTimed(ev);
   if(timed){
     const startMs = Date.parse(ev.starts_at);
     const endMs = (ev.ends_at && !Number.isNaN(Date.parse(ev.ends_at)) && Date.parse(ev.ends_at) > startMs)
@@ -4431,7 +4444,7 @@ const buildIcs = (events, opts) => {
 const googleCalUrl = (ev) => {
   if(!ev || !calYmdParts(CAL_D(ev.starts_on))) return null;
   let dates;
-  const timed = ev.starts_at && !Number.isNaN(Date.parse(ev.starts_at));
+  const timed = calExportTimed(ev);
   if(timed){
     const s = Date.parse(ev.starts_at);
     const e = (ev.ends_at && Date.parse(ev.ends_at) > s) ? Date.parse(ev.ends_at) : s + CAL_DEFAULT_EVENT_HOURS * 3600000;
@@ -48458,12 +48471,24 @@ function useCalendarSubs(user, skip){
     let cancelled = false;
     if(skip) return;
     if(!uid){
-      if(calSubsOwner()){
-        try { localStorage.removeItem(CAL_SUBS_OWNER_LS); } catch {}
-        calWritePending(new Set());
-        calSubsPublish([]);
+      // ⚠ "No user YET" is not "signed out". App starts with user=null and only
+      // learns the session after getSession() resolves, so a cold load of
+      // /calendar always passed through here first, and wiping the owner's
+      // mirror and pending queue then threw away every follow that had not
+      // reached the server (made offline, or a failed upsert): exactly the
+      // rows the pending queue exists to re-upload. Ask the SDK before wiping.
+      const owner = calSubsOwner();
+      if(owner){
+        sbClient.auth.getSession().then(({data}) => {
+          if(cancelled) return;
+          const sid = data && data.session && data.session.user && data.session.user.id;
+          if(sid){ calSubsPublish(sid === owner ? calReadLocalSubs() : []); return; }
+          try { localStorage.removeItem(CAL_SUBS_OWNER_LS); } catch {}
+          calWritePending(new Set());
+          calSubsPublish([]);
+        }, () => {});
       } else calSubsPublish(calReadLocalSubs());
-      return;
+      return () => { cancelled = true; };
     }
     (async () => {
       // .eq(user_id) even though the policy is owner-only with no OR branch —
@@ -48574,7 +48599,10 @@ const calSeriesSlot = (iso, tz) => {
     return dow < 0 ? null : {dow, hhmm: `${p.hour}:${p.minute}`};
   };
   try { if(tz) return read(tz); } catch {}
-  try { return read(undefined); } catch { return null; }
+  // No (or a bad) zone: UTC, the way safe_local_ts builds the series' slot on
+  // the server. The reader's own zone made a pinned series at such a store
+  // match none of its own dates (226 upcoming events have no timezone).
+  try { return read("UTC"); } catch { return null; }
 };
 const calSeriesMatches = (sub, ev) => {
   const m = (sub && sub.meta) || {};
@@ -51791,9 +51819,10 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     const my = ++mapSeq.current;
     setMapBusy(true); setMapErr(null);
     try {
-      let country = "";
-      try { country = (localStorage.getItem("packsink:scCountry") || "").toUpperCase(); } catch {}
-      const o = await scResolveOrigin(text, country);
+      // NOT forced to the stored country: the finder writes whatever country its
+      // last search resolved to (or a ?scc= link set), so after a search in France
+      // a plain US ZIP here probed only fr/60625 and failed. The resolver infers.
+      const o = await scResolveOrigin(text);
       if(my !== mapSeq.current) return;
       setMapFocus({lat: o.lat, lng: o.lng, zoom: CAL_MAP_FOCUS_Z,
                    label: [o.city, o.state].filter(Boolean).join(", ") || text});
@@ -51820,6 +51849,17 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   const [sel, setSel] = useState(null);
   const [dayList, setDayList] = useState(null);     // {day, events} — a busy day's list
   const [editing, setEditing] = useState(null);     // {} = new row, {id,…} = edit
+  // Unconfirmed candidates (a scan's proposals, a staged row) for the admin list.
+  // The public fetch asks for confirmed rows only, so these were invisible in the
+  // one place that exists to rule on them. Admin-only; RLS lets an admin read them.
+  const [pendingRows, setPendingRows] = useState([]);
+  useEffect(() => {
+    if(!isAdmin){ setPendingRows([]); return; }
+    let cancelled = false;
+    sbClient.from("calendar_events").select("*").eq("confirmed", false).order("starts_on").limit(200)
+      .then(({data, error}) => { if(!cancelled && !error) setPendingRows(data || []); });
+    return () => { cancelled = true; };
+  }, [isAdmin, curated]);
   const [showStores, setShowStores] = useState(false);
   // The region chips' disclosure. Persisted, so somebody who genuinely filters
   // by region keeps it open — but it DEFAULTS CLOSED, because nine chips is
@@ -51873,7 +51913,9 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
       const url = new URL(location.href);
       const all = kinds.length === CALENDAR_KIND_KEYS.length;
       all ? url.searchParams.delete("ck") : url.searchParams.set("ck", kinds.join(","));
-      mode === "list" ? url.searchParams.delete("cv") : url.searchParams.set("cv", mode);
+      // Always written: Month is the default now (calReadViewPref), so a List
+      // link with no cv opened in the reader's own stored mode, i.e. Month.
+      url.searchParams.set("cv", mode);
       region === "all" ? url.searchParams.delete("cr") : url.searchParams.set("cr", region);
       query.trim() ? url.searchParams.set("cq", query.trim()) : url.searchParams.delete("cq");
       (mode !== "timeline" || span === CAL_TL_MONTHS) ? url.searchParams.delete("cspan") : url.searchParams.set("cspan", String(span));
@@ -52440,7 +52482,9 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
                 <select value=${String(mapNearRadius)} aria-label=${_t("Search radius")}
                   onChange=${(e) => { const v = Number(e.target.value); setMapNearRadius(v);
                     try { localStorage.setItem(CAL_NEAR_LS_RADIUS, String(v)); } catch {} }}>
-                  ${[10, 25, 50, 100, 200].map(r => html`<option key=${r} value=${String(r)}>${_t("{n} mi", {n: r})}</option>`)}
+                  ${/* The radius can be any 1-500 (the finder's Custom radius, a ?cmr= link):
+                     listed here or the select silently shows 10 while querying 75. */""}
+                  ${[...new Set([10, 25, 50, 100, 200, mapNearRadius])].sort((a, b) => a - b).map(r => html`<option key=${r} value=${String(r)}>${_t("{n} mi", {n: r})}</option>`)}
                 </select>
               </label>`}
               ${/* ⚠ The last active chip cannot be switched off — the movers
@@ -52539,9 +52583,15 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
             </section>`)}
           </div>`}
 
-    ${isAdmin && curated.length > 0 && html`<details class="cal-admin-list">
-      <summary>${uiIcon("gear", 13)} Curated rows (${curated.length}) — admin</summary>
+    ${isAdmin && (curated.length > 0 || pendingRows.length > 0) && html`<details class="cal-admin-list">
+      <summary>${uiIcon("gear", 13)} Curated rows (${curated.length}${pendingRows.length ? `, ${pendingRows.length} unconfirmed` : ""}) — admin</summary>
       <ul>
+        ${pendingRows.map(r => html`<li key=${"p:" + r.id}>
+          <button type="button" onClick=${() => setEditing(r)}>${uiIcon("edit", 12)}</button>
+          <span class="cal-admin-kind">${r.kind} · unconfirmed</span>
+          <span>${_t(r.title)}${r.subtitle ? ` — ${r.subtitle}` : ""}</span>
+          <em>${CAL_D(r.starts_on)}</em>
+        </li>`)}
         ${curated.map(r => html`<li key=${r.id}>
           <button type="button" onClick=${() => setEditing(r)}>${uiIcon("edit", 12)}</button>
           <span class="cal-admin-kind">${r.kind}</span>
@@ -53160,6 +53210,13 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   // Pins are intentionally NOT in the URL — they're a personal per-device pref.
   const [scSeed] = useState(() => SC_DEEP_SEED || {});
   const pZip = scSeed.zip, pCtry = scSeed.ctry, pDist = scSeed.dist, pDate = scSeed.date, pMode = scSeed.mode;
+  // A link may choose for you, never over you: while the box is showing what a
+  // shared link seeded, nothing it shows is saved as the reader's own ZIP,
+  // radius, kinds, dates or country. Opening someone's ?sczip= link used to
+  // repoint the reader's home finder, the calendar's "SCs near me" and the map
+  // box at the sender's town for good. The first touch of the box releases it.
+  const linkHold = useRef(!!(pZip || pCtry || pDist || pDate || pMode));
+  const releaseLink = useCallback(() => { linkHold.current = false; }, []);
   // ⚠ Only "map" and "list" mean anything; anything else is ignored rather
   // than guessed at, so a mangled link lands on the reader's own preference
   // instead of a view nobody picked.
@@ -53259,11 +53316,11 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   // ⚠ Only persist a country a lookup actually confirmed. Writing the empty
   // initial value would erase the stored preference of everyone who had picked
   // one, on mount, before they had searched for anything.
-  useEffect(() => { try { if(country) localStorage.setItem("packsink:scCountry", country); } catch {} }, [country]);
-  useEffect(() => { try { localStorage.setItem("packsink:scMode", kinds.join(",")); } catch {} }, [kinds]);
+  useEffect(() => { if(linkHold.current) return; try { if(country) localStorage.setItem("packsink:scCountry", country); } catch {} }, [country]);
+  useEffect(() => { if(linkHold.current) return; try { localStorage.setItem("packsink:scMode", kinds.join(",")); } catch {} }, [kinds]);
   useEffect(() => { try { localStorage.setItem("packsink:scCollapsed", collapsed ? "1" : "0"); } catch {} }, [collapsed]);
-  useEffect(() => { try { localStorage.setItem("packsink:scDateOn", dateOn ? "1" : "0"); } catch {} }, [dateOn]);
-  useEffect(() => { try { localStorage.setItem("packsink:scDateFrom", dates.join(",")); } catch {} }, [dates]);
+  useEffect(() => { if(linkHold.current) return; try { localStorage.setItem("packsink:scDateOn", dateOn ? "1" : "0"); } catch {} }, [dateOn]);
+  useEffect(() => { if(linkHold.current) return; try { localStorage.setItem("packsink:scDateFrom", dates.join(",")); } catch {} }, [dates]);
   useEffect(() => { try { localStorage.setItem("packsink:scPinned", JSON.stringify(pinned)); } catch {} }, [pinned]);
   // Esc exits the full-screen view; lock body scroll while it's open.
   // ⚠ Esc belongs to the INNERMOST thing: the ✚ menu, a scouting sheet or a
@@ -53332,7 +53389,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
       setAltPlaces(o.altPlaces || []);
       setAltOpen(false);
       setResults(rows);
-      try { localStorage.setItem("packsink:scZip", z); localStorage.setItem("packsink:scRadius", String(r)); } catch {}
+      if(!linkHold.current){ try { localStorage.setItem("packsink:scZip", z); localStorage.setItem("packsink:scRadius", String(r)); } catch {} }
       // Deliberately not awaited — the answer is already on screen.
       scCountryOptions(z, o.altCountries || [], o)
         .then(opts => { if(live()) setCountryOpts(opts.length > 1 ? opts : []); })
@@ -53370,7 +53427,9 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   // Dublin. Falls back to a full search when the text has been edited since.
   const searchAtRadius = useCallback(async (r) => {
     r = Math.max(1, Math.min(500, parseInt(r, 10) || 50));
-    if(!origin || origin.zip !== String(zip || "").trim()) return runSearch(zip, r, country || undefined);
+    // A NEW code is resolved afresh: forcing the previous search's country onto
+    // it failed a US ZIP typed after a French one, via a radius chip.
+    if(!origin || origin.zip !== String(zip || "").trim()) return runSearch(zip, r);
     const seq = ++searchSeq.current;
     const live = () => seq === searchSeq.current;
     setLoading(true); setErr(null);
@@ -53378,7 +53437,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
       const rows = await fetchNear(origin.lat, origin.lng, r);
       if(!live()) return;
       setResults(rows);
-      try { localStorage.setItem("packsink:scRadius", String(r)); } catch {}
+      if(!linkHold.current){ try { localStorage.setItem("packsink:scRadius", String(r)); } catch {} }
     } catch(e){ if(live()){ setErr(String(e && e.message || e)); setResults(null); } }
     finally { if(live()) setLoading(false); }
   }, [zip, origin, country, runSearch, fetchNear]);
@@ -53482,7 +53541,8 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   const inTile = embed && !expanded;
   const mapHere = mapOn && !inTile;
   const scBox = html`<section class=${"sc-box"+(collapsed&&!expanded?" sc-collapsed":"")+(expanded?" sc-box--expanded":"")+(inTile?" sc-box--embed":"")}
-    onClick=${expanded ? (e=>e.stopPropagation()) : undefined}>
+    onClick=${expanded ? (e=>e.stopPropagation()) : undefined}
+    onPointerDownCapture=${releaseLink} onKeyDownCapture=${releaseLink}>
     <div class="sc-box-head">
       <button class="sc-box-title sc-box-title-btn" type="button" onClick=${()=>expanded?closeExpanded():setExpanded(true)}
         title=${expanded?_t("Exit full screen"):_t("Expand to full screen")}>
