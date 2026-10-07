@@ -26,6 +26,7 @@
 // card art and breaks installed native builds. scripts/build_dist.mjs asserts
 // Index.html still references both.
 import { tierPreview } from "./tierlist.mjs";
+import { langAliasTarget } from "./lang_alias.mjs";
 
 const PROXIES = [
   ["/img-proxy/", "https://cards.lorcast.io/"],
@@ -256,6 +257,12 @@ export default {
     for (const [prefix, origin] of PROXIES) {
       if (url.pathname.startsWith(prefix)) return proxyImage(request, prefix, origin);
     }
+
+    // packs.ink/ja/decks?deck=... -> /decks?deck=...&hl=ja (and /de/ /fr/ /it/ /en/,
+    // /jp/ for Japanese). Only reached on an asset miss, and nothing the site
+    // ships lives under a two-letter top-level folder. See worker/lang_alias.mjs.
+    const langTarget = langAliasTarget(url);
+    if (langTarget) return Response.redirect(langTarget, 302);
 
     // Pretty URL for the standalone policy. Google's OAuth verification crawler
     // reads this without running JavaScript, so it must serve the real static

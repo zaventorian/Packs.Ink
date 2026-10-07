@@ -28,13 +28,30 @@
    right language. English loads nothing at all. ?hl=<lang> previews a language
    for this page view without saving it (a link may choose for you, never over
    you); the settings menu is what saves one. Keep I18N_VER in step with the
-   ?v= the dictionaries were last changed under. */
+   ?v= the dictionaries were last changed under.
+   With neither, the BROWSER's languages decide (2026-10-06): the first entry
+   that is English or one we have wins, so ["en-US","ja"] stays English and
+   ["ja-JP"] reads Japanese. That guess is never stored, so it is a default and
+   not a choice: picking a language saves one and it wins from then on, and a
+   language saved on the account still beats the guess at sign-in (only a
+   STORED choice blocks that adoption). Cards follow it like any site language. */
 (function(){
   var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="8", l=null;
   try{
     var q=new URLSearchParams(location.search).get("hl");
-    l = (q && (OK[q]||q==="en")) ? q : localStorage.getItem("packsink:lang");
+    if(q && (OK[q]||q==="en")) l=q;
   }catch(e){}
+  if(!l){ try{ l=localStorage.getItem("packsink:lang"); }catch(e){} }
+  if(l && !(OK[l]||l==="en")) l=null;
+  if(!l){
+    try{
+      var nl=navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language];
+      for(var i=0;i<nl.length;i++){
+        var p=String(nl[i]||"").toLowerCase().split(/[-_]/)[0];
+        if(p==="en" || OK[p]){ l=p; break; }
+      }
+    }catch(e){}
+  }
   if(!l || !OK[l]) return;
   document.documentElement.setAttribute("lang", l);
   document.write('<script src="/i18n/'+l+'.js?v='+I18N_VER+'"><\/script>');
@@ -250,7 +267,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=532">
+<link rel="stylesheet" href="styles.css?v=533">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. FIRST VISIT ONLY: once the
@@ -2020,6 +2037,17 @@ const collectionSectionHref = (key, viewerContext) => {
 // ?a=, ?s=, ?f=, ?m=, ?c=) without a second source of truth to keep in sync.
 // The origin is forced to SITE_ORIGIN so a native build copies packs.ink
 // instead of a capacitor:// or localhost URL nobody else can open.
+// A deck's Copy link carries the language only when the ADDRESS BAR does
+// (?hl=, e.g. after a packs.ink/ja/ link), the same as the page link above,
+// which copies the bar. Never the reader's stored or browser-guessed language:
+// without ?hl= each recipient opens the link in their own (2026-10-06).
+const withLinkLang = (u) => {
+  try {
+    const hl = new URLSearchParams(window.location.search).get("hl");
+    if(hl && SITE_LANGS.some(l => l.k === hl)) u.searchParams.set("hl", hl);
+  } catch {}
+  return u;
+};
 const currentShareUrl = () => {
   try {
     const u = new URL(window.location.href);
@@ -59030,7 +59058,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       if(d.visibility !== "public" && d.share_token){
         url.searchParams.set("token", d.share_token);
       }
-      return url.toString();
+      return withLinkLang(url).toString();
     } catch { return null; }
   }, []);
 
@@ -59171,7 +59199,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       u.search = ""; u.hash = "";
       u.searchParams.set("deck", r.deck_id);
       if(r.deck_share_token) u.searchParams.set("token", r.deck_share_token);
-      url = u.toString();
+      url = withLinkLang(u).toString();
     } catch { flashToast(_t("Couldn't build link")); return; }
     if(navigator.clipboard && navigator.clipboard.writeText){
       navigator.clipboard.writeText(url)
@@ -62101,7 +62129,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       if(deck.visibility !== "public" && deck.share_token){
         url.searchParams.set("token", deck.share_token);
       }
-      return url.toString();
+      return withLinkLang(url).toString();
     } catch { return ""; }
   }, [deck.id, deck.visibility, deck.share_token]);
   const copyShareUrl = useCallback(()=>{

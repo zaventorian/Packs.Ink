@@ -122,6 +122,18 @@ Full write-up: **`docs/i18n.md`** (source survey, matching rules, roadmap). Inva
 - **Nobody is prompted to switch** (Zaven, 2026-10-03). A language is chosen in ⚙ Preferences or the
   footer's language dropdown. A first-visit "switch to Japanese?" banner was built and removed the same
   day — don't reintroduce one without asking.
+- **But a visitor who never chose gets their BROWSER's language** (Zaven, 2026-10-06), silently. The
+  head boot walks `navigator.languages` and the first entry that is English or one we have wins
+  (`["en-US","ja"]` stays English). Precedence: `?hl=` > stored choice > browser > English. **⚠ The guess
+  is never stored** — storing it would make it a choice, so it would beat the account's saved language at
+  sign-in and stop following the browser. Cards follow it like any site language (`CARD_LANG` "auto").
+  Guarded by `node scripts/test_lang_default.mjs`, which runs the real boot in a vm.
+- **`packs.ink/ja/…` (also `/jp/` `/de/` `/fr/` `/it/` `/en/`) is a 302 to the same page with
+  `?hl=<lang>`** (`worker/lang_alias.mjs`, mirrored in `dev_server.py`), which rides along through in-app
+  navigation. It is a shortcut, not a real prefix: a two-segment path breaks every relative asset URL in
+  Index.html (the `/t/<token>` crash), so the address bar ends on `?hl=ja`. **A deck's Copy link carries
+  `?hl=` only when the address bar does** (`withLinkLang`) — never the reader's stored or guessed
+  language, so each recipient otherwise opens it in their own.
 - **A card never printed in the card language still shows**: English art, plus an UNOFFICIAL
   translation of its rules text (`i18n/cards_mt/<lang>.json` → `scripts/load_mt_card_text.py`,
   `match_how='machine'`, `source='packs-ink-mt'`, name/art NULL, labelled in the card modal). The official
