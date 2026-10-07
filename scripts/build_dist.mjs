@@ -171,6 +171,32 @@ for (const [file, strip] of [["index.html", stripIndexHtml], ["styles.css", stri
   }
 }
 
+// Every literal Logos/, vendor/, i18n/ or scanner/ path a shipped page names
+// must be in dist/. The include-list fails closed for whole files, but an
+// exclude INSIDE a directory does not: on 2026-10-03 "logo transparent.png" was
+// dropped as a duplicate of packs-ink-logo.png while ticker.html still drew it,
+// and every stream overlay's "powered by packs.ink" credit was a broken image
+// until 2026-10-06. Runs after the comment strip, so a path named only in a
+// comment does not count. Template-built paths (`Logos/inks/${ink}.png`) are
+// skipped: the pattern stops at anything that is not a plain path character.
+{
+  const REF = /(?<![\w$])((?:Logos|vendor|i18n|scanner)\/[A-Za-z0-9_%\-./]+?\.(?:png|jpe?g|webp|svg|avif|gif|js|mjs|json|woff2?|css|ico|wasm|onnx|txt|bin))(?=[?"'`)\s#]|$)/g;
+  const missing = [];
+  for (const f of readdirSync(out)) {
+    if (!/\.(html|js|json|css)$/.test(f)) continue;
+    const text = readFileSync(join(out, f), "utf8");
+    for (const m of text.matchAll(REF)) {
+      let ref = m[1];
+      try { ref = decodeURIComponent(ref); } catch {}
+      if (!existsSync(join(out, ref))) missing.push(`${f} -> ${ref}`);
+    }
+  }
+  if (missing.length) {
+    console.error("build_dist: shipped files name assets that are not in dist/:\n  " + [...new Set(missing)].join("\n  "));
+    process.exit(1);
+  }
+}
+
 let bytes = 0, count = 0, biggest = { size: 0, path: "" };
 const walk = (d) => {
   for (const ent of readdirSync(d, { withFileTypes: true })) {
