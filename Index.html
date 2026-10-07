@@ -33863,12 +33863,12 @@ function EloPlayerProfile({playerId, onBack, backLabel, onEventClick, onPlayerCl
         const {data: ev, error: e2} = await sbClient.from("elo_player_events_v")
           .select("event_id,event_name,store,location,event_date,season,event_platform,wins,losses,draws,mw_pct,start_rating,end_rating,peak_rating_this_event,games_won,total_games,first_rating_id")
           .eq("player_id", canon)
-          // Two-key sort: most-recent date first, then within same date use the
-          // player's earliest match's rating_id descending (later events at the
-          // same date have higher first_rating_id since rating_ids are assigned
-          // in chronological compute order).
+          // Most-recent date first; two events on one date in the order elo.py
+          // rated them, which is event_id. rating_id is insertion order, not
+          // compute order: it put 146 of 875 same-date rows the wrong way round
+          // (2026-10-07), so a day's second event read as its first.
           .order("event_date", {ascending: false, nullsFirst: false})
-          .order("first_rating_id", {ascending: false});
+          .order("event_id", {ascending: false});
         if(e2) throw e2;
         if(cancelled) return;
         setEvents(ev || []);
@@ -33989,8 +33989,12 @@ function EloPlayerProfile({playerId, onBack, backLabel, onEventClick, onPlayerCl
 
   const h2hMatches = useMemo(() => {
     if(h2hOpponentId == null || !rounds) return null;
-    // Show oldest → newest so the H2H story reads chronologically.
-    return rounds.filter(r => r.opponent_id === h2hOpponentId).slice().reverse();
+    // Oldest → newest, sorted outright: reversing the fetch order (date desc,
+    // round ASC) ran a single event's rounds backwards, so a top-cut rematch
+    // read before the Swiss match it followed.
+    const k = r => [r.event_date || "", r.event_id ?? 0, r.round_number ?? 0, r.table_number ?? -1, r.rating_id ?? 0];
+    const cmp = (a, b) => { const x = k(a), y = k(b); for(let i = 0; i < x.length; i++){ if(x[i] < y[i]) return -1; if(x[i] > y[i]) return 1; } return 0; };
+    return rounds.filter(r => r.opponent_id === h2hOpponentId).slice().sort(cmp);
   }, [rounds, h2hOpponentId]);
   const h2hSummary = h2hOpponentId != null
     ? opponentsList.find(o => o.opponent_id === h2hOpponentId) : null;

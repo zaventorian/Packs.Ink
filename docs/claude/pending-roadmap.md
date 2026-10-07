@@ -20,6 +20,14 @@
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger.** Claude applies migrations itself, drops included (Zaven, 2026-09-30: *"im fine with claude having access to do everything"*) — see "Running SQL" under Ops for the two routes. A file is STAGED only when something outside the database has to happen first.
+- ~~`supabase/193_elo_view_fixes.sql`~~ — **APPLIED 2026-10-07** through the connector; verified. Three wrong numbers on the
+  public Elo board, all in the views: `elo_leaderboard_v` took a player's last rating in (date, round) order
+  instead of elo.py's (date, event_id, round, table, match) order, so 16 players who played two events on one date
+  read wrong (AlecM 1668 -> 1627); its GW% ignored games played under a merged account (SunnyDay 72.4% -> 65.0%);
+  and `elo_event_summary_v`'s Avg Elo used each player's LOWEST rating in the event, not their starting one
+  (CT's Hobbies 9/27: 1582 -> 1597). Proof the order is right: under it all 56,586 ratings chain (each
+  rating_before = the previous rating_after; the old order broke 3,005 times), and the board now sums to exactly
+  2160 x 1500, as a zero-sum pool must (it summed to 3,240,160). Grants and security_invoker survived the replace.
 - ~~`supabase/192_collection_scoped_share_tokens.sql`~~ — **APPLIED 2026-10-06** through the connector. Backward
   compatible: the five collection readers accept the base token as before, plus a scoped token (HMAC of the
   scope under the base) for their own section; new owner RPC `get_my_collection_share_tokens()`. Live client
