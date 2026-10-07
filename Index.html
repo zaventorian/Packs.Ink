@@ -28003,7 +28003,9 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
               const ownedInSet = section.items.filter(it => (sealedCollection[it.tcgplayer_product_id]||0) > 0).length;
               return html`<div key=${section.set_id} class="gc-set-block"
                 id=${"gc-section-" + section.set_id}>
-                <div class="gc-set-title gc-set-title-clickable"
+                <div class="gc-set-title gc-set-title-clickable" role="button" tabIndex=${0}
+                    aria-expanded=${!collapsed}
+                    onKeyDown=${e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); toggleCollapsed(section.set_id); } }}
                     onClick=${()=>toggleCollapsed(section.set_id)}>
                   <span class="gc-set-caret">${collapsed ? "▸" : "▾"}</span>
                   ${section.set_name}
@@ -28065,6 +28067,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
                     return html`<div key=${item.tcgplayer_product_id} class=${"gc-card gc-card-clickable"+(qty>0?" gc-card-owned":"")}
                         onClick=${()=>setSelectedProduct(item)}
                         title=${_t("View price history and details")}>
+                      ${tileOpen(cleanSealedName(item.name))}
                       ${displayMode==="grid" && item.image_url && html`<span class="sealed-card-img sealed-card-photo">
                         <${ProductPhoto} src=${item.image_url} glyph=${item.is_puzzle ? "puzzle" : "box"} size=${22}/></span>`}
                       ${displayMode==="grid" && !item.image_url && item.is_collectible && html`<div class="gc-card-img sealed-card-img collectible-ph" aria-hidden="true">
@@ -28583,6 +28586,16 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
     items[k] = {x: cbClamp(x, 0.02, 0.98), y: cbClamp(y, 0.02, 0.98), r: prev ? prev.r : 0, z: maxZ + 1};
     commitBoard("pins", {...b, items});
   };
+  // A stored placement for a counter you no longer own is invisible, so it must
+  // never hold a socket against one you can see. normalizeCollectibleBoard
+  // settles two placements on one socket by LOWEST n, not by ownership, so a
+  // counter placed onto a socket a hidden lower-numbered one still held was the
+  // one dropped: it stayed in the tray, and every tap picked that socket again.
+  const clearHiddenAt = (items, cell, drawnNs, k) => {
+    for(const key of Object.keys(items)){
+      if(key !== k && !drawnNs.includes(key) && items[key].c === cell.c && items[key].r === cell.r) delete items[key];
+    }
+  };
   const dropCounter = (n, x, y, drawn) => {
     const b = counterBoardRef.current;
     const cell = b && counterCellAt(geom, x, y);
@@ -28591,18 +28604,14 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
     const drawnNs = drawn || ownedCounterNs;
     const items = {...b.items};
     const prev = items[k];
-    // A stored placement for a counter you no longer own is invisible, so it
-    // must never hold a socket against one you can see.
-    for(const key of Object.keys(items)){
-      if(key !== k && !drawnNs.includes(key) && items[key].c === cell.c && items[key].r === cell.r) delete items[key];
-    }
+    clearHiddenAt(items, cell, drawnNs, k);
     const occupant = drawnNs.find(key => key !== k && items[key] && items[key].c === cell.c && items[key].r === cell.r);
     if(occupant){
       if(prev) items[occupant] = {c: prev.c, r: prev.r};
       else {
         delete items[occupant];
         const free = nextFreeCounterCell({items: {...items, [k]: cell}}, [...drawnNs, k], geom, occupant);
-        if(free) items[occupant] = free;
+        if(free){ clearHiddenAt(items, free, drawnNs, occupant); items[occupant] = free; }
       }
     }
     items[k] = {c: cell.c, r: cell.r};
@@ -28626,9 +28635,13 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
     } else {
       const b = counterBoardRef.current;
       if(!b) return;
-      const cell = nextFreeCounterCell(b, drawn || ownedCounterNs, geom, k);
+      const drawnNs = drawn || ownedCounterNs;
+      const cell = nextFreeCounterCell(b, drawnNs, geom, k);
       if(!cell){ flashToast(_t("The counter board is full — take one off first")); return; }
-      commitBoard("counters", {...b, items: {...b.items, [k]: cell}});
+      const items = {...b.items};
+      clearHiddenAt(items, cell, drawnNs, k);
+      items[k] = cell;
+      commitBoard("counters", {...b, items});
     }
     setSelected({kind, n: k});
   };
@@ -28646,6 +28659,7 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
       } else {
         const cell = nextFreeCounterCell(b, drawnNs, geom, k);
         if(!cell) break;
+        clearHiddenAt(b.items, cell, drawnNs, k);
         b.items[k] = cell;
       }
     }
@@ -28682,7 +28696,22 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
     if(!updateSealedQty) return;
     const k = String(r.collectible_n);
     updateSealedQty(r.tcgplayer_product_id, Math.max(1, qtyOf(r)));
-    placeFromTray(kind, k, [...(kind === "pins" ? ownedPinNs : ownedCounterNs), k]);
+    const drawn = [...(kind === "pins" ? ownedPinNs : ownedCounterNs), k];
+    // Back where it sat, as "I don't have it" promises: a placement is kept when
+    // you un-own something. Only a counter whose socket a visible one took since
+    // goes to the first free spot instead.
+    const b = kind === "pins" ? pinBoardRef.current : counterBoardRef.current;
+    const prev = b && b.items[k];
+    const clash = prev && kind === "counters" && drawn.some(o => o !== k && b.items[o] && b.items[o].c === prev.c && b.items[o].r === prev.r);
+    if(prev && !clash){
+      if(kind === "counters"){
+        const items = {...b.items};
+        clearHiddenAt(items, prev, drawn, k);
+        if(Object.keys(items).length !== Object.keys(b.items).length) commitBoard("counters", {...b, items});
+      }
+      setSelected({kind, n: k}); return;
+    }
+    placeFromTray(kind, k, drawn);
   };
   const bumpQty = (r, delta) => {
     if(!updateSealedQty) return;
@@ -30921,7 +30950,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       return a.set_name.localeCompare(b.set_name);
     });
     return setEntries;
-  }, [items, goals, cardById, cardsBySetId, extrasCardsByBucket, setNameById, visFilter, sectionSort, priceByKey, removedCardIds]);
+  // valueBasis + gradedHit: the "Owned $" section sort prices through both, so
+  // toggling Value: Last / Avg 5 left the sections in the old basis's order.
+  }, [items, goals, cardById, cardsBySetId, extrasCardsByBucket, setNameById, visFilter, sectionSort, priceByKey, removedCardIds, valueBasis, gradedHit]);
 
   // Quick total/value math for the header.
   //   totalCopies  = sum of quantities (every physical card, including dupes)
@@ -31124,17 +31155,22 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       ? (extrasCardsByBucket.get(extras_bucket) || [])
       : (set_id ? (cardsBySetId.get(set_id) || []) : []);
     const rar = new Set((rarities||[]).map(r => String(r).toLowerCase()));
-    const inGoalCards = rar.size > 0
+    // An Extras goal's rows carry the BUCKET label in Rarity, so the goal modal's
+    // rarity picks can filter every one of them out: Extras clears unfiltered.
+    const inGoalCards = (rar.size > 0 && !extras_bucket)
       ? goalCards.filter(c => rar.has((c.Rarity||"").toLowerCase()))
       : goalCards;
     if(inGoalCards.length){
+      // Clear EVERY removed key of each in-scope card, whatever its printing. A
+      // non-split set keys its tile as cardId|Normal, but chase and Extras rows
+      // have no Normal printing, so clearing removedKey(card, tcg_printing) never
+      // matched and a removed Enchanted could not come back by re-adding the goal.
+      const ids = new Set(inGoalCards.map(c => c.card_id).filter(Boolean));
       setRemovedCardIds(prev => {
         if(!prev.size) return prev;
         const next = new Set(prev); let changed = false;
-        for(const c of inGoalCards){
-          if(!c.card_id) continue;
-          const k = removedKey(c.card_id, c.tcg_printing);
-          if(next.has(k)){ next.delete(k); changed = true; }
+        for(const k of prev){
+          if(ids.has(k.slice(0, k.lastIndexOf("|")))){ next.delete(k); changed = true; }
         }
         if(!changed) return prev;
         persistRemoved(next);
@@ -31510,6 +31546,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                         style=${tileBg ? {background: tileBg} : null}
                         onClick=${openDetail}
                         title=${hidden ? _t("Hidden from tracking — click ↺ to restore") : _t("Open card · graded prices")}>
+                      ${tileOpen(card["Product Name"] || _t("this card"))}
                       ${hasOwned && html`<div class="gc-card-owned-check" title=${_t("In your graded collection")} aria-label=${_t("In your graded collection")} role="img">✓</div>`}
                       ${!readOnly && html`<button class="gc-card-add-btn"
                         aria-label=${_t(hasOwned ? "Add another graded copy of {name}" : "Add to graded collection: {name}", {name: card["Product Name"]||_t("this card")})}
@@ -31664,7 +31701,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
               const foilCards   = section.cards.filter(c => (c.printing || "Normal") !== "Normal");
               return html`<div key=${section.set_id} class="gc-set-block"
                 id=${"gc-section-" + section.set_id}>
-                <div class="gc-set-title gc-set-title-clickable"
+                <div class="gc-set-title gc-set-title-clickable" role="button" tabIndex=${0}
+                    aria-expanded=${!collapsed}
+                    onKeyDown=${e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); toggleCollapsed(section.set_id); } }}
                     onClick=${()=>toggleCollapsed(section.set_id)}>
                   <span class="gc-set-caret">${collapsed ? "▸" : "▾"}</span>
                   ${section.set_name}
@@ -31832,14 +31871,17 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     ${collGradeOpen && html`<${GradeFromCollectionModal} raw=${raw} collection=${collection||{}} user=${user}
       updateQty=${updateQty||(()=>{})} onGradeOwned=${addGradedCopies} onSendToQueue=${addSubmission}
       onClose=${()=>setCollGradeOpen(false)}/>`}
+    ${/* The bulk modal closes itself (its Done button) once the save lands.
+       Closing it from here unmounted it before its success view, and on a FAILED
+       save threw away dozens of checked rows and per-row grades. */""}
     ${bulkAddOpen && html`<${GradedBulkAddModal}
       raw=${raw}
       setIdsByName=${setIdsByName}
       setNameById=${setNameById}
       cardsBySetId=${cardsBySetId}
       onClose=${()=>setBulkAddOpen(false)}
-      onBulkAdd=${async (rows) => { const n = await bulkAddItems(rows); setBulkAddOpen(false); return n; }}
-      onBulkSendToQueue=${async (rows) => { const n = await bulkAddSubmissions(rows); setBulkAddOpen(false); if(n) flashToast(n === 1 ? _t("Sent 1 card to your grading queue.") : _t("Sent {n} cards to your grading queue.", {n})); return n; }}/>`}
+      onBulkAdd=${(rows) => bulkAddItems(rows)}
+      onBulkSendToQueue=${(rows) => bulkAddSubmissions(rows)}/>`}
     ${goalOpen && html`<${GradedCollectionGoalModal}
       setNameById=${setNameById} setIdsByName=${setIdsByName}
       extrasBucketOptions=${extrasBucketOptions}
@@ -32251,7 +32293,8 @@ const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClo
       n = await onBulkAdd(rows);
     }
     setBusy(false);
-    setAddedCount(n);
+    // 0 = the save failed (the writer already said so): stay on the form.
+    if(n > 0) setAddedCount(n);
   };
 
   return html`<div class="modal-backdrop" ...${backdropClose(onClose)}>
@@ -64324,12 +64367,17 @@ function App(){
       }
       // PostgREST caps RPC table-returns at 1000 rows by default. Paginate
        // until we drain — a heavy collection can easily exceed 1000 raw rows.
-      const paginateRpc = async (fn, args) => {
+      // `order` makes the page boundaries stable: an RPC table has no inherent
+      // order, so a row straddling a 1000-row boundary could come back twice
+      // (summed into a doubled quantity) or not at all.
+      const paginateRpc = async (fn, args, order) => {
         const PAGE = 1000;
         const out = [];
         for(let from = 0; ; from += PAGE){
           const to = from + PAGE - 1;
-          const res = await sbClient.rpc(fn, args).range(from, to);
+          let q = sbClient.rpc(fn, args);
+          for(const c of (order || [])) q = q.order(c, {ascending: true});
+          const res = await q.range(from, to);
           if(res.error) return res;
           const rows = res.data || [];
           out.push(...rows);
@@ -64339,9 +64387,9 @@ function App(){
         return {data: out, error: null};
       };
       const [rawRes, sealedRes, gradedRes] = await Promise.all([
-        vis.raw_visible    ? paginateRpc("get_shared_collection_raw",    {p_user_id: viewedCollectionId, p_token: tok}) : Promise.resolve({data:[]}),
-        vis.sealed_visible ? paginateRpc("get_shared_collection_sealed", {p_user_id: viewedCollectionId, p_token: tok}) : Promise.resolve({data:[]}),
-        vis.graded_visible ? paginateRpc("get_shared_collection_graded", {p_user_id: viewedCollectionId, p_token: tok}) : Promise.resolve({data:[]}),
+        vis.raw_visible    ? paginateRpc("get_shared_collection_raw",    {p_user_id: viewedCollectionId, p_token: tok}, ["card_id", "printing", "condition"]) : Promise.resolve({data:[]}),
+        vis.sealed_visible ? paginateRpc("get_shared_collection_sealed", {p_user_id: viewedCollectionId, p_token: tok}, ["tcgplayer_product_id", "condition"]) : Promise.resolve({data:[]}),
+        vis.graded_visible ? paginateRpc("get_shared_collection_graded", {p_user_id: viewedCollectionId, p_token: tok}, ["card_id", "printing", "grader", "grade"]) : Promise.resolve({data:[]}),
       ]);
       if(cancelled) return;
       const rawMap = {};
@@ -65443,6 +65491,15 @@ function App(){
   const [collectionLoading, setCollectionLoading] = useState(false);
   const collectionLoadingRef = useRef(false);
   collectionLoadingRef.current = collectionLoading;
+  // The +/− writers store an ABSOLUTE quantity computed from the local map, and
+  // that map is {} until the paged fetch lands (and stays {} or a stale mirror
+  // when it fails). A tap then saved 1 over a card owned 4 times. Until the map
+  // is known to be the server's, they refuse with a toast instead of guessing.
+  const collectionFailedRef = useRef(false);
+  const sealedStateRef = useRef("loading");     // loading | ok | failed
+  const collectionNotReady = () => collectionFailedRef.current
+    ? _t("Your collection didn't load. Reload the page before changing it.")
+    : collectionLoadingRef.current ? _t("Your collection is still loading. Try again in a moment.") : null;
   // Example collection for the walk's Collection stop — see buildDemoCollection.
   // Only kicks in while the walk is running, for a signed-in user whose real
   // collection has LOADED and is EMPTY; anyone with actual cards always sees
@@ -65982,10 +66039,13 @@ function App(){
           .from("collection_items")
           .select("card_id,printing,quantity")
           .eq("condition","NM")
-          .order("card_id", {ascending:true})
+          // card_id is not unique (one row per printing): a tie straddling a
+          // 1000-row page could be read twice and summed, or skipped.
+          .order("card_id", {ascending:true}).order("printing", {ascending:true})
           .range(from, from + PAGE - 1);
         if(error){
           console.error("collection fetch failed:", error);
+          if(!cancelled) collectionFailedRef.current = true;
           // Offline / outage: serve the last good mirror so the collection
           // still renders (read-only snapshot of the last sync).
           const mirror = await offlineMirrorRead("collection:"+user.id);
@@ -66004,6 +66064,7 @@ function App(){
       for(const row of all){
         map[row.card_id+":"+row.printing] = (map[row.card_id+":"+row.printing]||0) + row.quantity;
       }
+      collectionFailedRef.current = false;
       setCollection(map);
       setCollectionLoading(false);
       offlineMirrorWrite("collection:"+user.id, map);
@@ -66018,6 +66079,7 @@ function App(){
   useEffect(()=>{
     if(!user){ setSealedCollection({}); setSealedMeta({}); return; }
     let cancelled = false;
+    sealedStateRef.current = "loading";
     (async ()=>{
       const all = [];
       const PAGE = 1000;
@@ -66048,6 +66110,7 @@ function App(){
           // Table not deployed yet, or transient error — leave the map
           // empty rather than crashing. Console logs the reason for ops.
           console.warn("sealed collection fetch failed (run supabase/17_*.sql?):", error.message || error);
+          if(!cancelled) sealedStateRef.current = "failed";
           // Offline / outage: hydrate from the last good mirror.
           const mirror = await offlineMirrorRead("sealed:"+user.id);
           if(cancelled || !mirror) return;
@@ -66072,6 +66135,8 @@ function App(){
           };
         }
       }
+      if(cancelled) return;
+      sealedStateRef.current = "ok";
       setSealedCollection(map);
       setSealedMeta(meta);
       offlineMirrorWrite("sealed:"+user.id, {qty: map, meta});
@@ -66421,8 +66486,19 @@ function App(){
   }, [user]);
 
   // Optimistically bump local state, then persist to Supabase.
+  // Serialized per product and coalesced to the latest value, the same as
+  // updateQty: three quick + taps fired three overlapping upserts of 1, 2 and 3
+  // that could land in any order, and a failed early one rolled back to a stale
+  // value. Used by the Sealed tab, Pins & Counters, Playmats and the sealed modal.
+  const sealedWriteRef = useRef(new Map());
   const updateSealedQty = useCallback(async (productId, newQty)=>{
     if(!user || productId == null) return;
+    if(sealedStateRef.current !== "ok"){
+      flashToast(sealedStateRef.current === "failed"
+        ? _t("Your collection didn't load. Reload the page before changing it.")
+        : _t("Your collection is still loading. Try again in a moment."));
+      return;
+    }
     const pid = parseInt(productId, 10);
     let prevQty;
     setSealedCollection(c=>{
@@ -66438,29 +66514,46 @@ function App(){
     if(newQty<=0){
       setSealedMeta(m => { prevMeta = m[pid]; if(!m[pid]) return m; const n = {...m}; delete n[pid]; return n; });
     }
+    const running = sealedWriteRef.current.get(pid);
+    if(running){ running.want = newQty; return; }
+    const st = {want: newQty};
+    sealedWriteRef.current.set(pid, st);
     // supabase-js returns {error} rather than throwing — check it and roll the
     // optimistic state back so the UI never claims a save that didn't happen.
-    let err;
+    const writeOnce = async (qty) => {
+      try {
+        const {error} = qty <= 0
+          ? await sbClient.from("sealed_collection_items").delete()
+              .eq("user_id", user.id).eq("tcgplayer_product_id", pid).eq("condition","NM")
+          : await sbClient.from("sealed_collection_items").upsert({
+              user_id:user.id, tcgplayer_product_id:pid, condition:"NM", quantity:qty,
+            }, {onConflict:"user_id,tcgplayer_product_id,condition"});
+        return error || null;
+      } catch(e){ return e; }
+    };
+    let written, err = null;
     try {
-      if(newQty<=0){
-        ({error: err} = await sbClient.from("sealed_collection_items").delete()
-          .eq("user_id", user.id).eq("tcgplayer_product_id", pid)
-          .eq("condition","NM"));
-      } else {
-        ({error: err} = await sbClient.from("sealed_collection_items").upsert({
-          user_id:user.id, tcgplayer_product_id:pid, condition:"NM", quantity:newQty,
-        }, {onConflict:"user_id,tcgplayer_product_id,condition"}));
+      while(st.want !== written){
+        const target = st.want;
+        err = await writeOnce(target);
+        if(err) break;
+        written = target;
       }
-    } catch(e){ err = e; }
+    } finally {
+      sealedWriteRef.current.delete(pid);
+    }
     if(err){
       console.error("sealed collection update failed:", err.message || err);
+      // Back to what the server holds: the last write that landed, or the value
+      // before this run of taps.
+      const serverQty = written !== undefined ? written : prevQty;
       setSealedCollection(c=>{
         const next = {...c};
-        if(prevQty == null) delete next[pid];
-        else next[pid] = prevQty;
+        if(serverQty == null || serverQty <= 0) delete next[pid];
+        else next[pid] = serverQty;
         return next;
       });
-      if(newQty<=0 && prevMeta) setSealedMeta(m => ({...m, [pid]: prevMeta}));
+      if(written === undefined && newQty<=0 && prevMeta) setSealedMeta(m => ({...m, [pid]: prevMeta}));
       flashToast(navigator.onLine === false
         ? "You're offline — changes can't be saved"
         : "Couldn't save — change reverted");
@@ -66515,6 +66608,7 @@ function App(){
   const qtyWriteRef = useRef(new Map());
   const updateQty = useCallback(async (cardId, printing, newQty)=>{
     if(!user || !cardId || !printing) return;
+    { const why = collectionNotReady(); if(why){ flashToast(why); return; } }
     const key = cardId+":"+printing;
     let prevQty;
     setCollection(c=>{
@@ -66628,6 +66722,7 @@ function App(){
   const BULK_UPSERT_CHUNK = 500;
   const bulkUpdateCollection = useCallback(async (updates) => {
     if(!user || !updates.length) return {ok:true, written:0};
+    { const why = collectionNotReady(); if(why) return {ok:false, written:0, error: why}; }
     const prevCollection = collection;
     setCollection(c=>{
       const next = {...c};
