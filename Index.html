@@ -34834,7 +34834,14 @@ function ScoutCell({value, placeholder, multiline, saving, onCommit}){
   const commit = () => {
     focusRef.current = false;
     if(reverting.current){ reverting.current = false; return; }
-    if(v === base.current) return;
+    if(v === base.current){
+      // Unchanged, but the server's value may have moved while you were in the
+      // cell (a teammate's note arrived with a reload). The re-seed skips a
+      // focused cell, so show it now, or typing here later overwrites a note
+      // you never saw.
+      if(lastProp.current !== base.current){ base.current = lastProp.current; setV(lastProp.current); }
+      return;
+    }
     base.current = v;
     // A failed save keeps the text on screen AND lets the next blur try again,
     // rather than showing words that look saved and aren't.
@@ -35076,7 +35083,13 @@ function ScoutEventPanel({eventId, eventMeta, inline, onPlayerClick}){
       await load();
       return true;
     } catch(e){ flashToast("Couldn't save: " + scoutErrText(e)); await load(); return false; }
-    finally { inflight.current.delete(p.player_key); setSavingKey(null); }
+    // Only this save's own entry: a later save of the same row may already have
+    // replaced it, and dropping THAT one let a third edit rebuild from a stale
+    // row and send the second edit's field back as it was.
+    finally {
+      if(inflight.current.get(p.player_key) === next) inflight.current.delete(p.player_key);
+      setSavingKey(k => k === p.player_key + "|" + field ? null : k);
+    }
   };
 
   const ev      = (data && data.event) || eventMeta || {};

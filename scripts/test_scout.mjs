@@ -405,7 +405,10 @@ ok("a cell commits on blur", /const commit = \(\) => \{[\s\S]{0,800}onCommit\(v\
 // because focus left — re-seeding on blur put the old text back mid-save.
 ok("blur does not re-seed a cell from the stale prop", !/if\(!focus\)\{ setV\(value/.test(src) && /nv === lastProp\.current/.test(src));
 ok("a failed save lets the next blur retry", /if\(ok === false\) base\.current = lastProp\.current/.test(src));
-ok("an unchanged cell writes nothing", /if\(v === base\.current\) return;/.test(src));
+// An unchanged cell writes nothing, but shows a server value that moved while
+// it had focus (the re-seed skips a focused cell).
+ok("an unchanged cell writes nothing", /if\(v === base\.current\)\{[^}]*\}\s*return;/.test(src)
+  && /if\(lastProp\.current !== base\.current\)\{ base\.current = lastProp\.current; setV\(lastProp\.current\); \}/.test(src));
 ok("there is no Save button left in the sheet", !/ScoutNoteEditor|scout-btn--log/.test(src));
 
 // ⚠ save_scout_note writes BOTH fields, and each save triggers a reload. Tab from

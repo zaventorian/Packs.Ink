@@ -210,6 +210,13 @@ def event_records(conn: sqlite3.Connection, event_id: int) -> dict[int, tuple[in
         if bye:
             rec.setdefault(c1, [0, 0, 0])[0] += 1
             continue
+        if p2 is None:
+            # A forfeit / no-show (single-competitor row that is not a bye) is a
+            # LOSS for its player, as ingest_melee records it. Counted as a draw it
+            # broke that player's record, and the opponent side resolved to a
+            # None key that pair_by_record could try to write as player_id NULL.
+            rec.setdefault(c1, [0, 0, 0])[1] += 1
+            continue
         cw = canonical(conn, w) if w is not None else None
         for c in (c1, canonical(conn, p2)):
             r = rec.setdefault(c, [0, 0, 0])
