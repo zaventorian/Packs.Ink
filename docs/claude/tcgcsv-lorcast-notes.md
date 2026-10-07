@@ -19,6 +19,13 @@
 - Low price can also be contaminated by foreign-language listings — prefer Market when in doubt, but for set-level averages the `processData` fallback means Low is more inclusive.
 - Affiliate URL: `https://partner.tcgplayer.com/c/7285926/1780961/21018?u=<encoded URL>`. The `tcgUrl()` helper wraps every TCGPlayer link — never link directly.
 - **Lorcast's API key for inkable is `inkwell`**, not `inkable`. Our column is `inkable`; loader translates.
+- **Lorcast's own typos are corrected in `load_lorcast.py` `CARD_CORRECTIONS`**, keyed on the card id,
+  each field naming the value it replaces. A database edit alone is undone by the next daily load. An
+  entry stops applying, and the load prints that it can go, once Lorcast changes the field. A corrected
+  NAME or VERSION must also re-key any `TCG_PID_OVERRIDES` entry (Index.html + patch_pid_overrides.py,
+  keys are `Name - Version|cn`), or that card loses its TCGplayer link; `test_lorcast_corrections.py`
+  fails if one is missed. First two (2026-10-07): Hyperia City #20 "Russel" -> Russell, #68 "Magical
+  Markey" -> Magical Market, confirmed against the printed English cards.
 - **The legacy graded feed (retired 2026-06-30) capped `/history` at ~1 year and was very sparse for low-liquidity cards** — which is why the graded value chart needs its backward-fill. Kept only to explain that backward-fill's existence; the API and the tables are gone (see "Legacy graded deletion").
 - **Image sizes**: small (200w), normal (400w), large (734w). Use `img_normal` for tiles ≤200px; `img_large` for hover/modal/poster; `img_small` ≤80px thumbs. `img_large` NOT in catalog cache (stripped); fallback to img_normal.
 - **⚠ TCGCSV took its public price ARCHIVE offline (found 2026-09-27).** Every

@@ -456,12 +456,16 @@ _GALLERY_SET.update({"quest1": "Q1", "quest2": "Q2", "quest3": "Q3"})
 def tt_set_title(s: str) -> str | None:
     """'ＴＨＥ　ＦＩＲＳＴ　ＣＨＡＰＴＥＲ　物語のはじまり' -> '物語のはじまり': Japanese
     sets are printed with the English title in full-width capitals, then the
-    Japanese one. Only the Japanese half is the set's Japanese NAME."""
+    Japanese one. Only the Japanese half is the set's Japanese NAME.
+    From Hyperia City on, Takara prints the Japanese title alone
+    ('ハイペリアシティ'); a title with no Latin letters at all is the name."""
     if not s or s == "-":
         return None
     s = unicodedata.normalize("NFKC", s).strip()
     m = re.match(r"^[A-Z0-9 !'’.&\-:]+\s+(.+)$", s)
-    return m.group(1).strip() if m else None
+    if m:
+        return m.group(1).strip()
+    return s if not re.search(r"[A-Za-z]", s) else None
 
 
 def derive_terms(lang: str, rows: list[dict], cat: Catalog, sets: list[dict],

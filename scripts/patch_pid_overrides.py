@@ -130,10 +130,11 @@ OVERRIDES = {
     "Overwhelm|25": 722680,
     "Catastrophic Rupture|26": 722681,
     "Wild Growth|27": 722682,
-    # Hyperia City: Lorcast misspells these two (TCGplayer: "Russell", "Magical Market"),
-    # so the name check in link_preorder_pids refuses them. Keyed on Lorcast's spelling. 2026-10-05.
-    "Russel - Finding Adventure|20": 722370,
-    "Merlin's Shop and Smithy - Magical Markey|68": 722418,
+    # Hyperia City: Lorcast misspells these two ("Russel", "Magical Markey") and has no pid
+    # for either. load_lorcast.py CARD_CORRECTIONS writes the printed spelling, so these
+    # keys use it too. 2026-10-05, re-keyed 2026-10-07.
+    "Russell - Finding Adventure|20": 722370,
+    "Merlin's Shop and Smithy - Magical Market|68": 722418,
 }
 
 
