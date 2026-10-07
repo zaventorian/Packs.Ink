@@ -267,7 +267,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=534">
+<link rel="stylesheet" href="styles.css?v=535">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. FIRST VISIT ONLY: once the
@@ -1676,8 +1676,26 @@ const cardDisplayName = (row) => {
 // (image_url); a name-only match keeps the English picture.
 const cardDisplayImage = (cardId, fallback) => {
   const e = cardLocOf(cardId);
+  if(e && e.image_url && fallback) LOC_ART_FALLBACK.set(e.image_url, fallback);
   return (e && e.image_url) || fallback;
 };
+// Localized art URL -> the English art for the same printing. Storage can
+// refuse a burst of image requests (429), and sw.js retries twice; when that
+// still fails, the card shows in English rather than as a broken tile with
+// its name printed where the picture should be (2026-10-07). One capturing
+// listener covers every surface, so no <img> needs its own onError. It stops
+// the event, so a surface's own hideBrokenImg does not hide the English art
+// on its way in; if the English art fails too, that error reaches it as usual.
+const LOC_ART_FALLBACK = new Map();
+window.addEventListener("error", (ev) => {
+  const img = ev.target;
+  if(!(img instanceof HTMLImageElement)) return;
+  const src = img.getAttribute("src");
+  const en = src && LOC_ART_FALLBACK.get(src);
+  if(!en || en === src) return;
+  ev.stopPropagation();
+  img.src = en;
+}, true);
 async function fetchCardLocalizations(lang){
   if(!lang || lang === "en") return new Map();
   const key = "cardloc:" + lang;
@@ -1718,6 +1736,8 @@ function localizeCatalog(rows, loc){
       out.loc_art = true;
       out.img_small_en = r.img_small; out.img_normal_en = r.img_normal; out.img_large_en = r.img_large;
       out.img_small = e.image_url; out.img_normal = e.image_url; out.img_large = e.image_url;
+      const en = r.img_normal || r.img_large || r.img_small;
+      if(en) LOC_ART_FALLBACK.set(e.image_url, en);
     }
     return out;
   });

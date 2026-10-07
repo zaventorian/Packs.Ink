@@ -1,6 +1,6 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v534';
+const CACHE_VERSION = 'packsink-v535';
 // Card art + other images live in their own cache that is NOT wiped on
 // deploys. Before this existed, every CACHE_VERSION bump threw away every
 // runtime-cached card image, so devices never accumulated art for offline
@@ -34,7 +34,7 @@ const CORE_ASSETS = [
   '/vendor/react-dom.production.min.js?v=254',
   '/vendor/htm.js?v=254',
   '/vendor/supabase.js?v=254',
-  '/styles.css?v=534',
+  '/styles.css?v=535',
   '/logo.js?v=348',
   // scanner*.js intentionally NOT precached: the scanner is a modal most
   // visits never open — it runtime-caches on first use instead of costing
@@ -84,6 +84,16 @@ self.addEventListener('activate', (event) => {
 // so a true failure is never cached; the residual risk is caching an opaque
 // 404, which the next online revalidation overwrites.
 const cacheable = (res) => res && (res.ok || res.type === 'opaque');
+
+// A storage image answered with one of these is asked again (see the image
+// branch). Retry-After is honoured up to 15s; otherwise ~2s, then ~6s, with
+// jitter so a grid's worth of retries doesn't arrive as one second burst.
+const SW_RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
+const swRetryDelayMs = (res, attempt) => {
+  const ra = Number(res.headers && res.headers.get('retry-after'));
+  if (Number.isFinite(ra) && ra > 0) return Math.min(ra, 15) * 1000;
+  return (attempt === 0 ? 2000 : 6000) + Math.floor(Math.random() * 1500);
+};
 
 // Standalone documents served at a dot-free path. A navigation to one must
 // never replace the offline app shell (/Index.html): /picks and /box were
@@ -171,7 +181,14 @@ self.addEventListener('fetch', (event) => {
   // cached copy of a versioned /img-proxy/ URL is final: no background
   // re-fetch, which was a Worker invocation per view. TCGplayer photos are
   // NOT (a placeholder is swapped at the same URL), so they keep revalidating.
-  const immutableHit = proxied && url.pathname.startsWith('/img-proxy/') && url.search.length > 1;
+  const storageArt = url.hostname.endsWith('supabase.co') && url.pathname.includes('/storage/v1/object/public/');
+  // Supabase-storage art that carries ?v= is versioned the same way (the
+  // localized card art's v is a hash of its source; Coconut's is a rev that
+  // is bumped on every re-render), so a cached copy is final too. Without
+  // this every view of a Japanese grid re-asked storage for every card on
+  // screen, and that repeat traffic is what tripped its rate limit.
+  const immutableHit = (proxied && url.pathname.startsWith('/img-proxy/') && url.search.length > 1)
+    || (storageArt && url.searchParams.has('v'));
   if (req.destination === 'image' || proxied || url.hostname.endsWith('lorcast.io')) {
     // ⚠ The cache is keyed by URL, not by request mode. Supabase-storage art
     // (prestaged cards, Coconut, collectibles) is the one card art NOT routed
@@ -183,10 +200,22 @@ self.addEventListener('fetch', (event) => {
     // Set 14 card vanished from exported posters this way. Storage sends
     // ACAO:*, so fetch it in CORS mode always — a CORS response satisfies a
     // plain <img> too — and never serve an opaque hit to a CORS request.
-    const corsable = url.hostname.endsWith('supabase.co') && url.pathname.includes('/storage/v1/object/public/');
+    const corsable = storageArt;
     const netReq = corsable && req.mode !== 'cors'
       ? new Request(req.url, { mode: 'cors', credentials: 'omit' })
       : req;
+    // ⚠ Storage rate-limits a burst: scrolling a Japanese card grid asks it
+    // for a few hundred images in a minute, and past ~180 it answered 429.
+    // Handed straight to an <img>, a 429 is a broken tile until the page is
+    // reloaded (2026-10-07: four Attack of the Vine! tiles). So a refused or
+    // failed storage response is asked again, twice, after a pause; the page
+    // only sees the error if all three attempts fail.
+    const fetchArt = (attempt) => fetch(netReq)
+      .catch((err) => (netReq === req ? Promise.reject(err) : fetch(req)))
+      .then((res) => {
+        if (!corsable || attempt >= 2 || !res || !SW_RETRY_STATUS.has(res.status)) return res;
+        return new Promise((ok) => setTimeout(ok, swRetryDelayMs(res, attempt))).then(() => fetchArt(attempt + 1));
+      });
     event.respondWith(
       caches.open(IMG_CACHE).then((cache) =>
         // Global match (not cache.match) so precached entries in the
@@ -194,8 +223,7 @@ self.addEventListener('fetch', (event) => {
         caches.match(req).then((hit) => {
           const cached = hit && hit.type === 'opaque' && (req.mode === 'cors' || corsable) ? null : hit;
           if (cached && immutableHit) return cached;
-          const fetchPromise = fetch(netReq)
-            .catch((err) => (netReq === req ? Promise.reject(err) : fetch(req)))
+          const fetchPromise = fetchArt(0)
             .then((res) => {
               if (cacheable(res)) cache.put(req, res.clone());
               return res;
