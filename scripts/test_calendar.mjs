@@ -83,6 +83,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const calendarEstimatedSetEntries = (estimates) => {", NL + "};"),
   grab("const calendarProductEntries = (products) => {", NL + "};"),
   grabLine("const _calSetKey = "),
+  grabLine("const _calProdKey = "),
   grab("const calendarMergeEvents = (derived, rows) => {", NL + "};"),
   grabLine("const _calKindRank = "),
   grab("const _calPhaseRank = (e) => {", NL + "};"),
@@ -136,6 +137,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const icsStamp = "),
   grabLine("const CAL_DEFAULT_EVENT_HOURS = "),
   grabLine("const calendarIcsUid = "),
+  grab("const calExportTimed = (ev) => {", NL + "};"),
   grab("const icsEventLines = (ev, nowMs) => {", NL + "};"),
   grab("const buildIcs = (events, opts) => {", NL + "};"),
   grab("const googleCalUrl = (ev) => {", NL + "};"),
@@ -369,6 +371,13 @@ const twoProducts = calendarMergeEvents([], [
   {id: "b", kind: "product", title: "Gift Set", starts_on: "2027-02-01"},
 ]);
 ok("two same-named products both survive", twoProducts.length === 2, twoProducts.length);
+// A curated product row supersedes the derived one of the same title even when
+// its admin filled the Set field (a derived product has no set_name).
+const curatedProd = calendarMergeEvents(
+  [{id: "product:beast", kind: "product", title: "Beast Gift Box", starts_on: "2026-11-01"}],
+  [{id: "x", kind: "product", title: "Beast Gift Box", set_name: "Hyperia City", starts_on: "2026-11-08"}]);
+ok("a curated product with a set still replaces the derived one",
+  curatedProd.length === 1 && curatedProd[0].starts_on === "2026-11-08", JSON.stringify(curatedProd.map(e => e.starts_on)));
 
 ok("merged output is sorted by date", merged.every((e, i) =>
   i === 0 || merged[i - 1].starts_on <= e.starts_on));
@@ -939,6 +948,21 @@ ok("a timed event is stamped, not all-day",
   ics.includes("DTSTART:20260919T150000Z"), (ics.match(/DTSTART:\S+/) || [])[0]);
 ok("a timed event with no end gets a 2h default",
   ics.includes("DTEND:20260919T170000Z"), (ics.match(/DTEND:\d\S+/) || [])[0]);
+// A curated CCQ carries starts_at and never ends_at. Exported timed, a two-day
+// weekend became 2 hours on the Saturday and Sunday vanished from the calendar.
+{
+  const twoDay = {id: "ccq", kind: "ccq", title: "Cauldron Cup", starts_on: "2026-10-10", ends_on: "2026-10-11",
+                  starts_at: "2026-10-10T14:00:00Z"};
+  const t = buildIcs([twoDay], {nowMs: NOW});
+  ok("a multi-day timed row exports as an all-day span",
+    t.includes("DTSTART;VALUE=DATE:20261010") && t.includes("DTEND;VALUE=DATE:20261012"),
+    (t.match(/DT(START|END)\S*/g) || []).join(" "));
+  ok("Google gets the same two-day span", (googleCalUrl(twoDay) || "").includes("dates=20261010%2F20261012"),
+    googleCalUrl(twoDay));
+  const oneDay = {...twoDay, ends_on: "2026-10-10"};
+  ok("a one-day timed row keeps its clock time",
+    buildIcs([oneDay], {nowMs: NOW}).includes("DTSTART:20261010T140000Z"));
+}
 ok("the summary uses the display name",
   ics.includes("SUMMARY:Winterspell LGS release"),
   ics.split(String.fromCharCode(13,10)).find(l => l.startsWith("SUMMARY:Winterspell")));

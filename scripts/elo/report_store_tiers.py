@@ -79,9 +79,14 @@ def window_start(n_sets: int, skip_current: bool = True) -> tuple[str, str | Non
     tab's season bucketing cuts.
     """
     today = datetime.date.today().isoformat()
-    rows = _get(f"sets?select=name,released_at&released_at=lte.{today}"
+    rows = _get(f"sets?select=name,code,released_at&released_at=lte.{today}"
                 f"&order=released_at.desc&limit=200")
-    mainline = [r for r in rows if r.get("name") in set(FALLBACK_SETS)]
+    # A booster set carries a bare NUMBER as its code ("14"); promo sets carry
+    # "P1", "C2", "CC1". Same rule as discover_store_scs.fetch_set_releases.
+    # The hand-kept FALLBACK_SETS list stopped at Attack of the Vine!, so from
+    # Hyperia City's release this report would have treated the wrong set as
+    # current and disagreed with the Store Status tab it is meant to match.
+    mainline = [r for r in rows if str(r.get("code") or "").strip().isdigit()]
     # Skip the set currently running unless asked not to: its season is still
     # filling up, so counting it drags every store down against bars written for
     # finished seasons. Matches the Stores tab's default window.

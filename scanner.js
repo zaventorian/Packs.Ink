@@ -122,13 +122,16 @@
     return { lo: lo >>> 0, hi: hi >>> 0 };
   }
 
+  // A 404 / 500 body is not an index; say so instead of parsing an error page.
+  function okOrThrow(r) { if (r && r.ok === false) throw new Error("HTTP " + r.status + " for " + r.url); }
+
   function load() {
     if (state.loaded) return Promise.resolve(state);
     if (state.loading) return state.loading;
     state.loading = Promise.all([
-      fetch(BASE + "index.json" + IDXV).then(function (r) { return r.json(); }),
-      fetch(BASE + "color.bin" + IDXV).then(function (r) { return r.arrayBuffer(); }),
-      fetch(BASE + "dhash.bin" + IDXV).then(function (r) { return r.arrayBuffer(); }),
+      fetch(BASE + "index.json" + IDXV).then(function (r) { okOrThrow(r); return r.json(); }),
+      fetch(BASE + "color.bin" + IDXV).then(function (r) { okOrThrow(r); return r.arrayBuffer(); }),
+      fetch(BASE + "dhash.bin" + IDXV).then(function (r) { okOrThrow(r); return r.arrayBuffer(); }),
     ]).then(function (res) {
       var man = res[0];
       state.count = man.count;
@@ -145,6 +148,12 @@
       }
       state.loaded = true;
       return state;
+    }, function (e) {
+      // Forget a failed load. Kept, the rejected promise answered every later
+      // open with the same error until a full reload: one network blip in a
+      // card shop broke the scanner (and the deck-image import) for the session.
+      state.loading = null;
+      throw e;
     });
     return state.loading;
   }
@@ -220,10 +229,10 @@
     if (text.loaded) return Promise.resolve(text);
     if (text.loading) return text.loading;
     text.asOf = (opts && opts.asOf) || localYmd();
-    text.loading = fetch(BASE + "text.json" + TXTV).then(function (r) { return r.json(); }).then(function (cards) {
+    text.loading = fetch(BASE + "text.json" + TXTV).then(function (r) { okOrThrow(r); return r.json(); }).then(function (cards) {
       ingestText(text.extra.length ? cards.concat(text.extra) : cards);
       return text;
-    });
+    }, function (e) { text.loading = null; throw e; });
     return text.loading;
   }
   // Sort + tokenize the text index. Runs once when text.json lands, and again

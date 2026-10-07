@@ -43,7 +43,7 @@ const pieces = [
   grab("const CMP_PRINTING_FROM = ", NL),
   grab("const encodeCmpPrinting = ", NL),
   // Two physical lines — grab to the statement's real end, not the first NL.
-  grab("const decodeCmpPrinting = ", "(CMP_PRINTING_FROM[c] || null);"),
+  grab("const decodeCmpPrinting = ", "catch { return null; }") + NL + "};",
   grab("function encodeCompareItems(items){", NL + "}"),
   grab("function decodeCompareItems(str){", NL + "}"),
 ];

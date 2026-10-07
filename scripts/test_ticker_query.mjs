@@ -227,7 +227,8 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("Index.html: a tab with its own path does not also write ?a=",
     /MARKET_SUB_PATHS\[marketSub\]\) \? null : marketSub/.test(index), true);
   check("Index.html: the ticker tab uses the auto-height frame",
-    /<\$\{AutoHeightFrame\} src=\$\{"\/ticker\?embed=1"/.test(index), true);
+    /<\$\{AutoHeightFrame\} src=\$\{src\} title=\$\{_t\("Stream Ticker"\)\} mirrorParamsAt="\/ticker"/.test(index)
+    && /return "\/ticker\?embed=1"/.test(index) && /<\$\{TickerEmbed\}\/>/.test(index), true);
   // ⚠ A hand-written /ticker?gk=sales&g= must reach the configurator. Two
   // things eat those params otherwise and the page still looks fine, just
   // showing a default reel: the view-sync effect strips ?g= and ?m= (Price
@@ -237,7 +238,12 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   // /price-graphing?g=c~123 can't feed that ?g= in as a rarity group.
   check("Index.html: ticker config params are forwarded into the embed",
     /const TICKER_EMBED_PARAMS = \(\(\) => \{/.test(index) &&
-    /\(TICKER_EMBED_PARAMS \? "&" \+ TICKER_EMBED_PARAMS : ""\)/.test(index), true);
+    /_tickerLastParams : TICKER_EMBED_PARAMS/.test(index), true);
+  // ...and a frame that mounts AGAIN (tab switch, Back) reads the address or
+  // the last reel this session saw, never only the landing value.
+  check("Index.html: a remounted ticker frame keeps the reel you configured",
+    /if\(mirrorParamsAt === "\/ticker"\) _tickerLastParams = q;/.test(index)
+    && /const \[src\] = useState\(tickerEmbedSrc\)/.test(index), true);
   check("Index.html: ...and only for a direct /ticker landing",
     /TICKER_EMBED_PARAMS[\s\S]{0,600}?!== "\/ticker"\) return ""/.test(index), true);
   // ...and they must SURVIVE the landing. The view-sync used to strip ?g= and
@@ -347,6 +353,11 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("sold weeks", tickerSoldAgo("2026-08-18", now), "sold 4w ago");
   check("sold months", tickerSoldAgo("2026-06-15", now), "sold 3mo ago");
   check("no date, no claim", tickerSoldAgo(null, now), "");
+  // Counted in the VIEWER's calendar days, whatever their zone: 8 PM local on
+  // the 15th is still the 15th (elapsed-from-noon-UTC said "yesterday" there).
+  const evening = new Date(2026, 8, 15, 20, 0, 0);
+  check("an evening sale from today is today", tickerSoldAgo("2026-09-15", evening), "sold today");
+  check("an evening sale from yesterday is yesterday", tickerSoldAgo("2026-09-14", evening), "sold yesterday");
 }
 
 // ⚠ The sales window must be a LOCAL calendar date. toISOString().slice(0,10)
