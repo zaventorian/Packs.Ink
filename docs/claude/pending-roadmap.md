@@ -20,6 +20,12 @@
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger.** Claude applies migrations itself, drops included (Zaven, 2026-09-30: *"im fine with claude having access to do everything"*) — see "Running SQL" under Ops for the two routes. A file is STAGED only when something outside the database has to happen first.
+- ~~`supabase/194_scout_name_match.sql`~~ — **APPLIED 2026-10-07** through the connector; verified. The scouting sheet,
+  the Scout tab and the scout player search matched a roster name to Elo players by lower(display_name), and RPH
+  has two account pairs differing only by case (John M / john m, Wyatt A / Wyatt a), both on real rosters, so
+  that player appeared twice and was counted twice (an 11-player roster read 12 signed up). One account per
+  name now: a rated one first, then the exact case, then unmerged; merges resolve two hops. Bodies are 148's /
+  153's with only the join changed. 1,664 -> 1,654 rows over all stored roster members, 1,434 rated either way.
 - ~~`supabase/193_elo_view_fixes.sql`~~ — **APPLIED 2026-10-07** through the connector; verified. Three wrong numbers on the
   public Elo board, all in the views: `elo_leaderboard_v` took a player's last rating in (date, round) order
   instead of elo.py's (date, event_id, round, table, match) order, so 16 players who played two events on one date
