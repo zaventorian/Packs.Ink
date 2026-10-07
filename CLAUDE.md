@@ -1416,9 +1416,11 @@ Covers: Sets that are announced but not dated; Where the curated data comes from
 
 ## Swiss simulator (`/lab/swiss`) — unlisted, added 2026-08-20
 
-Full notes: `docs/claude/swiss-simulator.md` (6 KB). **Read it before changing this area.**
+Full notes: `docs/claude/swiss-simulator.md` (10 KB). **Read it before changing this area.**
 Monte Carlo odds for Lorcana Swiss events.
-Guards: `scripts/test_swiss_engine.mjs`.
+Guards: `scripts/test_swiss_engine.mjs`. The intentional-draw rule and the defaults were chosen by
+replaying 546 real RPH events (`python scripts/swiss_replay.py check`) — re-run it before changing
+either.
 
 ## Stream ticker (`/ticker`) — OBS overlay, added 2026-08-21
 
