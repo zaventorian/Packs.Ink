@@ -37041,7 +37041,11 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode,user,collectio
         if((row["Set"]||"").trim()!==set) continue;
         const rar=(row["Rarity"]||"").trim(),pr=(row["Printing"]||"").trim();
         if(pr!=="Normal"||!SET_RARS.includes(rar)) continue;
-        const name=(row["Product Name"]||"").trim(),price=parseP(row[priceField]);
+        // A missing side falls back to the other, as processData does for EV and
+        // Set Breakdown: a new set has a Low before it has an NM Market (all 204
+        // Hyperia City cards on 2026-10-06), and Market mode read it as $0.00.
+        const name=(row["Product Name"]||"").trim(),
+          price=parseP(row[priceField]) ?? parseP(row[priceField==="Low Price" ? "TCGPlayer Market" : "Low Price"]);
         if(!cards[name]) cards[name]={
           name, rarity:rar, price,
           img_small:row["img_small"], img_normal:row["img_normal"],
@@ -37258,6 +37262,14 @@ function MonteCarloView({rawData, sets, theme, presetSet, onSetChange, sealedPri
 // smart-search the rest of the app uses (name / ink / rarity / set / cost /
 // body text tokens) works here too.
 const TRADE_PERSIST_KEY = "packsink:trade:v1";
+// The share link this session has already applied: {key, payload, edited}.
+// TradeView mounts only while its tab is open, and App hands it the landing
+// URL's token for the whole session, so every return to the tab fetched the
+// link again and applied it over the board: an edit made since disappeared,
+// and the next one saved "shared + that edit", losing the first for good.
+// Once applied, a link is shown again only until you edit; after that your
+// own saved trade is the board.
+let _tradeShare = null;
 const tradeMoney = (n) => (typeof n === "number" && !Number.isNaN(n)) ? fmtUSD(n) : "—";
 const tradeTotalMoney = (n) => fmtUSD(Number(n)||0);
 // LCP (C1) Non-Foil/Foil render as two distinct tiles sharing one card_id
@@ -37391,25 +37403,50 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
       if(typeof payload.nameA === "string" && payload.nameA) setNameA(nameIn(payload.nameA, "Side A", SIDE_A));
       if(typeof payload.nameB === "string" && payload.nameB) setNameB(nameIn(payload.nameB, "Side B", SIDE_B));
     };
-    if(shareToken){
+    const loadLocal = () => { try { apply(JSON.parse(localStorage.getItem(TRADE_PERSIST_KEY) || "null")); } catch {} };
+    const key = shareToken ? "t:" + shareToken : shareBlob ? "b:" + shareBlob : null;
+    if(key && _tradeShare && _tradeShare.key === key){
+      if(_tradeShare.edited || !_tradeShare.payload) loadLocal();
+      else apply(_tradeShare.payload, true);
+    } else if(shareToken){
       fetchTradeRecord(shareToken).then(payload => {
         if(cancelled) return;
-        if(payload) apply(payload, true);
-        else flashToast(_t("That trade link is no longer available"));
+        if(payload){ _tradeShare = {key, payload, edited: false}; apply(payload, true); }
+        else {
+          // Expired (30-day retention): say so once, and show your own trade
+          // rather than an empty board the next edit would save over it.
+          _tradeShare = {key, payload: null, edited: true};
+          flashToast(_t("That trade link is no longer available"));
+          loadLocal();
+        }
       });
     } else if(shareBlob){
-      apply(decodeTrade(shareBlob), true);
+      const payload = decodeTrade(shareBlob);
+      _tradeShare = {key, payload, edited: false};
+      apply(payload, true);
     } else {
-      try { apply(JSON.parse(localStorage.getItem(TRADE_PERSIST_KEY) || "null")); } catch {}
+      loadLocal();
     }
     return () => { cancelled = true; };
   }, [groups, groupByKey]);
+  useEffect(() => () => {
+    // Leaving Trade Compare takes ?t= / ?trade= with it: kept, they rode along
+    // on every Analytics tool, and a refresh of any of them reopened Trade
+    // Compare (App's sub-tab initializer prefers a trade link).
+    try {
+      const u = new URL(window.location.href);
+      if(!u.searchParams.has("t") && !u.searchParams.has("trade")) return;
+      u.searchParams.delete("t"); u.searchParams.delete("trade");
+      window.history.replaceState(window.history.state, "", u.toString());
+    } catch {}
+  }, []);
   const persistReady = useRef(false);
   useEffect(()=>{
     // Skip the first invocation (mount): writing the empty default state here
     // would clobber a saved trade before the hydration effect's setState lands.
     if(!persistReady.current){ persistReady.current = true; return; }
     if(skipPersistOnce.current){ skipPersistOnce.current = false; return; }
+    if(_tradeShare) _tradeShare.edited = true;
     try{ localStorage.setItem(TRADE_PERSIST_KEY, JSON.stringify({a:sideA, b:sideB, nameA: nameOut(nameA, SIDE_A, "Side A"), nameB: nameOut(nameB, SIDE_B, "Side B")})); }catch{}
   }, [sideA, sideB, nameA, nameB]);
 
@@ -37580,7 +37617,16 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
   // always restorable). Unpriced cards sink to the bottom for price sorts.
   const sortEntries = (entries) => {
     if(sortMode === "added") return entries;
-    const priceOf = (e) => { const g = groupByKey.get(e.key); const p = g ? getCardPrice(g) : null; return (typeof p === "number" && !Number.isNaN(p)) ? p : null; };
+    // By what the LINE puts into the trade: the printings actually on it, times
+    // their quantities. getCardPrice reads the non-foil first, so a foil-only
+    // line of a $0.30 / $12 card sorted as $0.30, under a $5 card.
+    const linePx = (row, q) => { if(!(q > 0) || !row) return null; const v = row["Low Price"] ?? row["TCGPlayer Market"]; return typeof v === "number" && !Number.isNaN(v) ? v * q : null; };
+    const priceOf = (e) => {
+      const g = groupByKey.get(e.key); if(!g) return null;
+      const n = linePx(g.normal, e.qN), f = linePx(g.foil, e.qF);
+      if(n != null || f != null) return (n || 0) + (f || 0);
+      const p = getCardPrice(g); return (typeof p === "number" && !Number.isNaN(p)) ? p : null;
+    };
     const arr = entries.slice();
     if(sortMode === "price-desc" || sortMode === "price-asc"){
       const desc = sortMode === "price-desc";
@@ -41986,11 +42032,16 @@ function LoreArtPicker({seat, current, onPick, onClose}){
     const out = [];
     const seen = new Set();
     for(const r of raw){
-      const img = r.img_normal || r.img_large || r.img_small;
-      if(!img) continue;
-      // One entry per card, not per printing — a foil and its non-foil are the
-      // same picture, and a picker full of duplicates is unusable.
-      const key = r["Product Name"] || r.card_id;
+      const img0 = r.img_normal || r.img_large || r.img_small;
+      if(!img0) continue;
+      // Root a relative catalog path (Logos/cards/..., the Curator's and regional
+      // promos): loreArtOk accepts https:// or /, so a picked relative path showed
+      // on the button and was then dropped from the board and lost on reload.
+      const img = /^(https?:\/\/|\/)/.test(img0) ? img0 : "/" + img0;
+      // One entry per PICTURE: a foil and its non-foil share one, and a picker
+      // full of duplicates is unusable. Keyed on the name it collapsed the base
+      // card, its Enchanted / Epic and its promos (different art) into one tile.
+      const key = img;
       if(seen.has(key)) continue;
       if(parsed && !matchesCardFilter(r, blank, parsed)) continue;
       seen.add(key);
@@ -42401,7 +42452,14 @@ function LoreTracker({onOpen, onHome}){
             <input class="lore-nameinput" value=${names[i] || ""}
               placeholder=${_t("Player {n}", {n: i + 1})} maxLength=${24}
               aria-label=${_t("Name for {seat}", {seat: _t("Player {n}", {n: i + 1})})}
-              onChange=${e => setNames(ns => ns.map((n, x) => x === i ? e.target.value : n))}/>
+              onChange=${e => {
+                const v = e.target.value;
+                setNames(ns => ns.map((n, x) => x === i ? v : n));
+                // Cleared here = back to "Player N" on the board too. The seat sync
+                // keeps the board's old name for a blank one (it can't tell a
+                // clear from a seat nobody named), so Settings and board disagreed.
+                if(!v.trim()) setGame(g => g ? {...g, players: g.players.map((p, n) => n === i ? {...p, name: loreDefaultName(i)} : p)} : g);
+              }}/>
             <div class="lore-inkpick" role="group" aria-label=${_t("Ink for {seat}", {seat: seatLabel(i)})}>
               ${INKS.map(k => html`<button key=${k}
                 class=${"lore-inkbtn"+(inks[i]===k?" active":"")}
@@ -42635,6 +42693,25 @@ const TICKER_EMBED_PARAMS = (() => {
     return tickerParamsOnly(window.location.search);
   } catch { return ""; }
 })();
+// The reel the configurator last reported (the embed-params mirror keeps it).
+// The frame used to be rebuilt from the LANDING value whenever the tab mounted
+// again, so configuring a reel, visiting another tool and coming back (or
+// Back / Forward) showed the landing reel, and the mirror then wrote THAT over
+// the address. Now: the address when it is on /ticker, else the last reel
+// this session saw, else the landing one.
+let _tickerLastParams = null;
+const tickerEmbedSrc = () => {
+  let q = null;
+  try { if((window.location.pathname.replace(/\/$/, "") || "/") === "/ticker") q = tickerParamsOnly(window.location.search); } catch {}
+  if(!q) q = _tickerLastParams != null ? _tickerLastParams : TICKER_EMBED_PARAMS;
+  return "/ticker?embed=1" + (q ? "&" + q : "");
+};
+// Read once per mount (useState), never per render: the mirror rewrites the
+// address on every change, and a src that followed it would reload the frame.
+const TickerEmbed = () => {
+  const [src] = useState(tickerEmbedSrc);
+  return html`<${AutoHeightFrame} src=${src} title=${_t("Stream Ticker")} mirrorParamsAt="/ticker"/>`;
+};
 
 // The Swiss and Ticker tabs are same-origin frames whose pages read the theme
 // ONCE, at load — so toggling the site's theme left them dark inside a light
@@ -42673,6 +42750,7 @@ function AutoHeightFrame({src, title, minHeight = 420, mirrorParamsAt = null}){
         // replaceState: a setting is not a page. Only the ticker's own keys.
         if(!mirrorParamsAt || _normPath(window.location.pathname) !== mirrorParamsAt) return;
         const q = tickerParamsOnly(String(e.data.params || ""));
+        if(mirrorParamsAt === "/ticker") _tickerLastParams = q;
         try { window.history.replaceState(window.history.state, "", window.location.pathname + (q ? "?" + q : "")); } catch {}
         return;
       }
@@ -42838,8 +42916,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
     ${sub==="ticker" && html`<${React.Fragment}>
       <${MarketHeader} title=${_t("Stream Ticker")}
         sub=${_t("A scrolling bar of the biggest movers for your stream — set it up here, then paste one URL into an OBS browser source.")}/>
-      <${AutoHeightFrame} src=${"/ticker?embed=1" + (TICKER_EMBED_PARAMS ? "&" + TICKER_EMBED_PARAMS : "")}
-        title=${_t("Stream Ticker")} mirrorParamsAt="/ticker"/>
+      <${TickerEmbed}/>
     <//>`}
   </div>`;
 }
@@ -64581,7 +64658,22 @@ function App(){
     if(initialUrlParams.trade || initialUrlParams.tradeToken) return "market";
     if(initialUrlParams.deck || initialUrlParams.user || initialUrlParams.tourney) return "decks";
     if(initialUrlParams.collection) return "collection";
-    try { return parseViewFromPath(window.location.pathname) || "home"; }
+    try {
+      const v = parseViewFromPath(window.location.pathname) || "home";
+      // Old /analytics?a=sealed links land on the Screener with Sealed mode on.
+      // Decided HERE, so the first URL sync replaces straight to /screener. As
+      // an effect it ran after that sync had already spent its replace on
+      // /analytics, so Back from the Screener landed on Expected Value, a page
+      // the visitor never opened. The flags are set before the Screener mounts.
+      if(v === "market" && initialUrlParams.a === "sealed"){
+        try {
+          localStorage.setItem("packsink:screener:showSealed", "1");
+          localStorage.setItem("packsink:screener:showGraded", "0");
+        } catch {}
+        return "screener";
+      }
+      return v;
+    }
     catch { return "home"; }
   });
   viewRef.current = view;
@@ -64619,7 +64711,8 @@ function App(){
   // Sealed pricing's canonical home is the Screener's Sealed mode (the
   // Analytics Sealed tab retired 2026-08-20). Flips the mode flags before the
   // Screener mounts, so its useState initializers pick them up. Used by the
-  // ?a=sealed redirect below and Analytics' "Sealed ↗" pointer chip.
+  // Analytics' "Sealed ↗" pointer chip (old ?a=sealed links are handled in the
+  // view initializer).
   // The Lore Tracker's board covers the nav, so it needs a way out that does
   // not depend on the nav being reachable.
   const openHome = useCallback(() => setView("home"), []);
@@ -64642,13 +64735,6 @@ function App(){
       localStorage.setItem("packsink:screener:showGraded", "0");
     } catch {}
     setView("screener");
-  }, []);
-  // Old /analytics?a=sealed links land on the Screener with the mode on.
-  useEffect(() => {
-    // Runs once; `view` here is the first-render value, so this only fires
-    // when the ?a=sealed link actually pointed at Analytics.
-    if(initialUrlParams.a !== "sealed" || view !== "market") return;
-    openScreenerSealed();
   }, []);
   // Home "Toolbox" panel → jump straight to a specific Analytics tool.
   const openAnalyticsTool = useCallback((k) => {
