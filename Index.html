@@ -372,7 +372,7 @@
      the scanner on any given visit. Both scripts only attach globals used when
      the scan modal opens, long after DOMContentLoaded. The heavy parts (OpenCV,
      the ONNX OCR models) load later still, inside the workers. -->
-<script src="scanner.js?v=531" defer></script>
+<script src="scanner.js?v=533" defer></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -19125,10 +19125,15 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       const id = r && r.card_id;
       if(!id || m.has(id)) continue;
       const img = r.img_normal || r.img_large || r.img_small;
-      if(img) m.set(id, { img, type: r.card_type || "" });
+      if(img) m.set(id, { img, small: r.img_small || img, type: r.card_type || "" });
     }
     return m;
   }, [raw]);
+  // The review row's small picture. Lorcast hosts only ITS ids, so for our own
+  // minted ones (Hyperia City stand-ins, regional promos, custom variants) the
+  // "Matched card, compare with your snap" image was a broken link on exactly
+  // the unreleased cards people scan at a prerelease. The catalog has the art.
+  const scanThumb = (id) => { const a = scanArtById.get(id); return (a && a.small) || SCAN_THUMB_SMALL(id); };
   const ocrLoadingRef = useRef(false);        // models still downloading/compiling
   const rectRef = useRef(null);   // last rectified card (for the data flywheel)
   const ambCanvasRef = useRef(null);      // reused small rectified canvas (ambient)
@@ -19254,7 +19259,15 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   const [qaUndo, setQaUndo] = useState(null);         // {label} — undo chip after a row delete
   const qaUndoRef = useRef(null);                     // { row, idx, timer }
   const [qaClearArm, setQaClearArm] = useState(false);
-  const qaRestoredRef = useRef(false);
+  // The session key whose stored list has been READ (null = none yet). Per key,
+  // never a one-shot flag: the /scan shortcut opens the scanner before the
+  // session resolves, so it mounts under the guest key and only later gets the
+  // account's. With a one-shot flag the account's list was never read, and the
+  // persist effect then wrote an EMPTY list over it 600ms later: a signed-in
+  // user reopening through the shortcut lost their unsaved scans, silently.
+  const qaRestoredRef = useRef(null);
+  const qaPersistKeyRef = useRef(null);
+  const [qaRestoreTick, setQaRestoreTick] = useState(0);
   const qaPersistTimerRef = useRef(0);
   const artImgsRef = useRef(new Map());           // catalog art Image cache for the live on-card label
   const [torchAvail, setTorchAvail] = useState(false); // camera exposes a flashlight (Android)
@@ -19284,6 +19297,14 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
         const html = await res.text();
         const m = html.match(/SCANNER_BUILD\s*=\s*"(v\d+)"/);
         if(cancelled || !m || m[1] === SCANNER_BUILD) return;
+        // At most one reload per target build. If the edge still serves the old
+        // page (deployed, cache not yet purged), the reload lands on the same
+        // build, and without this every open showed "Updating…" and reloaded
+        // again: the scanner could not be used at all until the purge.
+        try {
+          if(sessionStorage.getItem("packsink:scanReloadFor") === m[1]) return;
+          sessionStorage.setItem("packsink:scanReloadFor", m[1]);
+        } catch(_e){ return; }
         setStaleUpdating(true);
         try { const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration(); if(reg) await reg.update(); } catch(_e){}
         setTimeout(() => { if(!cancelled) location.reload(); }, 700);
@@ -19309,9 +19330,10 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     if(r.review){ setQaResume(true); setQaReview(true); }
   }, [user]);
   const qaFresh = (s) => !!(s && Array.isArray(s.rows) && s.rows.length && Date.now() - (s.t || 0) <= 24 * 3600 * 1000);
+  qaPersistKeyRef.current = qaPersistKey;
   useEffect(() => {
-    if(!qaPersistKey || qaRestoredRef.current) return;
-    qaRestoredRef.current = true;
+    if(!qaPersistKey || qaRestoredRef.current === qaPersistKey) return;
+    const key = qaPersistKey;
     (async () => {
       try {
         const saved = await idbGet(qaPersistKey);
@@ -19331,12 +19353,24 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
           await idbSet(qaPersistKey, { t: Date.now(), rows });
           idbDel(SCAN_GUEST_SESSION);
         }
-        setQaResults(prev => prev.length ? prev : rows);
+        // MERGE, never replace or skip: rows already on screen (a guest's, before
+        // an in-place sign-in) and the stored list are both somebody's work.
+        setQaResults(prev => {
+          if(!prev.length) return rows;
+          const have = new Set(prev.map(r => r && r.id));
+          return prev.concat(rows.filter(r => !have.has(r.id)))
+            .sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 400);
+        });
         setSavedMsg(moved.length
           ? "Brought over " + moved.length + " scan" + (moved.length === 1 ? "" : "s") + " from before you signed in"
           : "Restored " + own.length + " scan" + (own.length === 1 ? "" : "s") + " from your last session");
         setTimeout(() => setSavedMsg(""), 3200);
       } catch(_e){}
+      finally {
+        // Only the key still in force: a guest read finishing after the account's
+        // began must not unlock persistence under the guest key's name.
+        if(qaPersistKeyRef.current === key){ qaRestoredRef.current = key; setQaRestoreTick(t => t + 1); }
+      }
     })();
   }, [qaPersistKey]);
   // Signed in without leaving the page (the native app's sign-in returns in
@@ -19345,7 +19379,9 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   const qaGuestKeyUsedRef = useRef(false);
   const qaPersistPendingRef = useRef(null);
   useEffect(() => {
-    if(!qaPersistKey) return;
+    // Never write under a key whose stored list hasn't been read yet: that write
+    // is what erased the account's session (see qaRestoredRef).
+    if(!qaPersistKey || qaRestoredRef.current !== qaPersistKey) return;
     // in-flight rows are dropped (their identify jobs die with the modal);
     // everything else persists verbatim, including user edits + saved marks
     const rows = qaResults.filter(x => x.status !== "identifying");
@@ -19361,7 +19397,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       }
     }, 600);
     return () => clearTimeout(qaPersistTimerRef.current);
-  }, [qaResults, qaPersistKey]);
+  }, [qaResults, qaPersistKey, qaRestoreTick]);
   // Closing the scanner inside that 600ms window dropped the write — so a
   // save, a Clear all or a delete made just before closing came back on the
   // next open, and "+ Add" then added those cards a second time.
@@ -19372,7 +19408,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
 
   const lbl = (c) => (c.name || "") + (c.version ? " - " + c.version : "");
   const toDisp = (card) => ({ id: card.id, name: card.name, version: card.version,
-    rarity: card.rarity, art_key: card.art_key, thumb: SCAN_THUMB_SMALL(card.id) });
+    rarity: card.rarity, art_key: card.art_key, thumb: scanThumb(card.id) });
   // price lookup for a catalog group — canonical pick chain (Low / NM Market).
   const resolveGroup = (card) => {
     const row = raw && raw.find(x => x.card_id === card.id && x.tcgplayer_product_id);
@@ -19425,6 +19461,23 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   // previous person's acceptance until their own record was read, and they
   // inherited that person's upload choice.
   const scanFlagKey = (base) => base + (user && user.id ? ":" + user.id.slice(0, 8) : "");
+  // Whose session the capture buffers belong to. The camera frames kept for the
+  // OCR debug thumbnails, the activity trace and the approach filmstrip ride out
+  // with the next snap's upload, so after an in-place sign-in the account's
+  // first snaps carried frames and events captured while signed OUT, which the
+  // guest notice promises are never uploaded. Start them over on a change.
+  const traceOwnerRef = useRef(user ? user.id : null);
+  useEffect(() => {
+    const owner = user ? user.id : null;
+    if(traceOwnerRef.current === owner) return;
+    traceOwnerRef.current = owner;
+    ocrThumbRef.current = [];
+    const T = traceRef.current;
+    T.ev = []; T.ocrMs = [];
+    for(const k in T.n) T.n[k] = 0;
+    try { for(const f of filmRef.current.frames) if(f) dropCanvas(f.c); } catch(_e){}
+    filmRef.current = { frames: [], i: 0 };
+  }, [user]);
   useEffect(() => {
     // Signed out: the guest notice, under its own key. Nothing uploads, so there
     // is no preference to read and nothing to fetch.
@@ -19500,16 +19553,27 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     // the session telemetry below belongs to whoever STARTED the camera: a guest
     // session sends none, even when the account arrives before it ends
     const sessionUser = userRef.current;
+    // A worker that is terminated, or whose script never loaded, drops every
+    // message silently, and nothing here times out: a snap awaiting it hung
+    // forever with J.running stuck, so every later snap sat on "Identifying…".
+    // Settle what is outstanding with null, which every caller already handles.
+    const settleAll = (ref) => { for(const cb of ref.current.values()){ try { cb(null); } catch(_e){} } ref.current.clear(); };
+    let wHeard = false;
     try {
       const w = new Worker(SCAN_WORKER_URL);
       w.onmessage = (e) => {
+        wHeard = true;
         const d = e.data;
         if(d.type === "ready"){ if(!cancelled) setWorkerReady(true); trc("cv-ready", { src: /^https?:/.test(d.src || "") ? "cdn" : "local" }); return; }
         if(d.type === "failed"){ if(!cancelled) setWorkerFailed(true); return; }   // stay on the fallback path
         const cb = pendingRef.current.get(d.id);
         if(cb){ pendingRef.current.delete(d.id); cb(d); }
       };
-      w.onerror = () => { if(!cancelled) setWorkerFailed(true); };
+      w.onerror = () => {
+        if(!cancelled) setWorkerFailed(true);
+        // never answered at all: its script didn't load, so nothing ever will
+        if(!wHeard){ if(workerRef.current === w) workerRef.current = null; settleAll(pendingRef); }
+      };
       workerRef.current = w;
     } catch(e){ /* no worker → guide-crop fallback still works */ setWorkerFailed(true); }
     // OCR worker (PP-OCR via onnxruntime-web) — its own worker so a ~1s read never
@@ -19539,7 +19603,11 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
         const cb = ocrPendingRef.current.get(m.id);
         if(cb){ ocrPendingRef.current.delete(m.id); cb(m); }
       };
-      ow.onerror = () => {};
+      ow.onerror = () => {
+        // not ready yet = it never will be; a pinned ocrLoadingRef also held the
+        // live badge on "Identifying…" for good
+        if(!ocrReadyRef.current){ ocrLoadingRef.current = false; settleAll(ocrPendingRef); }
+      };
       ocrWorkerRef.current = ow;
     } catch(e){ /* no OCR worker → colour-only still works */ }
     // dev/e2e escape hatch: lets a devtools session (or the headless e2e) read
@@ -19609,6 +19677,11 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       clearTimeout(loopTimerRef.current);
       const w = workerRef.current; if(w){ try { w.terminate(); } catch(_e){} }
       const ow = ocrWorkerRef.current; if(ow){ try { ow.terminate(); } catch(_e){} }
+      workerRef.current = null; ocrWorkerRef.current = null;
+      ocrReadyRef.current = false; ocrLoadingRef.current = false;
+      // the next worker holds none of the reference features the last one did
+      orbSentRef.current.clear();
+      settleAll(pendingRef); settleAll(ocrPendingRef);
       const s = streamRef.current; if(s) s.getTracks().forEach(t => t.stop());
       // whole-session QA log (fire-and-forget): the full trace + counters +
       // per-read latency stats. Snaps only carry their trailing slice; this row
@@ -20423,7 +20496,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
       if(i >= 0){ const cp = prev.slice(); const row = { ...cp[i], qty: cp[i].qty + 1 }; cp.splice(i, 1); return [row, ...cp]; }
       return [{ eid, key, cardId, printing: pr, name: (g && g["Product Name"]) || lbl(toDisp(card)),
         rarity: card.rarity, low: p.low, mkt: p.mkt, qty: 1, art_key: card.art_key,
-        thumb: SCAN_THUMB_SMALL(card.id), cands: (cands || []).slice(0, 4), expanded: false,
+        thumb: scanThumb(card.id), cands: (cands || []).slice(0, 4), expanded: false,
         predicted: card.id, _blob: null,
         hasFoilPair: !!(prN && prF), prN, prF,
         pxN: g ? pxOf(g.normal) : null, pxF: g ? pxOf(g.foil) : null }, ...prev];
@@ -20496,7 +20569,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     if(old._blob) uploadSample(newCard.id, old.predicted || old.cardId, true, pr, old._blob);
     const p = priceOf(g);
     cp[i] = { ...old, key: newKey, cardId, printing: pr, name: (g && g["Product Name"]) || lbl(toDisp(newCard)),
-      rarity: newCard.rarity, low: p.low, mkt: p.mkt, art_key: newCard.art_key, thumb: SCAN_THUMB_SMALL(newCard.id), expanded: false };
+      rarity: newCard.rarity, low: p.low, mkt: p.mkt, art_key: newCard.art_key, thumb: scanThumb(newCard.id), expanded: false };
     return cp;
   };
   // user taps an alternate in a session row → correct it.
@@ -21025,10 +21098,13 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
   }, [raw]);
   const qaEditMatches = useMemo(() => {
     const q = qaEditQd.trim();
-    if(q.length < 2) return [];
     // collector-number search: the tester is HOLDING the card — "154" or
     // "154/204" reads straight off the bottom line and beats typing a name.
+    // Tested BEFORE the 2-character minimum: promo and Challenge sets are mostly
+    // #1-#9, the cards whose versions get confused most, and a bare "7" found
+    // nothing and said nothing.
     const cnm = q.match(/^(\d{1,3})(?:\s*\/\s*(\d{1,3}))?$/);
+    if(q.length < 2 && !cnm) return [];
     if(cnm){
       const num = String(parseInt(cnm[1], 10));
       // "/204" is the set's card count — the one thing that tells two #154s
@@ -21991,7 +22067,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
     return html`<div class="scanner-overlay" role="dialog" aria-modal="true" aria-label=${_t("Card scanner")} ref=${scanRootRef}>
       <div class="scanner-head"><span class="scanner-title">${_t("Scan a card")}</span>
         <button class="scanner-close" onClick=${onClose} aria-label=${_t("Close scanner")}>×</button></div>
-      ${errBody(m[0], m[1], (phase === "error" || phase === "denied") && onRetry ? onRetry : null, reviewBtn)}
+      ${errBody(m[0], m[1], (phase === "error" || phase === "denied" || phase === "noindex") && onRetry ? onRetry : null, reviewBtn)}
     </div>`;
   }
 
@@ -22065,7 +22141,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
         <div class="scanner-cand-row scanner-qa-verrow">
           ${vars.map(v => html`<button key=${v.id} class=${"scanner-cand" + (v.id === x.guessId ? " top" : "")}
             title=${scanVariantTitle(v)} onClick=${() => qaPickVariant(x.id, v)}>
-            <img src=${v.img || SCAN_THUMB_SMALL(v.id)} alt=${_t(v.label)} loading="lazy"/>
+            <img src=${v.img || scanThumb(v.id)} alt=${_t(v.label)} loading="lazy"/>
             <span class="scanner-cand-name">${_t(v.label)}</span>
             <span class="scanner-cand-sub">${[v.number ? "#" + String(v.number).split("/")[0] : null, v.set].filter(Boolean).join(" · ")}</span>
           </button>`)}
@@ -22073,7 +22149,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
         ${others.length ? html`<div class="scanner-session-alts-lbl">${_t("Scanner's other guesses:")}</div>
         <div class="scanner-cand-row">
           ${others.map(c => html`<button key=${c.id} class="scanner-cand" onClick=${() => qaCorrectRow(x.id, { id: c.id, label: qaLabelOf(c), rarity: c.rarity }, "cand")}>
-            <img src=${SCAN_THUMB_SMALL(c.id)} alt=${qaLabelOf(c)} loading="lazy"/>
+            <img src=${scanThumb(c.id)} alt=${qaLabelOf(c)} loading="lazy"/>
             <span class="scanner-cand-name">${qaLabelOf(c)}</span>
           </button>`)}
         </div>` : null}
@@ -22091,7 +22167,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
             <span class="scanner-qa-search-name">${cardDisplayName(r)}</span>
             <span class="scanner-qa-search-meta">${[r.Number ? "#" + String(r.Number).split("/")[0] : null, r.Set, r.Rarity].filter(Boolean).join(" · ")}</span>
           </button>`)}
-        </div>` : (qaEditQd.trim().length >= 2 ? html`<div class="scanner-qa-search-none">${_t("No cards match \"{q}\"", {q: qaEditQd.trim()})}</div>` : null)}
+        </div>` : ((qaEditQd.trim().length >= 2 || /^\d$/.test(qaEditQd.trim())) ? html`<div class="scanner-qa-search-none">${_t("No cards match \"{q}\"", {q: qaEditQd.trim()})}</div>` : null)}
       </div>` : null}
     </div>`;
   };
@@ -22213,7 +22289,7 @@ function CardScannerModal({ raw, collection, updateQty, addManyToCollection, use
                   ${x.cands && x.cands.length > 1 ? html`<div class="scanner-session-alts-lbl">${_t("Wrong card? Tap the right one:")}</div>
                   <div class="scanner-cand-row">
                     ${x.cands.map(cc => html`<button key=${cc.art_key} class=${"scanner-cand" + (cc.art_key === x.art_key ? " top" : "")} onClick=${() => correctEntry(x.eid, cc)}>
-                      <img src=${SCAN_THUMB_SMALL(cc.id)} alt=${lbl(toDisp(cc))} loading="lazy"/>
+                      <img src=${scanThumb(cc.id)} alt=${lbl(toDisp(cc))} loading="lazy"/>
                       <span class="scanner-cand-name">${lbl(toDisp(cc))}</span>
                     </button>`)}
                   </div>` : null}
@@ -60909,17 +60985,26 @@ function DeckImageImport({raw, onUseText}){
     return m;
   }, [raw]);
 
+  // A second paste or drop while the first is still reading starts a second
+  // run; only the newest may commit, or an older poster's cards could land last
+  // and replace the one the user actually just pasted.
+  const runSeq = useRef(0);
   const runImage = useCallback(async (img) => {
+    const seq = ++runSeq.current;
+    const live = () => seq === runSeq.current;
     if(!window.CardScanner){ setPhase("error"); setNote("The card index didn't load. Try reloading the page."); return; }
     setPhase("scanning"); setNote("Loading the card index…");
     try {
       await window.CardScanner.load();
+      if(!live()) return;
       setNote("Finding the card grid…");
       const res = await window.CardScanner.scanDeckImage(img, { onProgress: (p) => {
+        if(!live()) return;
         setNote(p.phase === "detect"
           ? `Finding the card grid… (${p.tried} layout${p.tried === 1 ? "" : "s"} tried)`
           : `Reading cards… ${p.done}/${p.total}`);
       }});
+      if(!live()) return;
       if(!res || !res.cells.length){
         setPhase("error");
         setNote("Couldn't find a grid of cards in that image. It reads deck posters and screenshots of them, but the cards need to be in a grid and roughly 150px wide. If the picture also has browser tabs, a video call or a desktop around the poster, crop to just the cards and try again — that usually does it.");
@@ -60944,6 +61029,7 @@ function DeckImageImport({raw, onUseText}){
       setPhase("review");
       setNote("");
     } catch(e){
+      if(!live()) return;
       setPhase("error");
       setNote(`Something went wrong reading that image${e && e.message ? ": " + e.message : "."}`);
     }
@@ -60955,7 +61041,9 @@ function DeckImageImport({raw, onUseText}){
     }
     const url = URL.createObjectURL(file);
     const img = new Image();
-    img.onload = () => { runImage(img); };
+    // Revoked once read: the crops are drawn inside runImage, and every image
+    // imported used to stay in memory for the life of the page.
+    img.onload = () => { runImage(img).finally(() => URL.revokeObjectURL(url)); };
     img.onerror = () => { URL.revokeObjectURL(url); setPhase("error"); setNote("Couldn't open that image."); };
     img.src = url;
   }, [runImage]);
@@ -61022,6 +61110,8 @@ function DeckImageImport({raw, onUseText}){
       onDragOver=${e=>{e.preventDefault(); setDrag(true);}}
       onDragLeave=${()=>setDrag(false)}
       onDrop=${e=>{e.preventDefault(); setDrag(false); loadFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]);}}
+      role="button" tabIndex=${phase === "scanning" ? -1 : 0}
+      onKeyDown=${e=>{ if((e.key === "Enter" || e.key === " ") && phase !== "scanning" && fileRef.current){ e.preventDefault(); fileRef.current.click(); } }}
       onClick=${()=>phase !== "scanning" && fileRef.current && fileRef.current.click()}>
       ${phase === "scanning"
         ? html`<div class="deckimg-busy"><span class="deckimg-spin"></span><span>${note}</span></div>`
