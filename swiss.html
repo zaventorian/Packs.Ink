@@ -174,6 +174,8 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
 .sw-details[open] summary::before{content:'\25BE  ';}
 .sw-details[open] summary{margin-bottom:11px;}
 .sw-empty{color:var(--text-muted);font-size:12.5px;padding:6px 0;line-height:1.6;}
+.sw-link{background:none;border:0;padding:0;font:inherit;color:var(--accent);cursor:pointer;
+  text-decoration:underline;text-underline-offset:2px;}
 .sw-warn{color:var(--accent);font-size:11px;margin-top:7px;line-height:1.45;display:none;}
 
 /* Phones: both tables are wider than the viewport, and a horizontally
@@ -249,6 +251,22 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
           <option value="32">Top 32</option>
           <option value="64">Top 64</option>
         </select>
+        <div class="sw-hint" id="cutHint"></div>
+      </div>
+      <div class="sw-field">
+        <label class="sw-check"><input type="checkbox" id="d2On">Two-day event</label>
+        <div class="sw-row">
+          <div class="sw-field">
+            <label for="d2After">Day-one rounds</label>
+            <input type="number" id="d2After" min="1" max="14" value="8" disabled>
+          </div>
+          <div class="sw-field">
+            <label for="d2Pts">Points for day two</label>
+            <input type="number" id="d2Pts" min="0" max="99" value="18" disabled>
+          </div>
+        </div>
+        <div class="sw-hint">Only players on that many points after day one play on. Disney Lorcana
+          Challenges: 8 rounds, 18 points.</div>
       </div>
 
       <div class="sw-field">
@@ -257,7 +275,8 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
           <button data-v="1" class="active" aria-pressed="true">Realistic</button>
           <button data-v="0" aria-pressed="false">Nobody draws</button>
         </div>
-        <div class="sw-hint">Realistic: players take the draw in the last two rounds once it mathematically locks their cut.</div>
+        <div class="sw-hint">Realistic: in the last two rounds the top tables draw when, if they all do, every one of them
+          still makes the cut (or a prize tier) &mdash; the check players actually run, matched against 500+ real events.</div>
       </div>
 
       <div class="sw-field">
@@ -284,8 +303,9 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
 
           <div class="sw-field">
             <label for="drawRate">Unintentional draw rate</label>
-            <input type="number" id="drawRate" min="0" max="50" step="0.5" value="1.5">
-            <div class="sw-hint">% of matches that time out. Real Lorcana events land near 1&ndash;3%.</div>
+            <input type="number" id="drawRate" min="0" max="50" step="0.5" value="3">
+            <div class="sw-hint">% of matches that go to time. Measured on real events: about 3&ndash;5% at Set
+              Championships and qualifiers, about 1.5% at two-day Challenges.</div>
           </div>
 
           <div class="sw-field">
@@ -418,6 +438,10 @@ function swissEngine(cfg, nSims, seed, onProgress) {
   const MAXP = R * PW, PSPAN = MAXP + 1;
   const DRAWP = +cfg.drawRate;
   const DROPAT = cfg.dropAt | 0, ALLOWID = cfg.allowID ? 1 : 0;
+  // Two-day events: after round D2A, only players on D2P+ points play on.
+  // (Challenges: 8 rounds, 18 points.) 0 = single-day.
+  const D2A = cfg.day2After > 0 && cfg.day2After < R ? cfg.day2After | 0 : 0;
+  const D2P = cfg.day2Pts | 0;
 
   // Prize placements that pay out beyond the cut (Nats: cut 16, but 32 and 64
   // also collect). Ascending, so tier 0 is always the most exclusive.
@@ -438,18 +462,104 @@ function swissEngine(cfg, nSims, seed, onProgress) {
   const pts = new Int32Array(N), wins = new Int32Array(N);
   const loss = new Int32Array(N), draw = new Int32Array(N);
   const gW = new Int32Array(N), gL = new Int32Array(N), gD = new Int32Array(N);
-  const dropped = new Uint8Array(N), rp = new Int32Array(N);
+  const dropped = new Uint8Array(N), rp = new Int32Array(N), elim = new Uint8Array(N);
   const oppFlat = new Int32Array(N * R), resFlat = new Uint8Array(N * R);
   const omw = new Float64Array(N), gwp = new Float64Array(N), ogw = new Float64Array(N);
 
   // ── pairing scratch ───────────────────────────────────────────────────
   const order = new Int32Array(N), grp = new Int32Array(N), unp = new Int32Array(N);
   const cnt = new Int32Array(PSPAN), start = new Int32Array(PSPAN), cur = new Int32Array(PSPAN);
-  const atLeast = new Int32Array(PSPAN + 1);
+  const tcnt = new Int32Array(PSPAN), tstart = new Int32Array(PSPAN);
   const pairA = new Int32Array(N), pairB = new Int32Array(N);
   const stampArr = new Int32Array(N);
   let stamp = 0;
   const cutFlag = new Uint8Array(N);
+
+  // ── intentional-draw planning scratch ─────────────────────────────────
+  // A reach (pre-round total plus everything still to play) never passes
+  // MAXP, so one histogram slot per point total is enough.
+  const tabOrd = new Int32Array(N), tabLo = new Int32Array(N);
+  const idPlan = new Uint8Array(N);
+  const dH = new Int32Array(PSPAN + 2), nH = new Int32Array(PSPAN + 2);
+  const sD = new Int32Array(PSPAN + 3), sN = new Int32Array(PSPAN + 3);
+  // What players draw INTO: the cut first (ties are threats, since a tie is
+  // still settled on tiebreakers), then each prize tier wider than the cut
+  // (tie-inclusive, so only players strictly ahead of you count).
+  const groups = [];
+  if (CUT > 0) groups.push([CUT, 0]);
+  for (const t of tiers) if (t > CUT) groups.push([t, 1]);
+  const NG = groups.length, GS = PSPAN + 2;
+  const gCnt = new Int32Array(Math.max(1, NG) * GS);
+  const clampP = (v) => v < 0 ? 0 : v > MAXP + 1 ? MAXP + 1 : v;
+
+  /* Who takes an intentional draw this round, decided from the real pairings.
+
+     Tables are taken best-first by their LOWER player's points. A table draws
+     if — with it and every table above it drawing out the event — every one of
+     those players still finishes inside the cut. Every other table PLAYS, so
+     it puts at most ONE player above the line (its winner, who then wins out).
+
+     That is the check players actually run at the table ("if all of us ID, do
+     we all make it?"), and it was chosen by measurement, not taste. Replayed
+     over the final rounds of ~530 real RPH events (Set Championships, CCQs,
+     Challenges), it predicts 92% of the intentional draws that got both
+     players in, and of the predicted ones that were taken, 99% got both in
+     (with two rounds left: half of them, all of which got in). The rule it
+     replaced asked whether every player who could still reach your total
+     might ALL win out — impossible, since they are paired against each
+     other — and it recognised 63% of the IDs that worked, and 7% with two
+     rounds left, which is why it told people they "need the win" in spots
+     where everyone around them was drawing in. */
+  function planDraws(nPairs, floater, remAfter) {
+    idPlan.fill(0, 0, nPairs);
+    if (!NG || !nPairs) return;
+    const F = remAfter * PW, DD = PD * (remAfter + 1);
+    dH.fill(0); nH.fill(0); gCnt.fill(0); tcnt.fill(0);
+    for (let i = 0; i < nPairs; i++) {
+      const pa = pts[pairA[i]], pb = pts[pairB[i]];
+      const hi = pa > pb ? pa : pb, lo = pa > pb ? pb : pa;
+      tabLo[i] = lo; tcnt[lo]++;
+      // a playing table: one winner reaches hi/lo + PW + F at best
+      nH[clampP(hi + PW + F)]++;
+      nH[clampP(Math.max(Math.min(hi + PW, lo), Math.min(hi, lo + PW)) + F)]++;
+    }
+    if (floater >= 0) nH[clampP(pts[floater] + F)]++;   // bye already counted in pts
+    let off = 0;
+    for (let v = MAXP; v >= 0; v--) { tstart[v] = off; off += tcnt[v]; }
+    for (let i = 0; i < nPairs; i++) tabOrd[tstart[tabLo[i]]++] = i;
+
+    let k = 0;
+    for (let g = 0; g < NG && k < nPairs; g++) {
+      const base = g * GS;
+      for (; k < nPairs; k++) {
+        const i = tabOrd[k], pa = pts[pairA[i]], pb = pts[pairB[i]];
+        const hi = pa > pb ? pa : pb, lo = pa > pb ? pb : pa;
+        const m1 = clampP(hi + PW + F);
+        const m2 = clampP(Math.max(Math.min(hi + PW, lo), Math.min(hi, lo + PW)) + F);
+        const fa = clampP(pa + DD), fb = clampP(pb + DD);
+        nH[m1]--; nH[m2]--; dH[fa]++; dH[fb]++; gCnt[base + fa]++; gCnt[base + fb]++;
+        if (drawsHold()) { idPlan[i] = 1; continue; }
+        nH[m1]++; nH[m2]++; dH[fa]--; dH[fb]--; gCnt[base + fa]--; gCnt[base + fb]--;
+        break;   // this table moves on to the next (wider) group, if any
+      }
+    }
+  }
+
+  // Every drawing player still inside what they drew into?
+  function drawsHold() {
+    sD[MAXP + 2] = 0; sN[MAXP + 2] = 0;
+    for (let v = MAXP + 1; v >= 0; v--) { sD[v] = sD[v + 1] + dH[v]; sN[v] = sN[v + 1] + nH[v]; }
+    for (let g = 0; g < NG; g++) {
+      const lim = groups[g][0], strict = groups[g][1], base = g * GS;
+      for (let f = 0; f <= MAXP + 1; f++) {
+        if (!gCnt[base + f]) continue;
+        // other players finishing level-or-above (cut) / strictly above (tier)
+        const ahead = strict ? sD[f + 1] + sN[f + 1] : sD[f] - 1 + sN[f];
+        if (ahead >= lim) return false;
+      }
+    }
+    return true;
+  }
 
   // ── accumulators (all Float64Array so merging is an elementwise add) ───
   const A = {
@@ -461,7 +571,7 @@ function swissEngine(cfg, nSims, seed, onProgress) {
     tierLine: new Float64Array(NT * PSPAN),
     tierCond: new Float64Array(NT * (R + 1) * 256 * 4),
     sims: 0, players: N, rounds: R, ptsWin: PW, ptsDraw: PD, cut: CUT, maxPts: MAXP,
-    dropAt: DROPAT, tiers: tiers
+    dropAt: DROPAT, tiers: tiers, day2After: D2A, day2Pts: D2P
   };
   const cond = A.cond;
 
@@ -473,11 +583,14 @@ function swissEngine(cfg, nSims, seed, onProgress) {
   for (let sim = 0; sim < nSims; sim++) {
     pts.fill(0); wins.fill(0); loss.fill(0); draw.fill(0);
     gW.fill(0); gL.fill(0); gD.fill(0);
-    dropped.fill(0); rp.fill(0);
+    dropped.fill(0); rp.fill(0); elim.fill(0);
 
     for (let round = 1; round <= R; round++) {
       if (DROPAT > 0 && round > 1) {
         for (let p = 0; p < N; p++) if (!dropped[p] && loss[p] >= DROPAT) dropped[p] = 1;
+      }
+      if (D2A && round === D2A + 1) {
+        for (let p = 0; p < N; p++) if (!dropped[p] && pts[p] < D2P) { dropped[p] = 1; elim[p] = 1; }
       }
 
       // Counting sort of active players into point brackets, high to low.
@@ -494,13 +607,6 @@ function swissEngine(cfg, nSims, seed, onProgress) {
       for (let p = 0; p < N; p++) {
         if (dropped[p]) continue;
         order[cur[pts[p]]++] = p;
-      }
-
-      // Suffix histogram over every live player, so the intentional-draw
-      // guarantee check below is O(1) instead of a full scan per pairing.
-      if (ALLOWID && CUT > 0 && (R - round) <= 1) {
-        atLeast[MAXP + 1] = 0;
-        for (let v = MAXP; v >= 0; v--) atLeast[v] = atLeast[v + 1] + cnt[v];
       }
 
       // ── pair within brackets, floating the odd player down ──────────────
@@ -564,46 +670,14 @@ function swissEngine(cfg, nSims, seed, onProgress) {
 
       // ── resolve ────────────────────────────────────────────────────────
       const remAfter = R - round;          // rounds left once this one is done
+      const planned = ALLOWID && remAfter <= 1;
+      if (planned) planDraws(nPairs, floater, remAfter);
       for (let i = 0; i < nPairs; i++) {
         const a = pairA[i], b = pairB[i];
         oppFlat[a * R + rp[a]] = b;
         oppFlat[b * R + rp[b]] = a;
 
-        let isDraw = false;
-        if (ALLOWID && CUT > 0 && remAfter <= 1) {
-          // Guaranteed = even if both draw out the rest of the event, fewer
-          // than CUT other players can reach their final total. Threats are
-          // counted with >= rather than >, because a player who merely TIES
-          // you still has to be beaten on tiebreakers — treating a tie as
-          // safe is how a "locked" 6-2 turns into a 9th-place finish.
-          //
-          // The OPPONENT is a special case: in the draw scenario they draw
-          // THIS round too, so their reach is pts + PD + remAfter*PW, not a
-          // full slate of wins. A same-bracket opponent therefore ties you
-          // forever and must stay counted as a threat — dropping them let
-          // two players knife-edge-tied for the last slot "safely" draw each
-          // other into a 9th-place tiebreaker.
-          const finalP = pts[a] + PD * (remAfter + 1);
-          const T = finalP - (remAfter + 1) * PW;
-          const bMin = finalP - PD - remAfter * PW;   // opponent-threat floor
-          const ti = T <= 0 ? 0 : (T > MAXP ? MAXP + 1 : T);
-          let threats = atLeast[ti];
-          if (pts[a] >= T) threats--;
-          if (pts[b] >= T && pts[b] < bMin) threats--;
-          const aSafe = threats < CUT;
-          let bSafe = aSafe;
-          if (aSafe && pts[a] !== pts[b]) {
-            const fB = pts[b] + PD * (remAfter + 1);
-            const TB = fB - (remAfter + 1) * PW;
-            const aMin = fB - PD - remAfter * PW;
-            const tj = TB <= 0 ? 0 : (TB > MAXP ? MAXP + 1 : TB);
-            let th2 = atLeast[tj];
-            if (pts[b] >= TB) th2--;
-            if (pts[a] >= TB && pts[a] < aMin) th2--;
-            bSafe = th2 < CUT;
-          }
-          isDraw = aSafe && bSafe;
-        }
+        let isDraw = planned && idPlan[i] === 1;
         if (!isDraw && DRAWP > 0 && rnd() < DRAWP) isDraw = true;
 
         if (isDraw) {
@@ -697,12 +771,15 @@ function swissEngine(cfg, nSims, seed, onProgress) {
       // Conditional pool. Restricted to players who went the distance: a
       // player who dropped at 3 losses has no "next round", and folding their
       // frozen point total into the outcome distribution would drag it down.
-      if (rp[p] === R) {
+      // A player cut after day one is the opposite case — their event is over,
+      // not abandoned — so they stay in, for every round they played. Leaving
+      // them out would pool only the day-one records that went on to day two.
+      if (rp[p] === R || elim[p]) {
         const inCut = cutFlag[p];
         const fin = pts[p];
         let w = 0, l = 0;
         const base = p * R;
-        for (let r = 0; r < R - 1; r++) {
+        for (let r = 0; r < rp[p] - 1; r++) {
           const res = resFlat[base + r];
           if (res === 1 || res === 4) w++; else if (res === 2) l++;
           const key = ((r + 1) * 256 + (w * 16 + l));
@@ -766,6 +843,14 @@ const clampInt = (v, lo, hi, dflt) => {
    events actually use rather than a raw ceil(log2 n). */
 const ROUND_STEPS = [[8, 3], [16, 4], [32, 5], [64, 6], [128, 7], [226, 8], [2048, 9]];
 const suggestRounds = (n) => (ROUND_STEPS.find(([t]) => n <= t) || [0, 9])[1];
+/* Top cut by field size, as organizers actually run it (Set Championships of
+   9-16 players cut to Top 4 almost every time; 129-226 is split between Top 16
+   and Top 32; past that, Top 32). */
+const CUT_STEPS = [[8, 0], [16, 4], [128, 8], [226, 16], [2048, 32]];
+const suggestCut = (n) => (CUT_STEPS.find(([t]) => n <= t) || [0, 32])[1];
+/* Two-day Disney Lorcana Challenges: 8 rounds on day one, everyone on 18+
+   points plays 4 more, then a Top 32. Every one RPH has published runs this way. */
+const CHALLENGE_MIN = 410;
 
 let RESULT = null;      // last completed accumulator
 // The settings that PRODUCED the results on screen. Typing a record rewrites
@@ -793,7 +878,9 @@ function readCfg() {
     drawRate: Math.min(0.5, Math.max(0, (parseFloat($("drawRate").value) || 0) / 100)),
     dropAt: parseInt($("dropAt").value, 10) || 0,
     allowID: $("idsSeg").querySelector("button.active").dataset.v === "1",
-    tiers: readTiers(players)
+    tiers: readTiers(players),
+    day2After: $("d2On").checked ? clampInt($("d2After").value, 1, 14, 8) : 0,
+    day2Pts: clampInt($("d2Pts").value, 0, 99, 18)
   };
 }
 
@@ -831,9 +918,22 @@ function syncHints() {
   const n = clampInt($("players").value, 4, 2048, 64);
   const r = clampInt($("rounds").value, 1, 15, 6);
   const sug = suggestRounds(n);
-  $("roundsHint").textContent = r === sug
+  const base = r === sug
     ? sug + " rounds is standard for " + n + " players."
     : "Standard for " + n + " players would be " + sug + " rounds.";
+  // A field this size is often a two-day Challenge, which the round ladder
+  // can't express: 12 rounds, not 9, with a points cut after 8. Not every one
+  // is (CCQs up to ~500 run 9 rounds in a day), so offer it rather than set it.
+  // The day-two cut matters below ~1,200 players: at 560 a 5-3 who wins out
+  // reaches 27 against a real line of 26, but in a real Challenge they are gone.
+  if (n >= CHALLENGE_MIN) {
+    $("roundsHint").innerHTML = r === 12
+      ? "12 rounds: the two-day Challenge format" + ($("d2On").checked ? "." : " &mdash; tick Two-day event below for the day-two cut.")
+      : base + " A Disney Lorcana Challenge this size runs <b>12</b> over two days (18+ points after 8 advance) " +
+        'into a Top 32. <button type="button" class="sw-link" id="useChallenge">Use that format</button>';
+  } else $("roundsHint").textContent = base;
+  const sc = suggestCut(n), c = parseInt($("cut").value, 10) || 0;
+  $("cutHint").textContent = c === sc ? "" : (sc ? "Top " + sc : "No cut") + " is standard for " + n + " players.";
   // Measured ~1.9M player-rounds/sec per core in Chrome, so thresholds are set
   // against an 8-worker machine; a phone with 4 cores roughly doubles these.
   const load = n * r * (parseInt($("sims").value, 10) || 0);
@@ -1070,7 +1170,10 @@ function renderHead(r, rows) {
   const lockPool = locks.filter(x => x.d === 0);
   const lock = (lockPool.length ? lockPool : locks).slice(-1)[0] || null;
   const bub = solid.filter(x => x.cut > 0.02 && x.cut < 0.97).sort(byPop)[0] || null;
-  const dead = solid.filter(x => x.cut !== null && x.cut <= 0.02).sort(byPop)[0] || null;
+  // Only records that played the whole event: a 4-4 cut after day one, or a
+  // 1-3 that dropped, is "out", not "dead", and naming it here reads as a bug.
+  const dead = solid.filter(x => x.cut !== null && x.cut <= 0.02 && x.w + x.l + x.d === r.rounds)
+    .sort(byPop)[0] || null;
 
   // Modal cut line — the point total the last player inside the cut finished on.
   let cl = 0, clN = 0, clTot = 0;
@@ -1172,7 +1275,7 @@ function condAt(r, round, w, l) {
 function verdict(d) {
   if (!d.draw) return ["No draws happened here", "Nobody in this spot drew, so there's no read on it — turn intentional draws on, or add a timeout rate."];
   const dr = d.draw.p, wn = d.win ? d.win.p : 0, ls = d.loss ? d.loss.p : 0;
-  if (dr >= 0.985) return ["Draw and you're in", "The draw is mathematically as good as the win here. Take it and save the round."];
+  if (dr >= 0.985) return ["Draw and you're in", "Simulated players who drew from here made it essentially every time, as good as the win. Take it and save the round."];
   if (dr >= 0.85) return ["Draw is strong", "Drawing gets there " + pct(dr) + " of the time. Playing it out only adds " + pct(Math.max(0, wn - dr)) + ", and a loss costs you " + pct(Math.max(0, dr - ls)) + "."];
   if (dr >= 0.45) return ["Draw is a coin flip", "A draw lands at " + pct(dr) + ". If your opponent offers, weigh it against the " + pct(wn) + " a win gives you."];
   return ["You need the win", "A draw only gets there " + pct(dr) + " of the time. Play the match out — the win takes you to " + pct(wn) + "."];
@@ -1242,6 +1345,33 @@ function renderYou() {
     return;
   }
 
+  // Two-day events: the day-two cut is a points line, so it is exact maths,
+  // not a simulation read. Before it, give the odds of clearing it; at it,
+  // a record short of the line simply ends the event.
+  let d2Line = "";
+  if (r.day2After && round <= r.day2After) {
+    const have = w * r.ptsWin + d * r.ptsDraw, need = r.day2Pts - have, left = r.day2After - round;
+    if (round === r.day2After && need > 0) {
+      box.innerHTML = '<div class="sw-empty">Day two needs ' + r.day2Pts + ' points after round ' + r.day2After +
+        ' &mdash; ' + recLabel(w, l, d) + ' is ' + have + ', so this is where the event ends.</div>';
+      return;
+    }
+    const dr = LAST_RUN ? LAST_RUN.cfg.drawRate : 0.03;
+    let dist = new Map([[0, 1]]);
+    for (let k = 0; k < left; k++) {
+      const nx = new Map();
+      for (const [pv, pr] of dist) for (const [gain, q] of [[r.ptsWin, (1 - dr) / 2], [r.ptsDraw, dr], [0, (1 - dr) / 2]])
+        nx.set(pv + gain, (nx.get(pv + gain) || 0) + pr * q);
+      dist = nx;
+    }
+    let p2 = 0;
+    for (const [pv, pr] of dist) if (pv >= need) p2 += pr;
+    d2Line = '<div class="sw-call"><b>Day two:</b> ' + (need <= 0
+      ? 'already locked &mdash; ' + have + ' points clears the ' + r.day2Pts + '-point line.'
+      : pct(p2) + ' to reach ' + r.day2Pts + ' points with ' + left + ' day-one round' + (left === 1 ? '' : 's') +
+        ' left (' + need + ' more needed).') + '</div>';
+  }
+
   const c = condAt(r, round, w, l);
   if (!c) {
     box.innerHTML = '<div class="sw-empty">No simulated player held ' + recLabel(w, l, d) +
@@ -1280,7 +1410,7 @@ function renderYou() {
     '</b> with ' + left + ' round' + (left === 1 ? "" : "s") + ' to play, pooled from ' +
     Math.round(c.n).toLocaleString() + ' simulated players in exactly your spot.</div></div>' +
     '<div class="sw-opts">' + opt("If you win", oWin) + opt("If you draw", oDraw) + opt("If you lose", oLoss) + '</div>' +
-    '<div class="sw-call"><b>' + vTitle + '.</b> ' + vBody + '</div>' + chips;
+    '<div class="sw-call"><b>' + vTitle + '.</b> ' + vBody + '</div>' + d2Line + chips;
 }
 
 function renderSafety(r) {
@@ -1351,9 +1481,17 @@ function renderMethod(r) {
     '<li><b>Tiebreakers.</b> Match points, then OMW%, GW%, OGW% — each floored at 33.3%, byes excluded from OMW%, ' +
     'exactly as PlayHub resolves them. Game scores are a 2-0/2-1 coin flip, which is enough to give GW% a realistic ' +
     'spread but is not a game-level simulation.</li>' +
-    '<li><b>Intentional draws.</b> Taken in the last two rounds only, and only when <i>both</i> players are locked ' +
-    'independently. A player who could merely be <i>tied</i> counts as a threat, since ties are settled on tiebreakers ' +
-    'rather than guaranteed — so this errs toward drawing less often than an optimistic reading would.</li>' +
+    '<li><b>Intentional draws.</b> In the last two rounds, tables are taken best-first and a table draws when, with ' +
+    'it and every table above it drawing out the event, all of those players still finish inside the cut — while ' +
+    'every other table plays its match, so it can put at most one player (its winner) above you. A player who would ' +
+    'only <i>tie</i> you still counts against the cut, since ties go to tiebreakers. With prize tiers on, the tables ' +
+    'below keep drawing into a tier the same way. This is what players do at the table, and it was chosen by ' +
+    'measurement: replayed over ~530 real Set Championships, qualifiers and Challenges, it called 92% of the ' +
+    'final-round draws that got both players in, and 99% of the draws it called and players took got both in.</li>' +
+    '<li><b>Measured against real events.</b> Simulated at each real event’s size, rounds and cut, this lands on the ' +
+    'exact real cut line 76% of the time for 17–32 player Top 8s and 74% for 227+ player Top 32s. Real fields also ' +
+    'lose 10–30% of players to drops by the last round, and some players draw into spots that are only likely, not ' +
+    'safe — so treat a “coin flip” here as a real coin flip.</li>' +
     '<li><b>Where the odds come from.</b> Rather than tracking one player, every simulated player who held your ' +
     'record at your round is pooled — all of them are statistically interchangeable under equal skill. ' +
     'A 10,000-sim run at 64 players yields tens of thousands of samples per record, and changing your record ' +
@@ -1384,6 +1522,7 @@ function pushUrl(cfg, sims, seed) {
     id: cfg.allowID ? 1 : 0, n: sims, s: seed
   });
   if (cfg.tiers.length) q.set("t", cfg.tiers.join("."));
+  if (cfg.day2After) q.set("d2", cfg.day2After + "." + cfg.day2Pts);
   const y = ["yw", "yl", "yd"].map(id => $(id).value.trim());
   if (y.some(v => v !== "")) q.set("y", y.map(v => v === "" ? "0" : v).join("-"));
   history.replaceState(null, "", location.pathname + "?" + q.toString());
@@ -1409,6 +1548,10 @@ function loadUrl() {
     const t = (q.get("t") || "").split(".").filter(Boolean);
     if (t.length) { $("tiersOn").checked = true; $("tiers").disabled = false; $("tiers").value = t.join(", "); }
   }
+  if (q.has("d2")) {
+    const [da, dp] = (q.get("d2") || "").split(".");
+    if (da) { $("d2On").checked = true; $("d2After").value = da; if (dp) $("d2Pts").value = dp; syncD2(); }
+  }
   // after rounds is known, so the option list exists before we select one
   syncDropOptions();
   if (q.has("dr")) $("dropAt").value = q.get("dr");
@@ -1427,17 +1570,33 @@ $("idsSeg").addEventListener("click", (e) => {
 $("players").addEventListener("input", () => {
   // Setting .value does not fire an input event, so the round-count listeners
   // below never see this — refresh the dependants by hand.
-  $("rounds").value = suggestRounds(clampInt($("players").value, 4, 2048, 64));
+  const n = clampInt($("players").value, 4, 2048, 64);
+  $("rounds").value = suggestRounds(n);
+  $("cut").value = String(suggestCut(n));
   syncDropOptions();
   syncHints();
 });
 ["rounds", "sims"].forEach(id => $(id).addEventListener("input", syncHints));
+$("cut").addEventListener("change", syncHints);
+$("roundsHint").addEventListener("click", (e) => {
+  if (!e.target.closest("#useChallenge")) return;
+  $("rounds").value = "12"; $("cut").value = "32";
+  $("d2On").checked = true; $("d2After").value = "8"; $("d2Pts").value = "18"; syncD2();
+  // Challenges go to time about half as often as store events (1.3% of
+  // day-one matches, measured), and at 2,000 players that alone moves the
+  // Top 32 line from 30 to 28 points.
+  $("drawRate").value = "1.5";
+  syncDropOptions(); syncHints(); run();
+});
 $("rounds").addEventListener("input", syncDropOptions);
 $("tiersOn").addEventListener("change", () => {
   $("tiers").disabled = !$("tiersOn").checked;
   run();
 });
 $("tiers").addEventListener("change", () => { if ($("tiersOn").checked) run(); });
+function syncD2() { $("d2After").disabled = $("d2Pts").disabled = !$("d2On").checked; }
+$("d2On").addEventListener("change", () => { syncD2(); run(); });
+["d2After", "d2Pts"].forEach(id => $(id).addEventListener("change", () => { if ($("d2On").checked) run(); }));
 $("btnRun").addEventListener("click", run);
 
 // Your-record inputs re-read the existing pool, so they never re-simulate.

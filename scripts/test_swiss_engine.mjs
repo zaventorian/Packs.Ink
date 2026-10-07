@@ -115,6 +115,75 @@ for (const [name, cfg, sims] of [
     a.cond[ci + 6] > 0 && a.cond[ci + 7] === a.cond[ci + 6]);
 }
 
+// ── 3b. coordinated draws ──────────────────────────────────────────────────
+// The ID rule takes tables best-first and lets a table draw only if every
+// drawing player still makes it with all the tables above drawing too. At
+// 64/6/top8 with no time draws the field is the exact Swiss triangle, so the
+// answer is exact: the 5-0 pair draws to 16, then ONE 4-1 table can draw to 13
+// (2 at 16 + its own opponent + 4 winners at 15 = 7 ahead of each of them) —
+// and a second 4-1 table cannot (8 ahead). The old guarantee rule, which
+// assumed all ten 4-1s could win out together, never let a 4-1 draw here; in
+// real 33-64 player Top 8 events, 4-1s drew in the last round and 96% made it.
+{
+  const a = swissEngine({ ...base, players: 64, rounds: 6, cut: 8, allowID: true }, 2000, 9);
+  console.log("coordinated draws (64p/6r/top8, no time draws):");
+  check("exactly one 4-1 table draws in (two 4-1-1 per sim)", a.recCount[rc(4, 1, 1)] === 2 * a.sims,
+    a.recCount[rc(4, 1, 1)] / a.sims);
+  check("… and both of them always cut", a.recCut[rc(4, 1, 1)] === a.recCount[rc(4, 1, 1)]);
+  const ci = (5 * 256 + (4 * 16 + 1)) * 8;
+  check("4-1 after R5: the draw pool always cuts", a.cond[ci + 6] > 0 && a.cond[ci + 7] === a.cond[ci + 6]);
+}
+
+// With time draws off, every final-round draw is a planned one, and a planned
+// final-round draw assumes only that the tables NOT drawing play their match —
+// which, with no time draws, they always do. So it must always land: inside
+// the cut, or (drawing into a prize tier) inside the widest tier.
+console.log("final-round planned draws always land:");
+for (const [name, cfg, sims] of [
+  ["24p/5r/top8", { ...base, players: 24, rounds: 5, cut: 8, allowID: true }, 1500],
+  ["13p/4r/top4", { ...base, players: 13, rounds: 4, cut: 4, allowID: true }, 1500],
+  ["122p/7r/top8", { ...base, players: 122, rounds: 7, cut: 8, allowID: true }, 600],
+  ["300p/9r/top32", { ...base, players: 300, rounds: 9, cut: 32, allowID: true }, 200],
+  ["200p/9r/top16 + tiers 32/64", { ...base, players: 200, rounds: 9, cut: 16, allowID: true, tiers: [32, 64] }, 300],
+  ["120p/7r tiers only 16/32", { ...base, players: 120, rounds: 7, cut: 0, allowID: true, tiers: [16, 32] }, 300],
+]) {
+  const a = swissEngine(cfg, sims, 4242);
+  const r = cfg.rounds - 1, nt = a.tiers.length;
+  let drew = 0, landed = 0;
+  for (let w = 0; w <= r; w++) for (let l = 0; w + l <= r; l++) {
+    const ci = (r * 256 + (w * 16 + l)) * 8;
+    drew += a.cond[ci + 6];
+    if (cfg.cut > 0 && !nt) landed += a.cond[ci + 7];
+    else landed += a.tierCond[((nt - 1) * (cfg.rounds + 1) * 256 + r * 256 + (w * 16 + l)) * 4 + 3];
+  }
+  check(name + " (" + Math.round(drew / sims * 10) / 10 + " drawing players per event)", drew > 0 && landed === drew,
+    landed + " of " + drew);
+}
+
+// ── 3c. two-day events (Challenges: 8 rounds, 18+ points play 4 more) ──────
+{
+  const cfg = { ...base, players: 600, rounds: 12, cut: 32, allowID: true, drawRate: 0.03, day2After: 8, day2Pts: 18 };
+  const a = swissEngine(cfg, 300, 2026);
+  console.log("two-day event (600p, 8+4 rounds, 18 pts, top32):");
+  const t = tally(a);
+  check("conservation", t.players === 600 && t.cut === 32, "players=" + t.players + " cut=" + t.cut);
+  let elimRows = 0, elimCut = 0, shortPts = 0, d2 = 0;
+  for (let c = 0; c < 4096; c++) {
+    if (!a.recCount[c]) continue;
+    const [w, l, d] = dec(c);
+    if (w + l + d === 8) { elimRows += a.recCount[c]; elimCut += a.recCut[c]; if (w * 3 + d >= 18) shortPts++; }
+    if (w + l + d === 12) d2 += a.recCount[c];
+  }
+  check("players cut after day one finish on 8 rounds, all under 18", elimRows > 0 && shortPts === 0);
+  check("nobody cut after day one ever makes the top cut", elimCut === 0);
+  check("about 1 in 7 plays day two", d2 / a.sims > 60 && d2 / a.sims < 110, (d2 / a.sims).toFixed(1));
+  // 5-2 after round 7: a loss ends the event at 15 points. Those players must
+  // still be in the pool, or 'If you lose' reads off nobody.
+  const ci = (7 * 256 + (5 * 16 + 2)) * 8;
+  check("5-2 after R7: the losers (out at 15) stay in the pool", a.cond[ci + 4] > 0 && a.cond[ci + 5] === 0);
+  check("… and the winners (on 18) can still cut", a.cond[ci + 3] > 0);
+}
+
 // ── 4. tie-inclusive prize tiers ───────────────────────────────────────────
 {
   const tiers = [16, 32, 64];
