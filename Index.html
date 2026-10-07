@@ -6761,7 +6761,10 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
   // (far more common) a graded tier with exactly one recorded sale, produced a
   // legend chip and no mark. One point is renderable: it's a dot. Only a
   // genuinely empty set is "not enough".
-  if(!valids.length) return html`<div class="chart-empty">${_t("Not enough data yet")}</div>`;
+  // The ref is on the empty state too: the ResizeObserver effect runs once, and
+  // a chart that MOUNTED empty (a new card behind "Hide preorders") never got
+  // observed, so its viewBox stayed 920 wide and squashed every label.
+  if(!valids.length) return html`<div class="chart-empty" ref=${wrapRef}>${_t("Not enough data yet")}</div>`;
 
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for(const p of valids){
@@ -6790,7 +6793,9 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
     yScale = (y) => padding.top + innerH - ((Math.log10(Math.max(y, yMin)) - lMin) / (lMax - lMin || 1)) * innerH;
     yTicks = logTicks(yMin, yMax, 5);
   } else {
-    const yPad = Math.max(0.01, (maxY - minY) * 0.08);
+    // A flat series still needs a span to label: at 0.01 a $120 line printed
+    // "$120" five times down the axis.
+    const yPad = Math.max(0.01, (maxY - minY) * 0.08, Math.abs(maxY) * 0.02);
     yMin = Math.max(0, minY - yPad);
     yMax = maxY + yPad;
     yScale = (y) => padding.top + innerH - ((y - yMin) / (yMax - yMin || 1)) * innerH;
@@ -9522,7 +9527,7 @@ const ScatterChart = ({series, height=260, width=920, onSelect, selectedId, show
   for(const s of (series||[]))
     for(const p of (s.points||[]))
       if(Number.isFinite(p.x) && Number.isFinite(p.y)) flat.push({p, color:s.color, shape:s.shape});
-  if(!flat.length) return html`<div class="chart-empty large">${_t("No sales to plot.")}</div>`;
+  if(!flat.length) return html`<div class="chart-empty large" ref=${wrapRef}>${_t("No sales to plot.")}</div>`;
 
   let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity;
   for(const {p} of flat){
@@ -37989,8 +37994,13 @@ const CMP_PRINTING_FROM = {N:"Normal", F:"Foil", C:"Cold Foil", H:"Holofoil", X:
 // behind a `_` rather than collapsing to Normal and silently graphing the
 // wrong SKU.
 const encodeCmpPrinting = (p) => !p ? "-" : (CMP_PRINTING_TO[p] || "_" + encodeURIComponent(p));
-const decodeCmpPrinting = (c) => !c || c === "-" ? null
-  : c[0] === "_" ? decodeURIComponent(c.slice(1)) : (CMP_PRINTING_FROM[c] || null);
+// A link cut off mid-escape ("_Text%") made decodeURIComponent throw inside an
+// effect, and since ?g= survives a reload the page crashed on every reload.
+const decodeCmpPrinting = (c) => {
+  if(!c || c === "-") return null;
+  if(c[0] !== "_") return CMP_PRINTING_FROM[c] || null;
+  try { return decodeURIComponent(c.slice(1)); } catch { return null; }
+};
 
 function encodeCompareItems(items){
   if(!items || !items.length) return "";
@@ -38030,7 +38040,7 @@ function decodeCompareItems(str){
     } else if(kind === "g" && parts.length >= 5 && parts[1]){
       out.push({kind:"graded", gradedCardId: parts[1], grader: parts[2], grade: parts[3], gradedPrinting: decodeCmpPrinting(parts[4])});
     } else if(kind === "i" && parts.length >= 2 && parts[1]){
-      out.push({kind:"index", indexScope: parts[1], indexKey: decodeURIComponent(parts[2] || "")});
+      { let k = null; try { k = decodeURIComponent(parts[2] || ""); } catch {} if(k != null) out.push({kind:"index", indexScope: parts[1], indexKey: k}); }
     } else if(kind === "w" && parts.length >= 2 && parts[1]){
       out.push({kind:"index", watchlistId: parts[1]});
     }
