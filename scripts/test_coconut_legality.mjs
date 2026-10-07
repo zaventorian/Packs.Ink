@@ -403,8 +403,10 @@ check("the title opens the set with the card already open",
 check("the tile guards its nested button", /onClickCapture=\$\{navCapture\}/.test(tile), true);
 // ⚠ And the Cards view has to be able to open a card with no pid, or both of
 // the above land on the tab with nothing open. Every Coconut row has none.
+// ?card= resolves by card_id (2026-10-06), which needs no pid at all; a pid
+// lookup is exactly what could not find these rows.
 check("a pid-less card can be grouped for the modal",
-  /row\.tcgplayer_product_id[\s\S]{0,120}groupCards\(\[row\]\)/.test(SRC), true);
+  /const groupFromCardParam[\s\S]{0,1200}groupCards\(rawData\.filter\(r => r\.card_id === id\)\)/.test(SRC), true);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

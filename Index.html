@@ -1146,6 +1146,15 @@ const rawPointsFor = (raw, cardId, printings) => {
   return sales.filter(x => want.has(gradedSlotBucket(x.printing)));
 };
 
+// The printings a card page shows, for the raw-sales lookups above. The eBay
+// view is a property of the printing ON SCREEN: "has eBay sales on any
+// printing" opened A Whole New World's Prize Foil on "eBay sales 470" with
+// an empty panel under it, because every one of those sales is the non-foil.
+const rawPrintingsOf = (group) => !group ? [] : [
+  ...(group.normal ? [group.normal.tcg_printing || "Normal"] : []),
+  ...(group.foil ? [group.foil.tcg_printing || "Foil"] : []),
+];
+
 const rawSaleMatch = (rows, printing) => {
   if(!rows || !rows.length) return null;
   const single = rows.find(r => !r.printing);
@@ -7700,9 +7709,10 @@ const _fuzzyDim = (token) => {
 // Greedy: each token can only contribute to one filter; remaining tokens
 // become the name query.
 const parseSearchQuery = (input) => {
-  // dimTok: the word the user actually typed for a rarity / ink filter. The
-  // matcher uses it to rescue a card whose OWN name holds that word ("Ariel -
-  // On Human Legs" when "legs" parsed as Legendary).
+  // dimTok: the word the user actually typed for a rarity / ink / set / type /
+  // inkable / legality filter. The matcher uses it to rescue a card whose OWN
+  // name holds that word ("Ariel - On Human Legs" when "legs" parsed as
+  // Legendary; "Coconut Basket", "Ink Geyser", "Rise of the Titans").
   const out = {name:"", filters:{}, excludeRarities:new Set(),
     excludeInks:new Set(), excludeKeywords:new Set(),
     excludeClassifications:new Set(), excludeTypes:new Set(), dimTok:{}};
@@ -7831,6 +7841,7 @@ const parseSearchQuery = (input) => {
       const hit = SET_NICKNAMES[phrase] || SET_NICKNAMES[phrase.replace(/['’!.,]/g, "")];
       if(hit){
         out.filters.set = hit;
+        out.dimTok.set = phrase;
         indices.forEach(i => used.add(i));
         found = true;
         break;
@@ -7896,8 +7907,8 @@ const parseSearchQuery = (input) => {
     if(used.has(i)) continue;
     const t = tokens[i];
     const dt = depluralize(t);
-    if(CARD_TYPE_ALIASES[t]) { out.filters.card_type = CARD_TYPE_ALIASES[t]; used.add(i); break; }
-    if(CARD_TYPE_ALIASES[dt]){ out.filters.card_type = CARD_TYPE_ALIASES[dt]; used.add(i); break; }
+    if(CARD_TYPE_ALIASES[t]) { out.filters.card_type = CARD_TYPE_ALIASES[t]; out.dimTok.card_type = t; used.add(i); break; }
+    if(CARD_TYPE_ALIASES[dt]){ out.filters.card_type = CARD_TYPE_ALIASES[dt]; out.dimTok.card_type = t; used.add(i); break; }
   }
 
   // Numeric stats — "kw N", "N kw", "kw>=N", "kw<N", "kwN" (no space).
@@ -8000,10 +8011,10 @@ const parseSearchQuery = (input) => {
     if(used.has(i) || out.filters.legality) continue;
     const t = tokens[i];
     if(t === "core" || t === "constructed"){
-      out.filters.legality = "core"; used.add(i); break;
+      out.filters.legality = "core"; out.dimTok.legality = t; used.add(i); break;
     }
     if(t === "infinity"){
-      out.filters.legality = "infinity"; used.add(i); break;
+      out.filters.legality = "infinity"; out.dimTok.legality = t; used.add(i); break;
     }
     if(t === "japan"){
       out.filters.legality = "japan"; used.add(i);
@@ -8030,10 +8041,10 @@ const parseSearchQuery = (input) => {
   for(let i=0; i<tokens.length; i++){
     if(used.has(i)) continue;
     if(tokens[i] === "inkable" || tokens[i] === "ink"){
-      out.filters.inkable = true; used.add(i); break;
+      out.filters.inkable = true; out.dimTok.inkable = tokens[i]; used.add(i); break;
     }
     if(["uninkable","unink","noink"].includes(tokens[i])){
-      out.filters.inkable = false; used.add(i); break;
+      out.filters.inkable = false; out.dimTok.inkable = tokens[i]; used.add(i); break;
     }
   }
 
@@ -8047,7 +8058,7 @@ const parseSearchQuery = (input) => {
     else if(d.kind==="ink" && !out.filters.ink){ out.filters.ink = d.value; out.dimTok.ink = tokens[i]; used.add(i); }
     else if(d.kind==="keyword" && !out.filters.ability_keyword){ out.filters.ability_keyword = d.value; used.add(i); }
     else if(d.kind==="classification" && !out.filters.classification){ out.filters.classification = d.value; used.add(i); }
-    else if(d.kind==="type" && !out.filters.card_type){ out.filters.card_type = d.value; used.add(i); }
+    else if(d.kind==="type" && !out.filters.card_type){ out.filters.card_type = d.value; out.dimTok.card_type = tokens[i]; used.add(i); }
   }
 
   // Remaining tokens → name query (with depluralization). nameRaw keeps the
@@ -8136,8 +8147,12 @@ const smartSplitSuggestion = (raw, cardNames) => {
   if(hasPrice) chips.push(priceSmartChip(f.priceMin, f.priceMax));
   if(!chips.length) return null;
   const dims = chips.map(c => (SUGGEST_KIND_LABEL[c.kind]||c.kind)+": "+String(c.value).toLowerCase());
-  return {kind:"split", value:raw, label:[p.name, ...dims].filter(Boolean).join("  ·  "),
-    chips, name:p.name, replace:raw};
+  // The name chip carries what was TYPED, not the de-pluralised form: a contains
+  // chip is a plain substring test, so "hans sapphire" committed "han" and
+  // matched hand / than / change / Shan (125 cards against 2).
+  const nm = p.nameRaw || p.name;
+  return {kind:"split", value:raw, label:[nm, ...dims].filter(Boolean).join("  ·  "),
+    chips, name:nm, replace:raw};
 };
 // True when the parse pulled ANY structure out of the text: a dimension, a
 // stat, a price or an exclusion. A query like that already drives the live grid
@@ -8406,7 +8421,17 @@ const _cardPriceRange = (g, basis) => {
   };
   pick(g.normal); pick(g.foil);
   if(!vals.length) pick(g);
-  return vals.length ? {min: Math.min(...vals), max: Math.max(...vals)} : null;
+  return vals.length ? {min: Math.min(...vals), max: Math.max(...vals), vals} : null;
+};
+// One-sided bounds keep the documented rule (a max matches the cheapest printing,
+// a min the dearest). A BAND with both ends needs one printing inside it: by the
+// one-sided rule a $0.40 / $30 card matched Under $1, $1-$5, $5-$20 AND $20-$50,
+// and Collection's "Shop N missing" followed the band into all of them.
+const _priceInBounds = (pr, min, max) => {
+  if(min != null && max != null) return pr.vals.some(v => v >= min && v <= max);
+  if(max != null && pr.min > max) return false;
+  if(min != null && pr.max < min) return false;
+  return true;
 };
 const _priceNum = (n) => "$" + (Number.isInteger(n) ? n : (+n).toFixed(2));
 // Human label for a min/max pair. Used by the smart-search price chip, the
@@ -8506,8 +8531,12 @@ const matchesCardFilter = (row, f, parsed) => {
     if(parsed.filters.ink && !cardInks.includes(parsed.filters.ink) && !_nameHasDimTok("ink")) return false;
     if(parsed.filters.dualInk && cardInks.length < 2) return false;
     if(parsed.filters.rarity && row.Rarity !== parsed.filters.rarity && !_nameHasDimTok("rarity")) return false;
-    if(parsed.filters.card_type && !cardTypeParts.includes(parsed.filters.card_type)) return false;
-    if(parsed.filters.set){ const pp = cardParentSetForFilter(row); if(!(row.Set === parsed.filters.set || pp === parsed.filters.set)) return false; }
+    // Set, type, inkable and legality get the same rescue: typing a card's exact
+    // name ("coconut basket", "moana born leader", "freeze the vine", "ink
+    // geyser", "king's sensor core") turned one of its words into a filter the
+    // card itself fails, and it found nothing - or every OTHER card in a set.
+    if(parsed.filters.card_type && !cardTypeParts.includes(parsed.filters.card_type) && !_nameHasDimTok("card_type")) return false;
+    if(parsed.filters.set){ const pp = cardParentSetForFilter(row); if(!(row.Set === parsed.filters.set || pp === parsed.filters.set) && !_nameHasDimTok("set")) return false; }
     const _cmpStat = (rowVal, want, op) => {
       if(want == null) return true;
       if(rowVal == null) return false;
@@ -8523,8 +8552,8 @@ const matchesCardFilter = (row, f, parsed) => {
     if(!_cmpStat(row.strength,  parsed.filters.strength,  parsed.filters.strengthOp))  return false;
     if(!_cmpStat(row.willpower, parsed.filters.willpower, parsed.filters.willpowerOp)) return false;
     if(!_cmpStat(row.lore,      parsed.filters.lore,      parsed.filters.loreOp))      return false;
-    if(parsed.filters.inkable === true  && row.inkable !== true)  return false;
-    if(parsed.filters.inkable === false && row.inkable !== false) return false;
+    if(parsed.filters.inkable === true  && row.inkable !== true  && !_nameHasDimTok("inkable")) return false;
+    if(parsed.filters.inkable === false && row.inkable !== false && !_nameHasDimTok("inkable")) return false;
     // Multi-classification: parsed.filters.classifications is an array (from
     // CardsView chip merge). parsed.filters.classification (singular) is the
     // legacy back-compat field — other parseSearchQuery callers (Compare,
@@ -8562,7 +8591,7 @@ const matchesCardFilter = (row, f, parsed) => {
     }
     if(parsed.filters.legality === "core" || parsed.filters.legality === "corenext"){
       const coreSets = typeof computeCoreSets === "function" ? new Set(computeCoreSets(parsed.filters.legality === "corenext")) : null;
-      if(coreSets && !coreSets.has(row.Set)) return false;
+      if(coreSets && !coreSets.has(row.Set) && !_nameHasDimTok("legality")) return false;
     }
     if(parsed.filters.legality === "japan" && typeof isJapanCoreLegal === "function" && !isJapanCoreLegal(row)) return false;
     // "infinity" legality is a no-op filter — any mainline-legal card qualifies.
@@ -8591,8 +8620,7 @@ const matchesCardFilter = (row, f, parsed) => {
     if(parsed.filters.priceMin != null || parsed.filters.priceMax != null){
       const pr = _cardPriceRange(row, f && f.priceBasis);
       if(!pr) return false;  // unpriced cards can't satisfy a price filter
-      if(parsed.filters.priceMax != null && pr.min > parsed.filters.priceMax) return false;
-      if(parsed.filters.priceMin != null && pr.max < parsed.filters.priceMin) return false;
+      if(!_priceInBounds(pr, parsed.filters.priceMin, parsed.filters.priceMax)) return false;
     }
     if(parsed.name){
       // Primary: fuzzy match against name (handles transposed letters,
@@ -8748,8 +8776,7 @@ const matchesCardFilter = (row, f, parsed) => {
   } else if(f.priceMin != null || f.priceMax != null){
     const pr = _cardPriceRange(row, f.priceBasis);
     if(!pr) return false;
-    if(f.priceMax != null && pr.min > f.priceMax) return false;
-    if(f.priceMin != null && pr.max < f.priceMin) return false;
+    if(!_priceInBounds(pr, f.priceMin, f.priceMax)) return false;
   }
   return true;
 };
@@ -10656,6 +10683,12 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   // Badge shows the distinguishing version only — the baseline print gets none.
   const splitBadge = (p) => isFoilSplit ? (p === "Foil" ? "Foil" : null)
                                         : gradedVariantLabel(p, group.Set);
+  // A split C1 tile opened from the Cards grid passes no initialPrinting, so a
+  // Top Prize (foil) tile opened its Graded tab on Prize Wall: a ~$280 PSA 10
+  // market shown for a ~$1,707 card. The tile itself knows which side it is.
+  const initPrint = initialPrinting || (group.isSplitPrinting
+    ? ((group.foil && !group.normal) ? (group.foil.tcg_printing || "Foil") : "Normal")
+    : undefined);
   // Once sales load, lock the version filter onto the version the card was
   // opened to (initialPrinting from a screener/tile click — normalized to a foil
   // bucket for foil-split cards), else the base printing. Never combined.
@@ -10669,20 +10702,27 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       // (Two Swords / Text Error), then fall back to the foil bucket so a click
       // carrying "Cold Foil"/"Holofoil"/"Normal" still lands on Foil/Non-Foil.
       let want = null;
-      if(initialPrinting){
-        if(isFoilSplit) want = gradedFoilBucket(initialPrinting);
-        else if(cardPrintings.includes(initialPrinting)) want = initialPrinting;
+      if(initPrint){
+        if(isFoilSplit) want = gradedFoilBucket(initPrint);
+        else if(cardPrintings.includes(initPrint)) want = initPrint;
         // A named-version card opened on a finish (a Cold Foil tile, a sale
         // tagged "Foil") is the BASE version, not the named one. Without this
         // the foil bucket below sent it to whatever tab sorted first, which is
         // how clicking through to Text Error could land you on Normal.
-        else if(isNamedSplit && isFinishOnlyPrinting(initialPrinting)) want = "Normal";
-        else if(cardPrintings.includes(gradedFoilBucket(initialPrinting))) want = gradedFoilBucket(initialPrinting);
+        else if(isNamedSplit && isFinishOnlyPrinting(initPrint)) want = "Normal";
+        else if(cardPrintings.includes(gradedFoilBucket(initPrint))) want = gradedFoilBucket(initPrint);
       }
       if(want && cardPrintings.includes(want)) return want;
       return cardPrintings[0];
     });
-  }, [isSplitCard, isFoilSplit, isNamedSplit, cardPrintings, initialPrinting]);
+  }, [isSplitCard, isFoilSplit, isNamedSplit, cardPrintings, initPrint]);
+  // The raw-price overlay on the Graded tab belongs to the printing being graded:
+  // always reading the non-foil left every Enchanted / Epic / Iconic and Top
+  // Prize tile with no raw line at all (their normal history is empty), and drew
+  // foil slabs over the non-foil price on a mainline card's Foil tab.
+  const gradedRawWantsFoil = (isFoilSplit || isC1Split)
+    ? gradedFoilBucket(gradedPrintingFilter || "") === "Foil"
+    : !(history && history.normal && history.normal.length);
   const gradedRowsView = useMemo(()=> {
     if(!isSplitCard || !gradedPrintingFilter) return gradedSales.rows;
     if(isFoilSplit) return gradedSales.rows.filter(r => gradedFoilBucket(r.printing) === gradedPrintingFilter);
@@ -10765,7 +10805,8 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   const rawDefaultApplied = useRef(null);
   useEffect(() => {
     const id = group?.card_id;
-    const isRaw = !!(rawMap && rawMap.rollup.get(id));
+    const pts = group ? rawPointsFor(rawMap, id, rawPrintingsOf(group)) : null;
+    const isRaw = !!(pts && pts.length);
     if(isRaw){
       if(rawDefaultApplied.current === id) return;   // already nudged this card
       rawDefaultApplied.current = id;
@@ -10774,7 +10815,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       rawDefaultApplied.current = null;
       setShowLow(true); setShowMarket(false);        // back to the site default
     }
-  }, [rawMap, group?.card_id]);
+  }, [rawMap, group]);
   // Which view the price-history section opens on for a raw-priced card: the
   // eBay sales (the market) or TCGplayer's daily lines (the reference). Reset
   // to eBay on every card, because the modal does not remount between cards.
@@ -10950,12 +10991,10 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   // checkbox guard below) to avoid offering a control that does nothing.
   const hasBothPrintings = !!(group.normal && group.foil);
   // A card we price from raw eBay sales (raw_sales_rollup has a row for it).
-  const isRawCard = !!(rawMap && rawMap.rollup.get(group.card_id));
-  const rawPrintings = [
-    ...(group.normal ? [group.normal.tcg_printing || "Normal"] : []),
-    ...(group.foil ? [group.foil.tcg_printing || "Foil"] : []),
-  ];
-  const rawSaleCount = isRawCard ? ((rawMap.sales.get(group.card_id) || []).length) : 0;
+  const rawPrintings = rawPrintingsOf(group);
+  const rawOnScreen = rawPointsFor(rawMap, group.card_id, rawPrintings);
+  const isRawCard = !!(rawOnScreen && rawOnScreen.length);
+  const rawSaleCount = isRawCard ? rawOnScreen.length : 0;
   const effectiveShowFoil = hasBothPrintings ? showFoil : true;
   // Raw eBay sales for this card, plotted as dots on the price history.
   // ⚠ Only the printings this card actually HAS, never a defaulted "Normal".
@@ -11291,7 +11330,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
             ${_tRich("No graded sales yet — using **~Raw ${price}** as a placeholder value.", {price: Number(gradedRawRef).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})})}
           </div>`}
           ${(gradedOwned||[]).length > 0 && typeof onGradedMetaUpdate === "function" && html`<div class="card-detail-graded-owned-help muted">
-            ${_tRich("For each copy you own: **Paid** = what it cost you (used by the value chart's acquired-date gating), **Acquired** = date you got it (chart credits value only from that date forward), **Value** = override price per copy — leave blank to use the eBay average, fill in for cards with no graded market data or to lock in your own number.")}
+            ${_tRich("For each copy you own: **Paid** = what it cost you (used by the value chart's acquired-date gating), **Acquired** = date you got it (chart credits value only from that date forward).")}
           </div>`}
           ${(gradedOwned||[]).length > 0
             ? html`<div class="card-detail-graded-owned-list">
@@ -11323,11 +11362,11 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           ${isGradedMode && html`<div class="card-detail-prices-tag">${_t("Raw prices")}</div>`}
           ${group.normal && html`<${PrintingBlock} row=${group.normal} title=${_t("Normal")}
             qty=${collection[group.card_id+":"+group.normal.tcg_printing]||0}
-            onQtyChange=${user && updateQty ? (q)=>updateQty(group.card_id, group.normal.tcg_printing, q) : null}/>`}
+            onQtyChange=${user && updateQty && !group.isCoconut ? (q)=>updateQty(group.card_id, group.normal.tcg_printing, q) : null}/>`}
           ${group.foil && html`<${PrintingBlock} row=${group.foil}
             title=${group.isChase ? group.Rarity : (group.normal ? _t("Foil") : (group.Rarity || ""))}
             qty=${collection[group.card_id+":"+group.foil.tcg_printing]||0}
-            onQtyChange=${user && updateQty ? (q)=>updateQty(group.card_id, group.foil.tcg_printing, q) : null}/>`}
+            onQtyChange=${user && updateQty && !group.isCoconut ? (q)=>updateQty(group.card_id, group.foil.tcg_printing, q) : null}/>`}
         </div>`}
 
         ${/* ⚠ INSIDE the details column, directly under the price box — not a
@@ -11453,7 +11492,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       ${detailTab === "graded" && (gradedPremium
         ? html`<${GradedSalesTab} sales=${gradedRowsView} loading=${gradedSales.loading}
             focusKey=${gradedFocusKey} onFocusChange=${setGradedFocusKey} hideHeadline=${true}
-            rawHistory=${(history && history.normal) || null}
+            rawHistory=${(history && (gradedRawWantsFoil ? history.foil : history.normal)) || null}
             posterMeta=${{
               artSrc: posterArt,
               name: group["Product Name"],
@@ -15332,7 +15371,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     // Cards tab: seed from shareable URL params (?q=, ?set=, ...) so a refresh
     // or shared link restores the search + filters.
     if(urlSync){
-      try { if(cardParamsPresent(window.location.search)) return cardParamsToFilter(window.location.search); }
+      try { if(onViewPath("cards") && cardParamsPresent(window.location.search)) return cardParamsToFilter(window.location.search); }
       catch {/* no-op */}
     }
     const f = emptyFilter();
@@ -15448,7 +15487,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   // card_type|keyword|inkable|contains, value}. Filtering merges these with
   // whatever's currently being parsed from the input text.
   const [smartChips, setSmartChips] = useState(() => {
-    if(!urlSync) return [];
+    if(!urlSync || !onViewPath("cards")) return [];
     try { return new URLSearchParams(window.location.search).getAll("sc").map(smartChipFromParam).filter(Boolean); }
     catch { return []; }
   });
@@ -15509,14 +15548,14 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
       // it, so that word must stop rescuing cards by name.
       if(chip.kind === "ink")            { p.filters.ink = chip.value; delete p.dimTok.ink; }
       else if(chip.kind === "rarity")    { p.filters.rarity = chip.value; delete p.dimTok.rarity; }
-      else if(chip.kind === "set")       p.filters.set = chip.value;
-      else if(chip.kind === "card_type") p.filters.card_type = chip.value;
+      else if(chip.kind === "set")       { p.filters.set = chip.value; delete p.dimTok.set; }
+      else if(chip.kind === "card_type") { p.filters.card_type = chip.value; delete p.dimTok.card_type; }
       else if(chip.kind === "classification") classifications.push(chip.value);
       else if(chip.kind === "keyword")   keywords.push(chip.value);
-      else if(chip.kind === "inkable")   p.filters.inkable = chip.value;
+      else if(chip.kind === "inkable")   { p.filters.inkable = chip.value; delete p.dimTok.inkable; }
       else if(chip.kind === "dualInk")   p.filters.dualInk = true;
       else if(chip.kind === "cost")      p.filters.cost = chip.value;
-      else if(chip.kind === "legality")  p.filters.legality = chip.value;
+      else if(chip.kind === "legality")  { p.filters.legality = chip.value; delete p.dimTok.legality; }
       else if(chip.kind === "illustrator") p.filters.illustrator = chip.value;
       else if(chip.kind === "price"){
         if(chip.priceMin != null) p.filters.priceMin = chip.priceMin;
@@ -16161,8 +16200,8 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
         deckQtyAcrossName=${deckQtyAcrossName ? deckQtyAcrossName(g) : undefined}
         onDeckQtyChange=${onDeckQtyChange}
         showOwnedCounter=${showOwnedCounter}
-        onQuickAdd=${onQuickAdd || null}
-        selectable=${allowSelect}
+        onQuickAdd=${g.isCoconut ? null : (onQuickAdd || null)}
+        selectable=${allowSelect && !g.isCoconut}
         isSelected=${allowSelect && g.card_id ? selected.has(g.card_id) : false}
         onToggleSelect=${allowSelect ? toggleSelected : null}/>`)}
     </div>
@@ -16376,16 +16415,18 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
   // Build a card_id -> first-row index so we can find the canonical
   // tcg_printing key for each selected card without scanning raw on
   // every action.
+  // Format Coconut leaders are never owned or put in a deck (they sit outside
+  // the 60), so bulk actions skip them: there is no FK to stop the write.
   const rowByCardId = useMemo(() => {
     const m = new Map();
     for(const r of raw){
-      if(!r.card_id || m.has(r.card_id)) continue;
+      if(!r.card_id || r.isCoconut || m.has(r.card_id)) continue;
       // Prefer the Normal printing when one exists for this card_id.
       m.set(r.card_id, r);
     }
     // Second pass: if a card has a Normal printing in raw, swap it in.
     for(const r of raw){
-      if(!r.card_id) continue;
+      if(!r.card_id || r.isCoconut) continue;
       const cur = m.get(r.card_id);
       if(cur && cur.tcg_printing !== "Normal" && r.tcg_printing === "Normal"){
         m.set(r.card_id, r);
@@ -18707,11 +18748,17 @@ const groupFromCardParam = (param, rawData) => {
   if(!param || !rawData || !rawData.length) return null;
   const m = /^(.*?)~([FN])$/.exec(param);
   const id = m ? m[1] : param, side = m ? m[2] : null;
-  const row = rawData.find(r => r.card_id === id);
-  if(!row) return null;
-  // No pid (every Format Coconut row): one printing, so its own row is the group.
-  if(!row.tcgplayer_product_id) return groupCards([row])[0] || null;
-  return groupFromSimCard(side ? {...row, printing: side === "F" ? "Foil" : "Normal"} : row, rawData);
+  // By card_id, exactly as the grid groups. Going through the TCGplayer product
+  // id (groupFromSimCard) opened the BASE card for a Starter Deck Foil (its
+  // extras:<pid> row shares the base card's pid), the plain card for a Text
+  // Error / Two Swords variant, and dropped the foil of a connecting-foil card
+  // (its foil row carries the companion pid) - so the card page's own "Copy
+  // link" didn't reproduce the card, and nor did the home search or an alert.
+  const groups = groupCards(rawData.filter(r => r.card_id === id));
+  if(!groups.length) return null;
+  if(side && groups.length > 1)
+    return groups.find(g => side === "F" ? (!!g.foil && !g.normal) : !!g.normal) || groups[0];
+  return groups[0];
 };
 
 // --- Card scanner v3: opencv in a Web Worker (detect → rectify → match) -----
@@ -32488,7 +32535,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   // Initial value reads ?set= from the URL so refresh/back-forward land on
   // the same set the user was viewing instead of bouncing them to the grid.
   const [selectedSet, setSelectedSet] = useState(() => {
-    try { return new URL(window.location.href).searchParams.get("set") || null; }
+    try { return onViewPath("collection") ? (new URL(window.location.href).searchParams.get("set") || null) : null; }
     catch { return null; }
   });
   // Push a discrete history entry on entering a set so browser back goes
@@ -63613,6 +63660,12 @@ const VIEW_PATHS = {
 // page for ?bar= and ?embed= and only falls through to the SPA without them.
 const MARKET_SUB_PATHS = { ticker: "/ticker", tierlist: "/tierlist" };
 const _normPath = (p) => (p || "/").replace(/\/$/, "") || "/";
+// Is the address bar on this view's own page? A tab click strips the previous
+// view's params only AFTER the new view has rendered (tabStripRef), so a view
+// that seeds state from the query string must check the path first, or it
+// reads the page it is replacing: /collection?set=Fabled + the Cards tab opened
+// Cards filtered to Fabled, and a Cards ?set= opened Collection on that set.
+const onViewPath = (view) => { try { return _normPath(window.location.pathname) === _normPath(VIEW_PATHS[view]); } catch { return false; } };
 const MARKET_SUB_BY_PATH = Object.fromEntries(
   Object.entries(MARKET_SUB_PATHS).map(([sub, path]) => [_normPath(path), sub]));
 // The path a given (view, sub) pair should live at.
