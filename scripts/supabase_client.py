@@ -242,7 +242,15 @@ class Supabase:
         caller passes `order` we use it; otherwise we default to the first bare
         column in `columns` so pagination is always deterministic. Callers can
         still pass `order` via the `filters` dict for back-compat (we won't
-        clobber it)."""
+        clobber it).
+
+        The order must be UNIQUE over the rows read (or cover every selected
+        column). Rows that tie on it may come back in a different order on each
+        page request, so a page boundary inside a tie returns some rows twice
+        and others never. The first-column default is only safe when that
+        column is a key; for a composite key (deck_cards, deck_versions,
+        card_localizations, prices_daily ...) pass the whole key.
+        scripts/test_select_pagination.py polices the composite-key tables."""
         endpoint = f"{self.url}/rest/v1/{table}"
         params: dict[str, str] = {"select": columns}
         if filters:

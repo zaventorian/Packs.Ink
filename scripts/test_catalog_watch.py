@@ -544,5 +544,33 @@ check("a pipe in a name cannot break the table",
                                      "detail": "d"}], [], 0, "2026-09-30"), True)
 
 
+# ── the scanner index names only cards that exist ────────────────────────────
+# 2026-10-06: the index live on the site held 95 Hyperia City stand-ins that
+# retire_prestaged.py had retired four days earlier, and nothing said so.
+print("\n== scanner index ==")
+_f = rc.scanner_stale_finding({"crd_a", "crd_b", "crd_prestage_x"}, {"crd_a", "crd_b"}, "?v=10")
+check("a retired id in the index is reported", (_f or {}).get("kind"), "scanner_stale")
+check("...keyed on the index version and the count, so an ack snoozes only this build",
+      (_f or {}).get("key"), "index?v=10:1")
+check("...and the steps travel with it", "build_index.py" in (_f or {}).get("hint", ""), True)
+check("an index naming only live cards is quiet",
+      rc.scanner_stale_finding({"crd_a"}, {"crd_a", "crd_b"}, "?v=10"), None)
+
+
+class _SmallSb:
+    def select(self, table, **kw):
+        return [{"id": "crd_a"}]
+
+
+class _BrokenSb:
+    def select(self, table, **kw):
+        raise RuntimeError("network down")
+
+
+check("a failed catalog read is silence, not 3,500 dead ids", rc.scanner_findings(_BrokenSb()), [])
+check("a tiny catalog (a stub, a broken read) is silence too", rc.scanner_findings(_SmallSb()), [])
+check("the repo's own index is where the check looks", os.path.exists(rc.SCANNER_INDEX_PATH), True)
+
+
 print(f"\n{failed} FAILED" if failed else "\nall passed")
 raise SystemExit(1 if failed else 0)

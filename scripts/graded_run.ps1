@@ -26,7 +26,9 @@ param(
   [switch]$SkipLoad,
   [switch]$KeepChrome,
   [switch]$Raw,
-  [switch]$Deep
+  [switch]$Deep,
+  [int]$RawStart = 1,
+  [double]$GapScale = 1.0
 )
 
 $ErrorActionPreference = "Stop"
@@ -132,6 +134,8 @@ try {
   if ($Raw) {
     $rawArgs = @()
     if ($Deep) { $rawArgs += "--deep" }
+    if ($RawStart -gt 1) { $rawArgs += @("--start", "$RawStart") }
+    if ($GapScale -ne 1.0) { $rawArgs += @("--gap-scale", "$GapScale") }
     Say "scraping RAW watchlist queries - All-sites SPA, newest-first"
     & $Py -u "scripts\raw_topup.py" @rawArgs | Tee-Object -FilePath (Join-Path $LogDir "_run_rawtopup_$stamp.log")
   } else {

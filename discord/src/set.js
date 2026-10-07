@@ -341,7 +341,7 @@ export function newCardsMessage(R, index, cards, { origin, now = Date.now() } = 
       return `${inkMarks(c.fresh.inks)} ${shown}${rarTxt}${where}`.trim();
     }
     const card = R.cards[c.i];
-    const f = c.p.f[0] || [];
+    const f = c.p.f[R.defaultFinish(c.p)] || [];
     const name = clip(card.n, 60);
     const shown = f[1] && !f[6] ? `[${name}](${buyUrl(card.n, f[1], f[2] || FIN_PRINTING[f[0]])})` : name;
     return `${inkMarks(card.i)} ${shown}${rarTxt}${where}`.trim();
@@ -402,7 +402,7 @@ export function newCardsMessage(R, index, cards, { origin, now = Date.now() } = 
   const seen = new Set();
   for (const c of cards) {
     if (c.fresh) continue;
-    const key = R.cardKey(c.p, 0);
+    const key = R.cardKey(c.p, R.defaultFinish(c.p));
     if (seen.has(key) || options.length >= 50) continue;
     seen.add(key);
     options.push({ label: clip(R.cards[c.i].n, 100), value: key, description: statsLineFor(R.cards[c.i], [c.p.r, { k: "set", t: (R.sets[c.p.s] || {}).n }]) });

@@ -5,7 +5,7 @@
 Admin-gated bulk-upload. N player rows → N public decks linked to tournament. Tournament decks have **`user_id = null`** (ownerless) so they don't pollute uploader's My Decks / Following.
 
 - Migrations 35/37: tables + `tournament_results_v` view (security_invoker on).
-- Admin gate: `is_tournament_admin(uuid)` SECURITY DEFINER helper.
+- Admin gate: `is_tournament_admin(uuid)` SECURITY DEFINER helper. **⚠ It answers only for the caller (migration 191, 2026-10-06)**, and so does `is_elo_admin(uuid)`: asked from anon / authenticated about any id but `auth.uid()`, it returns false (service_role, the SQL editor and other server code can still ask about anyone; the API role comes from the `role` setting, which a SECURITY DEFINER call leaves alone). Before 191 any signed-in account could ask "is <user> an admin" for any user id, and user ids are public. Every caller already passed its own id — 12 RLS policies `(select auth.uid())`, the admin RPCs `v_uid := auth.uid()`, `can_scout` / `can_view_store_report` / `scout_member_*`, and the client `user.id` — so nothing moved. **A new caller must pass the caller's own id too**, or it silently gets false. Guarded by `node scripts/test_admin_checks_caller.mjs`, which checks every SQL and client call site.
 - Bulk upload RPC: `bulk_upload_tournament(p_name, p_event_date, p_format, p_num_players, p_rows jsonb) returns uuid`. One transactional round-trip.
 - Admin ops: `admin_delete_tournament`, `admin_update_tournament_meta`, `admin_update_tournament_deck`, `admin_replace_tournament_deck_cards`, `admin_add_tournament_deck`, `admin_delete_tournament_deck`. All SECURITY DEFINER, gated on admin.
 - **`TournamentBulkEditModal`** is the canonical editor (replaces meta-only `TournamentEditModal`).

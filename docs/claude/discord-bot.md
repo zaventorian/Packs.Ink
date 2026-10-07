@@ -391,10 +391,17 @@ Zaven: *"lets use low, like we do on the site"*, and on /card: the price lines a
   - **⚠ A promo we track eBay sales for never moves by TCGplayer in a report**
     (2026-10-05, Zaven: *"for those cards, we should use the ebay sales data and ignore
     the tcgp for changes in price"*). Any card in `raw_sales_rollup` leaves the
-    TCGplayer candidates (`fetch_ebay`); it comes back only when it SOLD on eBay inside
-    the window, moved by the average of its last 5 eBay sales now against the same
-    average at the window's start (`ebay_moves`, the site's "Avg of last 5"), and the
-    line says "eBay avg of last 5 sales · N sold this week". A split card's unlabelled
+    TCGplayer candidates (`fetch_ebay`); it comes back only when NEW eBay sales of it
+    reached us since the last report, moved by the average of its last 5 eBay sales now
+    against the same average before them (`ebay_moves`, the site's "Avg of last 5"), and
+    the line says "eBay avg of last 5 sales · N new sales".
+    **⚠ "New" is by `scraped_at`, not `sold_date`** (2026-10-06): Terapeak lists a sale a
+    day or more late, so "sold on the price date" left the daily with almost no eBay
+    moves. The window (`ebay_window`) opens at the previous report of the same cadence
+    (`discord_report_latest.built_at`; a same-day rebuild reuses that report's window;
+    nothing kept → the last day / week; never more than 2 days past that), and a sale
+    sold more than `EBAY_FRESH_DAYS` (14) before the price date is never new, so a
+    backfill can't read as this week's market. A split card's unlabelled
     ("Unknown") sales never stand for either printing, a baseline needs 3 sales, and
     no standing note is judged for these rows. What prompted it: Golden Mickey's single
     $200,000 TCGplayer listing led the Promos section at "+1233%".
@@ -510,3 +517,39 @@ Epics and promos "(foil)". Mocked up, then built. Guarded by
   `tcgUrl` exactly), never to packs.ink card pages (Zaven, 2026-09-28).
 - `python scripts/discord_reports.py --preview <dir>` builds both reports from
   live data (read-only) and writes the JSON and pictures to `<dir>`.
+
+### 2026-10-06: review fixes
+
+Each is guarded (section 10 of `test_discord_bot.mjs`, and `test_discord_reports.py`).
+
+- **A card opens on its listed finish** (`defaultFinish`): the first finish with a
+  TCGplayer id or a price. A foil-only Challenge Promo (Let It Go, Dragon Fire,
+  Invited to the Ball, Elsa's Ice Palace) carries a pid-less non-foil row FIRST
+  (on Let It Go and Dragon Fire it is the Chinese-exclusive non-foil, labelled
+  "Prize Wall" by `printingBadge` as on the site), and "/card let it go c1" opened on
+  it. The row is kept in the index (it is a real catalog printing); it is just never
+  the default.
+- **"top prize" / "prize wall" name a VERSION** (`NAMED_FINISH_WORDS`): they narrow to
+  the printing whose finish carries that label, else fall back to plain foil /
+  non-foil with a "No Top Prize printing of …" note.
+- **Graded tiers follow the site's split rule**: `gradedRowsFor` runs the site's
+  `gradedCatalogBuckets` / `gradedSplitTiers` / `makeGradedPrintingLookup` (copied by
+  the extractor). A foil-only C1 card is one market whatever a seller wrote, so its
+  mislabelled tiers show (Invited to the Ball PSA 9); on a split tier "Unknown" still
+  counts for neither printing (stricter than the site, which shows the blend with a
+  note); a named variant keeps only its own sales. `gradedChartBucket` draws the whole
+  tier where it is one market. The base of a named-variant card reads "Normal"
+  (`canonicalGradedSlot`): base Genie #209 found 2 "Foil" sales instead of 370.
+- **Discord's limits**: `/events` lists reserve room for their "…and N more" tail (they
+  reached ~1,037 of a field's 1,024); `/meta`'s card list takes what the breakdown and
+  events leave under 5,900, and past that the last events give way.
+- **A refused V2 reply gets the embed retry** even when nothing was uploaded.
+- **Typed text is escaped** (`escMd`; backticks swapped inside an example's code span)
+  wherever a public reply echoes it.
+- **Reports**: the weekly never runs on Monday's own prices (from November the ETL
+  lands inside the Monday window); weeklies need 3 days of prices between them, not 6
+  (a forced Tuesday weekly used to cost the next Monday's); a card in a
+  `PROMO_RARITY_SETS` set is a Promo whatever was printed (copied, pinned to
+  Index.html); one channel's timeout no longer ends the run, `last_posted_on` writes
+  are retried, and every post carries a per (channel, cadence, price date) `nonce` with
+  `enforce_nonce`.

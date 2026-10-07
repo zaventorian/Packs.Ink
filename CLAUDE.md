@@ -443,7 +443,7 @@ Guards: `scripts/test_market_index.mjs`.
 
 Full notes: `docs/claude/feedback-replies.md` (4 KB). **Read it before changing this area.**
 The footer feedback box was one-way.
-Guards: `scripts/test_feedback_threads.mjs`.
+Guards: `scripts/test_feedback_threads.mjs`, `scripts/test_anon_write_limits.mjs`.
 
 - ⚠ `packsink:feedback:` must never match `AUX_EVICTABLE_PREFIXES`.
 
@@ -541,7 +541,7 @@ The old `packsink:graded:hidden` key was swept by the AUX_CACHE_VERSION bump on 
 `graded_collection_goals(goal_id, user_id, set_id, extras_bucket, rarities[], display_name, printings[])`. **One of `set_id` or `extras_bucket` must be set** (CHECK constraint added in migration 46). **Migration 53** adds the `printings text[]` column.
 
 - **Regular set goal**: `set_id` populated. Tracks all cards in that set's `cardsBySetId` matching the rarity filter AND the printings filter.
-- **Extras goal**: `extras_bucket` populated with a variant_label string ("Deep Trouble" / "Palace Heist" / "Starter Deck Exclusive Foil"). Tracks all cards in `extrasCardsByBucket.get(bucket)`. UI shows these under a synthetic section "Extras & Oddities — <bucket>" via key `__extras:<bucket>`, which sorts after mainline sets.
+- **Extras goal**: `extras_bucket` populated with a variant_label string ("Deep Trouble" / "Palace Heist" / "Starter Deck Foil"). Tracks all cards in `extrasCardsByBucket.get(bucket)`. UI shows these under a synthetic section "Extras & Oddities — <bucket>" via key `__extras:<bucket>`, which sorts after mainline sets.
 - **Goal modal contract (2026-05-26)**:
   - **Rarities required** — no default-to-all-rarities behavior. The Add button stays disabled until at least one rarity is picked. Most users don't want infinite placeholder cards they then have to remove.
   - **Printings filter** — when the user selects any *base* rarity (Common, Uncommon, Rare, Super Rare, Legendary), a Foil/Non-Foil chip group appears below rarity. At least one must be picked. Chase rarities (Epic, Enchanted, Iconic, Promo) are inherently single-printing and don't trigger the chip group. Persisted to the `printings text[]` column from migration 53.
@@ -644,8 +644,10 @@ Guards: `scripts/test_csp_headers.mjs`.
 
 Full notes: `docs/claude/trade-comparison-tool.md` (11 KB). **Read it before changing this area.**
 `TradeView` (Index.html).
-Guards: `scripts/test_promo_single_printing.mjs`.
+Guards: `scripts/test_promo_single_printing.mjs`, `scripts/test_anon_write_limits.mjs`.
 Covers: Shareable trade links (DB-backed); Promo sets are named by the PRINTED suffix.
+
+- ⚠ `create_trade`'s global backstop is per POOL (signed in vs anonymous) with a fair share (migration 190). Keep the two pools apart, or one anonymous abuser locks out every signed-in user again.
 
 - ⚠ A filled-in pid reaches the `cards` rows only when the script runs FROM `main`.
 - ⚠ Delete a retired `art` file only AFTER the rows point at TCGplayer
@@ -811,6 +813,8 @@ Covers: Headless deck-poster autoCopy; TournamentDetailView is deck tiles, not a
 Full notes: `docs/claude/cards-tile-magnify-button-enlarged-card.md` (3 KB). **Read it before changing this area.**
 Every `CardTileImpl` — browse mode AND deck-builder card browser — has a tiny `.tile-magnify-btn` (22×22, inline Lucide-style SVG circle+line) in the bottom-left of the image wrap.
 
+**⚠ A tile that opens on a click anywhere AND holds its own buttons/links is never `role="button"`** (axe nested-interactive, 2026-10-06). The wrapper keeps its onClick with `tabIndex -1`; its first child is `tileOpen(label)`, an empty handler-free button whose click bubbles to the wrapper, covering the tile but clipped and `pointer-events:none`, with the ring drawn by `.X:has(> .tile-open:focus-visible)`. The wrapper must be positioned. Card, movers, sealed movers, EV row, pins checklist, playmat, graded goal and deck-row tiles use it. Guarded by `node scripts/test_tile_open.mjs`.
+
 ## SPA navigation: `<a href>` not `<button>` so modifier-clicks work
 
 User complaint: "you can't ctrl+click or right-click open in new tab on links, tabs, etc". A `<button onClick={navigate}>` intercepts EVERY click — Ctrl/Cmd/Shift/Alt-click and middle-click silently fall through to the same SPA navigation instead of opening a new tab, and right-click context menu doesn't offer "Open in new tab".
@@ -894,7 +898,8 @@ Mirrors deck sharing but with three independent visibility axes (raw / sealed / 
 
 - Non-owner reads always go through SECURITY DEFINER RPCs (`get_shared_collection_raw/sealed/graded(uuid, text)`). Direct table reads stay owner-only via RLS.
 - `get_collection_visibility(uuid, text)` returns the three per-section booleans.
-- One token across all three sections; trigger rotates when all three go private simultaneously.
+- One BASE token across all three sections; trigger rotates when all three go private simultaneously.
+- **⚠ An unlisted link is SCOPED (migration 192, 2026-10-06).** It used to carry the base token, which opens every unlisted section — including one unlisted AFTER the link went out. Now the popover hands out a scoped token: HMAC-SHA256 of the scope (`raw`, `sealed+graded`, ... in raw, sealed, graded order, joined by `+`) under the base token, first 16 bytes, base64url — the same 22-char shape. The five readers (`get_collection_visibility`, `get_shared_collection_raw/sealed/graded`, `get_shared_collectible_boards`) accept, through `_collection_token_ok(base, token, section)`, the base token (every link already sent keeps working) or a scope naming their section. "Copy unlisted link" is scoped to the sections unlisted at that moment; with two or more unlisted, each row also copies a link to itself alone. The owner gets the seven tokens from `get_my_collection_share_tokens()` (authenticated, own row), fetched with the settings and again after a visibility change or Regenerate (both can rotate the base; on failure the map goes null and the panel falls back to the base token, never to an old map). Regenerating still kills every link, scoped or not. Old base-token links stay all-access until the owner regenerates — deliberately, since rotating everyone's token would break every link people have shared. Guarded by `node scripts/test_collection_share_scope.mjs`.
 - **`profiles.collection_share_token` is NOT readable via the table API** (migration 63). The `profiles` table grant was narrowed from full-row SELECT to a safe-column allow-list (everything EXCEPT the token); the owner reads their own token via the `get_my_collection_settings()` SECURITY DEFINER RPC (auth.uid()-scoped, authenticated-only). A bare column REVOKE does NOT work against a table-level grant — must drop the table SELECT and re-grant columns. Never add `collection_share_token` back to a client `profiles` select (it 403s).
 - **Shared-collection RPCs do NOT expose `amount_paid` / graded `custom_value`** (migration 65) — only the owner sees their own purchase cost (direct table reads). `get_shared_collection_sealed/_graded` return quantity + `acquired_date` (needed for viewer value-chart gating) but no price the owner paid.
 - Owner-only `regenerate_collection_share_token()` RPC.
@@ -907,6 +912,9 @@ Mirrors deck sharing but with three independent visibility axes (raw / sealed / 
 
 Full notes: `docs/claude/tournaments.md` (3 KB). **Read it before changing this area.**
 Admin-gated bulk-upload.
+Guards: `scripts/test_admin_checks_caller.mjs`.
+
+- ⚠ `is_tournament_admin(uuid)` / `is_elo_admin(uuid)` answer only for the caller (migration 191): pass `auth.uid()` / `user.id`, never another user's id.
 
 ## Deck view / edit modes
 
@@ -1344,8 +1352,9 @@ Guards: `scripts/elo/test_manual_merges.py`.
 
 Full notes: `docs/claude/chicagoland-elo.md` (14 KB). **Read it before changing this area.**
 `EloView`'s inner tabs are `leaderboard | tournaments | stores | upcoming | scout`, mirrored to `?sub=<tab>` (plus `?p=`/`?e=`/`?store=` for the player / event / store-report leaf views) — the KEYS are unchanged; only the labels read **Tournament Results** and **Store Status** now.
-Guards: `scripts/elo/test_attendance_targets.py`, `scripts/test_elo_store_activity.mjs`.
+Guards: `scripts/elo/test_attendance_targets.py`, `scripts/test_elo_store_activity.mjs`, `scripts/test_attendance_privacy.mjs`.
 
+- ⚠ The client reads `rph_event_attendance` by pseudonym only (`person_key`, `played`; migration 188). Never select a name, account id or standing there: migration 189 (STAGED) takes them away from anon.
 - ⚠ `.elo-innertabs` is `flex-wrap:nowrap` + `overflow-x:auto`, and must stay that way (2026-09-12).
 - ⚠ History and attendance refresh on `discover_scs.yml`'s DAILY schedule — and until 2026-09-10 attendance was refreshed by nobody.
 

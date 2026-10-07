@@ -53,7 +53,7 @@ instance moved together:
 
 - **`--on-accent`** — the text colour on the site's one active-chip / primary-button
   treatment, `background:var(--accent)`. It was a literal `#fff` in ~75 rules, which reads
-  on the light themes' dark gold (#8a6d1b, ~5:1) and FAILS on the dark themes' bright gold
+  on the light themes' dark gold (now #775e17, 6:1) and FAILS on the dark themes' bright gold
   (#c8a846 2.3:1, aurora's #e8c850 1.6:1 — "Sign in" among them). `:root` sets `#fff`;
   aurora / velvet / black override it with dark ink `#1a1022`. **New accent-filled UI takes
   `color:var(--on-accent)`, never `#fff`** — and never a new token for the same job.
@@ -73,6 +73,15 @@ instance moved together:
   styles.css and does the WCAG arithmetic: muted ≥ 4.5:1 on every theme's `--bg-solid`, dim
   at least as strong as muted, `--on-accent` ≥ 4.5:1 on `--accent`, and no rule pairing
   `background:var(--accent)` with a literal white. It fails 16 checks on the pre-fix sheet.
+- **The light gold is dark enough to be TEXT (2026-10-06).** #8a6d1b measured 4.43:1 on
+  Parchment's own background and 3.6:1 on a hovered panel, so every gold link, active nav label
+  and active chip failed. It is `#775e17` now, `#715916` on Sunrise and Daydream (darker, purple-
+  tinted panels); same hue, a few points darker, with the rgba tints following. Dark text on the
+  gold FILL went to `var(--on-accent)` too (13 rules), because darker gold made dark-on-gold 3:1.
+  The guard checks gold text on `--bg-solid` / `--bg-card` / `--bg-modal`, on a panel over a
+  hovered row, and the active chip, and bans a literal dark colour on the fill.
+- **An axe run in a GRADIENT theme reports false contrast failures**: it can't see `body::before`,
+  so it measures against the wrong background. Force Parchment before trusting a contrast finding.
 - **The harness has two known artifacts** worth recognising before "fixing" them: text over a
   modal that hadn't finished loading (backgrounds of #010101), and positions sampled from a
   different scroll offset than the screenshot (footer text "on" map tiles). Confirm a

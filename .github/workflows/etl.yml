@@ -14,9 +14,10 @@ permissions:
 #   - The cron entries below are a safety net: if cron-job.org has an outage,
 #     these still fire (just less promptly). One late ETL + one late selfheal
 #     per day is enough to keep the site self-healing.
-#   - The script is idempotent: if today's prices_daily is already written,
-#     it skips the fetch and only refreshes matviews. So cron-job.org and
-#     GH cron firing the same job back-to-back is harmless.
+#   - The script is idempotent: if TCGCSV's newest file is already written
+#     (under the day TCGCSV published it), it skips the fetch and only
+#     refreshes matviews. So cron-job.org and GH cron firing the same job
+#     back-to-back is harmless, and so is a retry after midnight UTC.
 #   - "TCGCSV hasn't published yet" exits 0 (not failure), so we don't email
 #     on every miss before 20:00 UTC.
 #   - CONCURRENT runs are NOT harmless: two runs refreshing matviews at once
@@ -33,11 +34,14 @@ concurrency:
 
 on:
   schedule:
-    # Safety-net ETL fallback (cron-job.org is primary). 01:30 UTC = 8:30 PM CDT
-    # — late enough in the day that if cron-job.org missed every earlier slot,
-    # this still catches today's TCGCSV snapshot before midnight UTC. Offset 30
-    # min off cron-job.org's 01:00 ping so the two don't queue behind each other
-    # daily when GH cron happens to be on time.
+    # Safety-net ETL fallback (cron-job.org is primary). 01:30 UTC = 8:30 PM CDT,
+    # ~5h after TCGCSV's ~20:00 UTC publish — but already the NEXT UTC calendar
+    # day (and GitHub has landed this cron as late as ~07:30 UTC). That is fine
+    # only because etl_tcgcsv_daily.py dates a snapshot by TCGCSV's own publish
+    # stamp (last-updated.txt), not by the clock: this run files the previous
+    # evening's file under the previous evening. Offset 30 min off cron-job.org's
+    # 01:00 ping so the two don't queue behind each other daily when GH cron
+    # happens to be on time.
     - cron: "30 1 * * *"
     # Safety-net matview selfheal fallback. 06:30 UTC = 1:30 AM CDT — likewise
     # offset from cron-job.org's 06:00 selfheal ping.
@@ -195,8 +199,13 @@ jobs:
     # metadata job. That means a pre-order single gets priced the same day TCGCSV
     # lists it, and the daily load_lorcast null-revert is healed within hours.
     # Idempotent: a no-op once every revealed card is linked.
+    #
+    # Runs after a FAILED prices job too (only `needs` for ordering, so its
+    # card_prices_latest refresh never races the prices job's): linking has
+    # nothing to do with whether today's price load succeeded, and skipping it
+    # left the nightly null-revert unhealed for another day.
     if: |
-      always() && needs.prices.result == 'success' && (
+      always() && (needs.prices.result == 'success' || needs.prices.result == 'failure') && (
         (github.event_name == 'schedule' && github.event.schedule == '30 1 * * *') ||
         (github.event_name == 'workflow_dispatch' && (inputs.job == 'prices' || inputs.job == 'both'))
       )
@@ -261,6 +270,7 @@ jobs:
           cache-dependency-path: scripts/requirements.txt
       - run: pip install -r scripts/requirements.txt
       - name: Run Lorcast loader
+        id: lorcast
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -270,7 +280,11 @@ jobs:
       # Lorcast's value (null for promos it hasn't linked), which REVERTS every
       # manual pid override + drops those cards' prices until re-synced. Running
       # the patch here keeps promo/override prices flowing past the weekly refresh.
+      # !cancelled(): it must run even when load_lorcast FAILED, because a load
+      # that dies part-way has already nulled pids in the batches it wrote. The
+      # patch exits non-zero if any of its blocks fails, so the run goes red.
       - name: Re-apply pid overrides
+        if: ${{ !cancelled() }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -281,8 +295,10 @@ jobs:
       # unlinked cards to TCGCSV products by collector number, validated by name,
       # and fills ONLY null pids. Runs after load_lorcast (which nulls them) so
       # the links survive the weekly refresh and newly-revealed cards link as soon
-      # as TCGCSV lists them.
+      # as TCGCSV lists them. !cancelled() for the same reason as the patch above.
       - name: Link pre-order pids
+        id: link
+        if: ${{ !cancelled() }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -290,7 +306,12 @@ jobs:
       # Retire pre-staged stand-in cards (local art + TCGCSV data for cards
       # Lorcast hadn't indexed) once load_lorcast has published the real row for
       # that (set, collector number) — hands the tile over to Lorcast's data/art.
+      # It deletes cards, so it keeps the gate it always had in practice: the
+      # Lorcast load and the link both succeeded (a stand-in handed to a Lorcast
+      # row whose pid isn't linked yet would lose its price). A failed pid patch
+      # no longer skips it — that patch could only ever exit 0 before.
       - name: Retire superseded prestage cards
+        if: ${{ !cancelled() && steps.lorcast.outcome == 'success' && steps.link.outcome == 'success' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

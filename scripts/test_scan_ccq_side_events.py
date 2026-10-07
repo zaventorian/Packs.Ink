@@ -23,6 +23,8 @@ SIDE = [
     "CCQ - PARALELO 1 [10/10/26]",
     "CCQ Side Event: Sealed",
     "CCQ parallel tournament",
+    "CCQ side-event: Draft",
+    "CCQ (Side)",
 ]
 REAL = [
     "Lorcana Viernes CCQ",
@@ -30,6 +32,10 @@ REAL = [
     "Super Duper CCQper",
     "The Collector Store - $5000 Challenge Championship Qualifier",
     "Legendz League German Championship Qualifier",
+    # A store whose NAME ends in "side" (substring tests used to drop these).
+    "Lorcana CCQ (Westside)",
+    "Seaside Games - CCQ",
+    "CCQ at Bayside-Comics",
 ]
 
 fails = 0

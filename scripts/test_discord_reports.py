@@ -40,6 +40,7 @@ def check(cond, msg):
 
 
 TODAY = dt.date(2026, 9, 28)      # a Monday
+SUN = TODAY - dt.timedelta(days=1)   # the weekly's prices: never Monday's own (weekly_open)
 UTC = dt.timezone.utc
 
 
@@ -127,7 +128,7 @@ class FakeSb:
         if table == "card_prices_latest":
             return [{"price_date": self.price_date.isoformat()}]
         if table == "sets":
-            return [dict(s) for s in SETS]
+            return [dict(s) for s in SETS + getattr(self, "sets_extra", [])]
         if table == "raw_sales_rollup":
             return [dict(r) for r in self.ebay.get("roll", [])]
         if table == "cards":
@@ -250,7 +251,8 @@ os.environ["DISCORD_BOT_TOKEN"] = "secret-bot-token-value"
 
 # ── 1. posts once to a daily + a weekly subscriber, stale row dropped, nobody pinged ──
 sb = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}])
-sbw = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}])
+sbw = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}],
+             price_date=SUN, index_latest=SUN)
 disc = FakeDiscord()
 code, out = run(sb, disc)
 codew, outw = run(sbw, disc, now=MORNING)
@@ -263,7 +265,8 @@ dtext, wtext = all_text(daily.get("json", {}).get("embeds", [])), all_text(weekl
 check("Stale" not in dtext and "Stale" not in wtext, "the stale mover is dropped")
 check(all(p["json"].get("allowed_mentions") == {"parse": []} for p in disc.posts), "posts never ping anyone")
 check("secret-bot-token-value" not in out, "the bot token is never printed")
-check(sum(1 for u in sb.updates + sbw.updates if u[2].get("last_posted_on") == TODAY.isoformat()) == 2, "last_posted_on recorded")
+check([u[2].get("last_posted_on") for u in sb.updates + sbw.updates if u[2].get("last_posted_on")]
+      == [TODAY.isoformat(), SUN.isoformat()], "last_posted_on records each report's price date")
 
 # ── 2. the sections ──
 d_emb = daily["json"]["embeds"]
@@ -300,7 +303,7 @@ check(rep.tcg_url(649228, "Normal").endswith("%3FLanguage%3DEnglish"), "a Normal
 
 # ── 4. the weekly: pulse, pictures, worth a look ──
 w_emb = weekly["json"]["embeds"]
-check(w_emb[0]["title"] == "Lorcana week in review · Sep 22–28, 2026", f"weekly title ({w_emb[0]['title']})")
+check(w_emb[0]["title"] == "Lorcana week in review · Sep 21–27, 2026", f"weekly title ({w_emb[0]['title']})")
 fields = [f["name"] for f in w_emb[0].get("fields", [])]
 check(fields[:3] == ["Whole market", "Chase cards", "Sealed"], f"weekly header carries the market pulse ({fields})")
 check("🔥 Hottest set" in fields and "Fabled" in json.dumps(w_emb[0], ensure_ascii=False), "the hottest set is named")
@@ -319,7 +322,8 @@ check(worth and "**−" in worth["description"] and "%" in worth["description"].
 check(sum(rep.embed_chars(e) for e in w_emb) <= 6000, "the weekly fits Discord's 6000-character cap")
 
 # ── 5. Discord refuses the pictures -> the words still go out ──
-sb5 = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}])
+sb5 = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}],
+             price_date=SUN, index_latest=SUN)
 disc5 = FakeDiscord(refuse_files=True)
 run(sb5, disc5, now=MORNING)
 check(len(disc5.posts) == 2, f"a refused multipart post is re-sent once ({len(disc5.posts)})")
@@ -336,7 +340,7 @@ check(art.market_chart([("x", [(TODAY, 0.0)], art.GOLD)], "t", "s") is None, "a 
 
 # ── 7. a stale market index -> no pulse, not yesterday's market as today's ──
 sb7 = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}],
-             index_latest=TODAY - dt.timedelta(days=1))
+             price_date=SUN, index_latest=SUN - dt.timedelta(days=1))
 disc7 = FakeDiscord()
 run(sb7, disc7, now=MORNING)
 h7 = disc7.posts[0]["json"]["embeds"][0] if disc7.posts else {}
@@ -388,6 +392,21 @@ check("https://www.tcgplayer.com/product/${productId}/?Language=English" in tcg
 block = html[html.index("const SET_DISPLAY_NAMES"):html.index("};", html.index("const SET_DISPLAY_NAMES"))]
 site = dict(re.findall(r'"([^"]+)":\s*"([^"]+)"', block))
 check(site == rep.SET_DISPLAY_NAMES, f"SET_DISPLAY_NAMES matches Index.html ({site})")
+pblock = html[html.index("const PROMO_RARITY_SETS"):html.index("]);", html.index("const PROMO_RARITY_SETS"))]
+check(set(re.findall(r'"([^"]+)"', pblock)) == rep.PROMO_RARITY_SETS, "PROMO_RARITY_SETS matches Index.html")
+# A card in a promo-only set is a Promo, whatever Lorcast printed on it: a Promo
+# Set 2 "Enchanted" was reported as chase, a Magical Places "Rare" as a base card.
+promo_sb = FakeSb([], movers=MOVERS + [
+    mover("x_p3", "Elsa", "Spirit of Winter", "Enchanted", "Holofoil", 61, 300.0, 12.0, 12.0, set_id="s_p3"),
+    mover("x_dis", "Stitch", "Rock Star", "Rare", "Normal", 62, 40.0, 15.0, 15.0, set_id="s_epcot")])
+promo_sb.sets_extra = [{"id": "s_epcot", "name": "EPCOT Festival of the Arts", "released_at": "2025-02-01"}]
+with redirect_stdout(io.StringIO()):
+    prep = rep.build_report(promo_sb, TODAY, "1d", session=FakeCdn(), now=EVENING)
+sec = {(e.get("author") or {}).get("name", "").split(" ·")[0]: e.get("description", "") for e in prep["embeds"]}
+check("Spirit of Winter" in sec.get("★ PROMOS", "") and "Spirit of Winter" not in sec.get("✦ CHASE", ""),
+      "a promo-set card printed Enchanted is a promo, not chase")
+check("Rock Star" in sec.get("★ PROMOS", "") and "Rock Star" not in sec.get("◆ BASE CARDS", ""),
+      "a Magical Places Promos card printed Rare is a promo, not a base card")
 # A card that started the window under the floor is not news, however far it
 # climbed (the home banners' rule): $0.50 -> $6.00 is "+1100%" off one listing.
 cheap = {"rarity": "Super Rare", "printing": "Normal", "pct": 1100.0, "price": 6.0,
@@ -467,6 +486,20 @@ check(wk_posts(EVENING, SUNDAY, force=True, last=SUNDAY.isoformat()) == 1,
       "force_weekly sends it now, even outside the window and to a channel that had it")
 check(wk_posts(dt.datetime(2026, 10, 12, 14, 5, tzinfo=UTC), dt.date(2026, 10, 11), last="2026-10-05") == 1,
       "the first Monday-morning weekly follows the last Monday-evening one")
+# ⚠ From November (CST) the ETL lands ~14:40 Chicago, INSIDE the window: an
+# ETL-triggered run on Monday's own prices must not rebuild and post the weekly
+# beside the daily.
+NOV = dt.date(2026, 11, 9)        # a Monday on standard time
+check(wk_posts(at(NOV, 20, 40), NOV) == 0, "a CST Monday afternoon on Monday's own prices does not post the weekly")
+check(wk_posts(at(NOV, 20, 40), NOV - dt.timedelta(days=1)) == 1, "...on Sunday's prices it still does")
+check(not rep.weekly_open(NOV, at(NOV, 20, 40)) and rep.weekly_open(NOV - dt.timedelta(days=1), at(NOV, 20, 40)),
+      "weekly_open: the weekend's prices, never Monday's")
+# A weekly forced on a Tuesday must not cost the channel the next Monday's,
+# and a Monday whose price date moves Saturday -> Sunday never posts twice.
+check(wk_posts(MORNING, SUNDAY, last=(TODAY - dt.timedelta(days=6)).isoformat()) == 1,
+      "a weekly forced last Tuesday does not suppress this Monday's")
+check(wk_posts(MORNING, SUNDAY, last=(SUNDAY - dt.timedelta(days=1)).isoformat()) == 0,
+      "a weekly sent this morning on Saturday's prices is not re-sent on Sunday's")
 
 # ── 11. the old delivery rules, unchanged ──
 sb2 = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": TODAY.isoformat()}])
@@ -524,37 +557,91 @@ errs = [u for u in sb8.updates if u[2].get("last_error")]
 check(errs and "can't post" in errs[0][2]["last_error"], "a 403 is recorded in last_error")
 check(not any(u[2].get("last_posted_on") for u in sb8.updates), "a failed post is not marked posted")
 
+# ⚠ One channel's timeout must never end the run for the others, and a post
+# that went out is recorded even when the first write of it fails — a post
+# nobody wrote down goes out again next run.
+class FlakyDiscord(FakeDiscord):
+    def post(self, url, *a, **kw):
+        if "/channels/c_dead/" in url:
+            raise rep.requests.Timeout("read timed out")
+        return super().post(url, *a, **kw)
+
+
+sbt = FakeSb([{"guild_id": "g", "channel_id": "c_dead", "cadence": "daily", "last_posted_on": None},
+              {"guild_id": "g", "channel_id": "c_live", "cadence": "daily", "last_posted_on": None}])
+dt_ = FlakyDiscord()
+try:
+    code_t, out_t = run(sbt, dt_)
+except Exception as e:      # the old loop let it escape
+    code_t, out_t = None, f"raised {type(e).__name__}"
+check(code_t == 0 and len(dt_.posts) == 1 and dt_.posts[0]["url"].endswith("/channels/c_live/messages"),
+      f"a channel that times out does not stop the next one ({out_t[-120:]})")
+check(any(u[1]["channel_id"] == "c_dead" and "could not reach Discord" in (u[2].get("last_error") or "") for u in sbt.updates),
+      "the timed-out channel's last_error says so")
+check(any(u[1]["channel_id"] == "c_live" and u[2].get("last_posted_on") == TODAY.isoformat() for u in sbt.updates),
+      "the next channel's post is recorded")
+
+
+class FlakyUpdateSb(FakeSb):
+    fail_updates = 1
+
+    def update(self, table, match, patch, params=None):
+        if self.fail_updates:
+            self.fail_updates -= 1
+            raise RuntimeError("Update discord_report_subscriptions failed (503)")
+        return super().update(table, match, patch, params)
+
+
+sbu = FlakyUpdateSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}])
+try:
+    code_u, _ = run(sbu, FakeDiscord())
+except Exception as e:
+    code_u = f"raised {type(e).__name__}"
+check(code_u == 0 and any(u[2].get("last_posted_on") == TODAY.isoformat() for u in sbu.updates),
+      f"a failed first write of last_posted_on is retried, not lost ({code_u})")
+
+# Every post carries a nonce Discord dedupes on (enforce_nonce): one per
+# channel + cadence + price date, the same on a text-only re-send.
+nonces = [p["json"].get("nonce") for p in disc.posts]
+check(all(n and len(n) <= 25 for n in nonces) and len(set(nonces)) == len(nonces)
+      and all(p["json"].get("enforce_nonce") is True for p in disc.posts),
+      f"each report post carries its own enforce_nonce nonce ({nonces})")
+check(len(disc5.posts) == 2 and disc5.posts[0]["json"].get("nonce") == disc5.posts[1]["json"].get("nonce"),
+      "the text-only re-send of a report carries the same nonce")
+
 sb9 = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}])
 disc9 = FakeDiscord()
 _, out9 = run(sb9, disc9, post=False)
 check(not disc9.posts and "DRY RUN" in out9, "a dry run posts nothing")
 
 # ── /reports send: the latest report is kept, with its pictures stored ──
-yesterday = (TODAY - dt.timedelta(days=1)).isoformat()
-sb10 = FakeSb([], latest=[{"cadence": "daily", "price_date": yesterday, "files": []},
-                          {"cadence": "weekly", "price_date": yesterday, "files": ["weekly/%s/market.png" % yesterday]}])
+yesterday = (SUN - dt.timedelta(days=7)).isoformat()    # last week's weekly
+sb10 = FakeSb([], price_date=SUN, index_latest=SUN,
+              latest=[{"cadence": "daily", "price_date": yesterday, "files": []},
+                      {"cadence": "weekly", "price_date": yesterday, "files": ["weekly/%s/market.png" % yesterday]}])
 st10 = FakeStorage()
 code10, out10 = run(sb10, st10, now=MORNING)
 check(code10 == 0 and "No servers have asked" in out10, "no subscribers still exits 0")
 kept = {rows[0]["cadence"]: rows[0] for (t, rows, oc) in sb10.upserts if t == rep.LATEST_TABLE}
-check(set(kept) == {"daily", "weekly"} and all(r["price_date"] == TODAY.isoformat() for r in kept.values()),
-      f"both reports are kept for /reports send even with no subscribers ({sorted(kept)})")
+check(set(kept) == {"weekly"} and all(r["price_date"] == SUN.isoformat() for r in kept.values()),
+      f"Monday morning keeps the weekly for /reports send even with no subscribers ({sorted(kept)})")
 check(all((t, oc) == (rep.LATEST_TABLE, "cadence") for (t, _, oc) in sb10.upserts), "kept one row per cadence")
 wk = kept.get("weekly", {})
 pics = [(e.get("image") or {}).get("url", "") for e in wk.get("embeds", [])]
-check(wk.get("files") and all(u.startswith("https://example.supabase.co/storage/v1/object/public/discord-reports/weekly/" + TODAY.isoformat() + "/") for u in pics if u),
+check(wk.get("files") and all(u.startswith("https://example.supabase.co/storage/v1/object/public/discord-reports/weekly/" + SUN.isoformat() + "/") for u in pics if u),
       f"the weekly report's pictures point at their stored, dated copies ({[u for u in pics if u][:2]})")
 check(not any(u.startswith("attachment://") for e in wk.get("embeds", []) for u in [(e.get("image") or {}).get("url", ""), (e.get("thumbnail") or {}).get("url", "")]),
       "a kept report has no attachment:// left in it")
 check(st10.deleted and st10.deleted[0][1] == {"prefixes": ["weekly/%s/market.png" % yesterday]}, "yesterday's pictures are deleted once today's are kept")
 check(not st10.posts, "keeping a report posts nothing to Discord")
 
-sb11 = FakeSb([], latest=[{"cadence": "daily", "price_date": TODAY.isoformat(), "files": []},
-                          {"cadence": "weekly", "price_date": TODAY.isoformat(), "files": []}])
+sb11 = FakeSb([], price_date=SUN, index_latest=SUN,
+              latest=[{"cadence": "daily", "price_date": SUN.isoformat(), "files": []},
+                      {"cadence": "weekly", "price_date": SUN.isoformat(), "files": []}])
 run(sb11, FakeStorage(), now=MORNING)
 check(not sb11.upserts, "a report already kept today is not built or kept again")
 
-sb12 = FakeSb([], latest=[])
+sb12 = FakeSb([], latest=[], price_date=SUN, index_latest=SUN)
 st12 = FakeStorage(fail=True)
 run(sb12, st12, now=MORNING)
 wk12 = next((rows[0] for (t, rows, oc) in sb12.upserts if t == rep.LATEST_TABLE and rows[0]["cadence"] == "weekly"), {})
@@ -631,58 +718,99 @@ check(len(rep.extra_embeds(ExtraSb(CARDS, EVENTS), TODAY, "1d", sets_x, now=NOW)
 check(all(rep.embed_chars(e) < 1500 for e in both), "the extra sections stay short")
 
 # ── promos we track on eBay: eBay's sales decide the move, TCGplayer's Low never does ──
-def sale(cid, price, day, printing=None):
+def sale(cid, price, day, printing=None, seen=None):
+    """A sale sold on `day`, reaching us (scraped_at) at `seen` — by default
+    noon the day it sold."""
     return {"card_id": cid, "printing": printing, "sale_price": price, "sold_date": day.isoformat(),
-            "scraped_at": day.isoformat() + "T12:00:00"}
+            "scraped_at": (seen or at(day, 12)).isoformat()}
 
 
 D = lambda n: TODAY - dt.timedelta(days=n)  # noqa: E731
 FLAGS = {"p_gold": {"id": "p_gold", "split_printing": True, "foil_split": False},
          "p_rap": {"id": "p_rap", "split_printing": True, "foil_split": False},
-         "p_one": {"id": "p_one", "split_printing": False, "foil_split": False}}
+         "p_one": {"id": "p_one", "split_printing": False, "foil_split": False},
+         "p_late": {"id": "p_late", "split_printing": False, "foil_split": False}}
 SALES = ([sale("p_one", 100, D(20 + i)) for i in range(5)]               # baseline $100
          + [sale("p_one", 60, D(2))]                                    # one sale this week
          + [sale("p_rap", 6000, D(40 + i), "Foil") for i in range(4)]   # Top Prize, nothing this week
          + [sale("p_rap", 100, D(30 + i), "Non-Foil") for i in range(5)]
          + [sale("p_rap", 160, D(0), "Non-Foil")]                       # Prize Wall sold this week
          + [sale("p_gold", 9800, D(3))]                                 # unlabelled: never a price
-         + [sale("p_one", 999, TODAY + dt.timedelta(days=1))])          # after the price date: ignored
-mv = rep.ebay_moves(SALES, FLAGS, TODAY, 7)
-check(set(mv) == {("p_one", ""), ("p_rap", "Non-Foil")}, f"eBay moves: only buckets that sold this week ({sorted(mv)})")
+         + [sale("p_one", 999, TODAY + dt.timedelta(days=1))]           # reached us after the report: ignored
+         + [sale("p_late", 40, D(10 + i)) for i in range(5)]            # baseline $40...
+         + [sale("p_late", 90, D(3), seen=at(TODAY, 17))])              # ...sold Friday, scraped today
+WEEK = (EVENING - dt.timedelta(days=7), EVENING, TODAY - dt.timedelta(days=rep.EBAY_FRESH_DAYS))
+DAY = (EVENING - dt.timedelta(days=1), EVENING, TODAY - dt.timedelta(days=rep.EBAY_FRESH_DAYS))
+mv = rep.ebay_moves(SALES, FLAGS, *WEEK)
+check(set(mv) == {("p_one", ""), ("p_rap", "Non-Foil"), ("p_late", "")}, f"eBay moves: only buckets with new sales ({sorted(mv)})")
 one = mv.get(("p_one", ""), {})
 check(abs(one.get("now", 0) - (60 + 400) / 5) < 1e-9 and one.get("was") == 100 and one.get("sold") == 1,
-      "the move is the average of the last 5 sales now against before the window")
+      "the move is the average of the last 5 sales now against the average before them")
 check(("p_gold", "Unknown") not in mv, "an unlabelled split-card sale stands for neither printing")
-check(not rep.ebay_moves(SALES, FLAGS, TODAY, 7) .get(("p_rap", "Foil")), "a bucket with no sale this week has no move")
+check(not mv.get(("p_rap", "Foil")), "a bucket with no new sale has no move")
 thin = [sale("p_one", 100, D(20)), sale("p_one", 100, D(21)), sale("p_one", 300, D(1))]
-check(not rep.ebay_moves(thin, FLAGS, TODAY, 7), "a baseline of two sales is not a price")
+check(not rep.ebay_moves(thin, FLAGS, *WEEK), "a baseline of two sales is not a price")
 check(rep.sale_pkey("Holofoil", False, True) == "Foil" and rep.sale_pkey(None, True, False) == "Unknown"
       and rep.sale_pkey("Foil", False, False) == "", "sale_pkey matches graded_sale_pkey")
+# ⚠ "New" is when a sale REACHED us, not when it sold: Terapeak lists a sale a
+# day or more late, so "sold on the price date" left the daily with no eBay
+# moves at all.
+dmv = rep.ebay_moves(SALES, FLAGS, *DAY)
+check(("p_late", "") in dmv, "a sale that sold three days ago but reached us today moves the daily")
+check(("p_one", "") not in dmv, "a sale we already knew of at the last daily is baseline, not news")
+base5 = [sale("p_one", 100, D(20 + i)) for i in range(5)]
+backfill = base5 + [sale("p_one", 900, D(60), seen=at(TODAY, 17))]
+check(not rep.ebay_moves(backfill, FLAGS, *DAY), "a backfilled old sale never reads as a fresh move")
+# The window runs from the previous report of the same cadence.
+yest = TODAY - dt.timedelta(days=1)
+
+
+def win(latest, now=EVENING, window="1d"):
+    return rep.ebay_window(FakeSb([], latest=latest), TODAY, window, now)
+
+
+prev = at(yest, 21, 5)
+check(win([{"cadence": "daily", "price_date": yest.isoformat(), "built_at": prev.isoformat()}]) == (prev, EVENING),
+      "the daily's window opens at the previous daily's build")
+first = at(TODAY, 21, 0)
+check(win([{"cadence": "daily", "price_date": TODAY.isoformat(), "built_at": first.isoformat()}], now=at(TODAY, 23, 0))
+      == (first - dt.timedelta(days=1), first), "a second run the same day rebuilds the first run's window")
+check(win(None) == (EVENING - dt.timedelta(days=1), EVENING), "with nothing kept, the window is the last day")
+check(win(None, window="7d") == (EVENING - dt.timedelta(days=7), EVENING), "...or the last week for the weekly")
+long_ago = at(TODAY - dt.timedelta(days=20), 21)
+check(win([{"cadence": "daily", "price_date": "2026-09-08", "built_at": long_ago.isoformat()}])[0]
+      == EVENING - dt.timedelta(days=1 + rep.EBAY_MAX_GAP_DAYS), "a long gap never dumps weeks of sales into one report")
+check(win([{"cadence": "weekly", "price_date": yest.isoformat(), "built_at": prev.isoformat()}])[0]
+      == EVENING - dt.timedelta(days=1), "another cadence's report never opens this one's window")
 
 EB_MOVERS = MOVERS + [
     mover("p_gold", "Mickey Mouse", "Brave Little Tailor", "Promo", "Holofoil", 51, 200000.0, 50.0, 1233.3, set_id="s_c1"),
     mover("p_rap", "Rapunzel", "Gifted with Healing", "Promo", "Holofoil", 52, 6000.0, 40.0, 40.0, set_id="s_c1"),
     {**mover("p_rap", "Rapunzel", "Gifted with Healing", "Promo", "Normal", 52, 100.0, 0.0, -30.0, set_id="s_c1")},
     mover("p_one", "Elsa", "Snow Queen", "Promo", "Holofoil", 53, 5999.99, 0.0, 0.0, set_id="s_p3"),
+    mover("p_late", "Belle", "Strange but Special", "Promo", "Holofoil", 54, 12.0, 0.0, 0.0, set_id="s_p3"),
 ]
 ebay_sb = FakeSb([], movers=EB_MOVERS, ebay={"roll": [{"card_id": c} for c in FLAGS],
                                             "cards": list(FLAGS.values()), "sales": SALES})
 with redirect_stdout(io.StringIO()):
-    erep = rep.build_report(ebay_sb, TODAY, "7d", session=FakeCdn())
+    erep = rep.build_report(ebay_sb, TODAY, "7d", session=FakeCdn(), now=EVENING)
 promo = next((e["description"] for e in erep["embeds"] if "PROMOS" in (e.get("author") or {}).get("name", "")), "")
 check("200,000" not in promo and "Brave Little Tailor" not in promo,
       "a tracked card's TCGplayer spike never reaches the report (the $200,000 Golden Mickey)")
-check("Elsa — Snow Queen" in promo and "−8.0%" in promo and "eBay avg of last 5 sales · 1 sold this week" in promo,
-      "a tracked card that sold on eBay moves by its eBay sales, and says so")
+check("Elsa — Snow Queen" in promo and "−8.0%" in promo and "eBay avg of last 5 sales · 1 new sale" in promo,
+      "a tracked card with a new eBay sale moves by its eBay sales, and says so")
 check("Rapunzel — Gifted with Healing (Prize Wall)" in promo and "+12.0%" in promo,
       "a Challenge card's Prize Wall moves by its own bucket's sales")
-check("(Top Prize)" not in promo, "a printing that didn't sell on eBay this week is left out, not priced off TCGplayer")
+check("(Top Prize)" not in promo, "a printing with no new eBay sale is left out, not priced off TCGplayer")
 check("Woody" in promo, "an untracked promo still moves by TCGplayer")
 with redirect_stdout(io.StringIO()):
-    drep = rep.build_report(ebay_sb, TODAY, "1d", session=FakeCdn())
+    drep = rep.build_report(ebay_sb, TODAY, "1d", session=FakeCdn(), now=EVENING)
 dpromo = next((e["description"] for e in drep["embeds"] if "PROMOS" in (e.get("author") or {}).get("name", "")), "")
-check("Rapunzel — Gifted with Healing (Prize Wall)" in dpromo and "1 sold today" in dpromo,
+check("Rapunzel — Gifted with Healing (Prize Wall)" in dpromo and "1 new sale" in dpromo,
       "the daily carries an eBay sale from the last day")
+check("Belle — Strange but Special" in dpromo and "+25.0%" in dpromo,
+      "the daily carries a sale that sold days ago but reached us since the last report")
+check("Elsa — Snow Queen" not in dpromo, "the daily leaves out a sale the last daily already knew of")
 
 print("FAILS:", FAILS)
 sys.exit(1 if FAILS else 0)

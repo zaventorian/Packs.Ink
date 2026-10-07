@@ -104,7 +104,11 @@ def repoint_decks(sb, mapping, commit):
     """mapping: {old_card_id: new_card_id}. Re-point deck_cards rows (matched by their
     DECRYPTED card_id), merging quantity into an existing target row. Returns
     {old_id: count}. Raises on any error so the caller keeps the stand-in."""
-    rows = sb.select("deck_cards", columns="deck_id,card_id,printing,quantity")
+    # Ordered on the whole primary key: Range pages over a tie (deck_id alone,
+    # ~40 rows a deck) can return some rows twice and others never, and a row
+    # never read is never re-pointed - the stand-in is then deleted under it.
+    rows = sb.select("deck_cards", columns="deck_id,card_id,printing,quantity",
+                     order="deck_id.asc,card_id.asc,printing.asc")
     have = {(r["deck_id"], r["card_id"], r["printing"]): r for r in rows}
     moved = {}
     for r in rows:
@@ -130,7 +134,8 @@ def repoint_decks(sb, mapping, commit):
 def repoint_versions(sb, mapping, commit):
     """Same re-point inside deck_versions.cards (jsonb array of encrypted card_ids)."""
     n = 0
-    for v in sb.select("deck_versions", columns="deck_id,version,cards"):
+    for v in sb.select("deck_versions", columns="deck_id,version,cards",
+                       order="deck_id.asc,version.asc"):
         out, changed = [], False
         for c in v.get("cards") or []:
             old = deck_dec(c.get("card_id"))
@@ -149,7 +154,8 @@ def repoint_versions(sb, mapping, commit):
 def report_orphans(sb, card_ids):
     """Nightly tripwire: deck rows whose (decrypted) card_id has no cards row."""
     orphans = {}
-    for r in sb.select("deck_cards", columns="deck_id,card_id"):
+    for r in sb.select("deck_cards", columns="deck_id,card_id",
+                       order="deck_id.asc,card_id.asc,printing.asc"):
         cid = deck_dec(r["card_id"])
         if cid not in card_ids:
             orphans.setdefault(cid, set()).add(r["deck_id"])
@@ -175,7 +181,8 @@ def repoint(sb, table, keycols, old_id, new_id, commit):
     Raises on any Supabase error — the caller must NOT delete the stand-in when
     a re-point fails, or the referencing rows are silently orphaned."""
     olds = sb.select(table, columns=",".join(keycols + ["card_id", "quantity"]),
-                     filters={"card_id": f"eq.{old_id}"})
+                     filters={"card_id": f"eq.{old_id}"},
+                     order=",".join(f"{c}.asc" for c in keycols + ["card_id"]))
     n = 0
     for o in olds:
         n += 1

@@ -35,6 +35,14 @@ const PROXIES = [
 // Lorcast content-addresses its art (a hash query param changes when a card is
 // re-published), so a long immutable cache can't serve stale images.
 const IMG_CACHE_SECONDS = 2592000; // 30 days
+// ⚠ TCGplayer's product photo is NOT content-addressed: product/<pid>_in_1000x1000.jpg
+// keeps its URL when a pre-order placeholder is swapped for the real photo, so a
+// 30-day "immutable" kept the placeholder in browsers and at the edge for a month
+// (review, 2026-10-06). A day, then revalidated in the background.
+const TCG_IMG_CACHE_SECONDS = 86400;
+const imgCachePolicy = (prefix) => prefix === "/tcg-img-proxy/"
+  ? {ttl: TCG_IMG_CACHE_SECONDS, header: `public, max-age=${TCG_IMG_CACHE_SECONDS}, stale-while-revalidate=604800`}
+  : {ttl: IMG_CACHE_SECONDS, header: `public, max-age=${IMG_CACHE_SECONDS}, immutable`};
 
 async function proxyImage(request, prefix, origin) {
   const url = new URL(request.url);
@@ -58,7 +66,7 @@ async function proxyImage(request, prefix, origin) {
   try {
     res = await fetch(upstream, {
       method: request.method,
-      cf: { cacheEverything: true, cacheTtl: IMG_CACHE_SECONDS },
+      cf: { cacheEverything: true, cacheTtl: imgCachePolicy(prefix).ttl },
     });
   } catch {
     return new Response("Upstream unreachable", { status: 502 });
@@ -66,13 +74,21 @@ async function proxyImage(request, prefix, origin) {
 
   if (!res.ok) return new Response("Upstream error", { status: res.status });
 
+  // fetch() follows redirects. One that LEFT the intended host would serve
+  // somebody else's bytes under packs.ink (review, 2026-10-06).
+  if (res.url && new URL(res.url).origin !== new URL(origin).origin) {
+    return new Response("Upstream error", { status: 502 });
+  }
+
   // This is an IMAGE proxy. Whatever the upstream path resolves to is served
-  // under the packs.ink origin, so anything that is not an image (an HTML
-  // page, say) must never come back through here — with a text/html type it
-  // would render as first-party content. Upstream art is image/* (a few CDNs
-  // say octet-stream for AVIF, which is why that one is tolerated).
+  // under the packs.ink origin, so anything that is not a RASTER image must
+  // never come back through here: text/html would render as first-party
+  // content, and image/svg+xml carries script that runs on packs.ink (where
+  // the sign-in session lives) when opened directly. So the type is required
+  // and must be one of the formats the card art actually uses (a few CDNs say
+  // octet-stream for AVIF, which is why that one is tolerated).
   const type = res.headers.get("Content-Type") || "";
-  if (type && !/^(image\/|application\/octet-stream)/i.test(type)) {
+  if (!/^(image\/(jpeg|jpg|png|webp|avif|gif)|application\/octet-stream)\b/i.test(type)) {
     return new Response("Upstream error", { status: 502 });
   }
 
@@ -82,9 +98,11 @@ async function proxyImage(request, prefix, origin) {
   // tiles) and is required by the native builds, which load these cross-origin
   // from https://localhost with crossOrigin="anonymous".
   const headers = new Headers({
-    "Cache-Control": `public, max-age=${IMG_CACHE_SECONDS}, immutable`,
+    "Cache-Control": imgCachePolicy(prefix).header,
     "Access-Control-Allow-Origin": "*",
     "X-Content-Type-Options": "nosniff",
+    // An image needs none of this; a document opened from here gets nothing.
+    "Content-Security-Policy": "default-src 'none'; sandbox",
   });
   if (type) headers.set("Content-Type", type);
 

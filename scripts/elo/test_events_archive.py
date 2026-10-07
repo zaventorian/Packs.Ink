@@ -200,6 +200,78 @@ check("an event the scan already had isn't added twice", ids.count(104), 1)
 check("the scan's own rows are kept", 200 in ids, True)
 check("an unreadable feed is reported, not fatal", failed, [2])
 
+print("a failed upcoming COUNT skips the prune (it is half of the partial-pull guard)")
+
+
+def count_and_prune(count_resp):
+    """count_resp: an exception to raise, or the Content-Range header to send."""
+    log = []
+
+    def fake(req, timeout=None):
+        url, method = req.full_url, req.get_method()
+        if method == "GET" and "Prefer" in req.headers and "count=exact" in req.headers["Prefer"]:
+            if isinstance(count_resp, Exception):
+                raise count_resp
+            return Resp(b"[]", {"Content-Range": count_resp} if count_resp is not None else {})
+        if method == "DELETE":
+            log.append("delete")
+            return Resp(b"[]", {"Content-Range": "*/0"})
+        if method == "GET":
+            log.append("archive_read")
+            return Resp(b"[]")
+        log.append(method)
+        return Resp()
+
+    real = urllib.request.urlopen
+    urllib.request.urlopen = fake
+    try:
+        n = de.count_upcoming("lorcana_events")
+        # 4,500 pulled clears the absolute floor, so only the RATIO guard (which
+        # needs the count) stands between a short pull and a mass delete.
+        res = de.prune(RUN_START, pulled=4500, before_upcoming=n)
+    finally:
+        urllib.request.urlopen = real
+    return n, res, log
+
+
+n, res, log = count_and_prune(urllib.error.URLError("timed out"))
+check("an unreachable count deletes nothing", "delete" in log, False)
+check("...and is not read as an empty table", n == 0, False)
+n, res, log = count_and_prune(None)
+check("a count with no Content-Range deletes nothing", "delete" in log, False)
+n, res, log = count_and_prune("0-0/9000")
+check("a real count of 9000 vs a 4500 pull trips the ratio guard", (n, res, "delete" in log),
+      (9000, False, False))
+n, res, log = count_and_prune("*/0")
+check("a genuinely empty table still prunes", (n, "delete" in log), (0, True))
+
+print("the archive is INSERT-ONLY")
+prefers = []
+
+
+def archive_fake(req, timeout=None):
+    url, method = req.full_url, req.get_method()
+    if "lorcana_events_history" in url and method == "POST":
+        prefers.append(req.headers.get("Prefer", ""))
+        return Resp()
+    if method == "GET":
+        return Resp(json.dumps([{"event_id": 1}] if not prefers else []).encode())
+    raise AssertionError(method + " " + url)
+
+
+real = urllib.request.urlopen
+urllib.request.urlopen = archive_fake
+try:
+    de.archive_past_events()
+finally:
+    urllib.request.urlopen = real
+# Past rows sit in lorcana_events for 30 days and were re-archived every day,
+# overwriting the display_status (and counts) the store-history top-up had
+# corrected with the values frozen at the last upcoming listing.
+check("re-archiving never overwrites a history row",
+      bool(prefers) and all("resolution=ignore-duplicates" in p for p in prefers), True)
+check("...and never merges", any("merge-duplicates" in p for p in prefers), False)
+
 print("wiring")
 src = inspect.getsource(de.main)
 order = [src.find(s) for s in ("add_tracked_store_feeds(", "derive_prerelease_templates(",

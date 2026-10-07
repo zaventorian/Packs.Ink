@@ -1415,5 +1415,199 @@ const D = await mod("discord/src/data.js");
   ok(many.embeds[0].image.url.startsWith(O), "withUploads never mutates the payload it was handed");
 }
 
+// ── 10. review fixes (2026-10-06) ───────────────────────────────────────
+// Each block names the reply it kept from going out wrong.
+{
+  // A Challenge Promo (C1) card that exists only as the Top Prize foil carries
+  // a pid-less, unpriced non-foil placeholder FIRST (the index sorts non-foil
+  // first). "/card let it go c1" opened on it: "Prize Wall · No TCGplayer price
+  // yet", and two mislabelled non-foil PSA 10 sales ($75) for a ~$5,000 slab.
+  const lig = card("let it go c1");
+  const ligF = lig && lig.printing.f[lig.fi];
+  ok(lig && /\(C1\)/.test(R.sets[lig.printing.s].n) && ligF && ligF[1] != null && ligF[0] !== "N",
+    `"let it go c1" opens on the listed Top Prize foil, not the placeholder (${JSON.stringify(ligF)})`);
+  if (lig) {
+    const bare = R.resolve("c|" + lig.printing.id);
+    eq(bare.kind === "card" && bare.fi, lig.fi, "a key with no finish opens on the same listed finish");
+    const sg = R.suggest("let it go c1", 10).find((s) => s.kind === "card" && s.p.id === lig.printing.id);
+    ok(sg && sg.value.endsWith("|" + ligF[0]), `the C1 suggestion hands back the listed finish (${sg && sg.value})`);
+  }
+  // Everywhere: when ANY finish of a printing is listed or priced, the default
+  // one is; and a card whose non-foil is real still opens on its non-foil.
+  let checked = 0;
+  const bad = [];
+  for (const c of index.cards) for (const p of c.p) {
+    const real = (f) => f[1] != null || f[4] != null || f[5] != null;
+    if (!p.f.some(real)) continue;
+    const r = R.resolve("c|" + p.id);
+    checked++;
+    if (r.kind !== "card" || !real(r.printing.f[r.fi]) || (real(p.f[0]) && r.fi !== 0)) bad.push(p.id);
+  }
+  ok(checked > 100 && !bad.length, `every listed printing opens on a listed finish, non-foil first when it is real (${checked} checked, bad: ${bad.slice(0, 3)})`);
+
+  // "Top Prize" / "Prize Wall" name a Challenge Promo VERSION, not just a
+  // finish: as plain foil words "let it go top prize" landed on The First
+  // Chapter's cold foil.
+  const finOf = (q) => { const r = card(q); return r ? { set: R.sets[r.printing.s].n, label: r.printing.f[r.fi][3], notes: r.notes } : {}; };
+  for (const [q, label] of [["let it go top prize", "Top Prize"], ["cinderella stouthearted top prize", "Top Prize"], ["cinderella prize wall", "Prize Wall"]]) {
+    const got = finOf(q);
+    ok(/\(C1\)/.test(got.set || "") && got.label === label, `"${q}" is the Challenge Promo's ${label} (${got.set} · ${got.label})`);
+  }
+  const plain = finOf("mowgli top prize");
+  ok(plain.label !== "Top Prize" && (plain.notes || []).some((n) => /No Top Prize printing/.test(n)), "a card with no Top Prize says so instead of pretending");
+  const sgTop = R.suggest("cinderella top prize", 10).filter((s) => s.kind === "card");
+  ok(sgTop.length && sgTop.every((s) => s.p.f[s.fi][3] === "Top Prize"), "suggestions for a named finish offer only that version");
+  eq(finOf("elsa spirit of winter foil").label === "Top Prize", false, "a plain foil word is still just a finish");
+}
+{
+  // ⚠ /events in a busy metro: each list stopped at 1,000 characters and THEN
+  // added "…and N more stores within 100 mi", up to ~1,037 — over Discord's
+  // 1,024 for a field, which gets the whole reply refused. Swept over line
+  // lengths so some length lands right at the old edge.
+  const place = { city: "Chicago", state: "IL", lat: 41.8781, lng: -87.6298 };
+  let worst = 0;
+  for (let nameLen = 8; nameLen <= 48; nameLen++) {
+    const nm = (i) => (`Store ${i} ` + "x".repeat(60)).slice(0, nameLen);
+    const other = Array.from({ length: 150 }, (_, i) => ({ next_start: "2026-10-04T17:00:00Z", store_id: i, store_name: nm(i), name: "Weekly", kind: "other",
+      distance_mi: i, dow: (i % 7), local_time: "18:00", gameplay_format: "Core Constructed", occurrences: [{ event_id: 1000000 + i }] }));
+    const sc = Array.from({ length: 150 }, (_, i) => ({ next_start: `2026-11-${String(1 + (i % 28)).padStart(2, "0")}T17:00:00Z`, store_name: nm(i), kind: "sc",
+      distance_mi: i, gameplay_format: "Core Constructed", occurrences: [{ event_id: 2000000 + i, start_datetime: "2026-11-04T17:00:00Z", registered_user_count: 12, capacity: 32, cost_cents: 2500, currency: "USD" }] }));
+    for (const k of ["all", "sc", "other"]) {
+      const m = E.eventsMessage({ place, byKind: { sc, prerelease: [], other }, radius: 100, kind: k, query: "60614" });
+      for (const f of m.embeds[0].fields) worst = Math.max(worst, f.value.length);
+    }
+  }
+  ok(worst <= 1024, `/events never builds a field over Discord's 1,024 (longest ${worst})`);
+
+  // ⚠ /meta's three embeds together: long event names, deck links and the ten
+  // most-played cards' affiliate links passed Discord's 6,000-character cap,
+  // and the whole reply was refused. Player and deck names full of markdown
+  // characters double in length when escaped ("[OSA] Moluk_x").
+  const longRow = (k) => ({ place: "Top 8", place_rank: k, player_name: "[_]".repeat(14) + k, deck_id: "d" + k,
+    deck_name: "[*]".repeat(20), deck_inks: ["Amber", "Amethyst"], deck_visibility: "unlisted", deck_share_token: "t".repeat(22) });
+  const busy = { decks: 64, events: 8, sinceSet: "Attack of the Vine!", from: "2026-07-17",
+    breakdown: Array.from({ length: 8 }, (_, k) => ({ key: "Amber/Amethyst" + k, inks: ["Amber", "Amethyst"], n: 20 - k, t4: 4, wins: 2 })),
+    recent: Array.from({ length: 3 }, (_, k) => ({ id: "t" + k, name: "Disney Lorcana Challenge ".repeat(12) + k, date: "2026-09-12", players: 900, format: "core",
+      top: [1, 2, 3, 4].map(longRow) })) };
+  const mm = E.metaMessage({ R, index, meta: busy });
+  const tot = mm.embeds.reduce((n, e) => n + (e.title || "").length + (e.description || "").length + ((e.footer && e.footer.text) || "").length +
+    (e.fields || []).reduce((k, f) => k + f.name.length + f.value.length, 0), 0);
+  ok(tot <= 6000, `/meta stays under Discord's 6,000 characters with long names (${tot})`);
+  ok(mm.embeds[2].fields && mm.embeds[2].fields.length >= 1 && /\[[^\]]+\]\(https?:/.test(mm.embeds[1].description), "/meta still carries its events and its card list");
+  checkMessage(mm, "meta, long names");
+}
+{
+  // ⚠ A /card (Components V2) that Discord refuses gets the embed retry even
+  // when nothing was uploaded; it used to drop straight to plain text and lose
+  // the picture.
+  const { handleInteraction } = await mod("discord/src/interactions.js");
+  const sent = [], pending = [];
+  const nullDb = { hasService: false, async get() { return []; }, async all() { return []; }, async rpc() { return []; } };
+  await handleInteraction({ type: 2, token: "v2", application_id: "123", data: { type: 1, name: "card", options: [{ type: 3, name: "name", value: "mowgli" }] } },
+    { R, index, db: nullDb, origin: "https://bot.example", appId: "123", assets: null, log: () => {},
+      fetch: async (u, init) => { const b = init.body instanceof FormData ? JSON.parse(init.body.get("payload_json")) : JSON.parse(init.body); sent.push({ b, multipart: init.body instanceof FormData });
+        return new Response("{}", { status: b.flags === 32768 ? 400 : 200 }); },
+      waitUntil: (p) => pending.push(p) });
+  await Promise.all(pending.splice(0));
+  ok(sent.length === 2 && !sent[0].multipart && sent[0].b.flags === 32768 && sent[1].b.embeds && sent[1].b.embeds[0] && !sent[1].b.flags && !sent[1].b.content,
+    `a refused V2 /card with nothing uploaded is retried as the embed, not plain text (${sent.map((s) => (s.b.flags ? "V2" : s.b.embeds && s.b.embeds.length ? "embed" : "text")).join(" -> ")})`);
+}
+{
+  // ⚠ What somebody typed is echoed in PUBLIC replies. Unescaped, "[free
+  // packs](https://…)" became a link the bot posted, and **…** bold text.
+  const { handleInteraction } = await mod("discord/src/interactions.js");
+  const evil = "[free](https://evil.example) **x** `y";
+  // Markdown that would render: outside code spans (escaped backticks aside),
+  // an unescaped link or bold.
+  const live = (s) => { const t = String(s).replace(/\\`/g, "").replace(/`[^`]*`/g, ""); return /(^|[^\\])\[free\]\(https:\/\/e/.test(t) || /(^|[^\\])\*\*x/.test(t); };
+  const nf = E.notFoundMessage(R, R.resolve(evil), evil, {});
+  ok(!live(nf.embeds[0].description) && nf.embeds[0].description.includes("\\[free\\]"), `"No card matched" escapes the query (${nf.embeds[0].description.split("\n")[0]})`);
+  const dn = E.notFoundMessage(R, { kind: "none", dimsOnly: true, suggestions: [] }, "ench **x** [free](https://e.x)", {});
+  ok(!live(dn.embeds[0].description), `the "narrows it down" line escapes the query (${dn.embeds[0].description.split("\n")[0]})`);
+  // Inside the example's code span a backtick would close it early.
+  const dt1 = E.notFoundMessage(R, { kind: "none", dimsOnly: true, suggestions: [] }, "e`", {});
+  ok(dt1.embeds[0].description.includes("`elsa e'`"), `a backtick never closes the example's code span (${dt1.embeds[0].description.split("\n")[0]})`);
+  const res = R.resolve("mogli");
+  const cm = E.cardMessage({ R, res, price: null, graded: [], raw: null, range: "3m", origin: "https://bot.example", inkColors: index.inkColors,
+    playSet: index.playSet, gradedTarget: { cardId: res.printing.id, bucket: "" }, query: "mogli " + evil });
+  ok(res.corrected && /Closest match/.test(cm.embeds[0].description) && !live(cm.embeds[0].description), "\"Closest match for …\" escapes the query");
+  const ns = await handleInteraction({ type: 2, token: "ns", application_id: "123", data: { type: 1, name: "set", options: [{ type: 3, name: "set", value: evil }] } },
+    { R, index, db: { async get() { return []; }, async all() { return []; } }, origin: "https://bot.example", appId: "123", log: () => {}, fetch: async () => new Response("{}"), waitUntil: () => {} });
+  ok(ns.type === 4 && /No set called/.test(ns.data.content) && !live(ns.data.content), `"No set called …" escapes the name (${ns.data && ns.data.content})`);
+}
+{
+  // Graded tiers follow the SITE's split rule (gradedSplitTiers): a card's
+  // sales split by printing only when the catalog carries two printings. The
+  // shapes below are the live rollup's (2026-10-06).
+  const D = await mod("discord/src/data.js");
+  const byId = (id) => { for (const c of index.cards) for (const p of c.p) if (p.id === id) return { c, p }; return null; };
+  const roll = (id, rows) => rows.map(([printing, grade, sale_count, last_sold_price]) =>
+    ({ card_id: id, printing, grader: "PSA", grade: String(grade), sale_count, last_sold_price, avg_last_5: last_sold_price, last_sold_date: "2026-09-01" }));
+  const tierOf = (rows, g) => rows.find((r) => String(r.grade) === String(g));
+  const cat = (c, id) => (typeof D.catalogBucketsFor === "function" ? D.catalogBucketsFor(c, id) : undefined);
+  const chartB = (...a) => (typeof D.gradedChartBucket === "function" ? D.gradedChartBucket(...a) : "missing");
+
+  // ⚠ A foil-only Challenge Promo is ONE market. Invited to the Ball's only
+  // PSA 9 sales are three mislabelled "Non-Foil": reading the curated split
+  // flag alone dropped the tier from the card altogether.
+  const lig = card("let it go c1");
+  if (lig) {
+    const { c, p } = byId(lig.printing.id);
+    const gt = D.gradedTarget(p, p.f[lig.fi][0]);
+    const catalog = cat(c, gt.cardId);
+    eq(catalog && catalog.get(gt.cardId) && catalog.get(gt.cardId).size, 1, "the pid-less placeholder does not make a foil-only C1 card two-sided");
+    const itb = roll(gt.cardId, [["Foil", 10, 1, 6006.86], ["Non-Foil", 10, 10, 3000], ["Unknown", 10, 2, 5999], ["Non-Foil", 9, 3, 1547]]);
+    const got = D.gradedRowsFor(itb, gt, catalog);
+    eq(tierOf(got, 10) && tierOf(got, 10).last_sold_price, 6006.86, "foil-only C1: PSA 10 is the card's own Foil row");
+    eq(tierOf(got, 9) && tierOf(got, 9).last_sold_price, 1547, "foil-only C1: a tier with only mislabelled Non-Foil sales still shows");
+    eq(chartB(itb, gt, catalog, { grader: "PSA", grade: "10" }), "", "foil-only C1: the graded chart draws every sale of the tier");
+  }
+  // A genuinely two-sided C1 card keeps the split, in both directions.
+  const cin = index.cards.flatMap((c) => c.p.map((p) => ({ c, p }))).find(({ c, p }) => c.n === "Cinderella - Stouthearted" && /\(C1\)/.test(R.sets[p.s].n));
+  ok(!!cin, "the fixture carries Cinderella - Stouthearted (C1)");
+  if (cin) {
+    const rows = roll(cin.p.id, [["Foil", 10, 86, 5500], ["Non-Foil", 10, 127, 550], ["Unknown", 10, 14, 600], ["Non-Foil", 9, 24, 107.4]]);
+    const catalog = cat(cin.c, cin.p.id);
+    const foil = D.gradedRowsFor(rows, D.gradedTarget(cin.p, "H"), catalog);
+    const nf = D.gradedRowsFor(rows, D.gradedTarget(cin.p, "N"), catalog);
+    ok(tierOf(foil, 10) && tierOf(foil, 10).last_sold_price === 5500 && !tierOf(foil, 9), "two-sided C1: the Top Prize never borrows the Prize Wall's PSA 9");
+    ok(tierOf(nf, 10) && tierOf(nf, 10).last_sold_price === 550 && tierOf(nf, 9) && tierOf(nf, 9).last_sold_price === 107.4, "two-sided C1: the Prize Wall reads its own tiers");
+    ok(![...foil, ...nf].some((r) => r.printing === "Unknown"), "two-sided C1: an unlabelled sale is never either printing");
+    eq(chartB(rows, D.gradedTarget(cin.p, "H"), catalog, { grader: "PSA", grade: "10" }), "Foil", "two-sided C1: the graded chart keeps only the foil's sales");
+  }
+  // ⚠ The BASE of a named-variant card reads "Normal" (the site's
+  // canonicalGradedSlot): base Genie - On the Job is an Enchanted holofoil, and
+  // reading it as "Foil" found 2 stray sales instead of 370.
+  const genie = byId("crd_ae7e91462bfc4861bbf97e99ed53a1c1");
+  const swords = byId("crd_ae7e91462bfc4861bbf97e99ed53a1c1::variant::two-swords-variant");
+  ok(genie && swords, "the fixture carries Genie - On the Job #209 and its Two Swords clone");
+  if (genie && swords) {
+    const rows = roll(genie.p.id, [["Foil", 10, 2, 1125], ["Normal", 10, 370, 1150], ["Two Swords", 10, 28, 2295], ["Normal", 8, 20, 105.5]]);
+    const gt = D.gradedTarget(genie.p, "H");
+    eq(gt.bucket, "Non-Foil", "base Genie #209 reads the Normal bucket");
+    const base = D.gradedRowsFor(rows, gt, cat(genie.c, gt.cardId));
+    eq(tierOf(base, 10) && tierOf(base, 10).sale_count, 370, "base Genie PSA 10 is the 370-sale Normal tier");
+    eq(tierOf(base, 8) && tierOf(base, 8).last_sold_price, 105.5, "base Genie PSA 8 (Normal only) shows");
+    const sg = D.gradedTarget(swords.p, "H");
+    eq(sg.cardId, genie.p.id, "the Two Swords clone reads its base card");
+    const sw = D.gradedRowsFor(rows, sg, cat(swords.c, sg.cardId));
+    ok(sw.length === 1 && sw[0].printing === "Two Swords", "Two Swords keeps only its own sales (never the base's PSA 8 by a fallback)");
+  }
+  // End to end: "/price let it go c1 psa 9" leads with the PSA 9 sale.
+  if (lig) {
+    const { handleInteraction } = await mod("discord/src/interactions.js");
+    const sent = [], pending = [];
+    const rows = roll(lig.printing.id, [["Foil", 10, 132, 6500], ["Non-Foil", 10, 2, 75.39], ["Unknown", 10, 8, 622], ["Non-Foil", 9, 3, 1547]]);
+    const db = { hasService: false, async get(t) { return t === "graded_sales_rollup" ? rows : []; }, async all() { return []; }, async rpc() { return []; } };
+    await handleInteraction({ type: 2, token: "g9", application_id: "123", data: { type: 1, name: "price", options: [{ type: 3, name: "name", value: "let it go c1 psa 9" }] } },
+      { R, index, db, origin: "https://bot.example", appId: "123", assets: null, log: () => {},
+        fetch: async (u, init) => { sent.push(init.body instanceof FormData ? JSON.parse(init.body.get("payload_json")) : JSON.parse(init.body)); return new Response("{}"); },
+        waitUntil: (pr) => pending.push(pr) });
+    await Promise.all(pending.splice(0));
+    const d = sent[0] && sent[0].embeds && sent[0].embeds[0] ? sent[0].embeds[0].description : "";
+    ok(/\*\*\$1,547\*\* last PSA 9 sale/.test(d) && !/No PSA 9 sales/.test(d), `"/price let it go c1 psa 9" leads with that sale (${d.split("\n").slice(0, 3).join(" | ")})`);
+  }
+}
+
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

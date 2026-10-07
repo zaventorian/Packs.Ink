@@ -27,8 +27,14 @@ export const WANT = [
   // "near me": postal codes and towns, the same walk the site's event finder does
   "SC_GEO_COUNTRIES", "scPostalCandidates", "scNormalizePostal", "scZippo", "scRankPlaces",
   "scLocalTime12",
-  // graded + raw eBay sales: which rollup row belongs to which printing
+  // graded + raw eBay sales: which rollup row belongs to which printing, and
+  // the site's rule for when a card's graded sales are split by printing at
+  // all (a card must actually carry two catalog printings — a foil-only
+  // Challenge Promo is one market whatever a seller wrote) and which tier row
+  // prices a printing. A named variant's base reads "Normal" (canonicalGradedSlot).
   "gradedSlotBucket", "rawSaleMatch",
+  "gradedCatalogBuckets", "gradedSplitTiers", "buildGradedPriceIndex", "makeGradedPrintingLookup",
+  "canonicalGradedSlot", "SPLIT_PRINTING_CARD_IDS",
   // /open: the site's pack slots and pull rates, so a simulated pack is the
   // same pack Analytics » Simulator opens
   "simPack", "getPull",

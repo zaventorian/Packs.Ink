@@ -1,6 +1,8 @@
 // data.js — what the bot asks the database, shaped the way the site shapes it.
 import {
   computeSeriesDeltas, priceStanding, seriesPricedOn, gradedSlotBucket, rawSaleMatch,
+  gradedCatalogBuckets, gradedSplitTiers, buildGradedPriceIndex, makeGradedPrintingLookup,
+  canonicalGradedSlot, SPLIT_PRINTING_CARD_IDS,
   calendarMergeEvents, calendarSetEntries, calendarEstimatedSetEntries, calendarSetEstimates,
   calendarProductEntries, calendarUpcoming, SET_RELEASE_DATES, UPCOMING_SET_NAMES,
   PRODUCT_RELEASE_DATES, calTodayYmd, calAddDays, calRegionOf,
@@ -57,14 +59,36 @@ export function priceSummary(rows, asOf) {
 // ── graded + raw eBay sales ──────────────────────────────────────────────
 // A named variant (Text Error, Two Swords) is a PRINTING of the base card on
 // the graded side, never a card_id of its own — see CLAUDE.md "A named VARIANT
-// is a printing, not a card_id".
+// is a printing, not a card_id". The site's canonicalGradedSlot does the
+// mapping. ⚠ The BASE of such a card reads "Normal" whatever its finish: its
+// sales are filed Normal beside the variant's, and its one finish is an
+// Enchanted holofoil — read as "Foil", base Genie - On the Job PSA 10 found
+// two stray sales instead of 370.
 export function gradedTarget(printing, finish) {
   const id = String(printing.id);
   const cut = id.indexOf("::variant::");
   if (cut > 0) {
-    return { cardId: id.slice(0, cut), bucket: gradedSlotBucket(String(printing.var || "").replace(/\s+variant$/i, "")) };
+    const slot = canonicalGradedSlot(id, String(printing.var || "").replace(/\s+variant$/i, ""));
+    // canonicalGradedSlot remaps only the cards it knows; any other clone
+    // still reads its base card under its own variant label.
+    const cardId = slot.card_id === id ? id.slice(0, cut) : slot.card_id;
+    return { cardId, printing: slot.printing, bucket: gradedSlotBucket(slot.printing) };
   }
-  return { cardId: id, bucket: gradedSlotBucket(FIN_PRINTING[finish] || "Normal") };
+  const pr = SPLIT_PRINTING_CARD_IDS.has(id) ? "Normal" : (FIN_PRINTING[finish] || "Normal");
+  return { cardId: id, printing: pr, bucket: gradedSlotBucket(pr) };
+}
+
+// What the CATALOG offers of one card_id — the site's gradedCatalogBuckets,
+// fed the index's finishes. Only a finish with a TCGplayer id counts, so a
+// Challenge Promo card's pid-less non-foil placeholder never makes a
+// foil-only card look two-sided.
+export function catalogBucketsFor(card, cardId) {
+  const rows = [];
+  for (const p of (card && card.p) || []) {
+    if (p.id !== cardId) continue;
+    for (const f of p.f || []) rows.push({ card_id: p.id, tcgplayer_product_id: f[1], tcg_printing: f[2] });
+  }
+  return gradedCatalogBuckets(rows);
 }
 
 export async function gradedRollup(db, cardId) {
@@ -75,15 +99,51 @@ export async function gradedRollup(db, cardId) {
   });
 }
 
-// The rollup rows that describe THIS printing. One bucket ("") means the card
-// has no printing axis; otherwise only the matching bucket counts — a Top
-// Prize foil and a Prize Wall non-foil are two markets ~50x apart, and
-// "Unknown" can never be read as either.
-export function gradedRowsFor(rows, bucket) {
+// The rollup rows that describe THIS printing, one per (grader, grade) — the
+// site's rule, run through the site's own code (gradedSplitTiers +
+// makeGradedPrintingLookup):
+//  - A tier is SPLIT only when the rollup labels its printings AND, on the
+//    foil axis, the catalog actually carries two printings. On a split tier
+//    only this printing's own row counts — a Top Prize foil and a Prize Wall
+//    non-foil are two markets ~50x apart — and "Unknown" is never read as
+//    either (the bot is stricter there than the site, which shows that blend
+//    with a note).
+//  - ⚠ A foil-only Challenge Promo is ONE market whatever a seller wrote:
+//    Invited to the Ball's only PSA 9 sales are three mislabelled "Non-Foil",
+//    and reading the flag alone dropped the tier from the card entirely.
+//  - A named variant (Two Swords / Text Error) keeps only its own sales.
+// target is gradedTarget's answer; catalogBuckets is catalogBucketsFor's.
+const FOIL_AXIS = new Set(["Foil", "Non-Foil"]);
+export function gradedRowsFor(rows, target, catalogBuckets) {
   const list = (rows || []).filter((r) => r.last_sold_price != null);
   if (!list.length) return [];
-  if (list.some((r) => !r.printing)) return list.filter((r) => !r.printing);
-  return bucket ? list.filter((r) => gradedSlotBucket(r.printing) === bucket) : [];
+  const t = target && typeof target === "object" ? target : { bucket: target || null };
+  if (t.bucket && !FOIL_AXIS.has(t.bucket)) return list.filter((r) => gradedSlotBucket(r.printing) === t.bucket);
+  const want = t.printing || (t.bucket === "Foil" ? "Holofoil" : "Normal");
+  const hitFor = makeGradedPrintingLookup(buildGradedPriceIndex(list, null, (r) => r.card_id), gradedSplitTiers(list, catalogBuckets));
+  const out = [];
+  const seen = new Set();
+  for (const r of list) {
+    const gk = String(r.grader || "").toLowerCase();
+    const tier = r.card_id + "|" + gk + "|" + r.grade;
+    if (seen.has(tier)) continue;
+    seen.add(tier);
+    const hit = hitFor(r.card_id, r.card_id, gk, r.grade, want);
+    if (!hit.row || !hit.exact) continue;
+    const own = list.find((x) => x.card_id === r.card_id && x.grader === r.grader && String(x.grade) === String(r.grade) &&
+      (x.printing || "") === hit.row.rollup_printing);
+    if (own) out.push(own);
+  }
+  return out;
+}
+
+// Which of a tier's sales the graded chart draws: every one where the tier is
+// a single market (the same split rule), else only this printing's.
+export function gradedChartBucket(rows, target, catalogBuckets, grade) {
+  if (!target || !target.bucket) return "";
+  if (!FOIL_AXIS.has(target.bucket) || !grade) return target.bucket;
+  const split = gradedSplitTiers((rows || []).filter((r) => r.last_sold_price != null), catalogBuckets);
+  return split.has(`${target.cardId}|${String(grade.grader || "").toLowerCase()}|${grade.grade}`) ? target.bucket : "";
 }
 
 const GRADER_RANK = { PSA: 0, BGS: 1, CGC: 2, TAG: 3, SGC: 4, ACE: 5 };

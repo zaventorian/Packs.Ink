@@ -239,7 +239,7 @@ def latest_prices(sb: Supabase, pids: set[int], days: int) -> dict[int, dict]:
                 "tcgplayer_product_id": f"in.({','.join(str(p) for p in chunk)})",
                 "date": f"gte.{cutoff}",
             },
-            order="tcgplayer_product_id.asc,date.asc",
+            order="tcgplayer_product_id.asc,date.asc,printing.asc",
         )
         for r in rows:
             pid = r["tcgplayer_product_id"]
@@ -479,6 +479,53 @@ def stale_feed_findings(sb: Supabase, today: str) -> list[dict]:
     return out
 
 
+# The card scanner matches against scanner/index.json, a file built by hand and
+# shipped with a deploy. When the nightly retire_prestaged.py hands a stand-in
+# card over to Lorcast's row, the stand-in's id leaves `cards` but stays in the
+# index, and a scan can land on a card that no longer exists. On 2026-10-06 the
+# index live on the site still held 95 Hyperia City stand-ins retired on 10/02;
+# nothing said so.
+SCANNER_INDEX_PATH = os.path.join(os.path.dirname(__file__), "..", "scanner", "index.json")
+SCANNER_VERSIONS_PATH = os.path.join(os.path.dirname(__file__), "scanner", "asset_versions.json")
+SCANNER_HINT = ("Rebuild the scanner index from today's catalog:\n"
+                "  python scripts/scanner/fetch_cards.py\n"
+                "  python scripts/scanner/build_index.py\n"
+                "  python scripts/scanner/build_text_index.py\n"
+                "then bump IDXV and TXTV in scanner.js, the scanner.js ?v= tag in Index.html, and run\n"
+                "  node scripts/test_scanner_asset_cache.mjs --update")
+
+
+def scanner_stale_finding(index_ids: set[str], card_ids: set[str], version: str) -> dict | None:
+    """The scanner index names cards the catalog no longer has.
+
+    The key carries the index VERSION and the count, so an ack only snoozes this
+    build: a rebuild moves the key, and a later retirement changes the count."""
+    dead = sorted(index_ids - card_ids)
+    if not dead:
+        return None
+    return {"kind": "scanner_stale", "key": f"index{version}:{len(dead)}",
+            "name": f"Scanner index lists {len(dead)} card id(s) that no longer exist",
+            "detail": ", ".join(dead[:4]) + (" ..." if len(dead) > 4 else ""),
+            "hint": SCANNER_HINT}
+
+
+def scanner_findings(sb: Supabase) -> list[dict]:
+    """Silence on any failure to read, like the other staleness checks."""
+    try:
+        with open(SCANNER_INDEX_PATH, encoding="utf-8") as fh:
+            index_ids = {c["id"] for c in json.load(fh)["cards"]}
+        with open(SCANNER_VERSIONS_PATH, encoding="utf-8") as fh:
+            version = json.load(fh)["groups"]["index"]["version"]
+        card_ids = {r["id"] for r in sb.select("cards", columns="id", order="id.asc")}
+    except Exception as e:
+        print(f"  (scanner index check skipped, non-fatal: {e})")
+        return []
+    if len(card_ids) < 1000:
+        return []                        # a stub or a broken read, not a catalog
+    f = scanner_stale_finding(index_ids, card_ids, version)
+    return [f] if f else []
+
+
 def new_since(prev_keys: set[str] | None, fresh: list[dict]) -> list[dict]:
     """The findings that were NOT in the previous run's report.
 
@@ -665,7 +712,7 @@ def collect_findings(sb: Supabase, ack: dict | None = None, today: str | None = 
     cards_by_name: dict[str, list[dict]] = {}
     for r in sb.select("cards",
                        columns="name,version,collector_number,set_id,tcgplayer_product_id",
-                       order="set_id.asc"):
+                       order="set_id.asc,id.asc"):
         disp = (r.get("name") or "") + (f" - {r['version']}" if r.get("version") else "")
         cards_by_name.setdefault(norm_name(disp), []).append(r)
     bound_groups = {r["tcgplayer_group_id"] for r in sets_rows
@@ -725,7 +772,7 @@ def collect_findings(sb: Supabase, ack: dict | None = None, today: str | None = 
     # 5. card_prices_latest is an INNER JOIN on the pid, so a null one means the
     #    card can never show a price no matter how well TCGplayer lists it.
     for r in sb.select("cards", columns="name,version,collector_number,set_id,tcgplayer_product_id",
-                       filters={"tcgplayer_product_id": "is.null"}, order="set_id.asc"):
+                       filters={"tcgplayer_product_id": "is.null"}, order="set_id.asc,id.asc"):
         sname = set_name.get(r.get("set_id"), r.get("set_id") or "?")
         if sname in CARD_NO_PID_SKIP_SETS:
             continue
@@ -778,6 +825,7 @@ def collect_findings(sb: Supabase, ack: dict | None = None, today: str | None = 
 
     out.extend(pop_findings(sb, today or date.today().isoformat()))
     out.extend(stale_feed_findings(sb, today or date.today().isoformat()))
+    out.extend(scanner_findings(sb))
 
     if ack is not None:
         out.extend(due_reviews(ack, today or date.today().isoformat()))
@@ -796,6 +844,7 @@ KIND_LABEL = {
     "review_due":     "Scheduled review (no feed watches this — a person has to look)",
     "pop_stale":      "PSA population data is stale (needs a signed-in Chrome — see the steps)",
     "scrape_stale":   "A hand-refreshed feed has gone quiet",
+    "scanner_stale":  "The card scanner's index names cards that no longer exist",
 }
 
 
@@ -835,7 +884,7 @@ def run_watch(sb: Supabase, fail: bool, json_path: str | None,
             by_kind.setdefault(f["kind"], []).append(f)
         for kind, items in by_kind.items():
             print(f"\n▶ {KIND_LABEL.get(kind, kind)}  ({len(items)})")
-            if kind in ("review_due", "pop_stale", "scrape_stale"):
+            if kind in ("review_due", "pop_stale", "scrape_stale", "scanner_stale"):
                 # The whole value of these is that the steps travel with the
                 # alert — nobody is going to go dig up how to do it.
                 for f in items:
@@ -1148,7 +1197,7 @@ def _probe_pids(sb: Supabase, pids: list[int], days: int) -> int:
         for r in sb.select("cards",
                            columns="id,name,version,collector_number,set_id,tcgplayer_product_id",
                            filters={"tcgplayer_product_id": in_list},
-                           order="tcgplayer_product_id.asc")
+                           order="tcgplayer_product_id.asc,id.asc")
     }
     by_sealed = {
         r["tcgplayer_product_id"]: r

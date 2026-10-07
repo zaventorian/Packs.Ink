@@ -54,6 +54,11 @@ def run_soft(cmd: list[str], cwd: Path | None = None) -> None:
     r = subprocess.run(cmd, cwd=cwd, check=False)
     if r.returncode != 0:
         print(f"  ! soft step failed (rc={r.returncode}); continuing refresh", flush=True)
+        # A green run is otherwise indistinguishable from one where this step
+        # did nothing - which is how the board froze at a set rotation.
+        step = Path(str(cmd[1])).name if len(cmd) > 1 else str(cmd[0])
+        print(f"::warning title=refresh_elo soft step::{step} exited {r.returncode}; "
+              f"the refresh continued without it", flush=True)
 
 
 def one_off_season() -> str | None:
@@ -97,8 +102,11 @@ def main() -> None:
     if not args.xlsx.exists():
         sys.exit(f"season file missing: {args.xlsx}")
 
-    run([sys.executable, "ingest.py", "--xlsx", str(args.xlsx),
-         "--season", args.season, "--workers", "8"], cwd=ELO_DIR)
+    # Soft: the sheet is the historical Wilds Unknown seed and a permanent no-op
+    # (every event in it is finished and held). ingest.py exits 1 when any event
+    # fails, so one RPH flake here would otherwise cost the whole week's refresh.
+    run_soft([sys.executable, "ingest.py", "--xlsx", str(args.xlsx),
+              "--season", args.season, "--workers", "8"], cwd=ELO_DIR)
 
     # Store-driven SC backfill: the spreadsheet above is hand-curated and has
     # silently dropped stores that ran an SC (coverage regressed from 82 stores
@@ -124,6 +132,8 @@ def main() -> None:
         cmd = [sys.executable, "ingest.py", "--ids", *[str(i) for i in args.ids]]
         if label:
             cmd += ["--season", label]
+        # Hard: someone asked for these by hand, so a failed one turns the run
+        # red (ingest.py exits 1) instead of ending green with nothing ingested.
         run(cmd, cwd=ELO_DIR)
 
     # Detect + apply RPH account renames. RPH has no stable user_id, so a renamed

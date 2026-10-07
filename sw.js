@@ -1,6 +1,6 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v531';
+const CACHE_VERSION = 'packsink-v532';
 // Card art + other images live in their own cache that is NOT wiped on
 // deploys. Before this existed, every CACHE_VERSION bump threw away every
 // runtime-cached card image, so devices never accumulated art for offline
@@ -34,7 +34,7 @@ const CORE_ASSETS = [
   '/vendor/react-dom.production.min.js?v=254',
   '/vendor/htm.js?v=254',
   '/vendor/supabase.js?v=254',
-  '/styles.css?v=531',
+  '/styles.css?v=532',
   '/logo.js?v=348',
   // scanner*.js intentionally NOT precached: the scanner is a modal most
   // visits never open — it runtime-caches on first use instead of costing
@@ -48,11 +48,21 @@ const CORE_ASSETS = [
   '/Logos/packs-ink-logo-sm.png?v=5'
 ];
 
+// What the app cannot boot offline without. These are cached all-or-nothing:
+// if one fails (a flaky connection mid-update) the INSTALL fails, so the
+// working worker and its cache stay in charge and the browser retries the
+// update later. Swallowing every failure let a new worker activate without the
+// shell, delete the old cache on activate, and then the controllerchange
+// reload landed on nothing offline (review, 2026-10-06). The rest (icons,
+// manifest, wordmark) stays best-effort.
+const coreRequired = (a) => a === '/' || a.startsWith('/vendor/') || a.startsWith('/styles.css');
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) =>
-      Promise.all(CORE_ASSETS.map((a) => cache.add(a).catch(() => null)))
-    )
+    caches.open(CACHE_VERSION).then((cache) => Promise.all([
+      cache.addAll(CORE_ASSETS.filter(coreRequired)),
+      ...CORE_ASSETS.filter((a) => !coreRequired(a)).map((a) => cache.add(a).catch(() => null)),
+    ]))
   );
   self.skipWaiting();
 });
@@ -74,6 +84,13 @@ self.addEventListener('activate', (event) => {
 // so a true failure is never cached; the residual risk is caching an opaque
 // 404, which the next online revalidation overwrites.
 const cacheable = (res) => res && (res.ok || res.type === 'opaque');
+
+// Standalone documents served at a dot-free path. A navigation to one must
+// never replace the offline app shell (/Index.html): /picks and /box were
+// missing from this list, so opening either one made it the page every route
+// showed offline (review, 2026-10-06). scripts/test_sw_shell_pages.mjs fails
+// when build_dist ships a standalone .html page that is not listed here.
+const NON_SHELL_PAGES = ['/privacy', '/swiss', '/ticker', '/lab/swiss', '/picks', '/box'];
 
 // The cross-origin hosts the site loads images from. A fetch() from a service
 // worker is checked against connect-src, not img-src, so every one of these
@@ -144,7 +161,18 @@ self.addEventListener('fetch', (event) => {
   // they still fall through to the skip below.
   // Someone else's image: see SW_IMAGE_HOSTS.
   if (req.destination === 'image' && url.origin !== self.location.origin && !swImageHost(url.hostname)) return;
-  if (req.destination === 'image' || url.hostname.endsWith('lorcast.io')) {
+  // ⚠ Our own image proxies are images whatever the request says. The offline
+  // image downloader fetch()es them (destination ''), which used to fall into
+  // the generic same-origin branch below: each one was stored in the
+  // per-deploy cache AND, by the downloader, in IMG_CACHE — "All cards" held
+  // ~270 MB twice until the next deploy (review, 2026-10-06).
+  const proxied = url.origin === self.location.origin && /^\/(tcg-)?img-proxy\//.test(url.pathname);
+  // Lorcast art is content-addressed (a re-render gets a new ?<stamp>), so a
+  // cached copy of a versioned /img-proxy/ URL is final: no background
+  // re-fetch, which was a Worker invocation per view. TCGplayer photos are
+  // NOT (a placeholder is swapped at the same URL), so they keep revalidating.
+  const immutableHit = proxied && url.pathname.startsWith('/img-proxy/') && url.search.length > 1;
+  if (req.destination === 'image' || proxied || url.hostname.endsWith('lorcast.io')) {
     // ⚠ The cache is keyed by URL, not by request mode. Supabase-storage art
     // (prestaged cards, Coconut, collectibles) is the one card art NOT routed
     // through a same-origin proxy, so a plain <img> caches an OPAQUE response
@@ -165,6 +193,7 @@ self.addEventListener('fetch', (event) => {
         // versioned cache (icons, wordmark) also satisfy image requests.
         caches.match(req).then((hit) => {
           const cached = hit && hit.type === 'opaque' && (req.mode === 'cors' || corsable) ? null : hit;
+          if (cached && immutableHit) return cached;
           const fetchPromise = fetch(netReq)
             .catch((err) => (netReq === req ? Promise.reject(err) : fetch(req)))
             .then((res) => {
@@ -202,8 +231,7 @@ self.addEventListener('fetch', (event) => {
           // dot-check covers every file-ish path (privacy.html, swiss.html,
           // ticker.html, robots.txt, sitemap.xml, manifest.json, …); SPA
           // routes are dot-free.
-          if (res.ok && !url.pathname.includes('.') &&
-              !['/privacy', '/swiss', '/ticker', '/lab/swiss'].includes(url.pathname)) {
+          if (res.ok && !url.pathname.includes('.') && !NON_SHELL_PAGES.includes(url.pathname)) {
             const copy = res.clone();
             caches.open(CACHE_VERSION).then((c) => c.put('/Index.html', copy));
           }

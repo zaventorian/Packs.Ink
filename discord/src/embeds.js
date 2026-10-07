@@ -147,7 +147,7 @@ export function cardMessage(ctx) {
   const lines = [];
 
   const lead = [];
-  if (ctx.query && res.corrected) lead.push(`Closest match for “${clip(ctx.query, 40)}”.`);
+  if (ctx.query && res.corrected) lead.push(`Closest match for “${escMd(clip(ctx.query, 40))}”.`);
   if (res.ambiguous && !res.exact) {
     lead.push(res.basis === "collector"
       ? "Showing the most-traded version — pick another below."
@@ -516,17 +516,21 @@ export function sealedMessage(ctx) {
 }
 
 // ── nothing found ────────────────────────────────────────────────────────
+// What somebody typed, echoed in a PUBLIC reply: as text it is escaped
+// (escMd), so "[free](https://…)" is not a link the bot posted; inside a code
+// span only a backtick can break out, so it is swapped for a quote.
+const codeSafe = (s) => String(s || "").replace(/`/g, "'");
 export function notFoundMessage(R, res, query, ids) {
   const sug = (res.suggestions || []).slice(0, 5);
   const lines = [res.dimsOnly
-    ? `“${clip(query, 60)}” narrows it down but doesn't name a card — add the card's name, e.g. \`elsa ${clip(query, 30)}\`.`
-    : `No card or product matched “${clip(query, 60)}”.`];
+    ? `“${escMd(clip(query, 60))}” narrows it down but doesn't name a card — add the card's name, e.g. \`elsa ${codeSafe(clip(query, 30))}\`.`
+    : `No card or product matched “${escMd(clip(query, 60))}”.`];
   // What someone probably meant when the words aren't a card at all.
   const q = String(query || "").trim();
   if (/^(?:\d{5}(?:-\d{4})?|[a-z]\d[a-z] ?\d[a-z]\d|[a-z]{1,2}\d[a-z\d]? ?\d[a-z]{2})$/i.test(q)) {
     lines.push(`Looks like a postal code — for events near there, try ${cmdMention(ids, "events")} \`${clip(q, 12)}\`.`);
   } else if (R.resolveSet && R.resolveSet(q) >= 0 && /\S/.test(q)) {
-    lines.push(`For a whole set, try ${cmdMention(ids, "set")} \`${clip(q, 30)}\`.`);
+    lines.push(`For a whole set, try ${cmdMention(ids, "set")} \`${codeSafe(clip(q, 30))}\`.`);
   }
   if (!sug.length && lines.length === 1) lines.push(`Card names work best on their own — \`mowgli\`, \`elsa enchanted\`, \`azurite box\`. ${cmdMention(ids, "help")} shows everything it can do.`);
   const embed = { title: "No match", color: 0x6b6480, description: lines.join("\n") };
@@ -561,6 +565,11 @@ export function parseEventsId(id) {
   return { lat: Number(m[2]), lng: Number(m[3]), radius: Number(m[4]), kind: m[5], label: m[6] };
 }
 
+// ⚠ A field's value holds at most 1,024 characters, its "…and N more" tail
+// included. The lists stopped at 1,000 and then added the tail, which took a
+// busy metro's field to ~1,037, and Discord refuses the whole reply for it.
+const EVENT_FIELD_MAX = 1024;
+const EVENT_TAIL_ROOM = 48;      // "*…and 9999 more stores within 100 mi*" + newline
 export function eventsMessage({ place, byKind, radius, kind = "all", query }) {
   const where = [place.city, place.state || place.country].filter(Boolean).join(", ") || clip(query, 40);
   const heading = { all: "Lorcana events", sc: "Set Championships", prerelease: "Prereleases", other: "Weekly Lorcana" }[kind] || "Lorcana events";
@@ -588,7 +597,7 @@ export function eventsMessage({ place, byKind, radius, kind = "all", query }) {
     const lines = [];
     for (const s of rows.slice(0, cap)) {
       const line = oneOff(s);
-      if (lines.join("\n").length + line.length + 1 > 1000) break;
+      if (lines.join("\n").length + line.length + 1 > EVENT_FIELD_MAX - EVENT_TAIL_ROOM) break;
       lines.push(line);
     }
     const rest = rows.length - lines.length;
@@ -638,7 +647,7 @@ export function eventsMessage({ place, byKind, radius, kind = "all", query }) {
         });
       const name = clip(g.name, 40);
       const line = `${g.url ? `[${name}](${g.url})` : `**${name}**`} · ${Math.round(g.mi)} mi — ${slots.join(", ")}`;
-      if (lines.join("\n").length + line.length + 1 > 1000 || lines.length >= (kind === "other" ? 12 : 6)) break;
+      if (lines.join("\n").length + line.length + 1 > EVENT_FIELD_MAX - EVENT_TAIL_ROOM || lines.length >= (kind === "other" ? 12 : 6)) break;
       lines.push(line);
     }
     if (list.length > lines.length) lines.push(`*…and ${list.length - lines.length} more stores ${within}*`);
@@ -805,6 +814,14 @@ const metaBar = (n, lead) => {
   const k = lead > 0 ? Math.max(n > 0 ? 1 : 0, Math.min(10, Math.round((n / lead) * 10))) : 0;
   return "█".repeat(k) + "░".repeat(10 - k);
 };
+// ⚠ Discord refuses a message whose embeds hold more than 6,000 characters in
+// all. Three long event names, their deck links and ten affiliate links in the
+// card list pass it (~6,300), and the whole /meta reply is refused. The card
+// list takes what the other two leave, and past that the last events give way.
+const META_TOTAL_MAX = 5900;
+const embedChars = (e) => (e.title || "").length + (e.description || "").length +
+  ((e.footer && e.footer.text) || "").length + ((e.author && e.author.name) || "").length +
+  (e.fields || []).reduce((n, f) => n + f.name.length + f.value.length, 0);
 export function metaMessage({ R, index, meta }) {
   const m = meta || { breakdown: [], recent: [], events: 0, decks: 0 };
   const since = m.sinceSet ? `since ${m.sinceSet} (${shortDate(m.from)})` : `in the last ${META_FALLBACK_DAYS} days`;
@@ -841,7 +858,6 @@ export function metaMessage({ R, index, meta }) {
   });
   const played = {
     title: ps ? `Most played in ${ps.n}` : "Most played cards", color: BRAND_COLOR, url: `${SITE}/decks?s=tournaments`,
-    description: fitLines(lines, 2400) || "Not enough Core top cuts on record since the current set released yet.",
   };
 
   const fields = [];
@@ -861,6 +877,10 @@ export function metaMessage({ R, index, meta }) {
     ...(fields.length ? { fields } : { description: "No recent results on record." }),
     footer: { text: `Top 8s from events packs.ink tracks · ${ps ? `play share counts Core top cuts since ${ps.n} released` : "play share counts the current set's Core top cuts"} · TCGplayer Low as of ${shortDate(index.priceDate)} · ${AFFILIATE_NOTE}` },
   };
+  const others = () => embedChars(decksEmbed) + embedChars(results) + played.title.length;
+  while (fields.length > 1 && others() + 400 > META_TOTAL_MAX) fields.pop();
+  played.description = (lines.length ? fitLines(lines, Math.min(2400, META_TOTAL_MAX - others())) : "") ||
+    "Not enough Core top cuts on record since the current set released yet.";
   const components = [];
   if (picks.length) components.push({ type: 1, components: [{ type: 3, custom_id: openId("card"), placeholder: "Look at a card", options: picks.slice(0, 25) }] });
   components.push({ type: 1, components: [{ type: 2, style: 5, label: "All tournament results", url: `${SITE}/decks?s=tournaments` }] });

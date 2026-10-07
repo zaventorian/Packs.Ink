@@ -154,7 +154,10 @@ async function patchOriginal(it, deps, payload, { update = false } = {}) {
   if (deps.log) deps.log("patch failed", r.status, (await r.text().catch(() => "")).slice(0, 800));
   // The upload is the new risk, so if it was refused for any reason the reply
   // goes again exactly as it was before uploads existed: the picture as a link.
-  if (up) {
+  // ⚠ A refused Components V2 reply gets the same embed retry whether or not
+  // it uploaded anything — without one it used to skip straight to plain
+  // text, and a /card with a linked picture lost its picture for good.
+  if (up || (layout !== "embed" && r.status === 400)) {
     r = await send("PATCH", orig, plainBody);
     if (r.ok) return;
     if (deps.log) deps.log("patch without upload failed", r.status);
@@ -292,9 +295,9 @@ export async function cardPayload(res, { view, range, query }, deps) {
     (c.gs > 0 || p.g > 0 || wantGrade) ? settle(D.gradedRollup(db, gt.cardId)) : null,
     p.raw ? settle(D.rawRollup(db, gt.cardId)) : null,
   ]);
-  const single = (gradedAll || []).some((r) => !r.printing);
   const rawSingle = (rawRows || []).some((r) => !r.printing);
-  const forPrinting = D.gradedRowsFor(gradedAll || [], gt.bucket);
+  const catalog = D.catalogBucketsFor(c, gt.cardId);
+  const forPrinting = D.gradedRowsFor(gradedAll || [], gt, catalog);
   let graded = D.topGradedTiers(forPrinting, 6);
   let grade = null;
   if (wantGrade) {
@@ -310,7 +313,7 @@ export async function cardPayload(res, { view, range, query }, deps) {
     R, res, price, graded, view: grade && view === "chart" ? "graded" : view, range, query,
     raw: D.rawRowFor(rawRows || [], printingStr),
     rawTarget: { cardId: gt.cardId, bucket: rawSingle ? "" : gt.bucket },
-    grade, gradedTarget: { cardId: gt.cardId, bucket: single ? "" : gt.bucket },
+    grade, gradedTarget: { cardId: gt.cardId, bucket: D.gradedChartBucket(gradedAll || [], gt, catalog, grade) },
     origin: deps.origin, inkColors: deps.index.inkColors, playSet: deps.index.playSet,
     priceDate: deps.index.priceDate,
   });
@@ -401,7 +404,7 @@ async function events(o, deps) {
   const radius = Math.min(250, Math.max(5, Number(optVal(o, "radius", 50)) || 50));
   const kind = D.EVENT_KINDS.includes(String(optVal(o, "kind", "all"))) ? String(optVal(o, "kind", "all")) : "all";
   const place = await D.resolvePlace(deps.db, near);
-  if (!place) return { content: `Couldn't place “${near.slice(0, 60)}”. Try a postal code, or a town name.`, embeds: [], components: [] };
+  if (!place) return { content: `Couldn't place “${E.escMd(near.slice(0, 60))}”. Try a postal code, or a town name.`, embeds: [], components: [] };
   return eventsBoard({ place, radius, kind, query: near }, deps);
 }
 async function eventsBoard({ place, radius, kind, query }, deps) {
@@ -513,7 +516,7 @@ function pickSet(R, index, name, { released = false } = {}) {
   const mains = R.sets.map((s, i) => i).filter((i) => R.sets[i].main).sort((a, b) => R.sets[b].main - R.sets[a].main);
   return (released ? mains.find((i) => !(R.sets[i].rel && R.sets[i].rel.lgs > today)) : mains[0]) ?? -1;
 }
-const noSet = (name) => ({ content: `No set called “${String(name).slice(0, 60)}”. Try a name or a number — \`hyperia city\`, \`azurite\`, \`set 5\`.`, embeds: [], components: [] });
+const noSet = (name) => ({ content: `No set called “${E.escMd(String(name).slice(0, 60))}”. Try a name or a number — \`hyperia city\`, \`azurite\`, \`set 5\`.`, embeds: [], components: [] });
 
 export function setReply(name, deps) {
   const si = pickSet(deps.R, deps.index, name);

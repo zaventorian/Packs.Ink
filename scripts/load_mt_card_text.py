@@ -85,7 +85,8 @@ def main() -> int:
     args = ap.parse_args()
     sb = Supabase()
     cards = sb.select("cards", columns="id,name,version,text")
-    rows = sb.select("card_localizations", columns="card_id,lang,source,text")
+    rows = sb.select("card_localizations", columns="card_id,lang,source,text",
+                     order="card_id.asc,lang.asc")
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     for lang in LANGS:
         p = os.path.join(MT_DIR, f"{lang}.json")

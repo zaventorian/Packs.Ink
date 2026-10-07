@@ -255,7 +255,9 @@ def detect_challenge(page: Page) -> bool:
     iframe/element, OR by visible body text. Content-based so it catches inline
     overlays that don't change the URL."""
     try:
-        url = (page.url or "").lower()
+        # Host + path only: the search keywords ride in the query string, and a
+        # watchlist query like "Lorcana" "Challenge" would otherwise trip "challenge".
+        url = (page.url or "").lower().split("?", 1)[0].split("#", 1)[0]
     except Exception:
         url = ""
     if any(b in url for b in _CHALLENGE_URL_BITS):

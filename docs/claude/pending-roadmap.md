@@ -20,6 +20,61 @@
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger.** Claude applies migrations itself, drops included (Zaven, 2026-09-30: *"im fine with claude having access to do everything"*) — see "Running SQL" under Ops for the two routes. A file is STAGED only when something outside the database has to happen first.
+- ~~`supabase/192_collection_scoped_share_tokens.sql`~~ — **APPLIED 2026-10-06** through the connector. Backward
+  compatible: the five collection readers accept the base token as before, plus a scoped token (HMAC of the
+  scope under the base) for their own section; new owner RPC `get_my_collection_share_tokens()`. Live client
+  unaffected; the share popover that hands out scoped links ships with the same commit. Run against PGlite
+  (28 checks). Verified live over all 123 profiles: the base token gives exactly the old visibility (0
+  mismatches), a Cards-scoped token opens Cards only and a Sealed+Graded one only those (0 mismatches), the
+  SQL token matches Node's HMAC byte for byte, the token check runs once per call on the profile row (not per
+  collection row), and anon cannot call the owner RPC.
+- ~~`supabase/191_admin_checks_caller_only.sql`~~ — **APPLIED 2026-10-06** through the connector.
+  `is_tournament_admin(uuid)` / `is_elo_admin(uuid)` return false for any id but the caller's when asked from
+  anon / authenticated (they are the only role checks that take a user id). Every caller already passes its
+  own id. Run against PGlite (22 checks, incl. RLS policies, a definer admin RPC and `can_scout`). Verified live
+  by a rolled-back probe: another account asking about the admin gets false, the admin about themself true,
+  `can_scout()` still true for them, server-side still true.
+- ~~`supabase/190_anon_write_fair_limits.sql`~~ — **APPLIED 2026-10-06** through the connector. Server-only:
+  `_rate_bucket` (account when signed in, address otherwise, IPv6 per /64; an IPv4 bucket hashes exactly as
+  before) and a `signed_in` column on `trade_create_events` / `feedback_submit_events`, so `create_trade` and
+  `_feedback_rate_limit` keep two backstop pools with a fair share past half the cap. Same messages, same
+  signatures. Checked first: a forged `CF-Connecting-IP` is refused by Cloudflare (403, error 1000) and a
+  forged `X-Forwarded-For` only prepends, so `_client_ip()` was already unspoofable. Run against PGlite (26
+  checks). Verified live by a rolled-back probe (the trade and both event rows land in the right buckets;
+  nothing left behind) and an anon REST call.
+- **`supabase/189_attendance_anon_columns.sql`** — **STAGED 2026-10-06, apply after the client from the same
+  commit is LIVE** (deployed + edge purged; give open tabs a day). It revokes the table-wide SELECT on
+  `rph_event_attendance` from anon / authenticated and grants back only `event_id, person_key, played,
+  registration_status`. Applied before that client ships, the live Store Status tab 42501s (it still selects
+  `best_identifier, rph_user_id` and filters on the standings). Rollback is one line in its header.
+- ~~`supabase/188_attendance_person_key.sql`~~ — **APPLIED 2026-10-06** through the connector. Additive:
+  `private` schema + `private.server_secrets` (random 32 bytes, no API role can read it), and on
+  `rph_event_attendance` a trigger-filled `person_key` (HMAC of the old client key) and a stored generated
+  `played`. Verified live: 28,975 rows keyed, 2,635 distinct people under both keys and 2,635 distinct pairs
+  (a bijection), `played` equals the old filter on every row, and the Store Status pivot over the old and new
+  reads agree on all 107 stores. Run against PGlite first (43 checks, 188 and 189 both twice).
+- **`supabase/187_starter_deck_foil_rekey.sql`** — **STAGED 2026-10-06: apply RIGHT AFTER the deploy** that
+  ships the Starter Deck Foil client change (EXTRAS_MAP `printing:"Holofoil"`). Moves the 12 Starter Deck Foil
+  collection entries from Cold Foil to Holofoil (47 rows, 9 users on the day; a Holofoil row made in between
+  keeps the larger count). Before the deploy the live client still keys these as Cold Foil, so applying it
+  early shows those owners' tiles as unowned until the deploy lands.
+- ~~`supabase/186_latest_raw_prices_before.sql`~~ — **APPLIED 2026-10-06** through the connector. Additive:
+  `latest_raw_prices_before(pids, printings, before)`, one index probe per key, used by
+  `fetchCollectionPriceSeeds` to seed the value charts with each owned item's price going into the range.
+  ~0.2-0.4s per 250 keys; capped at 500 per call. Client tolerates its absence.
+- ~~`supabase/185_security_hardening.sql`~~ — **APPLIED 2026-10-06** through the connector, from a database
+  security review: the tier-list view counter returns before writing a mark for a slug that isn't an openable
+  list; `scout_event_meta` is service-role only (its callers are definer functions and the edge function's
+  service client); `scan-samples` objects capped at 1 MB (real max 506 KB over 3,546); TRUNCATE / REFERENCES /
+  TRIGGER / MAINTAIN revoked from anon + authenticated on all 81 public relations and in postgres's default
+  privileges. Verified live: 0 relations left with TRUNCATE, normal grants intact, public reads 200.
+- ~~`supabase/184_tier_list_hardening.sql`~~ — **APPLIED 2026-10-06** through the connector. From a review of
+  the Tier List maker: the 500-list cap no longer fails edits (only new lists), `forked_from` names a
+  parent only while it is public, an owner cannot like their own list, views count once per list per
+  viewer (user, or hashed IP via `_client_ip()`) per day in `custom_tier_list_view_marks`, and
+  `tier_lists` loses anon writes and TRUNCATE. Run against PGlite with RLS first (26 checks). It changed
+  no live rows (2 lists, no copies, likes or views yet). Verified live by an anon REST probe on a
+  nonexistent slug (two calls, one mark; probe row deleted after).
 - ~~`supabase/178_challenge_c3_set.sql`~~ — **APPLIED 2026-09-30** via `scripts/sql.py`. The C3 set row; its two
   cards are inserted by `patch_pid_overrides.py` on the next daily metadata run from `main`.
 - ~~`supabase/177_admin_exec_sql.sql`~~ — **APPLIED 2026-09-30** through the connector. The service-role-only

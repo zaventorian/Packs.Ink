@@ -50,10 +50,12 @@ const check = (ok, msg) => {
 // such as "// proxied to /img-proxy/* at the boundary" as an opener and blanks
 // everything up to the next `*/` - 1,900 lines of Index.html, including two
 // real emoji this test exists to catch.
+// ⚠ A block opener must not follow a letter, quote or slash: the `/*` in
+// accept="image/*" read as one and hid ~840 lines of Index.html (2026-10-06).
 const blank = (m) => m.replace(/[^\n]/g, " ");
 const stripComments = (src, isCss) => isCss
   ? src.replace(/\/\*[\s\S]*?\*\//g, blank)
-  : src.replace(/(?<![:"'`\\])\/\/[^\n]*|\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, blank);
+  : src.replace(/(?<![:"'`\\])\/\/[^\n]*|(?<![\w"'/])\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, blank);
 
 const scan = (src, isCss) => {
   const hits = [];
@@ -84,12 +86,15 @@ const planted = [
   "// proxied to /img-proxy/* at the boundary",                      // a /* inside a LINE comment...
   "<b>" + U(0x23f1) + "</b>",                                        // 11 ...must not hide this line
   "x = 2; /* a later block comment closes here */",
+  "<input accept=\"image/*\"/>",                                      // 13 a /* in an attribute...
+  "<i>" + U(0x2728) + "</i>",                                        // 14 ...must not hide this line
+  "y = 3; /* a real block comment after it */",
 ].join("\n");
 const ph = scan(planted, false);
-check(ph.length === 5, "planted sample: expected 5 hits, got " + ph.length +
+check(ph.length === 6, "planted sample: expected 6 hits, got " + ph.length +
   " (" + ph.map(h => "line " + h.line + " U+" + h.cp.toString(16)).join(", ") + ")");
-check(JSON.stringify(ph.map(h => h.line)) === JSON.stringify([1, 2, 8, 9, 11]),
-  "planted sample: hits on lines 1, 2, 8, 9, 11 only (comments and (c) skipped), got " +
+check(JSON.stringify(ph.map(h => h.line)) === JSON.stringify([1, 2, 8, 9, 11, 14]),
+  "planted sample: hits on lines 1, 2, 8, 9, 11, 14 only (comments and (c) skipped), got " +
   ph.map(h => h.line).join(","));
 check(scan("a{content:\"" + U(0x2197) + "\"} /* " + U(0x2197) + " */", true).length === 1,
   "CSS: a glyph in content: is caught, one in a comment is not");

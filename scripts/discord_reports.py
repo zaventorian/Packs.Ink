@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -99,6 +100,12 @@ WEEKLY_TZ = ZoneInfo("America/Chicago")
 WEEKLY_FIRST_HOUR = 9
 WEEKLY_LAST_HOUR = 15          # exclusive
 WEEKLY_MAX_LAG_DAYS = 2        # Sunday's prices, or Saturday's if Sunday's ETL failed
+WEEKLY_MIN_LAG_DAYS = 1        # never Monday's own: that is the daily's report
+# A weekly is owed when the last one went out at least this many days of prices
+# ago. In one Monday window the price date can only move Saturday -> Sunday (a
+# late ETL), so 3 never posts twice; 6 let a weekly forced on a Tuesday cost
+# the channel the next Monday's.
+WEEKLY_REPEAT_DAYS = 3
 
 # ── links: the site's tcgUrl, exactly (test_discord_reports.py checks Index.html) ──
 TCG_AFFILIATE_BASE = "https://partner.tcgplayer.com/c/7285926/1780961/21018"
@@ -111,6 +118,23 @@ SET_DISPLAY_NAMES = {
     "Hunny Rescue – Illumineer's Quest": "Illumineer's Quest: The Great Hunny Rescue",
 }
 C1_SET = "Challenge Promo"
+# Index.html's PROMO_RARITY_SETS (display names): every card in these sets is a
+# Promo on the site whatever rarity Lorcast printed. price_movers carries the
+# PRINTED rarity, so without this a Promo Set 2 "Enchanted" read as a chase card
+# and a Magical Places Promos "Rare" as a base card. Pinned by the test.
+PROMO_RARITY_SETS = {
+    "Promo Set 1", "Promo Set 2", "Promo Set 3",
+    "Lorcana Challenge Promo (C1)",
+    "D23 Collection",
+    "Lorcana Challenge Promo (C2)",
+    "Lorcana Challenge Promo (C3)",
+    "Magical Places Promos",
+    "Curator's Collection: Heroines",
+    "Curator's Collection: Beauty and the Beast",
+    "Promo Set 4",
+    "PD1",
+    "Ravensburger Play Hub Promos",
+}
 
 # ── sections ────────────────────────────────────────────────────────────────
 CHASE_RARITIES = {"Enchanted", "Epic", "Iconic"}
@@ -174,17 +198,19 @@ def due(sub, today, force_weekly=False):
     if sub["cadence"] == "weekly":
         # force_weekly is a person asking for it now: it posts even to a
         # channel that already has this week's.
-        return force_weekly or last is None or (today - last).days >= 6
+        return force_weekly or last is None or (today - last).days >= WEEKLY_REPEAT_DAYS
     return False
 
 
 def weekly_open(price_date, now):
-    """May the weekly post at `now` (UTC)? Monday 9 AM - 3 PM Chicago, on
-    prices no older than the weekend."""
+    """May the weekly post at `now` (UTC)? Monday 9 AM - 3 PM Chicago, on the
+    weekend's prices. ⚠ Never on MONDAY's: from November (CST) the ETL lands
+    ~14:40 Chicago, inside the window, and an ETL-triggered run would rebuild
+    the weekly from Monday's prices and post it beside the daily."""
     local = now.astimezone(WEEKLY_TZ)
     if local.weekday() != 0 or not (WEEKLY_FIRST_HOUR <= local.hour < WEEKLY_LAST_HOUR):
         return False
-    return (local.date() - price_date).days <= WEEKLY_MAX_LAG_DAYS
+    return WEEKLY_MIN_LAG_DAYS <= (local.date() - price_date).days <= WEEKLY_MAX_LAG_DAYS
 
 
 def fresh_enough(price_date, now):
@@ -250,6 +276,16 @@ def bucket_of(row):
     return "foil"
 
 
+def site_rarity(row, sets):
+    """The row with the rarity the SITE shows (buildRow's PROMO_RARITY_SETS
+    override, as the home movers banners apply it to price_movers): a card in
+    a promo-only set is a Promo, whatever was printed on it."""
+    name = set_display(sets.get(row.get("set_id"), ""))
+    if name in PROMO_RARITY_SETS and row.get("rarity") not in ("Promo", "Quest"):
+        return {**row, "rarity": "Promo"}
+    return row
+
+
 def dollar_move(price, pct):
     """What the move was in dollars, from today's price and its percent."""
     base = 1 + float(pct) / 100
@@ -302,10 +338,21 @@ def sectioned(rows, window, ebay=()):
 # "+1233%" to $200,000 led the Promos section on 2026-10-05. Zaven: "for those
 # cards, we should use the ebay sales data and ignore the tcgp for changes in
 # price." Any card in raw_sales_rollup leaves the TCGplayer movers entirely, and
-# comes back only when it SOLD on eBay inside the window: its move is the
-# average of its last 5 eBay sales now against the same average at the start of
-# the window — the site's "Avg of last 5", so a report and a card page agree.
+# comes back only when NEW eBay sales of it reached us since the last report:
+# its move is the average of its last 5 eBay sales now against the same average
+# before them — the site's "Avg of last 5", so a report and a card page agree.
+#
+# ⚠ "New" is when we LEARNED of a sale (scraped_at), not when it sold. The
+# scrape runs once a day and Terapeak lists a sale a day or more after it
+# sells, so "sold on the price date" (the first rule) almost never held and the
+# daily carried no eBay moves at all; a sale that sold Saturday and reached us
+# Tuesday fell between two weeklies. The window runs from the previous report
+# of the same cadence (discord_report_latest.built_at) to now, and a sale that
+# sold more than EBAY_FRESH_DAYS before the price date is never "new" — a
+# backfill of old sales must not read as this week's market.
 EBAY_MIN_BEFORE = 3            # a baseline of one or two sales is not a price
+EBAY_FRESH_DAYS = 14
+EBAY_MAX_GAP_DAYS = 2          # past one missed report, a window stops growing
 EBAY_FOIL = {"foil", "cold foil", "holofoil", "holo"}
 EBAY_NONFOIL = {"normal", "non-foil", "nonfoil"}
 
@@ -333,9 +380,45 @@ def catalog_bucket(printing):
     return s
 
 
-def ebay_moves(sales, flags, price_date, days):
-    """{(card_id, bucket): move} for every bucket that sold inside the window
-    and has a real baseline before it. Pure — the test drives it directly."""
+def _utc(ts):
+    """An ISO timestamp as an aware UTC datetime (a naive one is taken as
+    UTC), or None."""
+    if not ts:
+        return None
+    try:
+        t = dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
+
+
+def ebay_window(sb, price_date, window, now):
+    """(cutoff, end): a sale scraped after cutoff and by end is NEW to this
+    report. cutoff is when the previous report of this cadence was built; a
+    rebuild of a report already kept for this price date (a second run the
+    same day) reuses that report's own window, so both say the same thing."""
+    span = dt.timedelta(days=digest.WINDOW_DAYS[window])
+    cadence = "daily" if window == "1d" else "weekly"
+    end, cutoff = now, None
+    try:
+        row = (load_latest(sb) or {}).get(cadence) or {}
+    except Exception:
+        row = {}
+    built = _utc(row.get("built_at"))
+    if built and built <= now:
+        if str(row.get("price_date") or "")[:10] == price_date.isoformat():
+            end, cutoff = built, built - span
+        else:
+            cutoff = built
+    if cutoff is None:
+        cutoff = end - span
+    return max(cutoff, end - span - dt.timedelta(days=EBAY_MAX_GAP_DAYS)), end
+
+
+def ebay_moves(sales, flags, cutoff, end, floor):
+    """{(card_id, bucket): move} for every bucket with a sale NEW to this
+    report — scraped after cutoff and by end, sold on or after floor — and a
+    real baseline from what was known before. Pure — the test drives it."""
     groups = {}
     for s in sales:
         cid, price, day = s.get("card_id"), s.get("sale_price"), s.get("sold_date")
@@ -345,23 +428,26 @@ def ebay_moves(sales, flags, price_date, days):
         key = (cid, sale_pkey(s.get("printing"), f.get("split_printing"), f.get("foil_split")))
         if key[1] == "Unknown":
             continue
+        seen = _utc(s.get("scraped_at"))
+        if seen and seen > end:
+            continue                  # reached us after this report: the next one's
         d = dt.date.fromisoformat(str(day)[:10])
-        if d > price_date:
-            continue
-        groups.setdefault(key, []).append((d, str(s.get("scraped_at") or ""), float(price)))
-    start = price_date - dt.timedelta(days=days)
+        fresh = bool(seen and seen > cutoff and d >= floor)
+        old = not (seen and seen > cutoff)
+        if fresh or old:
+            groups.setdefault(key, []).append((d, str(s.get("scraped_at") or ""), float(price), fresh))
     out = {}
     for key, rows in groups.items():
         rows.sort()
-        sold = [r for r in rows if r[0] > start]
-        before = [r for r in rows if r[0] <= start][-5:]
-        if not sold or len(before) < EBAY_MIN_BEFORE:
+        new = [r for r in rows if r[3]]
+        before = [r for r in rows if not r[3]][-5:]
+        if not new or len(before) < EBAY_MIN_BEFORE:
             continue
         now = [r[2] for r in rows[-5:]]
         avg_now, avg_was = sum(now) / len(now), sum(r[2] for r in before) / len(before)
         if avg_was <= 0 or avg_now == avg_was:
             continue
-        out[key] = {"now": avg_now, "was": avg_was, "sold": len(sold), "n": len(now),
+        out[key] = {"now": avg_now, "was": avg_was, "sold": len(new), "n": len(now),
                     "pct": (avg_now / avg_was - 1) * 100}
     return out
 
@@ -389,9 +475,10 @@ def ebay_rows(moves, flags, catalog):
     return out
 
 
-def fetch_ebay(sb, price_date, window):
+def fetch_ebay(sb, price_date, window, now=None):
     """(card ids we track on eBay, report rows), or None when the eBay tables
     can't be read — the report then runs on TCGplayer alone, as before."""
+    now = now or dt.datetime.now(dt.timezone.utc)
     try:
         roll = sb.select("raw_sales_rollup", columns="card_id", order="card_id.asc,printing.asc")
         ids = sorted({r["card_id"] for r in roll if r.get("card_id")})
@@ -401,15 +488,15 @@ def fetch_ebay(sb, price_date, window):
         flags = {r["id"]: r for r in sb.select("cards", columns="id,split_printing,foil_split",
                                                filters={"id": inlist}, order="id.asc")}
         sales = sb.select("raw_sales", columns="card_id,printing,sale_price,sold_date,scraped_at",
-                          filters={"card_id": inlist, "excluded": "is.false",
-                                   "sold_date": f"lte.{price_date.isoformat()}"},
+                          filters={"card_id": inlist, "excluded": "is.false"},
                           order="card_id.asc,sold_date.asc,item_id.asc")
         catalog = sb.select("price_movers", columns="card_id,name,version,rarity,set_id,printing,tcgplayer_product_id",
                             filters={"card_id": inlist}, order="card_id.asc,printing.asc")
     except Exception as e:
         print(f"  (eBay sales unavailable, promos stay on TCGplayer: {type(e).__name__}: {str(e)[:160]})")
         return None
-    moves = ebay_moves(sales, flags, price_date, digest.WINDOW_DAYS[window])
+    cutoff, end = ebay_window(sb, price_date, window, now)
+    moves = ebay_moves(sales, flags, cutoff, end, price_date - dt.timedelta(days=EBAY_FRESH_DAYS))
     return set(ids), ebay_rows(moves, flags, catalog)
 
 
@@ -496,10 +583,11 @@ def arrow(row):
 
 def ebay_note(row, weekly):
     """What an eBay row's price is: the average of its last N eBay sales, and
-    how many sold in the window — a move made by one sale should say so."""
+    how many NEW sales moved it — a move made by one sale should say so. "New"
+    is new to us since the last report, not sold in a calendar window (see
+    ebay_window), so the line does not claim a sale date it doesn't know."""
     e = row["ebay"]
-    span = "this week" if weekly else "today"
-    return f"eBay avg of last {e['n']} sales · {e['sold']} sold {span}"
+    return f"eBay avg of last {e['n']} sales · {e['sold']} new sale{'' if e['sold'] == 1 else 's'}"
 
 
 def daily_line(row, key, sets, standing):
@@ -901,9 +989,11 @@ def build_report(sb, price_date, window, session=requests, now=None):
     weekly = window != "1d"
     sets_meta = load_sets(sb)
     sets = {sid: m["name"] for sid, m in sets_meta.items()}
-    cands = fetch_candidates(sb, window)
-    eb = fetch_ebay(sb, price_date, window)
+    now = now or dt.datetime.now(dt.timezone.utc)
+    cands = [site_rarity(r, sets) for r in fetch_candidates(sb, window)]
+    eb = fetch_ebay(sb, price_date, window, now=now)
     tracked, ebay = eb if eb is not None else (set(), [])
+    ebay = [site_rarity(r, sets) for r in ebay]
     ranked = sectioned([r for r in cands if r.get("card_id") not in tracked], window, ebay)
     fresh = {}
     for key in SECTION_ORDER:
@@ -1032,20 +1122,30 @@ def build_report(sb, price_date, window, session=requests, now=None):
             "plain": plain}
 
 
-def post(token, channel_id, report, session=requests):
+def report_nonce(sub, price_date):
+    """Discord's nonce for one (channel, cadence, price date). Sent with
+    enforce_nonce, a second post of the same report inside Discord's dedupe
+    window (a few minutes) gets the first message back instead of a duplicate:
+    a post that timed out on our side but landed, then went again. ≤25 chars."""
+    key = f"{sub['channel_id']}|{sub['cadence']}|{price_date.isoformat()}"
+    return hashlib.sha1(key.encode()).hexdigest()[:25]
+
+
+def post(token, channel_id, report, session=requests, nonce=None):
     """Post one report; a report whose attachments Discord refuses is re-sent
     without them, so the words still arrive."""
     url = f"{API}/channels/{channel_id}/messages"
     auth = {"Authorization": f"Bot {token}"}
+    once = {"nonce": nonce, "enforce_nonce": True} if nonce else {}
 
     def as_json(embeds):
         return session.post(url, headers={**auth, "Content-Type": "application/json"},
-                            json={"embeds": embeds, "allowed_mentions": {"parse": []}}, timeout=30)
+                            json={"embeds": embeds, "allowed_mentions": {"parse": []}, **once}, timeout=30)
 
     files = report.get("files") or []
     if not files:
         return as_json(report["embeds"])
-    payload = {"embeds": report["embeds"], "allowed_mentions": {"parse": []},
+    payload = {"embeds": report["embeds"], "allowed_mentions": {"parse": []}, **once,
                "attachments": [{"id": i, "filename": n} for i, (n, _) in enumerate(files)]}
     r = session.post(url, headers=auth, data={"payload_json": json.dumps(payload)},
                      files={f"files[{i}]": (n, b, "image/png") for i, (n, b) in enumerate(files)},
@@ -1070,7 +1170,7 @@ def load_latest(sb):
     """{cadence: row} for the stored reports, or None when migration 175 is
     not applied yet."""
     try:
-        rows = sb.select(LATEST_TABLE, columns="cadence,price_date,files", order="cadence.asc")
+        rows = sb.select(LATEST_TABLE, columns="cadence,price_date,files,built_at", order="cadence.asc")
     except RuntimeError as e:
         msg = str(e)
         if "404" in msg or "42P01" in msg or "PGRST205" in msg or "does not exist" in msg:
@@ -1143,6 +1243,19 @@ def store_latest(sb, price_date, report_for, session=requests, cadences=("daily"
     return stored
 
 
+def record(sb, match, patch, tries=3):
+    """Write a subscription's bookkeeping, retried: a post that went out but
+    was never recorded is posted AGAIN by the next run. Never raises."""
+    for i in range(tries):
+        try:
+            sb.update(TABLE, match, {**patch, "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()})
+            return True
+        except Exception as e:
+            print(f"  (could not record it, try {i + 1}/{tries}: {type(e).__name__}: {str(e)[:160]})")
+            time.sleep(0.5 * (i + 1))
+    return False
+
+
 def run(args, sb=None, session=requests, now=None):
     token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
     if args.post and not token:
@@ -1175,7 +1288,7 @@ def run(args, sb=None, session=requests, now=None):
 
     def report_for(cadence):
         if cadence not in built:
-            built[cadence] = build_report(sb, price_date, WINDOW[cadence], session=session)
+            built[cadence] = build_report(sb, price_date, WINDOW[cadence], session=session, now=now)
         return built[cadence]
 
     # Kept whether or not any channel subscribes: /reports send posts it.
@@ -1214,20 +1327,27 @@ def run(args, sb=None, session=requests, now=None):
             print(f"  DRY RUN {where}: {rep['embeds'][0]['title']} — {len(rep['embeds'])} embeds, "
                   f"{len(rep['files'])} pictures")
             continue
-        r = post(token, s["channel_id"], rep, session=session)
         match = {"guild_id": s["guild_id"], "channel_id": s["channel_id"], "cadence": s["cadence"]}
-        if r.status_code < 300:
+        # ⚠ One channel's timeout must never end the run for every other one.
+        try:
+            r = post(token, s["channel_id"], rep, session=session, nonce=report_nonce(s, price_date))
+            status = r.status_code
+        except Exception as e:
+            status, reason = None, f"could not reach Discord ({type(e).__name__})"
+        if status is not None and status < 300:
             posted += 1
-            sb.update(TABLE, match, {"last_posted_on": price_date.isoformat(), "last_error": None,
-                                     "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()})
+            # Recorded straight away (and retried): a post nobody wrote down
+            # goes out again next run.
+            if not record(sb, match, {"last_posted_on": price_date.isoformat(), "last_error": None}):
+                print(f"::warning::posted {where} but could not record it; the next run may post it again")
             print(f"  posted {where}")
         else:
             failed += 1
             # The bot's own words about why — never the token, never the URL.
-            reason = {403: "the bot can't post in that channel (missing access or permission)",
-                      404: "that channel no longer exists"}.get(r.status_code, f"Discord said HTTP {r.status_code}")
-            sb.update(TABLE, match, {"last_error": reason[:300],
-                                     "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()})
+            if status is not None:
+                reason = {403: "the bot can't post in that channel (missing access or permission)",
+                          404: "that channel no longer exists"}.get(status, f"Discord said HTTP {status}")
+            record(sb, match, {"last_error": reason[:300]})
             print(f"  FAILED {where}: {reason}")
         time.sleep(0.4)   # well under Discord's per-route rate limits
     print(f"Done: {posted} posted, {failed} failed, {len(owed) - posted - failed} skipped.")

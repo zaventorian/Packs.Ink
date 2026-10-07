@@ -450,6 +450,15 @@
       "how": "Ask Zaven for the current bundle (he is on the distribution list; a Google Drive\nlink is the usual form). Unzip it anywhere, then:\n  python scripts/bake_brand_assets.py --bundle \"<...>/Complete Bundle\" --check\n--check writes nothing and NAMES any file that moved — Ravensburger renames\nbetween drops (\"Set6_Colour\" one set, \"AzuriteSea-Color\" the next), so fix the\nmanifest at the top of that script first and re-run until it is clean.\nThen bake for real with --contact and LOOK AT THE SHEET: a logo whose alpha is\nempty, or a 'white' glyph that was actually black, both bake without an error\nand are invisible on exactly one theme.\nAdd the new set to LORCANA_SET_ART in Index.html (key = the SET_RELEASE_DATES\nname), then `node scripts/test_brand_art.mjs`, which checks the maps against the\nfiles in both directions.\nAlso worth a look each time: new promo stamps in Promo Icons/ for any promo set\nwe track, and whether the new set brought a colour logo for The First Chapter\n(it is the one set with none, and ships as an inverted black SVG because of it).",
       "due": "2026-11-07",
       "every_days": 90
+    },
+    {
+      "id": "migration-189-attendance",
+      "what": "Apply migration 189: take attendance names away from anonymous readers",
+      "why": "Migration 188 (applied 2026-10-06) gave rph_event_attendance a private person_key, and the client that reads it shipped in v532. 189 revokes the table-wide SELECT so names, RPH account ids and standings are readable only with the service key. It waits a day after the deploy because a tab still running the old site selects those columns and would fail.",
+      "how": "Confirm v532 or later is live: curl -s https://packs.ink/__nope-$RANDOM | grep -o 'styles.css?v=[0-9]*'\nThen apply supabase/189_attendance_anon_columns.sql (Supabase connector apply_migration, or the SQL editor).\nCheck: an anon read of rph_event_attendance?select=best_identifier must 401/403, and /elo?sub=stores must still list the stores.\nRecord it APPLIED in docs/claude/pending-roadmap.md and DELETE this review entry (it is a one-off).",
+      "due": "2026-10-07",
+      "every_days": 1,
+      "last_done": null
     }
   ]
 }

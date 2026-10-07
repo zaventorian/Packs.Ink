@@ -181,6 +181,10 @@ def main():
                     help="ignore per-file cutoffs and pull every query to exhaustion")
     ap.add_argument("--query", default=None,
                     help="only queries containing this substring (case-insensitive)")
+    ap.add_argument("--start", type=int, default=1,
+                    help="resume at this 1-based query number (skip ones already done)")
+    ap.add_argument("--gap-scale", type=float, default=1.0,
+                    help="multiply the 45-90s between-query pause (e.g. 3 = slower, gentler)")
     args = ap.parse_args()
 
     RAW_OUT.mkdir(exist_ok=True)
@@ -208,6 +212,8 @@ def main():
         tt.ensure_all_sites(page)
 
         for i, q in enumerate(qs, 1):
+            if i < args.start:
+                continue
             print(f"\n[{i}/{len(qs)}] {q}")
             r = scrape_query(page, q, args.deep)
             if r == "CHALLENGE":
@@ -216,7 +222,7 @@ def main():
             # keyword switches in a row is the shape of traffic Distil watches
             # for, and the burner account is not worth saving ten minutes.
             if i < len(qs):
-                time.sleep(random.uniform(45.0, 90.0))
+                time.sleep(random.uniform(45.0, 90.0) * args.gap_scale)
     print("\nALL DONE. Next: python scripts/raw_load.py --from-jsonl")
     return 0
 

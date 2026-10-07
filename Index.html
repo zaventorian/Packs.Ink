@@ -30,7 +30,7 @@
    you); the settings menu is what saves one. Keep I18N_VER in step with the
    ?v= the dictionaries were last changed under. */
 (function(){
-  var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="7", l=null;
+  var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="8", l=null;
   try{
     var q=new URLSearchParams(location.search).get("hl");
     l = (q && (OK[q]||q==="en")) ? q : localStorage.getItem("packsink:lang");
@@ -250,16 +250,23 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=531">
+<link rel="stylesheet" href="styles.css?v=532">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
-     Each PNG is ~3-5 KB so the cost is negligible. -->
-<link rel="preload" as="image" href="Logos/inks/AMBER.png"/>
-<link rel="preload" as="image" href="Logos/inks/AMETHYST.png"/>
-<link rel="preload" as="image" href="Logos/inks/EMERALD.png"/>
-<link rel="preload" as="image" href="Logos/inks/RUBY.png"/>
-<link rel="preload" as="image" href="Logos/inks/SAPPHIRE.png"/>
-<link rel="preload" as="image" href="Logos/inks/STEEL.png"/>
+     Each PNG is ~3-5 KB so the cost is negligible. FIRST VISIT ONLY: once the
+     service worker controls the page Chrome refuses a parser preload ("cross-
+     world service worker resource mismatch"), fetches each icon again and logs
+     a warning per ink chip — 128 of them on the home page (2026-10-06). -->
+<script>
+(function(){
+  try { if(navigator.serviceWorker && navigator.serviceWorker.controller) return; } catch(e){}
+  ["AMBER","AMETHYST","EMERALD","RUBY","SAPPHIRE","STEEL"].forEach(function(n){
+    var l = document.createElement("link");
+    l.rel = "preload"; l.as = "image"; l.href = "Logos/inks/" + n + ".png";
+    document.head.appendChild(l);
+  });
+})();
+</script>
 </head>
 <body>
 <!--
@@ -348,7 +355,7 @@
      the scanner on any given visit. Both scripts only attach globals used when
      the scan modal opens, long after DOMContentLoaded. The heavy parts (OpenCV,
      the ONNX OCR models) load later still, inside the workers. -->
-<script src="scanner.js?v=511" defer></script>
+<script src="scanner.js?v=531" defer></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -624,7 +631,7 @@ const deckVersionsUnavailable = (err) => {
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v65";  // v65: Lorcast's duplicate Piglet #223 (Into the Inklands) is suppressed; same row count in `cards`, so the count probe would not refetch on its own. v64: art for three Palace Heist oversized cards and the quest battlegrounds now stored sideways like Locations; same row count, so the cards-count probe would not refetch. (v63: Illumineer's Quest cards are their own sets with rarity "Quest" (no longer Promo), and Q3's set name is the display name, both baked into cached rows. (v62: Coconut leader The Black Cauldron (cn 27, the first versionless one) is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v61: two ink drop counter rows (Extras & Oddities, Hyperia City) are NEW synthetic rows baked in by transformSupabaseData, and Minnie Mouse 17/P4 gains its "Japanese Exclusive" label and moves to the Normal printing there, so a cache replay would show neither for 24h. (v60: Coconut rebalance — Snow White (Beta 1.1) + The Madrigal Family (Beta 2.1) ability text and re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording for 24h. (v59: Coconut leader Pete - Bad Guy (cn 26) is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v58: rows carry `added_at` (cards.inserted_at) for the new-card reveal reel — a replayed v57 record has no such field, so every card reads as "not new" and the reel stays dark for 24h on exactly the sessions a reveal wave is meant to reach. (v57: promo-set rework — SUPPRESSED_CARD_IDS, one placeholder row per unpriced P4/PD1 card, the P3 #63 "Japanese Exclusive" label, and the cards-count freshness probe (a v56 record has no cardCount). (v56: Coconut Beta 2 — The Vine - Towering Stalk is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v55: Elsa - Exploring the Unknown 59/P3 (JA) moved to JAPAN_ONLY_NONFOIL, so its img_* now point at the JP scan — the English frame is baked into cached rows and a replay would keep showing it for 24h. v54: Coconut Beta 1.1 — Stitch/Mufasa/Donald Duck/Robin Hood ability text + their re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording searchable for 24h. v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. v52: Coconut leader merge/suppress.))
+const CACHE_KEY = "packsink:catalog:v66";  // v66: the 12 Starter Deck Foil tiles are the Holofoil printing (was the in-pack Cold Foil) and relabelled "Starter Deck Foil"; migration 187 moves their collection entries, so a replayed v65 record keys them as Cold Foil and shows those owners' tiles as unowned for 24h. v65: Lorcast's duplicate Piglet #223 (Into the Inklands) is suppressed; same row count in `cards`, so the count probe would not refetch on its own. v64: art for three Palace Heist oversized cards and the quest battlegrounds now stored sideways like Locations; same row count, so the cards-count probe would not refetch. (v63: Illumineer's Quest cards are their own sets with rarity "Quest" (no longer Promo), and Q3's set name is the display name, both baked into cached rows. (v62: Coconut leader The Black Cauldron (cn 27, the first versionless one) is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v61: two ink drop counter rows (Extras & Oddities, Hyperia City) are NEW synthetic rows baked in by transformSupabaseData, and Minnie Mouse 17/P4 gains its "Japanese Exclusive" label and moves to the Normal printing there, so a cache replay would show neither for 24h. (v60: Coconut rebalance — Snow White (Beta 1.1) + The Madrigal Family (Beta 2.1) ability text and re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording for 24h. (v59: Coconut leader Pete - Bad Guy (cn 26) is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v58: rows carry `added_at` (cards.inserted_at) for the new-card reveal reel — a replayed v57 record has no such field, so every card reads as "not new" and the reel stays dark for 24h on exactly the sessions a reveal wave is meant to reach. (v57: promo-set rework — SUPPRESSED_CARD_IDS, one placeholder row per unpriced P4/PD1 card, the P3 #63 "Japanese Exclusive" label, and the cards-count freshness probe (a v56 record has no cardCount). (v56: Coconut Beta 2 — The Vine - Towering Stalk is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v55: Elsa - Exploring the Unknown 59/P3 (JA) moved to JAPAN_ONLY_NONFOIL, so its img_* now point at the JP scan — the English frame is baked into cached rows and a replay would keep showing it for 24h. v54: Coconut Beta 1.1 — Stitch/Mufasa/Donald Duck/Robin Hood ability text + their re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording searchable for 24h. v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. v52: Coconut leader merge/suppress.))
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -1607,11 +1614,17 @@ async function writeCache(rows, latestDate, cardCount){
   //      state (theme/display prefs, graded:removed, trade draft, screener
   //      views, install prefs) — see AUX_EVICTABLE_PREFIXES.
   //   3. If still failing, give up and warn (next visit will retry).
-  try { localStorage.removeItem(CACHE_KEY); localStorage.setItem(CACHE_KEY, payload); return; }
+  // ⚠ Once this copy is written, drop the IndexedDB record: readCache reads IDB
+  // FIRST, so an IDB that refuses writes but still answers reads kept handing
+  // back its outdated catalog, which then flashed on screen on every re-probe
+  // and forced a full refetch each time (2026-10-06). If this write fails too,
+  // the old record stays: an outdated catalog beats none.
+  try { localStorage.removeItem(CACHE_KEY); localStorage.setItem(CACHE_KEY, payload); idbDel(CATALOG_IDB_KEY); return; }
   catch(e){ /* fall through */ }
   try {
     wipePriceDerivedAuxCaches();
     localStorage.setItem(CACHE_KEY, payload);
+    idbDel(CATALOG_IDB_KEY);
   } catch(e2){
     console.warn("cache write failed even after eviction:", e2?.message || e2);
   }
@@ -1897,7 +1910,7 @@ function Tip(props){
 const signalGradedSurface = () => { try { window.dispatchEvent(new Event("packsink:graded-surface")); } catch {} };
 
 // "Extras & Oddities" — bucket for one-off TCGPlayer variants that aren't
-// part of any mainline set (starter-deck-exclusive foils, set-bonus prints,
+// part of any mainline set (Starter Deck Foils, set-bonus prints,
 // confirmed misprint variants). Prepended to SET_ORDER so:
 //   - reverse() iteration in the Collection view puts it LAST (it's a
 //     curio bucket, not the headline set);
@@ -2574,23 +2587,33 @@ const VARIANT_LABELS_BY_CARD_ID = {
 //   excludeFromBaseSet:  if true, also drop the base card's appearance from
 //                        its origin set — used for cards that only really
 //                        exist as the variant (e.g. Half Hexwell Crown).
+//   printing:            the TCGCSV printing that IS the variant, when the
+//                        product carries more than one foil printing.
 // Audit source: scripts/audit_holofoils.py (run periodically).
+//
+// Starter Deck Foils (Zaven's name for them, 2026-10-06): a foil treatment
+// printed only in the starter decks. TCGplayer lists each one as the HOLOFOIL
+// printing of the base card's product, beside the ordinary in-pack Cold Foil —
+// so these 12 products carry Normal + Cold Foil + Holofoil. The base tile owns
+// Normal + Cold Foil; this tile is the Holofoil. It used to take the Cold Foil
+// first and show the in-pack foil's price (Jessie $3.02 against $7.89).
+const STARTER_DECK_FOIL = {variantLabel:"Starter Deck Foil", printing:"Holofoil"};
 const EXTRAS_MAP = {
-  // Wilds Unknown starter-deck-exclusive foils
-  678236: {originSet:"Wilds Unknown",        variantLabel:"Starter Deck Exclusive Foil"}, // Buzz Lightyear - On the Way
-  678237: {originSet:"Wilds Unknown",        variantLabel:"Starter Deck Exclusive Foil"}, // Mrs. Incredible - Super Stretchy
-  678238: {originSet:"Wilds Unknown",        variantLabel:"Starter Deck Exclusive Foil"}, // Jack-Jack Parr - Incredible Potential
-  690204: {originSet:"Wilds Unknown",        variantLabel:"Starter Deck Exclusive Foil"}, // Jessie - Lively Cowgirl
-  // Fabled starter-deck-exclusive foils
-  647652: {originSet:"Fabled",               variantLabel:"Starter Deck Exclusive Foil"}, // Ariel - Singing Mermaid
-  647681: {originSet:"Fabled",               variantLabel:"Starter Deck Exclusive Foil"}, // Max Goof - Rebellious Teen
-  649224: {originSet:"Fabled",               variantLabel:"Starter Deck Exclusive Foil"}, // Powerline - World's Greatest Rock Star
-  650077: {originSet:"Fabled",               variantLabel:"Starter Deck Exclusive Foil"}, // Mulan - Considerate Diplomat
-  // Whispers in the Well starter-deck-exclusive foils
-  653916: {originSet:"Whispers in the Well", variantLabel:"Starter Deck Exclusive Foil"}, // Judy Hopps - Uncovering Clues
-  657892: {originSet:"Whispers in the Well", variantLabel:"Starter Deck Exclusive Foil"}, // Megara - Secret Keeper
-  657893: {originSet:"Whispers in the Well", variantLabel:"Starter Deck Exclusive Foil"}, // Robin Hood - Ephemeral Archer
-  657894: {originSet:"Whispers in the Well", variantLabel:"Starter Deck Exclusive Foil"}, // Simba - King in the Making
+  // Wilds Unknown Starter Deck Foils
+  678236: {originSet:"Wilds Unknown",        ...STARTER_DECK_FOIL}, // Buzz Lightyear - On the Way
+  678237: {originSet:"Wilds Unknown",        ...STARTER_DECK_FOIL}, // Mrs. Incredible - Super Stretchy
+  678238: {originSet:"Wilds Unknown",        ...STARTER_DECK_FOIL}, // Jack-Jack Parr - Incredible Potential
+  690204: {originSet:"Wilds Unknown",        ...STARTER_DECK_FOIL}, // Jessie - Lively Cowgirl
+  // Fabled Starter Deck Foils
+  647652: {originSet:"Fabled",               ...STARTER_DECK_FOIL}, // Ariel - Singing Mermaid
+  647681: {originSet:"Fabled",               ...STARTER_DECK_FOIL}, // Max Goof - Rebellious Teen
+  649224: {originSet:"Fabled",               ...STARTER_DECK_FOIL}, // Powerline - World's Greatest Rock Star
+  650077: {originSet:"Fabled",               ...STARTER_DECK_FOIL}, // Mulan - Considerate Diplomat
+  // Whispers in the Well Starter Deck Foils
+  653916: {originSet:"Whispers in the Well", ...STARTER_DECK_FOIL}, // Judy Hopps - Uncovering Clues
+  657892: {originSet:"Whispers in the Well", ...STARTER_DECK_FOIL}, // Megara - Secret Keeper
+  657893: {originSet:"Whispers in the Well", ...STARTER_DECK_FOIL}, // Robin Hood - Ephemeral Archer
+  657894: {originSet:"Whispers in the Well", ...STARTER_DECK_FOIL}, // Simba - King in the Making
   // Gift-set oversized jumbo cards (TFC + Into the Inklands gift sets). Their
   // TCGCSV listing is the Cold Foil printing; excludeFromBaseSet keeps the jumbo
   // out of its origin set so only the normal print shows there.
@@ -3133,6 +3156,15 @@ const RarityTag = ({rarity, hideText, klass}) => {
     ${!hideText && html`<span class="rarity-tag-text">${_term("rarity", rarity)}</span>`}
   </span>`;
 };
+
+// The face of an icon-only rarity CHIP (the button carries the name in its
+// title / aria-label). A rarity with no icon file rendered a blank, unlabelled
+// pill: Quest (2026-10-03) did exactly that at the end of the Screener's row.
+// It shows its name instead, and so will the next rarity anyone adds.
+const RarityChipFace = ({rarity}) => RARITY_ICONS[rarity]
+  ? html`<img class="chip-rarity-icon" src=${RARITY_ICONS[rarity]} alt="" aria-hidden="true"
+      onError=${e=>{ e.target.style.display="none"; }}/>`
+  : html`<span class="chip-rarity-text" aria-hidden="true">${_term("rarity", rarity)}</span>`;
 
 // Pointy-top hex frame shared by all the hex chips below. Inline SVG, no
 // extra HTTP request, theme-aware via the cost-hex-* CSS variables.
@@ -4449,6 +4481,27 @@ const keyActivate = (fn) => (e) => {
   if(e.target !== e.currentTarget) return;
   if(e.key === "Enter" || e.key === " "){ e.preventDefault(); fn(e); }
 };
+// The keyboard and screen-reader way into a tile that opens on a click ANYWHERE
+// in it (a card tile, a movers tile, an EV row) while also holding buttons and
+// links of its own. Such a tile used to BE the button — role="button" on the
+// wrapper — but a button may not contain other controls: a screen reader reads
+// the whole tile as one long name and some cannot reach the inner ones at all
+// (axe "nested-interactive", 2026-10-06). So the wrapper is a plain clickable box
+// and this is its button, first in the tile so Tab lands on it before the
+// tile's own controls.
+// ⚠ It has NO handler: its click bubbles to the wrapper's onClick, so the two can
+// never disagree about what opening the tile means (in the deck builder it adds
+// a copy, exactly as Enter on the tile did).
+// ⚠ It COVERS the tile (inset:0 — the wrapper must be positioned) so focusing it
+// scrolls the whole tile into view, but it is clipped to nothing and ignores the
+// pointer: a mouse or a finger still lands on the art, the links and the image's
+// context menu exactly as before. The focus ring is drawn on the tile by
+// `:has(> .tile-open:focus-visible)` rules in styles.css.
+// ⚠ The wrapper keeps tabIndex -1 and its keydown handler, so a CLICK still
+// focuses the tile as it always did (focus-within reveals, focus returning to
+// it when a modal closes, Enter after a click) — only Tab skips it now.
+// Guarded by scripts/test_tile_open.mjs.
+const tileOpen = (label) => html`<button type="button" class="tile-open" aria-label=${label}></button>`;
 const fmtUSD = (n, decimals=2) => {
   const v = Number(n);
   const body = Math.abs(v).toLocaleString(undefined, {minimumFractionDigits:decimals, maximumFractionDigits:decimals});
@@ -4943,13 +4996,16 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
     if(!seed) continue;
     const prices = pricesByProduct[pid] || [];
     // Variants live under different printings depending on the source.
-    // Starter-deck foils + Half Hexwell are Holofoil; Deep Trouble cards
-    // are Cold Foil. Prefer whichever printing the product actually has.
-    const foilPrice = prices.find(p => p.printing === "Cold Foil")
+    // An entry that names its printing gets exactly that one (a Starter Deck
+    // Foil's product also carries the in-pack Cold Foil, which belongs to the
+    // base tile). Otherwise prefer whichever foil the product actually has:
+    // Half Hexwell is Holofoil, Deep Trouble cards are Cold Foil.
+    const foilPrice = (info.printing && prices.find(p => p.printing === info.printing))
+                   || prices.find(p => p.printing === "Cold Foil")
                    || prices.find(p => p.printing === "Foil")
                    || prices.find(p => p.printing === "Holofoil")
                    || null;
-    const printingTag = foilPrice ? foilPrice.printing : "Cold Foil";
+    const printingTag = foilPrice ? foilPrice.printing : (info.printing || "Cold Foil");
     const syntheticCard = {
       ...seed,
       // excludeFromBaseSet cards (quest rewards, gift oversized) are dropped from
@@ -5526,7 +5582,7 @@ function writeJsonCache(key, data){
 function readJsonCacheIdb(key, ttlMs){
   return idbGet(IDB_JSONCACHE_PREFIX + key).then(o => {
     if(!o || typeof o.t !== "number") return null;
-    return {data: o.data, stale: Date.now() - o.t > ttlMs};
+    return {data: o.data, stale: Date.now() - o.t > ttlMs, t: o.t};
   });
 }
 function writeJsonCacheIdb(key, data){
@@ -5938,7 +5994,7 @@ function computeSalesValueHistory(sales, ownedSlots, knownBuckets){
   // valued by forward-fill from each slot's last known sale. Without this the
   // endpoint lands on whatever the window's last sale date happens to be, and
   // acquired-date gating against that shifting date can move the headline.
-  const today = new Date().toISOString().slice(0,10);
+  const today = localYmd();
   if(dates[dates.length-1] < today) dates.push(today);
   const valueByDate = Object.fromEntries(dates.map(d=>[d,0]));
   for(const s of ownedSlots){
@@ -5964,7 +6020,7 @@ function computeSalesValueHistoryAvg5(sales, ownedSlots, knownBuckets){
   for(const s of ownedSlots){ const ser = seriesFor(s); if(ser) for(const r of ser) dateSet.add(r.date); }
   const dates = Array.from(dateSet).sort();
   if(!dates.length) return [];
-  const today = new Date().toISOString().slice(0,10);
+  const today = localYmd();
   if(dates[dates.length-1] < today) dates.push(today);
   const valueByDate = Object.fromEntries(dates.map(d=>[d,0]));
   for(const s of ownedSlots){
@@ -6246,9 +6302,9 @@ function addUnsoldSlabsToSeries(series, sales, slots, valueOf, fallbackDates, kn
   });
 }
 // Range start / today, as the flat-line anchor for the no-sales-in-window case.
-const portfolioFallbackDates = (days) => [
-  new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10),
-  new Date().toISOString().slice(0,10),
+const portfolioFallbackDates = (since) => [
+  since,
+  localYmd(),
 ];
 
 // Per-sealed-pid Δ% rollup. Mirrors computeGradedDeltas + the raw
@@ -6382,7 +6438,8 @@ async function fetchCollectionPriceHistory(productIds, sinceDate, opts){
     source: "eq.tcgcsv",
     grade: "eq.raw",
     tcgplayer_product_id: "in.(" + b.join(",") + ")",
-    date: "gte." + sinceDate,
+    // `dates` (collectionRangeDates) samples a long range instead of every day.
+    date: (opts && opts.dates) ? "in.(" + opts.dates.join(",") + ")" : "gte." + sinceDate,
     order: "tcgplayer_product_id.asc,printing.asc,date.asc",
   });
   try {
@@ -6406,12 +6463,44 @@ async function fetchCollectionPriceHistory(productIds, sinceDate, opts){
 // is exactly what forward-fill would have carried had the window reached back.
 // Only the mats: every other sealed product has daily prices, so its first
 // in-window row already sits at the window's start. `matPids` are TCGplayer ids.
-async function fetchSealedValueHistory(pids, sinceDate, matPids){
-  const rows = await fetchCollectionPriceHistory(pids, sinceDate);
+// Each owned (product, printing)'s newest priced row from BEFORE `sinceDate`,
+// re-dated to sinceDate (migration 186). The value charts fetch prices from the
+// range start only, so an item not priced inside the range (a promo last
+// priced months ago) was missing from the chart entirely and one priced
+// sparsely joined it part-way, while the headline counted both: owning a
+// $5,999.99 Elsa last priced in June read "+$5,999.99 (+150,000%) past 1M"
+// (review, 2026-10-06). Batches of 250 (~0.2-0.4s each) in parallel, under the
+// anon statement timeout. null = couldn't ask (no 186, a timeout): the caller
+// then behaves as before; [] = asked, nothing priced earlier.
+const PRICE_SEED_BATCH = 250;
+async function fetchCollectionPriceSeeds(keys, sinceDate){
+  if(!keys || !keys.length) return [];
+  const batches = [];
+  for(let i = 0; i < keys.length; i += PRICE_SEED_BATCH) batches.push(keys.slice(i, i + PRICE_SEED_BATCH));
+  let failed = false;
+  const out = await Promise.all(batches.map(b =>
+    Promise.resolve(sbClient.rpc("latest_raw_prices_before", {
+      p_pids: b.map(k => k.pid), p_printings: b.map(k => k.printing), p_before: sinceDate}))
+      .then(r => { if(!r || r.error){ failed = true; return []; } return Array.isArray(r.data) ? r.data : []; },
+            () => { failed = true; return []; })));
+  if(failed) return null;
+  return out.flat().map(r => ({...r, date: sinceDate}));
+}
+
+async function fetchSealedValueHistory(pids, sinceDate, matPids, dates){
+  const [rows, seeds] = await Promise.all([
+    fetchCollectionPriceHistory(pids, sinceDate, dates ? {dates} : undefined),
+    fetchCollectionPriceSeeds([...new Set(pids.map(Number))].map(pid => ({pid, printing: "Normal"})), sinceDate),
+  ]);
+  // Seeds go FIRST: the rollup groups rows per product in array order and walks
+  // them oldest to newest.
+  if(seeds) return [...seeds, ...rows];
+  // Without migration 186: the playmats-only seed it replaced (their history
+  // has a months-long hole, so they were the urgent case).
   const want = new Set(pids.map(Number));
   const mats = [...new Set((matPids || []).map(Number))].filter(p => want.has(p));
   if(!mats.length) return rows;
-  const seeds = await Promise.all(mats.map(pid =>
+  const matSeeds = await Promise.all(mats.map(pid =>
     sbClient.from("prices_daily").select("tcgplayer_product_id,printing,date,low_price")
       .eq("source", "tcgcsv").eq("grade", "raw").eq("printing", "Normal")
       .eq("tcgplayer_product_id", pid).lt("date", sinceDate)
@@ -6419,9 +6508,7 @@ async function fetchSealedValueHistory(pids, sinceDate, matPids){
       .order("date", {ascending: false}).limit(1)
       .then(r => (r && !r.error && r.data && r.data[0]) ? {...r.data[0], date: sinceDate} : null,
             () => null)));
-  // Seeds go FIRST: the rollup groups rows per product in array order and walks
-  // them oldest to newest.
-  return [...seeds.filter(Boolean), ...rows];
+  return [...matSeeds.filter(Boolean), ...rows];
 }
 
 // djb2-style hash for the (sorted) owned-products string. The full key
@@ -9011,7 +9098,7 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
     ? (group.foil ? "PRIZE FOIL" : "PRIZE WALL")
     : null;
   return html`<div class=${"card-tile"+(isSelected?" is-selected":"")+(checkboxEl?" card-tile--selectable":"")} onClick=${onClick}
-    role="button" tabIndex="0"
+    tabIndex="-1"
     onKeyDown=${e=>{
       // Only a key pressed ON the tile opens it. Enter on a button inside it
       // (the deck counter's "−", the magnifier) bubbled up here, had its own
@@ -9019,8 +9106,8 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
       // builder ADDS a copy.
       if(e.target !== e.currentTarget) return;
       if(e.key === "Enter" || e.key === " "){ e.preventDefault(); onClick && onClick(e); }
-    }}
-    aria-label=${productName}>
+    }}>
+    ${onClick && tileOpen(productName)}
     <div class="card-tile-img-wrap">
       ${img
         ? html`<img src=${img} alt=${productName} loading="lazy"/>`
@@ -10125,7 +10212,7 @@ const GradedPrivateSaleModal = ({cardId, cardName, onClose, onAdded}) => {
   const [grader, setGrader] = useState("PSA");
   const [grade, setGrade]   = useState("10");
   const [price, setPrice]   = useState("");
-  const [date, setDate]     = useState(()=> new Date().toISOString().slice(0,10));
+  const [date, setDate]     = useState(()=> localYmd());
   const [note, setNote]     = useState("");
   const [busy, setBusy]     = useState(false);
   const submit = async () => {
@@ -10158,7 +10245,7 @@ const GradedPrivateSaleModal = ({cardId, cardName, onClose, onAdded}) => {
       <div class="gs-modal-fields">
         <label>${_t("Sale price")}<input type="number" step="0.01" min="0" value=${price}
           onInput=${e=>setPrice(e.target.value)} placeholder="$"/></label>
-        <label>${_t("Sale date")}<input type="date" value=${date} max=${new Date().toISOString().slice(0,10)}
+        <label>${_t("Sale date")}<input type="date" value=${date} max=${localYmd()}
           onInput=${e=>setDate(e.target.value)}/></label>
       </div>
       <div class="gs-modal-cardpick">
@@ -10928,7 +11015,9 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       for(const v of variantRows){
         const vr = variants.data[v.key];
         if(!vr || !vr.length) continue;
-        const tag = (v.printing !== "Normal" && v.printing !== "Non-Foil")
+        // A label that already names its finish ("Starter Deck Foil") takes no
+        // finish word after it: "Starter Deck Foil Holo" says the finish twice.
+        const tag = (v.printing !== "Normal" && v.printing !== "Non-Foil" && !/\bfoil$/i.test(v.row.Rarity || ""))
           ? (v.printing === "Holofoil" ? " Holo" : " " + v.printing) : "";
         const num = v.row.Number ? " #" + String(v.row.Number).split("/")[0] : "";
         rows.push({
@@ -11273,7 +11362,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           </div>
           ${rangeKey === "custom" && html`<input type="date" class="custom-date-input"
             value=${customStart}
-            max=${new Date().toISOString().slice(0,10)}
+            max=${localYmd()}
             onChange=${e=>setCustomStart(e.target.value)}/>`}
           <label class="checkbox-group" title=${_t("Hide data points from before this set's Local Game Store release.")}>
             <input type="checkbox" checked=${hidePreorders} onChange=${e=>setHidePreorders(e.target.checked)}/>
@@ -11508,8 +11597,7 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
           ${CARDS_RARITIES.map(r => html`<button key=${r} class=${"chip chip-rarity-only "+(filter.rarities.has(r)?"active":"")}
             title=${_term("rarity", r)} aria-label=${_term("rarity", r)}
             onClick=${()=>setFilter(f=>({...f,rarities:toggleSet(f.rarities,r)}))}>
-            ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt=${r}
-              onError=${e=>{ e.target.style.display="none"; }}/>`}
+            <${RarityChipFace} rarity=${r}/>
           </button>`)}
         </div>
       </div>
@@ -15842,8 +15930,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
             class=${"chip chip-rarity-only "+(filter.rarities.has(r)?"active":"")}
             title=${_term("rarity", r)} aria-label=${_term("rarity", r)}
             onClick=${()=>setFilter(f=>({...f,rarities:toggleSet(f.rarities,r)}))}>
-            ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt=${r}
-              onError=${e=>{ e.target.style.display="none"; }}/>`}
+            <${RarityChipFace} rarity=${r}/>
           </button>`)}
         </div>
         <div class="cards-quickfilter-sub">
@@ -16106,6 +16193,7 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
   // Home-page quick-search handoff: pre-seed the smart-search and (when set)
   // open the chosen card's detail modal once `raw` is loaded.
   const [pendingSearch, setPendingSearch] = useState(null);
+  const missingCardRef = useRef(null);  // see the retry effect below
   useEffect(() => {
     if(incomingSearch == null && incomingOpenCardId == null) return;
     // A ?card=<id> cold load reaches here before the catalog: consuming now
@@ -16121,9 +16209,25 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       // side the link named. Pid-less rows (Format Coconut) group on their own.
       const g = groupFromCardParam(incomingOpenCardId, raw);
       if(g) setSelectedGroup(g);
+      else missingCardRef.current = {id: incomingOpenCardId, until: Date.now() + 60000};
     }
     onConsumedIncomingCardsSearch && onConsumedIncomingCardsSearch();
   }, [incomingSearch, incomingOpenCardId, raw, onConsumedIncomingCardsSearch]);
+  // A ?card= link to a card newer than the SAVED catalog finds nothing on the
+  // replayed rows, and the id above is consumed either way (holding it would
+  // re-apply the incoming search on every later row change). The fresh fetch
+  // lands seconds later with the card in it, so the id is remembered for a
+  // minute and tried again whenever the rows change — a shared link to a
+  // just-revealed card otherwise landed on /cards with no card open.
+  useEffect(() => {
+    const m = missingCardRef.current;
+    if(!m || !raw || !raw.length) return;
+    if(Date.now() > m.until){ missingCardRef.current = null; return; }
+    const g = groupFromCardParam(m.id, raw);
+    if(!g) return;
+    missingCardRef.current = null;
+    setSelectedGroup(prev => prev || g);
+  }, [raw]);
   // ── Shareable card URLs ──────────────────────────────────────────────
   // The open modal is mirrored to ?card=<id> ("card" is registered in
   // dirtyParams + VIEW_OWNED.cards). Opening pushes a history entry so the
@@ -16836,7 +16940,10 @@ const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback
               jammed against the link before it ("@packs_ink· @HighScoreZAP·"). */""}
         ${_t("follow")} <a href="https://x.com/packs_ink" target="_blank" rel="noopener">@packs_ink</a>${" · "}
         <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener">@HighScoreZAP</a>${" · "}
-        <a href="/privacy">${_t("Privacy & Terms")}</a>${" · "}
+        <a href="/privacy">${_t("Privacy & Terms")}</a>${" "}
+        ${/* No "·" before the picker: on a phone it wraps to a line of its own
+              and left the dot dangling after "Privacy & Terms". The globe is
+              the separator. */""}
         <label class="footer-lang" title=${_t("Language")}>
           ${uiIcon("globe", 13)}
           <select value=${SITE_LANG} onChange=${e => setSiteLanguage(e.target.value)} aria-label=${_t("Language")}>
@@ -17099,10 +17206,10 @@ function EVView({raw, sets, avgs, nc, setNc,
       ${rows.map(({setName, ev, deltas, box, diffVsBox}) => html`<div key=${setName}
         class=${"ev-row"+(openSetHistory?" ev-row-clickable":"")}
         onClick=${openSetHistory ? ()=>openSetHistory(setName) : null}
-        role=${openSetHistory ? "button" : null}
-        tabIndex=${openSetHistory ? 0 : null}
+        tabIndex=${openSetHistory ? -1 : null}
         onKeyDown=${openSetHistory ? (e)=>{ if(e.target===e.currentTarget && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); openSetHistory(setName);} } : null}
         title=${openSetHistory ? _t("Open price history for {set}", {set: setName}) : null}>
+        ${openSetHistory && tileOpen(_t("Open price history for {set}", {set: setName}))}
         <div class="ev-row-set">${setName}${PRERELEASE_SETS.has(setName) && html` <span class="ev-presale-tag" title=${_t(EV_PRESALE_TIP)}>${_t("Pre-sale")}</span>`} <span class="ev-row-set-hint">${extIcon()}</span>
           ${onSimulateSet && html`<button class="ev-row-simbtn"
             title=${_t("Simulate opening a {set} box", {set: setName})}
@@ -23157,7 +23264,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
           <div class="cards-chipgroup">
             ${setRarities.map(r => html`<button key=${r} class=${"chip chip-rarity-only "+(rarityFilter.has(r)?"active":"")}
               title=${_term("rarity", r)} aria-label=${_term("rarity", r)} onClick=${()=>setRarityFilter(s => toggleSet(s, r))}>
-              ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt=${r} onError=${e=>{ e.target.style.display="none"; }}/>`}
+              <${RarityChipFace} rarity=${r}/>
             </button>`)}
           </div>
           <select class=${"setdet-price-band"+(priceBand?" active":"")} value=${priceBand}
@@ -23306,7 +23413,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
             const showNormal = printingMode ? (printingMode === "normal" && !!g.normal) : nInScope(g);
             const showFoil   = printingMode ? (printingMode === "foil"   && !!g.foil)   : fInScope(g);
             // Extras cards stamp their variant label into `Rarity`; surface
-            // it as a subtitle (e.g. "Starter Deck Exclusive Foil").
+            // it as a subtitle (e.g. "Starter Deck Foil").
             const subtitle = g.variant_label || (isExtrasView ? g.Rarity : null);
             return html`<${SetDetailListRow} key=${g.card_id+":"+(printingMode||"")+(g.isSplitPrinting ? "::"+(g.Printing||g.tcg_printing||"") : "")} group=${g} theme=${theme}
               normalQty=${nKey ? (collection[nKey]||0) : 0}
@@ -25036,7 +25143,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, onConsumedHistoryTarget, 
       </div>
       ${rangeKey === "custom" && html`<input type="date" class="custom-date-input"
         value=${customStart}
-        max=${new Date().toISOString().slice(0,10)}
+        max=${localYmd()}
         onChange=${e=>setCustomStart(e.target.value)}/>`}
       ${(mode === "card" || compareCards.some(c => c.kind === "card")) && html`<label class="checkbox-group" title=${_t("Pre-release prices are wildly inflated (often 10-20× the real post-release floor). Default ON hides those days for every card individually using its set's release date. Uncheck to include them anyway.")}>
         <input type="checkbox" checked=${hidePreorders} onChange=${e=>setHidePreorders(e.target.checked)}/>
@@ -25799,11 +25906,34 @@ function DisplayNameEditor({profile, onSave}){
   </div>`;
 }
 
+// Which token an unlisted collection link carries. Since migration 192 a link
+// is SCOPED: its token opens exactly the sections named (keys, any order), so
+// a Cards link sent last month does not open Graded unlisted today. Scoped
+// tokens come from get_my_collection_share_tokens() (an HMAC of the scope
+// under the base token, made server-side); without them (a database before
+// 192) the base token stands in, which opens every unlisted section and still
+// works for every link already sent.
+const COLLECTION_SHARE_SECTIONS = ["raw", "sealed", "graded"];
+function collectionShareToken(profile, keys){
+  const scope = COLLECTION_SHARE_SECTIONS.filter(k => (keys || []).includes(k)).join("+");
+  return (scope && profile?.collection_scope_tokens?.[scope]) || profile?.collection_share_token || "";
+}
+
+// The owner's scoped tokens, or null (the panel then falls back to the base).
+async function fetchCollectionScopeTokens(){
+  try {
+    const {data, error} = await sbClient.rpc("get_my_collection_share_tokens");
+    return (!error && data && typeof data === "object") ? data : null;
+  } catch { return null; }
+}
+
 // Collection-sharing controls inside the settings popover. Three per-section
 // visibility selects (raw / sealed / graded), copy-link buttons for whichever
 // of {public, unlisted} are currently in play, plus regenerate-link and
-// make-all-private actions. The single share_token covers any unlisted
-// section; rotating it is a single click to revoke a leaked URL.
+// make-all-private actions. The unlisted link opens the sections unlisted when
+// it is copied, and only those; with two or more unlisted, each row also
+// copies a link to that section alone. Regenerating the base token kills every
+// unlisted link at once, scoped or not.
 function CollectionSharingPanel({profile, onChange, onRegenerate}){
   const [savingSection, setSavingSection] = useState(null);
   const [regenBusy, setRegenBusy] = useState(false);
@@ -25823,7 +25953,9 @@ function CollectionSharingPanel({profile, onChange, onRegenerate}){
   const origin = IS_NATIVE_APP ? (SITE_ORIGIN + "/")
     : window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, "/");
   const publicUrl   = `${origin}?collection=${profile.user_id}`;
-  const unlistedUrl = `${origin}?collection=${profile.user_id}&token=${profile.collection_share_token||""}`;
+  const unlistedKeys = sections.filter(s => valueOf(s) === "unlisted").map(s => s.key);
+  const unlistedUrlFor = (keys) => `${origin}?collection=${profile.user_id}&token=${collectionShareToken(profile, keys)}`;
+  const unlistedUrl = unlistedUrlFor(unlistedKeys);
   const change = async (section, level) => {
     setErr(null); setSavingSection(section);
     const r = await onChange(section, level);
@@ -25865,16 +25997,21 @@ function CollectionSharingPanel({profile, onChange, onRegenerate}){
       ${_tRich("Choose who can see each section. **Private** = only you · **Unlisted** = anyone with the link · **Public** = visible from your profile to anyone.")}
     </div>
     ${sections.map(s => html`
-      <label key=${s.key} class="collection-sharing-row">
-        <span class="collection-sharing-label">${_t(s.label)}</span>
-        <select value=${valueOf(s)}
+      <div key=${s.key} class="collection-sharing-row">
+        <label class="collection-sharing-label" for=${"coll-share-" + s.key}>${_t(s.label)}</label>
+        <select id=${"coll-share-" + s.key} value=${valueOf(s)}
           disabled=${savingSection === s.key}
           onChange=${e => change(s.key, e.target.value)}>
           <option value="private">${_t("Private")}</option>
           <option value="unlisted">${_t("Unlisted (link only)")}</option>
           <option value="public">${_t("Public")}</option>
         </select>
-      </label>
+        ${unlistedKeys.length > 1 && valueOf(s) === "unlisted" && html`<button class="settings-action collection-sharing-copy1"
+          title=${_t("Copy link to this section")} aria-label=${_t("Copy link to this section") + " (" + _t(s.label) + ")"}
+          onClick=${()=>copy(unlistedUrlFor([s.key]), s.key)}>
+          ${uiIcon(copied === s.key ? "check" : "link", 14)}
+        </button>`}
+      </div>
     `)}
     ${(anyPublic || anyUnlisted) && html`<div class="collection-sharing-links">
       ${anyPublic && html`<button class="settings-action" onClick=${()=>copy(publicUrl, "public")}>
@@ -25883,6 +26020,7 @@ function CollectionSharingPanel({profile, onChange, onRegenerate}){
       ${anyUnlisted && html`<button class="settings-action" onClick=${()=>copy(unlistedUrl, "unlisted")}>
         ${copied === "unlisted" ? _t("✓ Copied") : _t("Copy unlisted link")}
       </button>`}
+      ${anyUnlisted && html`<div class="collection-sharing-hint">${_t("An unlisted link opens only the sections that were unlisted when you copied it.")}</div>`}
     </div>`}
     <div class="collection-sharing-actions">
       ${anyUnlisted && html`<button class="settings-action link" disabled=${regenBusy} onClick=${regen}>
@@ -26411,7 +26549,7 @@ function buildCollectionCsv(collection, raw){
 // chart on the Home panel — fetches prices_daily for every owned sealed
 // product, rolls up via the shared computeCollectionValueHistory helper,
 // then renders the same line-chart shape used by Graded.
-const SealedValueChart = ({sealedCollection, sealedPrices, rangeKey, setRangeKey}) => {
+const SealedValueChart = ({sealedCollection, sealedMeta, sealedPrices, rangeKey, setRangeKey}) => {
   const [historyRows, setHistoryRows] = useState(null);
   const [state, setState] = useState({loading: false, error: null});
 
@@ -26433,19 +26571,28 @@ const SealedValueChart = ({sealedCollection, sealedPrices, rangeKey, setRangeKey
 
   useEffect(() => {
     if(!owned.size){ setHistoryRows([]); return; }
-    const days = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
-    const since = new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10);
+    const since = collectionRangeSince(rangeKey);
     const pids = Array.from(new Set(Array.from(owned.keys()).map(k => parseInt(k.split("|")[0],10))));
     const matPids = Object.keys(sealedCollection || {}).filter(isPlaymatPid).map(sealedPricePid);
     let cancelled = false;
     setState({loading: true, error: null});
-    fetchSealedValueHistory(pids, since, matPids)
+    fetchSealedValueHistory(pids, since, matPids, collectionRangeDates(rangeKey, since))
       .then(rows => { if(!cancelled){ setHistoryRows(rows); setState({loading:false, error:null}); } })
       .catch(e => { if(!cancelled) setState({loading:false, error: String(e?.message || e)}); });
     return () => { cancelled = true; };
   }, [ownedKey, rangeKey]);
 
-  const valueSeries = useMemo(() => historyRows ? computeCollectionValueHistory(historyRows, owned, null) : null, [historyRows, owned]);
+  // Each item counts from the day it was acquired, exactly as the home panel's
+  // sealed line does. Without it the two charts drew different histories and
+  // different range changes for the same dated items (review, 2026-10-06).
+  const acquired = useMemo(() => {
+    const m = new Map();
+    for(const [pid, meta] of Object.entries(sealedMeta || {})){
+      if(meta && meta.acquired_date) m.set(sealedPricePid(pid) + "|Normal", meta.acquired_date);
+    }
+    return m;
+  }, [sealedMeta]);
+  const valueSeries = useMemo(() => historyRows ? computeCollectionValueHistory(historyRows, owned, null, acquired) : null, [historyRows, owned, acquired]);
   const chartSeries = useMemo(() => {
     if(!valueSeries || !valueSeries.length) return [];
     return [{
@@ -26461,7 +26608,6 @@ const SealedValueChart = ({sealedCollection, sealedPrices, rangeKey, setRangeKey
   const rangeDelta   = (startValue != null && startValue > 0) ? (currentValue - startValue) : null;
   const rangeDeltaPct= (startValue != null && startValue > 0) ? ((currentValue - startValue) / startValue * 100) : null;
   const deltaColor   = rangeDelta == null ? "var(--text-muted)" : rangeDelta >= 0 ? "var(--green)" : "var(--red)";
-  const rangeLabel   = (COLLECTION_RANGES.find(r => r.key === rangeKey) || {}).label || rangeKey;
 
   // When you don't own any sealed items the chart has nothing to draw —
   // render a thin placeholder strip so the panel is still discoverable.
@@ -26481,7 +26627,7 @@ const SealedValueChart = ({sealedCollection, sealedPrices, rangeKey, setRangeKey
         ${rangeDelta != null && html`<span class="gvc-delta" style=${{color:deltaColor}}>
           ${rangeDelta >= 0 ? "+" : "−"}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})}
           <span style=${{opacity:0.8}}>(${rangeDeltaPct >= 0 ? "+" : ""}${rangeDeltaPct.toFixed(1)}%)</span>
-          <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>${_t("past {range}", {range: rangeLabel})}</span>
+          <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>${collectionRangePhrase(rangeKey)}</span>
         </span>`}
       </div>
       <div class="panel-range-buttons">
@@ -27642,7 +27788,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
     </div>
 
     ${onOpenPins && html`<p class="sealed-coll-pins-note">${_t("Pins and lore counters have their own tab now:")}${" "}<a href=${pinsHref || collectionSectionHref("pins", null)} onClick=${navHandler(onOpenPins)}>${_t("Pins & Counters")} →</a></p>`}
-    ${!readOnly && html`<${SealedValueChart} sealedCollection=${sealedCollection} sealedPrices=${sealedPrices}
+    ${!readOnly && html`<${SealedValueChart} sealedCollection=${sealedCollection} sealedMeta=${sealedMeta} sealedPrices=${sealedPrices}
       rangeKey=${chartRange} setRangeKey=${setChartRange}/>`}
 
     <div class="graded-collection-body">
@@ -28649,9 +28795,10 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
             : shown.map(r => {
                 const qty = qtyOf(r);
                 return html`<div key=${r.tcgplayer_product_id} class=${"cb-row" + (qty > 0 ? "" : " is-missing")}
-                  role="button" tabIndex=${0} title=${_t("Where it came from, and your copies")}
+                  tabIndex=${-1} title=${_t("Where it came from, and your copies")}
                   onClick=${() => setDetail(r)}
                   onKeyDown=${e => { if(e.target === e.currentTarget && e.key === "Enter"){ e.preventDefault(); setDetail(r); } }}>
+                  ${tileOpen(r.name)}
                   <div class="cb-row-thumb">${r.image_url ? html`<img src=${r.image_url} alt="" loading="lazy"/>` : collectiblePh(r)}</div>
                   <div class="cb-row-meta">
                     <div class="cb-row-name">${r.name}</div>
@@ -28988,8 +29135,9 @@ const PlaymatsView = ({user, sealedCollection, sealedMeta, updateSealedQty, upda
     const bump = (d) => { const next = Math.max(0, Math.min(99, qty + d)); if(next !== qty) updateSealedQty(own, next); };
     const open = () => setDetail(playmatProduct(r));
     return html`<div key=${pid} class=${"gc-card gc-card-clickable playmat-card" + (qty > 0 ? " gc-card-owned" : "")}
-        tabIndex=${0} onClick=${open} title=${_t("Price history and details")}
+        tabIndex=${-1} onClick=${open} title=${_t("Price history and details")}
         onKeyDown=${e => { if(e.target === e.currentTarget && e.key === "Enter"){ e.preventDefault(); open(); } }}>
+      ${tileOpen(r.name)}
       <span class="playmat-card-photo">
         <${ProductPhoto} src=${photo.src} glyph="mat" size=${28} noCut=${photo.own}/>
         ${r.presale && html`<span class="playmat-badge">${_t("Pre-order")}</span>`}
@@ -29175,10 +29323,10 @@ const GradedValueChart = ({items, cardById, priceByKey, knownBuckets, splitTiers
 
   const slotsKey = useMemo(() => slots.map(s => `${s.pid}|${s.printing}|${s.grader}|${s.grade}|${s.qty}`).sort().join(","), [slots]);
 
-  const rangeDays = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
+  const rangeSince = collectionRangeSince(rangeKey, GRADED_SALES_EARLIEST_DATE);
   useEffect(() => {
     if(!slots.length){ setHistoryRows([]); return; }
-    const since = new Date(Date.now() - rangeDays*24*3600*1000).toISOString().slice(0,10);
+    const since = rangeSince;
     let cancelled = false;
     setState({loading: true, error: null});
     fetchGradedSalesFor(slots, since)
@@ -29195,7 +29343,7 @@ const GradedValueChart = ({items, cardById, priceByKey, knownBuckets, splitTiers
     return (valueBasis) => (s) =>
       gradedRowValue(priceByKey.get(`${s.pid}|${s.printing}|${s.grader}|${s.grade}`), valueBasis);
   }, [priceByKey]);
-  const fallbackDates = useMemo(() => portfolioFallbackDates(rangeDays), [rangeDays]);
+  const fallbackDates = useMemo(() => portfolioFallbackDates(rangeSince), [rangeSince]);
 
   const lastSeries = useMemo(() => historyRows
     ? addUnsoldSlabsToSeries(computeSalesValueHistory(historyRows, slots, knownBuckets),
@@ -29220,7 +29368,6 @@ const GradedValueChart = ({items, cardById, priceByKey, knownBuckets, splitTiers
   const rangeDelta   = (startValue != null && startValue > 0) ? (currentValue - startValue) : null;
   const rangeDeltaPct= (startValue != null && startValue > 0) ? ((currentValue - startValue) / startValue * 100) : null;
   const deltaColor   = rangeDelta == null ? "var(--text-muted)" : rangeDelta >= 0 ? "var(--green)" : "var(--red)";
-  const rangeLabel   = (COLLECTION_RANGES.find(r => r.key === rangeKey) || {}).label || rangeKey;
 
   if(!slots.length) return null;
   return html`<div class="graded-value-chart">
@@ -29231,7 +29378,7 @@ const GradedValueChart = ({items, cardById, priceByKey, knownBuckets, splitTiers
         ${rangeDelta != null && html`<span class="gvc-delta" style=${{color:deltaColor}}>
           ${rangeDelta >= 0 ? "+" : "−"}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})}
           <span style=${{opacity:0.8}}>(${rangeDeltaPct >= 0 ? "+" : ""}${rangeDeltaPct.toFixed(1)}%)</span>
-          <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>${_t("past {range}", {range: rangeLabel})}</span>
+          <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>${collectionRangePhrase(rangeKey)}</span>
         </span>`}
       </div>
       <div class="panel-range-buttons">
@@ -29752,7 +29899,7 @@ const GradeFromCollectionModal = ({raw, collection, user, updateQty, onGradeOwne
       <div class="gfc-raritychips">
         ${CARDS_RARITIES.map(r => html`<button key=${r} class=${"chip chip-rarity-only "+(rarityFilter.has(r)?"active":"")}
           title=${_term("rarity", r)} aria-label=${_term("rarity", r)} onClick=${()=>toggleRarity(r)}>
-          ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt=${r} onError=${e=>{ e.target.style.display="none"; }}/>`}
+          <${RarityChipFace} rarity=${r}/>
         </button>`)}
       </div>
     </div>
@@ -30360,7 +30507,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   }, [raw]);
   // Bucket Extras & Oddities rows by their bucket label. buildRow stores
   // the EXTRAS_MAP variantLabel ("Deep Trouble", "Palace Heist", "Starter
-  // Deck Exclusive Foil") in the Rarity slot for Extras rows — it's the
+  // Deck Foil") in the Rarity slot for Extras rows — it's the
   // "rarity-line label" rendered on Extras tiles. We read it from there.
   // Cards are deduped per (card_id, bucket) so split-printing rows don't
   // double-count.
@@ -31444,10 +31591,11 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                 const goalTargetSid = g.extras_bucket ? ("__extras:" + g.extras_bucket) : g.set_id;
                 const onGoalActivate = () => jumpToSection(goalTargetSid);
                 return html`<div key=${g.goal_id} class="gc-goal gc-goal-clickable"
-                  role="button" tabIndex="0"
+                  tabIndex="-1"
                   title=${_t("View {name} in the collection", {name: targetName || _t("set")})}
                   onClick=${onGoalActivate}
                   onKeyDown=${(e)=>{ if(e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")){ e.preventDefault(); onGoalActivate(); } }}>
+                  ${tileOpen(_t("View {name} in the collection", {name: g.display_name || targetName || _t("set")}))}
                   <div class="gc-goal-name">${g.display_name || targetName || _t("Goal")}</div>
                   <div class="gc-goal-sub muted">${targetName}${g.rarities?.length ? " · " + g.rarities.map(r => _term("rarity", r)).join(" · ") : " · " + _t("All rarities")}${g.printings?.length ? " · " + g.printings.join("/") : ""}</div>
                   <div class="gc-goal-progress">
@@ -35187,8 +35335,9 @@ function EloUpcomingSCs({canViewStore, canScout, onStoreClick, onPlayerClick, on
 // Every number is CALCULATED from public, anon-readable tables — nothing
 // store-level is stored anywhere:
 //   • lorcana_events_history → one row per event a store has run.
-//   • rph_event_attendance   → one row per person per event, carrying their
-//     final standing and match record.
+//   • rph_event_attendance   → one row per person per event. The tab reads it
+//     by pseudonym only: person_key and played (migration 188), never the
+//     name, the account id or the standing (189 takes those away from anon).
 //
 // Tickets and Fans are RPH's own definitions and both are about PLAYERS, not
 // registrants: Event Tickets is "the total number of players across all events",
@@ -35238,17 +35387,13 @@ function eloSeasonSetLabel(season){
   return best || season;
 }
 
-// Who sat down, as opposed to who merely registered. Applied server-side so a
-// phone is never shipped the no-shows; mirrors played() in
-// scripts/elo/scrape_event_attendance.py. registration_status is deliberately
-// not part of it — that is about the registration, not the attendance.
-//
-// The standing test is written `gte.0` rather than a not-null: PostgREST spells
-// negation inside an or() group as a `not.` PREFIX on the column, which reads
-// nothing like the standalone form and is easy to get subtly wrong. A standing
-// is a positive integer or absent, so `gte.0` is the same set with no syntax to
-// get wrong. Keep it identical to PLAYED in scripts/elo/report_store_tiers.py.
-const RPH_PLAYED_FILTER = "(final_place_in_standings.gte.0,matches_won.gt.0,matches_lost.gt.0,matches_drawn.gt.0)";
+// Who sat down, as opposed to who merely registered, is the `played` column:
+// migration 188 stores the old filter (a standing, or any recorded match) as a
+// generated column, so the tab filters on it without being able to read the
+// standings themselves. Applied server-side so a phone is never shipped the
+// no-shows. registration_status is deliberately not part of it — that is about
+// the registration, not the attendance. Keep it identical to PLAYED in
+// scripts/elo/report_store_tiers.py (test_attendance_privacy.mjs checks).
 
 // ── Events where nobody has a recorded result ───────────────────────────────
 // Not every store runs its pairings through RPH. Seven Out Cards took 19
@@ -35274,9 +35419,15 @@ const rphCompleteReg = (a) => {
   return !st || st === "COMPLETE";
 };
 
-// Distinct-person key. rph_user_id is the stable account id and the right thing
-// to count on; guests come through without one, so the display name stands in.
-const rphPersonKey = (a) => a.rph_user_id != null
+// Distinct-person key. The server hands out person_key (migration 188): an
+// HMAC, under a secret the browser never sees, of exactly the key below — the
+// stable account id, or a guest's folded display name — so one person is one
+// key and the counts are unchanged, but nobody can turn a name into a key and
+// look them up. The fallback is that old key, for rows that carry the raw
+// columns (the guard's fixtures, a database without 188).
+const rphPersonKey = (a) => a.person_key
+  ? "k:" + a.person_key
+  : a.rph_user_id != null
   ? "u:" + a.rph_user_id
   : "n:" + String(a.best_identifier || "").trim().toLowerCase();
 
@@ -35307,10 +35458,13 @@ async function fetchEloStoreActivity(){
   if(trackedIds.size) histParams.store_id = "in.(" + Array.from(trackedIds).join(",") + ")";
   const [events, played, scans, sets] = await Promise.all([
     sbFetchAll("lorcana_events_history", histParams, null),
+    // Ordered by every column it reads: rows that tie on all of them are
+    // indistinguishable, so range pagination returns the same multiset however
+    // the planner breaks the tie.
     sbFetchAll("rph_event_attendance", {
-      select: "event_id,rph_user_id,best_identifier",
-      or: RPH_PLAYED_FILTER,
-      order: "event_id.asc,best_identifier.asc",
+      select: "event_id,person_key",
+      played: "is.true",
+      order: "event_id.asc,person_key.asc",
     }, null),
     // Which events have been looked at, so "no attendance" and "not scraped
     // yet" stay distinguishable instead of both reading as a quiet week.
@@ -35375,9 +35529,9 @@ async function fetchEloAttendanceFor(eventIds){
   for(let i = 0; i < eventIds.length; i += 200){
     const chunk = eventIds.slice(i, i + 200);
     const rows = await sbFetchAll("rph_event_attendance", {
-      select: "event_id,rph_user_id,best_identifier,registration_status",
+      select: "event_id,person_key,registration_status",
       event_id: "in.(" + chunk.join(",") + ")",
-      order: "event_id.asc,best_identifier.asc",
+      order: "event_id.asc,person_key.asc,registration_status.asc",
     }, null);
     out.push(...rows);
   }
@@ -40310,8 +40464,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           class=${"price-db-raritybtn price-db-raritybtn-icon"+(filterRarities.has(r)?" active":"")}
           title=${rarityLabel(r)} aria-label=${rarityLabel(r)}
           onClick=${()=>setFilterRarities(prev=>{ const n=new Set(prev); n.has(r)?n.delete(r):n.add(r); return n; })}>
-          ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt="" aria-hidden="true"
-            onError=${e=>{ e.target.style.display="none"; }}/>`}
+          <${RarityChipFace} rarity=${r}/>
         </button>`)}
         ${filterRarities.size > 0 && html`<button class="price-db-raritybtn clear"
           onClick=${()=>setFilterRarities(new Set())}>${_t("Clear")}</button>`}
@@ -40820,6 +40973,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             const openThisRow = () => openModal(r.card_id, isSealedRow ? r._sealedProduct : null, r._variant);
             return html`<tr key=${key} class=${isSel ? "price-db-row-sel" : ""}>
               <td class="td-check"><input type="checkbox" checked=${isSel}
+                aria-label=${_t("Select {name}", {name: [r.name, r.version].filter(Boolean).join(" - ") || r.display_type || ""})}
                 onChange=${() => toggleSelect(key)}/></td>
               ${user && !watchlistsUnavailable && !showGraded && (() => {
                 const wk = rowWatchKey(r);
@@ -42414,14 +42568,25 @@ const tierClean = (list, pool) => {
 // being revealed: the day a lower-numbered chase card is added, every offset
 // silently points one card further along. A code with no base (links made the
 // first day, v523) still reads against the pool's first card.
+// ⚠ The base is the lowest RANKED card, not the pool's first: one character
+// holds an offset of 0-35, and a single low-numbered row in a chase pool (the
+// scanner index already holds two mis-rarity'd Hyperia City cards at #206 and
+// #212) put every real chase card 36+ past the pool's first and silently out
+// of the code. Every reader takes the base from the code, so any base works.
 const tierEncode = (tiers, pool) => {
   if(!pool.length) return "";
-  const base = pool[0].num;
+  const numOf = new Map(pool.map(p => [p.id, p.num]));
+  const ranked = tiers.flat().map(id => numOf.get(id)).filter(n => n != null);
+  const base = ranked.length ? Math.min(...ranked) : pool[0].num;
   const off = new Map(pool.map(p => [p.id, p.num - base]));
+  let lost = 0;
   const parts = tiers.map(t => t.map(id => {
     const o = off.get(id);
-    return (o != null && o >= 0 && o < 36) ? o.toString(36) : "";
+    if(o != null && o >= 0 && o < 36) return o.toString(36);
+    if(o != null) lost++;
+    return "";
   }).join(""));
+  if(lost) console.warn("[tierlist] " + lost + " ranked card(s) sit 36+ numbers past the lowest and are left out of the link");
   while(parts.length && !parts[parts.length - 1]) parts.pop();
   return parts.length ? base + "-" + parts.join(".") : "";
 };
@@ -42570,9 +42735,12 @@ const tierUnB64 = (s) => {
   } catch { return null; }
 };
 // groups = the five tiers, then the pool.
-const tierCustomEncode = (groups, idx) => {
+// `unknown` are tokens this device could not resolve (see tierCustomDecode),
+// written back at the end of the tier they came from.
+const tierCustomEncode = (groups, idx, unknown) => {
   const toks = [];
   let cur = null;
+  const poolAt = groups.length - 1;
   groups.forEach((g, gi) => {
     if(gi) toks.push("*");
     for(const id of g || []){
@@ -42584,17 +42752,29 @@ const tierCustomEncode = (groups, idx) => {
       if(code !== cur){ toks.push("_" + code); cur = code; }
       toks.push(e.key.slice(dash + 1));
     }
+    for(const u of unknown || []){
+      const at = (u.g < 0 || u.g >= poolAt) ? poolAt : u.g;
+      if(at !== gi) continue;
+      if(u.cur && u.cur !== cur){ toks.push("_" + u.cur); cur = u.cur; }
+      toks.push(u.tok);
+    }
   });
   while(toks.length && toks[toks.length - 1] === "*") toks.pop();
   return toks.join(".");
 };
 // Returns {tiers, pool, missing}: `missing` counts cards the catalog no longer
 // has, so the page can say so instead of quietly showing a shorter list.
+// ⚠ A token this device cannot resolve is KEPT (`unknown`), not dropped. A
+// device whose saved catalog predates a card (reveal season, or a catalog up
+// to a day old) used to lose that card on its next edit, and the save carried
+// the loss to the account and every other device (found 2026-10-06). Kept
+// with the tier it sat in (g = -1 for the pool), and written back by
+// tierCustomEncode until a catalog that knows the card decodes it.
 const tierCustomDecode = (str, idx, n) => {
   const k = n || TIER_COUNT;
   const groups = Array.from({length: k + 1}, () => []);
   let g = 0, cur = null, missing = 0, kept = 0;
-  const seen = new Set();
+  const seen = new Set(), unknown = [], seenTok = new Set();
   for(const tok of String(str || "").split(".")){
     if(!tok) continue;
     if(tok === "*"){ if(g < k) g++; continue; }
@@ -42602,13 +42782,21 @@ const tierCustomDecode = (str, idx, n) => {
     let e = null;
     if(tok[0] === "-"){ const id = tierUnB64(tok.slice(1)); e = id ? idx.byId.get(id) : null; }
     else if(cur) e = idx.byKey.get(cur + "-" + tok.toLowerCase());
-    if(!e){ missing++; continue; }
-    if(seen.has(e.id) || kept >= TIER_CUSTOM_MAX) continue;
+    if(!e){
+      missing++;
+      const key = (tok[0] === "-" ? "" : cur) + "|" + tok.toLowerCase();
+      if((tok[0] === "-" || cur) && !seenTok.has(key) && kept + unknown.length < TIER_CUSTOM_MAX){
+        seenTok.add(key);
+        unknown.push({g: g < k ? g : -1, cur: tok[0] === "-" ? null : cur, tok});
+      }
+      continue;
+    }
+    if(seen.has(e.id) || kept + unknown.length >= TIER_CUSTOM_MAX) continue;
     seen.add(e.id);
     kept++;
     groups[g].push(e.id);
   }
-  return {tiers: groups.slice(0, k), pool: groups[k], missing};
+  return {tiers: groups.slice(0, k), pool: groups[k], missing, unknown};
 };
 const tierCustomBlank = (n) => ({tiers: Array.from({length: n || TIER_COUNT}, () => []), pool: [], title: "", labels: null});
 // Unknown ids dropped, each card once across tiers + pool, capped.
@@ -42624,11 +42812,12 @@ const tierCustomClean = (list, idx) => {
   const spill = (list && Array.isArray(list.tiers) ? list.tiers.slice(n) : []).flat();
   const pool = [...(list && Array.isArray(list.pool) ? list.pool : []), ...spill].filter(keep);
   const labels = list && Array.isArray(list.labels) ? tierNormLabels(list.labels, n) : null;
-  return {tiers, pool, title: String((list && list.title) || "").slice(0, TIER_TITLE_MAX), labels};
+  const unknown = list && Array.isArray(list.unknown) && list.unknown.length ? list.unknown : undefined;
+  return {tiers, pool, title: String((list && list.title) || "").slice(0, TIER_TITLE_MAX), labels, unknown};
 };
 const tierCustomQuery = (list, idx) => {
   const q = new URLSearchParams();
-  q.set("tc", tierCustomEncode([...list.tiers, list.pool], idx));
+  q.set("tc", tierCustomEncode([...list.tiers, list.pool], idx, list.unknown));
   if(list.title) q.set("tn", list.title);
   const tt = tierLabelsParam(list.labels);
   if(tt) q.set("tt", tt);
@@ -42638,16 +42827,18 @@ const tierCustomQuery = (list, idx) => {
 // account state: vis = private | unlisted | public, fork = the slug it was
 // copied from, r = the account it was last confirmed on.
 const tierCustomToStored = (list, idx, extra) => {
-  const ranked = list.tiers.reduce((a, t) => a + t.length, 0);
-  return {...(extra || {}), code: tierCustomEncode([...list.tiers, list.pool], idx),
+  const unk = list.unknown || [];
+  const n = list.tiers.length;
+  const ranked = list.tiers.reduce((a, t) => a + t.length, 0) + unk.filter(u => u.g >= 0 && u.g < n).length;
+  return {...(extra || {}), code: tierCustomEncode([...list.tiers, list.pool], idx, unk),
     title: list.title || "", labels: tierLabelsParam(list.labels),
-    n: ranked + list.pool.length, rk: ranked, t: list.t || Date.now()};
+    n: list.tiers.reduce((a, t) => a + t.length, 0) + list.pool.length + unk.length, rk: ranked, t: list.t || Date.now()};
 };
 const tierCustomFromStored = (e, idx) => {
   if(!e) return {...tierCustomBlank(), missing: 0};
   const labels = tierParseLabels(e.labels);
   const d = tierCustomDecode(e.code, idx, tierCountOf(labels));
-  return {...tierCustomClean({tiers: d.tiers, pool: d.pool, title: e.title, labels}, idx), missing: d.missing, t: e.t};
+  return {...tierCustomClean({tiers: d.tiers, pool: d.pool, title: e.title, labels, unknown: d.unknown}, idx), missing: d.missing, t: e.t};
 };
 // Rename tier i (blank = back to its default letter), add a tier at the
 // bottom, or remove one (a custom list's pool takes its cards back; a chase
@@ -42667,9 +42858,13 @@ const tierWithRemoved = (l, i) => {
   const labels = l.tiers.map((_, k) => tierLabelOf(l, k)).filter((_, k) => k !== i);
   const out = {...l, tiers: l.tiers.filter((_, k) => k !== i), labels: tierNormLabels(labels, labels.length)};
   if(Array.isArray(l.pool)) out.pool = [...l.pool, ...l.tiers[i]];
+  // Cards this device can't show (tierCustomDecode) move with their tier too.
+  if(Array.isArray(l.unknown)) out.unknown = l.unknown.map(u =>
+    u.g === i ? {...u, g: -1} : u.g > i ? {...u, g: u.g - 1} : u);
   return out;
 };
 const tierLabelsOf = (l) => l.tiers.map((_, i) => tierLabelOf(l, i));
+const tierUnknownToPool = (u) => Array.isArray(u) ? u.map(x => ({...x, g: -1})) : u;
 const tierNewSlug = () => {
   const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   const b = new Uint8Array(10);
@@ -42936,21 +43131,35 @@ const tierCustomFetchMine = async (uid) => {
     return data || [];
   } catch(e){ console.warn("[tierlist] load failed", e); return null; }
 };
+// ⚠ VISIBILITY IS SENT ONLY WHEN THIS DEVICE MEANS TO SET IT: on the list's
+// first save to this account (`r` is not this account), or after a local
+// create / fork / visibility button (`vd`, cleared once that value lands).
+// Sending the device's copy on every save let a device opened BEFORE the list
+// was made private publish it again by moving one card (found 2026-10-06).
+// Left out of the upsert, the column keeps what the account holds; a first
+// insert gets the table default, 'unlisted', which is also the client's.
+const tierCustomSendsVis = (uid, st) => !!st && (!!st.vd || st.r !== uid);
 const tierCustomSaveRemote = async (uid, slug, st) => {
   if(_tierCustomOff || !uid || !TIER_SLUG_RE.test(slug)) return false;
   try {
     const n = Math.min(st.n || 0, 400);
-    const {error} = await sbClient.from("custom_tier_lists").upsert({
+    const row = {
       slug, user_id: uid, title: st.title || "", labels: st.labels || "", code: st.code || "",
       card_count: n, ranked_count: Math.min(st.rk || 0, n),
-      visibility: TIER_VIS.includes(st.vis) ? st.vis : "unlisted",
       forked_from: st.fork && TIER_SLUG_RE.test(st.fork) ? st.fork : null,
       updated_at: new Date(st.t || Date.now()).toISOString(),
-    }, {onConflict: "slug"});
+    };
+    if(tierCustomSendsVis(uid, st)) row.visibility = TIER_VIS.includes(st.vis) ? st.vis : "unlisted";
+    const {error} = await sbClient.from("custom_tier_lists").upsert(row, {onConflict: "slug"});
     if(error){ tierCustomFail("save", error); return false; }
     return true;
   } catch(e){ console.warn("[tierlist] save failed", e); return false; }
 };
+// The parent a copy names in forked_from, which every reader of the copy can
+// see. Only a PUBLIC parent: an unlisted list's slug is its whole secret, and a
+// public copy of one published it (found 2026-10-06).
+const tierForkParent = (source) =>
+  source && source.kind === "remote" && source.row && source.row.visibility === "public" ? source.slug : null;
 const tierCustomDeleteRemote = async (uid, slug) => {
   if(_tierCustomOff || !uid) return false;
   try {
@@ -43006,6 +43215,21 @@ const openTierListSlug = (slug) => {
   try { window.dispatchEvent(new CustomEvent("packsink:open-tierlist", {detail: {slug}})); } catch {}
 };
 
+// Lists deleted on this device but maybe not yet on the account ({slug: uid}).
+// A delete made signed out, or one whose request failed, used to be undone by
+// the next sign-in merge, which rebuilt the list from the account's copy.
+// The merge now finishes those deletes instead, and a mark goes once the
+// account confirms the row is gone.
+const TIER_GONE_LS = "packsink:tierlist:gone:v1";
+const tierGoneRead = () => {
+  try { const v = JSON.parse(localStorage.getItem(TIER_GONE_LS) || "{}"); return v && typeof v === "object" ? v : {}; }
+  catch { return {}; }
+};
+const tierGoneSet = (slug, uid) => {
+  const g = tierGoneRead();
+  if(uid) g[slug] = uid; else delete g[slug];
+  try { localStorage.setItem(TIER_GONE_LS, JSON.stringify(g)); } catch {}
+};
 const tierCustomRead = () => {
   try {
     const v = JSON.parse(localStorage.getItem(TIER_CUSTOM_LS) || "null");
@@ -43031,9 +43255,15 @@ function useTierCustomStore(user){
   const [remote, setRemote] = useState(false);
   const timers = useRef({});
   const pending = useRef({});
-  const markSynced = (slug, who) => {
+  const markSynced = (slug, who, sent) => {
     dirty.current = true;
-    setStore(s => s.lists[slug] ? {lists: {...s.lists, [slug]: {...s.lists[slug], r: who}}} : s);
+    setStore(s => {
+      const e = s.lists[slug];
+      if(!e) return s;
+      // A visibility change made while this save was in flight stays pending.
+      const landed = sent && e.vd && sent.vis === e.vis;
+      return {lists: {...s.lists, [slug]: {...e, r: who, sf: 0, ...(landed ? {vd: 0} : {})}}};
+    });
   };
   useEffect(() => {
     setRemote(false);
@@ -43042,14 +43272,27 @@ function useTierCustomStore(user){
     tierCustomFetchMine(uid).then(rows => {
       if(cancelled || !rows) return;
       const local = tierCustomRead().lists;
+      const gone = tierGoneRead();
+      for(const [slug, who] of Object.entries(gone)){
+        if(who === uid && !rows.some(r => r.slug === slug)) tierGoneSet(slug, null);
+      }
+      rows = rows.filter(r => {
+        if(gone[r.slug] !== uid) return true;
+        tierCustomDeleteRemote(uid, r.slug).then(ok => { if(ok) tierGoneSet(r.slug, null); });
+        return false;
+      });
       const remoteBy = new Map(rows.map(r => [r.slug, r]));
       const merged = {};
       for(const r of rows){
         const rt = Date.parse(r.updated_at) || 0;
         const mine = local[r.slug];
         if(mine && (mine.t || 0) > rt){
-          merged[r.slug] = {...mine, r: uid, lk: r.like_count, vw: r.view_count};
-          tierCustomSaveRemote(uid, r.slug, mine);
+          // Newer cards and title win; visibility is the account's unless a
+          // change to it was made here and never reached the account.
+          const keep = {...mine, r: uid, lk: r.like_count, vw: r.view_count,
+            ...(mine.vd ? {} : {vis: r.visibility})};
+          merged[r.slug] = keep;
+          tierCustomSaveRemote(uid, r.slug, keep).then(ok => { if(ok) markSynced(r.slug, uid, keep); });
         } else {
           merged[r.slug] = {code: r.code || "", title: r.title || "", labels: r.labels || "", t: rt,
             vis: r.visibility, fork: r.forked_from || null, n: r.card_count, rk: r.ranked_count, r: uid,
@@ -43063,7 +43306,7 @@ function useTierCustomStore(user){
         merged[slug] = l;
         // Another account's list stays on the device, untouched.
         if(l.r) continue;
-        tierCustomSaveRemote(uid, slug, l).then(ok => { if(ok) markSynced(slug, uid); });
+        tierCustomSaveRemote(uid, slug, l).then(ok => { if(ok) markSynced(slug, uid, l); });
       }
       dirty.current = true;
       setStore({lists: merged});
@@ -43077,10 +43320,19 @@ function useTierCustomStore(user){
     const st = pending.current[slug];
     delete pending.current[slug];
     if(!st || !uid || _tierCustomOff) return Promise.resolve(false);
-    return tierCustomSaveRemote(uid, slug, st).then(ok => { if(ok) markSynced(slug, uid); return ok; });
+    return tierCustomSaveRemote(uid, slug, st).then(ok => {
+      if(ok) markSynced(slug, uid, st);
+      else if(!_tierCustomOff){
+        // `r` alone would keep saying "Saved" after the first success.
+        dirty.current = true;
+        setStore(s => s.lists[slug] ? {lists: {...s.lists, [slug]: {...s.lists[slug], sf: 1}}} : s);
+      }
+      return ok;
+    });
   }, [uid]);
   // Write one list (a partial patch over what is stored). Debounced per list.
-  const put = useCallback((slug, patch) => {
+  const put = useCallback((slug, patch0) => {
+    const patch = ("vis" in patch0 && !("r" in patch0)) ? {...patch0, vd: 1} : patch0;
     const prev = storeRef.current.lists[slug] || {};
     const next = {...prev, ...patch};
     storeRef.current = {lists: {...storeRef.current.lists, [slug]: next}};
@@ -43098,7 +43350,12 @@ function useTierCustomStore(user){
     const had = storeRef.current.lists[slug];
     dirty.current = true;
     setStore(s => { const lists = {...s.lists}; delete lists[slug]; return {lists}; });
-    if(uid && had) tierCustomDeleteRemote(uid, slug);
+    // Marked first: a delete that fails, or one made signed out, is finished by
+    // the next sign-in merge rather than undone by it.
+    const owner = (had && had.r) || uid;
+    if(had && owner) tierGoneSet(slug, owner);
+    // Another account's list is only deleted when that account signs in here.
+    if(uid && had && owner === uid) tierCustomDeleteRemote(uid, slug).then(ok => { if(ok) tierGoneSet(slug, null); });
   }, [uid]);
   useEffect(() => () => {
     for(const slug of Object.keys(pending.current)) flush(slug);
@@ -44014,7 +44271,7 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
     const slug = tierNewSlug();
     forkedRef.current = slug;
     store.put(slug, tierCustomToStored(next, idx, {vis: "unlisted",
-      fork: source.kind === "remote" ? source.slug : null}));
+      fork: tierForkParent(source)}));
     onOpenSlug(slug, true);
     flashToast(_t("This is your copy now — the original is untouched."), 4000);
   }, [own, source, idx, store, onOpenSlug]);
@@ -44022,10 +44279,11 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
   const fork = (keepRanking) => {
     const base = listRef.current;
     const next = keepRanking ? base
-      : {...base, tiers: base.tiers.map(() => []), pool: [...base.tiers.flat(), ...base.pool]};
+      : {...base, tiers: base.tiers.map(() => []), pool: [...base.tiers.flat(), ...base.pool],
+         unknown: tierUnknownToPool(base.unknown)};
     const slug = tierNewSlug();
     store.put(slug, tierCustomToStored({...next, t: Date.now()}, idx, {vis: "unlisted",
-      fork: source.kind === "remote" ? source.slug : null}));
+      fork: tierForkParent(source)}));
     onOpenSlug(slug, true);
     flashToast(keepRanking ? _t("Copied to My lists. Move cards to make it yours.")
       : _t("Copied to My lists with every card unranked. Rank them your way."), 4500);
@@ -44097,7 +44355,12 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
   const cards = idx.byId;
   const author = source.kind === "remote" ? (source.row.display_name || _t("Someone")) : null;
   const title = list.title || _t("Untitled tier list");
-  const shortLink = (own && onAccount && vis !== "private") || source.kind === "remote";
+  // ⚠ The short ?tid= link only once THIS list is confirmed on the account
+  // (`r`). Before its first save lands (offline, a failed save, or the first
+  // 900ms) the slug resolves for nobody else, and the copied link opened
+  // "private or deleted"; the long link carries the list itself and always works.
+  const confirmed = !!(entry && user && entry.r === user.id);
+  const shortLink = (own && onAccount && confirmed && vis !== "private") || source.kind === "remote";
   const shareUrl = shortLink ? tierCustomShortUrl(source.slug) : TIER_SITE + TIER_PATH + "?" + tierCustomQuery(list, idx);
   const ranked = list.tiers.reduce((a, t) => a + t.length, 0);
   const share = useTierShare({
@@ -44116,7 +44379,8 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
   const reset = () => {
     const before = listRef.current;
     if(!ranked) return;
-    updateList(l => ({...l, tiers: l.tiers.map(() => []), pool: [...l.tiers.flat(), ...l.pool]}));
+    updateList(l => ({...l, tiers: l.tiers.map(() => []), pool: [...l.tiers.flat(), ...l.pool],
+      unknown: tierUnknownToPool(l.unknown)}));
     flashToast(_t("Every card is back in the pool"), 5000, {label: _t("Undo"), run: () => updateList(() => before)});
   };
   const setVis = (v) => {
@@ -44139,7 +44403,7 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
       <button type="button" class="tl-btn tl-btn--primary tl-btn--sm" onClick=${() => fork(false)}>${_t("Rank these cards yourself")}</button>
       ${ranked > 0 && html`<button type="button" class="tl-btn tl-btn--sm" onClick=${() => fork(true)}>${_t("Start from this ranking")}</button>`}
     </div>`}
-    ${list.missing > 0 && html`<p class="tl-warn">${_t("{n} cards in this list are no longer in the catalog and were left out.", {n: list.missing})}</p>`}
+    ${list.missing > 0 && html`<p class="tl-warn">${_t("{n} cards in this list aren't in the catalog on this device, so they aren't shown. They stay in the list.", {n: list.missing})}</p>`}
 
     <div class="tl-bar">
       <label class="tl-field tl-field--grow">
@@ -44175,7 +44439,9 @@ function TierCustomEditor({idx, user, onSignIn, store, source, onOpenSlug, onBac
         aria-pressed=${like.on ? "true" : "false"}
         title=${user ? (like.on ? _t("Unlike this list") : _t("Like this list")) : _t("Sign in to like this list")}
         onClick=${toggleLike}>${uiIcon("heart", 15)} ${like.n}</button>`}
-      ${onAccount && entry && entry.r === user.id && html`<span class="tl-sync">${uiIcon("check", 13)} ${_t("Saved to your account")}</span>`}
+      ${onAccount && entry && entry.sf
+        ? html`<span class="tl-sync tl-sync--fail" role="status">${uiIcon("warn", 13)} ${_t("Not saved to your account. Your changes are on this device.")}</span>`
+        : onAccount && confirmed && html`<span class="tl-sync">${uiIcon("check", 13)} ${_t("Saved to your account")}</span>`}
       ${onAccount && entry && vis !== "private" && entry.lk != null && html`<span class="tl-stats">
         <span title=${_t("{n} likes", {n: entry.lk})}>${uiIcon("heart", 13)} ${entry.lk}</span>
         <span title=${_t("{n} views", {n: entry.vw || 0})}>${uiIcon("eye", 13)} ${entry.vw || 0}</span>
@@ -45495,9 +45761,10 @@ const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
   const prBadge = printingBadge(card.printing, card.card_id);
   const wins = visibleWindows || MOVER_WINDOWS.slice(0,3);
   return html`<div class="mover-tile"
-    role="button" tabIndex=${0}
+    tabIndex=${-1}
     onClick=${onClick}
     onKeyDown=${e=>{ if(e.target === e.currentTarget && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); onClick && onClick(); } }}>
+    ${tileOpen(name)}
     <div class="mt-img-wrap">
       ${img
         ? html`<img src=${img} alt=${name} loading="lazy"/>`
@@ -45678,9 +45945,10 @@ const SealedMoverTile = ({row, activeWindow, visibleWindows, onClick}) => {
   const wins = visibleWindows || MOVER_WINDOWS.slice(0,3);
   const meta = _t(row.type_label) + (row.set_name ? " · " + _term("set", row.set_name) : "");
   return html`<div class="mover-tile mover-tile--sealed"
-    role="button" tabIndex=${0}
+    tabIndex=${-1}
     onClick=${onClick}
     onKeyDown=${e=>{ if(e.target === e.currentTarget && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); onClick && onClick(); } }}>
+    ${tileOpen(row.name || _t("Sealed"))}
     <div class="mt-img-wrap">
       <${ProductPhoto} src=${row.image} glyph="box" size=${30}/>
       ${url && html`<a class="mt-tcg-link" href=${url} target="_blank" rel="noopener nofollow sponsored"
@@ -46093,17 +46361,44 @@ const MoversBanner =({title, subtitle, controls, cards, onTileClick, activeWindo
   </section>`;
 };
 
-// Range options for the collection-value chart. Each maps to "days back".
-// `all` falls through to fetching the full year (the ETL archive starts
-// 2024-02-08, but we cap fetch at 365 days for cost — anything beyond gets
-// summarized via the existing 1Y mover delta instead).
+// Range options for the collection-value charts. Each maps to "days back";
+// `all` (days null) reaches back to the first price on file, 2024-02-08 (graded:
+// the first recorded sale). It used to stop at 365 days, the same as 1Y.
+//   `sampleDays`: fetch one day in N instead of every day. The full history
+// daily is 3.35M price rows for the largest collection (2,909 products,
+// 2026-10-06) — 1Y alone is 1.8M — while weekly is 475k. The last
+// COLLECTION_DAILY_TAIL days stay daily so the chart's end is today's value,
+// and forward-fill carries each item between samples.
 const COLLECTION_RANGES = [
   {key:"1m",  label:"1M",  days:30},
   {key:"3m",  label:"3M",  days:90},
   {key:"6m",  label:"6M",  days:180},
   {key:"1y",  label:"1Y",  days:365},
-  {key:"all", label:"All", days:365},
+  {key:"all", label:"All", days:null, sampleDays:7},
 ];
+const COLLECTION_DAILY_TAIL = 14;
+const GRADED_SALES_EARLIEST_DATE = "2023-06-19";
+const collectionRange = (key) => COLLECTION_RANGES.find(r => r.key === key) || COLLECTION_RANGES[1];
+const collectionRangeSince = (key, earliest = EARLIEST_DATA_DATE) => {
+  const r = collectionRange(key);
+  return r.days ? localYmdDaysAgo(r.days) : earliest;
+};
+// The days a range fetches prices for, ascending, or null for every day.
+const collectionRangeDates = (key, since) => {
+  const r = collectionRange(key);
+  if(!r.sampleDays) return null;
+  const out = [];
+  for(let n = 0; ; n += (n < COLLECTION_DAILY_TAIL ? 1 : r.sampleDays)){
+    const d = localYmdDaysAgo(n);
+    if(d <= since) break;
+    out.push(d);
+  }
+  out.push(since);
+  return out.reverse();
+};
+// "past 1M", but "all time" rather than "past All".
+const collectionRangePhrase = (key) => key === "all"
+  ? _t("all time") : _t("past {range}", {range: collectionRange(key).label});
 
 // Eye / eye-off glyphs (Lucide-style line icons) used by the collection
 // panel's "hide my value" privacy toggle.
@@ -46481,9 +46776,15 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
       if(qty <= 0) continue;
       const r = byKey[k];
       if(!r || !r.tcgplayer_product_id) continue;
+      ownedRows.push({row:r, qty});
+      // A CUSTOM_VARIANTS clone (Genie Two Swords, Peter Pan Text Error) keeps
+      // its base card's product id and printing but has no price of its own,
+      // so the headline and the Collection tab count it $0 — while the chart,
+      // keyed on (product, printing), priced it as the base Enchanted. Owning
+      // only the variant read "-$280 (-100%)" (review, 2026-10-06).
+      if(r.isCustomVariant) continue;
       const pk = r.tcgplayer_product_id + "|" + r.tcg_printing;
       map.set(pk, (map.get(pk)||0) + qty);
-      ownedRows.push({row:r, qty});
     }
     return {map, ownedRows};
   }, [raw, collection, user]);
@@ -46525,11 +46826,18 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     if(!user || owned.map.size === 0){ setHistoryState({loading:false, error:null}); return; }
     if(historyRows) return; // already fetched this range this session
     const productIds = Array.from(new Set(Array.from(owned.map.keys()).map(k => parseInt(k.split("|")[0],10))));
-    const days = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
-    const since = new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10);
+    const since = collectionRangeSince(rangeKey);
     let cancelled = false;
     setHistoryState({loading:true, error:null});
-    fetchCollectionPriceHistory(productIds, since)
+    // Seeds first (see fetchCollectionPriceSeeds): the rollup walks each key's
+    // rows in array order, oldest to newest.
+    const seedKeys = Array.from(owned.map.keys()).map(k => {
+      const bar = k.indexOf("|");
+      return {pid: parseInt(k.slice(0, bar), 10), printing: k.slice(bar + 1)};
+    });
+    const dates = collectionRangeDates(rangeKey, since);
+    Promise.all([fetchCollectionPriceSeeds(seedKeys, since), fetchCollectionPriceHistory(productIds, since, dates ? {dates} : undefined)])
+      .then(([seeds, hist]) => [...(seeds || []), ...hist])
       .then(rows => {
         if(cancelled) return;
         setHistoryCache(c => ({...c, [ownedProductsKey]: {...(c[ownedProductsKey]||{}), [rangeKey]: rows}}));
@@ -46565,7 +46873,8 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   }, [raw, setsMeta]);
   // Forward-fill in computeCollectionValueHistory means a card that wasn't
   // priced during the range start still contributes from its most recent
-  // prior snapshot.
+  // prior snapshot. (Only true since the fetch above seeds that snapshot; it
+  // used to fetch from the range start alone.)
   const freshSeries = useMemo(() => {
     if(!historyRows) return null;
     return computeCollectionValueHistory(historyRows, owned.map, productEarliestDate);
@@ -46619,12 +46928,11 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   const sealedOwnedKey = useMemo(() => Array.from(sealedOwned.keys()).sort().join(","), [sealedOwned]);
   useEffect(() => {
     if(!showSealed || !sealedOwned.size){ setSealedHistoryRows(null); return; }
-    const days = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
-    const since = new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10);
+    const since = collectionRangeSince(rangeKey);
     const pids = Array.from(new Set(Array.from(sealedOwned.keys()).map(k => parseInt(k.split("|")[0],10))));
     const matPids = Object.keys(sealedCollection || {}).filter(isPlaymatPid).map(sealedPricePid);
     let cancelled = false;
-    fetchSealedValueHistory(pids, since, matPids)
+    fetchSealedValueHistory(pids, since, matPids, collectionRangeDates(rangeKey, since))
       .then(rows => { if(!cancelled) setSealedHistoryRows(rows); })
       .catch(() => { if(!cancelled) setSealedHistoryRows([]); });
     return () => { cancelled = true; };
@@ -46687,10 +46995,10 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   const gradedSlotsKey = useMemo(() => gradedSlots.map(s => `${s.pid}|${s.printing}|${s.grader}|${s.grade}|${s.qty}`).sort().join(","), [gradedSlots]);
   // Pull the user's individual graded SALES — drives the graded value line.
   const [gradedSalesRows, setGradedSalesRows] = useState(null);
-  const gradedRangeDays = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
+  const gradedRangeSince = collectionRangeSince(rangeKey, GRADED_SALES_EARLIEST_DATE);
   useEffect(() => {
     if(!(gradedPremium && showGraded && gradedSlots.length)){ setGradedSalesRows(null); return; }
-    const since = new Date(Date.now() - gradedRangeDays*24*3600*1000).toISOString().slice(0,10);
+    const since = gradedRangeSince;
     let cancelled = false;
     fetchGradedSalesFor(gradedSlots, since)
       .then(rows => { if(!cancelled) setGradedSalesRows(rows); })
@@ -46720,8 +47028,8 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     return addUnsoldSlabsToSeries(
       computeSalesValueHistory(gradedSalesRows, gradedSlots, gradedKnownBucketsMap),
       gradedSalesRows, gradedSlots, gradedRollupValue,
-      portfolioFallbackDates(gradedRangeDays), gradedKnownBucketsMap);
-  }, [gradedSalesRows, gradedSlots, gradedRollupValue, gradedRangeDays, gradedKnownBucketsMap]);
+      portfolioFallbackDates(gradedRangeSince), gradedKnownBucketsMap);
+  }, [gradedSalesRows, gradedSlots, gradedRollupValue, gradedRangeSince, gradedKnownBucketsMap]);
   const gradedLatestValue = useMemo(() => (gradedValueSeries && gradedValueSeries.length) ? gradedValueSeries[gradedValueSeries.length-1].value : 0, [gradedValueSeries]);
 
   // Multi-series chart. Each {date,value} series → one line. Toggled-off
@@ -46787,18 +47095,21 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     (showCards ? cardLatestValue : 0) +
     (showSealed ? sealedLatestValue : 0) +
     (showGraded ? gradedLatestValue : 0);
-  // Combined start value (sum across enabled sections' first datapoint) for
-  // the range-delta pill. If only one section is on, use that section's
-  // own start so the delta matches what users expect.
-  const combinedStartValue = (() => {
-    let s = 0, anyHadData = false;
-    if(showCards && valueSeries?.length){ s += valueSeries[0].value; anyHadData = true; }
-    if(showSealed && sealedValueSeries?.length){ s += sealedValueSeries[0].value; anyHadData = true; }
-    if(showGraded && gradedValueSeries?.length){ s += gradedValueSeries[0].value; anyHadData = true; }
-    return anyHadData ? s : null;
+  // The range pill is the CHART's own change: each enabled section's last point
+  // minus its first. It used to be the headline minus the chart's first point,
+  // and the headline counts things the chart leaves out (a pre-release card,
+  // whose inflated pre-order prices the chart drops on purpose; anything
+  // priced too sparsely to have a row in range), so they read as gains.
+  const {start: combinedStartValue, end: combinedEndValue} = (() => {
+    let start = 0, end = 0, any = false;
+    for(const [on, series] of [[showCards, valueSeries], [showSealed, sealedValueSeries], [showGraded, gradedValueSeries]]){
+      if(!on || !series || !series.length) continue;
+      start += series[0].value; end += series[series.length - 1].value; any = true;
+    }
+    return any ? {start, end} : {start: null, end: null};
   })();
-  const rangeDelta = (combinedStartValue != null && combinedStartValue > 0) ? (combinedCurrentValue - combinedStartValue) : null;
-  const rangeDeltaPct = (combinedStartValue != null && combinedStartValue > 0) ? ((combinedCurrentValue - combinedStartValue) / combinedStartValue * 100) : null;
+  const rangeDelta = (combinedStartValue != null && combinedStartValue > 0) ? (combinedEndValue - combinedStartValue) : null;
+  const rangeDeltaPct = (combinedStartValue != null && combinedStartValue > 0) ? ((combinedEndValue - combinedStartValue) / combinedStartValue * 100) : null;
 
   if(!user) return html`<aside class="collection-panel">
     <div class="panel-header">
@@ -46833,7 +47144,6 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   </aside>`;
 
   const deltaColor = rangeDelta == null ? "var(--text-muted)" : rangeDelta >= 0 ? "var(--green)" : "var(--red)";
-  const rangeLabel = (COLLECTION_RANGES.find(r => r.key === rangeKey) || {}).label || rangeKey;
 
   return html`<aside class=${"collection-panel"+(minimized?" is-min":"")}>
     <div class="panel-header">
@@ -46849,7 +47159,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
       ${!hideValue && rangeDelta != null && html`<div class="panel-value-delta" style=${{color:deltaColor}}>
         ${rangeDelta >= 0 ? "+" : "−"}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
         <span style=${{opacity:0.8}}>(${rangeDeltaPct >= 0 ? "+" : ""}${rangeDeltaPct.toFixed(2)}%)</span>
-        <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>${_t("past {range}", {range: rangeLabel})}</span>
+        <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>${collectionRangePhrase(rangeKey)}</span>
       </div>`}
     </div>
     ${!minimized && html`<div>
@@ -47163,7 +47473,10 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, panelNa
         //   reprinted in a Core-legal set is Core-legal regardless of which
         //   printing the user happened to add to the deck.
         const cardMetaById = new Map();
-        const setsByProductName = new Map();
+        // The two maps checkDeckLegality takes, built the way DecksView builds
+        // them: every catalog row per card_id, and every set per card family.
+        const cardRowsById = {};
+        const setsByFamily = {};
         if(raw && raw.length){
           for(const r of raw){
             const inks = r.inks && r.inks.length ? r.inks : (r.ink ? [r.ink] : []);
@@ -47171,10 +47484,10 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, panelNa
             if(r.card_id && !cardMetaById.has(r.card_id)){
               cardMetaById.set(r.card_id, {inks, name, set: r.Set});
             }
+            if(r.card_id) (cardRowsById[r.card_id] = cardRowsById[r.card_id] || []).push(r);
             if(name && r.Set){
-              let bag = setsByProductName.get(name);
-              if(!bag){ bag = new Set(); setsByProductName.set(name, bag); }
-              bag.add(r.Set);
+              const key = cardFamilyKey(name);
+              (setsByFamily[key] = setsByFamily[key] || new Set()).add(r.Set);
             }
           }
         }
@@ -47202,44 +47515,28 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, panelNa
             for(const {deckId, rows} of rpcResults) cardsByDeck[deckId] = await decDeckCards(rows);
           }
         }
-        const coreSets = new Set(typeof computeCoreSets === "function" ? computeCoreSets() : []);
         const computedInks = {};
         const formatByDeck = {};
         for(const d of decks){
           const cards = cardsByDeck[d.id] || [];
           const inkSet = new Set();
-          let totalQty = 0;
-          let allInCore = cards.length > 0;
           let anyCardKnown = false;
           for(const dc of cards){
-            totalQty += (dc.quantity || 0);
             const meta = cardMetaById.get(dc.card_id);
             if(!meta) continue;
             anyCardKnown = true;
             for(const i of meta.inks) inkSet.add(i);
-            // Reprint-aware Core check: card is Core-legal if ANY of its
-            // printings (across the catalog) sits in a Core set, not just
-            // the specific printing in this deck.
-            const allSetsForCard = setsByProductName.get(meta.name) || new Set([meta.set]);
-            let hasCorePrinting = false;
-            for(const s of allSetsForCard){ if(coreSets.has(s)){ hasCorePrinting = true; break; } }
-            if(!hasCorePrinting) allInCore = false;
           }
           computedInks[d.id] = inkSet;
-          // Legality: >=60 cards AND <=2 inks. (60 is the minimum; over is OK.)
-          // If we couldn't resolve any cards for this deck, fall back to "infinity"
-          // so we don't silently hide the tag.
-          let fmt;
-          if(!anyCardKnown){
-            fmt = "infinity";
-          } else if(totalQty < 60 || inkSet.size > 2){
-            fmt = "invalid";
-          } else if(allInCore){
-            fmt = "core";
-          } else {
-            fmt = "infinity";
-          }
-          formatByDeck[d.id] = fmt;
+          // ONE rulebook. This tag used to come from a private copy of the
+          // rules that had drifted: it looked reprints up by exact name ("HeiHei"
+          // vs "Heihei" read Infinity), had no copy limit (5 copies read Core),
+          // no Gather-the-Party exemption (a legal Hunny deck read invalid) and
+          // let a promo re-legalise a rotated card (review, 2026-10-06). With no
+          // card resolvable at all, say Infinity rather than hide the tag.
+          formatByDeck[d.id] = anyCardKnown
+            ? checkDeckLegality({cards, coconut_card: d.coconut_card}, cardRowsById, setsByFamily).format
+            : "infinity";
         }
 
         const creatorIds = Array.from(new Set([...decks.map(d => d.user_id), ...tierRows.map(t => t.user_id)]));
@@ -53938,7 +54235,7 @@ const NEWS_ARTICLES = [
     body: [
       {type:"p", text:"The art from Illumineer's Quest: The Great Hunny Rescue is getting its own playmat. It is planned for release on select Ravensburger sites on November 13, 2026."},
       {type:"img", src:"Logos/news/great-hunny-rescue-playmat.jpg", alt:"Ravensburger announcement graphic for the Great Hunny Rescue playmat, showing the mat and its tube",
-       caption:"Announcement graphic from illumineertales on Instagram, shared by @OhHeyItsBrando on X. The mat shown is a sample."},
+       caption:"Announcement graphic. The mat shown is a sample."},
       {type:"ul", items: [
         "Release: Nov 13, 2026, on select Ravensburger sites.",
         "Art: Winnie the Pooh, in his wizard's robes, with his friends from the Great Hunny Rescue.",
@@ -54407,6 +54704,9 @@ const HomePanelModal = ({panelKey, label, node, cta, onClose, onNavAway}) => {
 // the day's prices had been detected, a full multi-page refetch) landed.
 // `epoch` is the priceEpoch the rows were fetched under: a later epoch
 // means newer prices exist and the rows stay up while they are refetched.
+// `at` is when the rows left the server (a network fetch's start, or the
+// write time of the stored copy), so App can tell whether they predate a
+// catalog refresh — see the stale-catalog branch of loadFromSupabase.
 // What the movers area shows before its first rows exist (a first visit, or
 // storage that was cleared): the shape of two banners, so the page reads as
 // loading rather than empty. Only ever on screen until the first fetch lands —
@@ -54421,6 +54721,17 @@ const MoversSkeleton = ({rows = 2}) => html`<div class="movers-skel" role="statu
   </div>`)}
 </div>`;
 let _homeMoversMem = null;
+// What a FULL catalog refetch (the one a saved catalog past its TTL takes
+// instead of the freshness probe) owes the rest of the page: `wipe` when it
+// brought newer prices than the saved copy, as the probe does; `bump` the
+// priceEpoch only when Home's movers on screen left the server before the
+// refetch started (`mem.at`). Bumping regardless refetched all ~6 pages of
+// movers a second time for every visitor back after a day or more.
+const staleCatalogRefresh = (cached, maxPriceDate, mem, fetchAt) => {
+  const newer = !!(cached && cached.rows && cached.rows.length && cached.stale && maxPriceDate
+    && (!cached.latestDate || maxPriceDate > cached.latestDate));
+  return {wipe: newer, bump: newer && !!mem && (mem.at || 0) < fetchAt};
+};
 const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, openAnalyticsTool, openEventFinder, finderOpen, onEventArtistClick, layout, homeEdit}) => {
   // Resolved home layout (set in App from the settings popover): which panels
   // are on, which column each sits in, and their order within that column.
@@ -54683,11 +54994,12 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
     if(cached && hadCache){
       setState(prev => (prev && prev.rows && prev.rows.length) ? prev : {rows: cached.data, loading:false, error:null});
       if(!cached.stale && priceEpoch === 0){
-        _homeMoversMem = {rows: cached.data, epoch: priceEpoch};
+        _homeMoversMem = {rows: cached.data, epoch: priceEpoch, at: cached.t || 0};
         return;
       }
       // Fall through and background-refresh.
     }
+    const fetchedAt = Date.now();
     sbFetchAll("price_movers", {select: "card_id,set_id,name,version,rarity,ink,collector_number,image_small,image_normal,tcgplayer_product_id,printing,low_today,low_prev,low_7d,low_30d,low_90d,low_180d,low_365d,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,abs_pct_1d,market_today,market_prev,market_7d,market_30d,market_90d,market_180d,market_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d", order: "abs_pct_1d.desc.nullslast"})
       // MUST paginate — see the Screener fetch above. PostgREST's 1000-row cap
       // ignores .limit(), and since migration 120 that would drop ~4,800 of
@@ -54723,7 +55035,7 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
             image_normal: lorcastToProxy(r.image_normal),
           }));
           setState({rows, loading:false, error:null});
-          _homeMoversMem = {rows, epoch: priceEpoch};
+          _homeMoversMem = {rows, epoch: priceEpoch, at: fetchedAt};
           writeJsonCacheIdb(CACHE_KEY, rows);
         }
       });
@@ -55514,7 +55826,7 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
               : (() => {
                   const newestBanner = NEWEST_SET && html`<${MoversBanner}
                     title=${_t("{set} · MOST VALUABLE", {set: _term("set", NEWEST_SET).toUpperCase()})}
-                    subtitle=${html`${PRERELEASE_SETS.has(NEWEST_SET) ? html`<span style=${{display:"inline-block",background:"var(--accent)",color:"#17110a",fontWeight:800,fontSize:9,letterSpacing:0.5,padding:"1px 6px",borderRadius:4,marginRight:6,verticalAlign:"middle"}}>${_t("PRE SALE")}</span>` : null}${_t(valuableMode==="chase" ? "Top 20 chase by Low price" : "Top 20 non-chase by Low price")}${(!PRERELEASE_SETS.has(NEWEST_SET) && newestSetIsHot)?" · " + _t("release week"):""}`}
+                    subtitle=${html`${PRERELEASE_SETS.has(NEWEST_SET) ? html`<span style=${{display:"inline-block",background:"var(--accent)",color:"var(--on-accent)",fontWeight:800,fontSize:9,letterSpacing:0.5,padding:"1px 6px",borderRadius:4,marginRight:6,verticalAlign:"middle"}}>${_t("PRE SALE")}</span>` : null}${_t(valuableMode==="chase" ? "Top 20 chase by Low price" : "Top 20 non-chase by Low price")}${(!PRERELEASE_SETS.has(NEWEST_SET) && newestSetIsHot)?" · " + _t("release week"):""}`}
                     controls=${valuableControls}
                     cards=${valuableCards}
                     activeWindow=${""}
@@ -56574,7 +56886,7 @@ const JAPAN_CORE_PARTIAL_SETS = new Set(["Whispers in the Well", "Winterspell"])
 // 9 read illegal -- and invisibly, because each one's booster twin IS legal, so
 // the CARD still shows up and only this printing's tile goes missing.
 //   Scoped to the two QUEST buckets deliberately. duels.ink tracks no entry of
-// its own for the other two: a Starter Deck Exclusive Foil is a foil reprint
+// its own for the other two: a Starter Deck Foil is a foil reprint
 // sharing its base card's collector number, and the Gift Set Oversized cards are
 // display pieces no format allows. Nothing to match, so both stay out.
 const JAPAN_CORE_EXTRAS_BUCKETS = new Set(["Deep Trouble", "Palace Heist"]);
@@ -60736,12 +61048,26 @@ function parseDeckText(text, raw){
     asked[e.card_id] = (asked[e.card_id]||0) + e.quantity;
     capOf[e.card_id] = e.cap; nameOf[e.card_id] = e.name;
   }
+  // ⚠ The limit is per CARD, not per printing: "4 Cinderella - Ballroom
+  // Sensation" plus "4 Cinderella - Ballroom Sensation (2-205)" (its
+  // Enchanted) imported 8 with nothing said, and the tournament bulk upload
+  // stores what this returns (review, 2026-10-06). Printings share their
+  // family's limit in the order the list names them.
   const trimmed = [];
-  const out = Object.entries(asked).map(([cid, q]) => {
-    const kept = Math.min(capOf[cid], q);
-    if(kept < q) trimmed.push(`${q}× ${nameOf[cid]} → ${kept}`);
-    return {card_id: cid, quantity: kept};
-  });
+  const out = [];
+  const fam = {};
+  for(const [cid, q] of Object.entries(asked)){
+    const key = cardFamilyKey(nameOf[cid]);
+    const f = fam[key] || (fam[key] = {cap: capOf[cid], left: capOf[cid], asked: 0, name: nameOf[cid]});
+    f.asked += q;
+    const kept = Math.min(f.left, q);
+    f.left -= kept;
+    if(kept > 0) out.push({card_id: cid, quantity: kept});
+  }
+  for(const f of Object.values(fam)){
+    const kept = f.cap - f.left;
+    if(kept < f.asked) trimmed.push(`${f.asked}× ${f.name} → ${kept}`);
+  }
   return {entries: out, unmatched, trimmed, mismatched, coconut};
 }
 
@@ -61356,7 +61682,12 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard, defaultInk
               const hover = (e) => { if(big && onHoverCard) onHoverCard({src: proxyImg(big), x: e.clientX, y: e.clientY}); };
               return html`<div key=${g.card_id + "::" + (g.Printing || "")}
                 class=${"deck-quickadd-row" + (i === cursor ? " on" : "") + (qty > 0 ? " in-deck" : "") + (full ? " full" : "")}
-                role="button" tabIndex=${-1}
+                ${/* No role="button": the row holds its own − / + buttons, and a
+                      button may not contain controls (see tileOpen). The keyboard
+                      never needs the row — Enter in the search box adds the
+                      highlighted card, and the + inside it is the row's action for
+                      a screen reader. */""}
+                tabIndex=${-1}
                 title=${full ? _t("{name} — already at the limit of {n}", {name: g["Product Name"] || _t("card"), n: max})
                              : _t("Add {name} to the deck", {name: g["Product Name"] || _t("card")})}
                 onPointerEnter=${mouseHoverOnly((e) => { setCursor(i); hover(e); })}
@@ -62735,10 +63066,11 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
             <${CostInkShield} cost=${meta.cost} inkable=${meta.inkable !== false}/>
           </span>
           <span class="deck-row-name" title=${cardDisplayName(meta)}
-            role="button" tabIndex="0"
+            tabIndex="-1"
             onClick=${()=>openCardModal(item.card_id)}
             onKeyDown=${keyActivate(()=>openCardModal(item.card_id))}
             style=${{cursor:"pointer"}}>
+            ${tileOpen((meta["Product Name"] ? cardDisplayName(meta) : null) || _t("(unknown card)"))}
             ${inkSwatch}
             <span class="deck-row-name-text">${(meta["Product Name"] ? cardDisplayName(meta) : null) || _t("(unknown card)")}</span>
             ${buildVariantChevron(item, meta, "deck-variant-btn--row")}
@@ -65047,6 +65379,9 @@ function App(){
       if(!setRes.error && Array.isArray(setRes.data) && setRes.data[0]){
         prof = {...prof, collection_share_token: setRes.data[0].collection_share_token};
       }
+      const scopeTokens = await fetchCollectionScopeTokens();
+      if(cancelled) return;
+      prof = {...prof, collection_scope_tokens: scopeTokens};
       setProfile(prof);
       // Prompt for a display name if it's missing (typical for a fresh sign-in).
       if(!data || !data.display_name || !data.display_name.trim()){
@@ -65074,8 +65409,10 @@ function App(){
     // comes from the owner-gated RPC (it's revoked from the table API roles).
     const {data} = await sbClient.rpc("get_my_collection_settings");
     const row = Array.isArray(data) ? data[0] : null;
-    if(row) setProfile(p => ({...(p||{user_id:user.id}), ...row}));
-    else setProfile(p => ({...(p||{user_id:user.id}), [col]: level}));
+    // Scoped tokens are derived from the base one, so they follow a rotation.
+    const scopeTokens = await fetchCollectionScopeTokens();
+    if(row) setProfile(p => ({...(p||{user_id:user.id}), ...row, collection_scope_tokens: scopeTokens}));
+    else setProfile(p => ({...(p||{user_id:user.id}), [col]: level, collection_scope_tokens: scopeTokens}));
     return {ok:true};
   }, [user]);
 
@@ -65085,7 +65422,9 @@ function App(){
     if(!user) return {ok:false, error:"Not signed in"};
     const {data, error} = await sbClient.rpc("regenerate_collection_share_token");
     if(error) return {ok:false, error: error.message};
-    setProfile(p => ({...(p||{user_id:user.id}), collection_share_token: data}));
+    // null on failure, never the old map: an old scoped token is a dead link.
+    const scopeTokens = await fetchCollectionScopeTokens();
+    setProfile(p => ({...(p||{user_id:user.id}), collection_share_token: data, collection_scope_tokens: scopeTokens}));
     return {ok:true, token: data};
   }, [user]);
 
@@ -66279,6 +66618,7 @@ function App(){
     }
 
     // 2. Fetch fresh in background (or as the initial load).
+    const catalogFetchAt = Date.now();
     try {
       setLoadProgress({loaded:0,total:3,current:"Fetching sets"});
       // Slim columns — heavy text fields (text/flavor_text) are fetched on
@@ -66372,6 +66712,19 @@ function App(){
         if(p && p.price_date && (!maxPriceDate || p.price_date > maxPriceDate)) maxPriceDate = p.price_date;
       }
       setCatalogPriceDate(maxPriceDate);
+      // A saved catalog past its TTL skips the probe above and lands here, so
+      // the probe's "newer prices exist" handling has to happen here too. It
+      // didn't: the home movers memo is keyed on priceEpoch, and an installed
+      // app resumed after more than a day refetched the catalog but kept
+      // yesterday's movers for the rest of the page's life.
+      // ⚠ Bump only when the movers on screen PREDATE this fetch. A visitor
+      // back after a few days lands on Home while the catalog loads, and Home
+      // fetches today's movers itself in that window; bumping regardless
+      // fetched all ~6 pages of them a second time (measured: 12 requests
+      // against 6).
+      const refreshed = staleCatalogRefresh(cached, maxPriceDate, _homeMoversMem, catalogFetchAt);
+      if(refreshed.wipe) wipePriceDerivedAuxCaches();
+      if(refreshed.bump) setPriceEpoch(n => n + 1);
       writeCache(allRows, maxPriceDate, cardsRows.length);
       // The rows on screen ARE what was just cached — record that, or the next
       // re-probe reads them back and swaps in an identical copy.
@@ -66430,9 +66783,12 @@ function App(){
   // styles.css), which takes it from 80px to 36 and leaves row 2 19px of SPARE at
   // full 8.5px type. If a NINTH ever lands here, something has to leave the nav.
   // The third element is a SHORT label for the chip only: "Price Graphing" is the
-  // one label that wraps to two lines, and it is still the title + aria-label, so
-  // hover and a screen reader say the full name (the SetHeading rule — never drop
-  // the real name out of reach just because the visible text got shorter).
+  // one label that wraps to two lines, and it is still the title, so hover and a
+  // screen reader (as the description) say the full name (the SetHeading rule —
+  // never drop the real name out of reach just because the visible text got
+  // shorter). ⚠ No aria-label on a tab: the visible label IS its name, so a voice
+  // user saying "click Graphs" reaches it. An aria-label of "Price Graphing" over
+  // "Graphs" (and "Scan a card (beta)" over "BETA Scan") broke that (WCAG 2.5.3).
   const TABS_BOTTOM = [["screener","Screener"],["history","Price Graphing","Graphs"],["market","Analytics"],["calendar","Calendar"]];
   const renderTab = ([v,l,short]) => {
     // The scanner is a modal, but /scan opens it (LANDED_ON_SCAN), so the tab
@@ -66442,14 +66798,14 @@ function App(){
       class=${"nav-tab nav-tab--scan"+(scanOpen?" active":"")}
       href="/scan"
       onClick=${navHandler(openScan)}
-      title=${_t("Scan a card with your camera (beta)")} aria-label=${_t("Scan a card (beta)")}>
+      title=${_t("Scan a card with your camera (beta)")}>
       <span class="nav-tab-icon">${NAV_ICONS.scan}<span class="nav-tab-beta" aria-hidden="true">${_t("BETA")}</span></span>
       <span class="nav-tab-label">${_t(l)}</span>
     </a>`;
     return html`<a key=${v} class=${"nav-tab"+(view===v?" active":"")}
       href=${VIEW_PATHS[v] || "/"}
       onClick=${navHandler(()=>onTabClick(v))}
-      title=${_t(l)} aria-label=${_t(l)}>
+      title=${_t(l)}>
       <span class="nav-tab-icon">${NAV_ICONS[v]}</span>
       <span class="nav-tab-label">${_t(short || l)}</span>
     </a>`;
