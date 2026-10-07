@@ -167,6 +167,9 @@ check("Villain" not in t["class"], "name-only rows do not vote")
 check(t["set"].get("The First Chapter") == "Das erste Kapitel", "localized set name")
 check(t["ink"]["Amber"] == "Bernstein" and t["rarity"]["Super Rare"] == "Super selten", "official terms")
 check(ic.tt_set_title("ＴＨＥ　ＦＩＲＳＴ　ＣＨＡＰＴＥＲ　物語のはじまり") == "物語のはじまり", "Japanese half of a set title")
+check(ic.tt_set_title("ハイペリアシティ") == "ハイペリアシティ", "a Japanese-only set title is the name")
+check(ic.tt_set_title("キュレーターズ・ライブラリー　WHISPERS IN THE WELL") is None,
+      "a product title naming the set in English is not a Japanese set name")
 
 # --- the gallery extractor, on a synthetic page
 node = shutil.which("node")
