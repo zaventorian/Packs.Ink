@@ -12102,6 +12102,14 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   const [cols, setCols] = useState(7);
   const [bgStyle, setBgStyle] = useState("ink");      // ink | dark | light
   const [showQr, setShowQr] = useState(!!shareUrl);
+  // The locked QR chip on a Private deck makes it Unlisted; the share link then
+  // arrives, but showQr was decided once at mount, so no QR drew until the chip
+  // was clicked again. Turn it on when a link first appears.
+  const hadShareUrl = useRef(!!shareUrl);
+  useEffect(() => {
+    if(shareUrl && !hadShareUrl.current) setShowQr(true);
+    hadShareUrl.current = !!shareUrl;
+  }, [shareUrl]);
   const [showUrl, setShowUrl] = useState(true);
   const [showStats, setShowStats] = useState(true);
   const [showCurve, setShowCurve] = useState(true);
@@ -58036,6 +58044,24 @@ const TournamentBulkEditModal = ({tournament, results, raw, onClose, onSaved}) =
     if(!tName.trim()){ setError("Tournament name is required."); return; }
     setBusy(true);
     try {
+      // Ask about unmatched lines BEFORE writing anything. Asked after the
+      // deletions, Cancel left rows already deleted for good, and the next Save
+      // deleted them again ("tournament deck not found"), so the editor could
+      // never save until it was closed and reopened.
+      // Collect unmatched lines across all rows to surface in one prompt.
+      const liveRows = rows.filter(r => r.deck_name.trim() || r.deck_text.trim() || r.player_name.trim() || r.place.trim());
+      const allUnmatched = [];
+      const parsed = liveRows.map(r => {
+        const p = r.deck_text.trim() ? parseDeckText(r.deck_text, raw) : {entries:[], unmatched:[]};
+        if(p.unmatched.length) allUnmatched.push(`Row "${r.player_name||r.deck_name||"untitled"}": ${p.unmatched.join(", ")}`);
+        return {row: r, entries: p.entries};
+      });
+      if(allUnmatched.length){
+        if(!confirm(`Some lines couldn't be matched and will be skipped:\n\n${allUnmatched.slice(0,8).join("\n")}${allUnmatched.length>8?"\n…":""}\n\nSave anyway?`)){
+          setBusy(false); return;
+        }
+      }
+
       const metaChanged =
         tName.trim() !== (tournament?.name || "") ||
         (tDate || "") !== (tournament?.event_date || "") ||
@@ -58054,23 +58080,12 @@ const TournamentBulkEditModal = ({tournament, results, raw, onClose, onSaved}) =
       }
 
       // Process deletions first so deck count math in subsequent steps is honest.
+      // Each step records what landed, so a retry after a failure part-way
+      // through never deletes a row twice or adds a deck twice.
       for(const rid of deletedIds){
         const r = await sbClient.rpc("admin_delete_tournament_deck", {p_result_id: rid});
         if(r.error) throw r.error;
-      }
-
-      // Collect unmatched lines across all rows to surface in one prompt.
-      const liveRows = rows.filter(r => r.deck_name.trim() || r.deck_text.trim() || r.player_name.trim() || r.place.trim());
-      const allUnmatched = [];
-      const parsed = liveRows.map(r => {
-        const p = r.deck_text.trim() ? parseDeckText(r.deck_text, raw) : {entries:[], unmatched:[]};
-        if(p.unmatched.length) allUnmatched.push(`Row "${r.player_name||r.deck_name||"untitled"}": ${p.unmatched.join(", ")}`);
-        return {row: r, entries: p.entries};
-      });
-      if(allUnmatched.length){
-        if(!confirm(`Some lines couldn't be matched and will be skipped:\n\n${allUnmatched.slice(0,8).join("\n")}${allUnmatched.length>8?"\n…":""}\n\nSave anyway?`)){
-          setBusy(false); return;
-        }
+        setDeletedIds(ds => ds.filter(x => x !== rid));
       }
 
       for(const {row: r, entries} of parsed){
@@ -58091,6 +58106,9 @@ const TournamentBulkEditModal = ({tournament, results, raw, onClose, onSaved}) =
             p_cards: cardsPayload,
           });
           if(res.error) throw res.error;
+          const at = rows.indexOf(r);
+          if(at >= 0 && res.data) updateRow(at, {result_id: res.data, _initialDeckText: r.deck_text,
+            _initialMeta: {place: r.place, player_name: r.player_name, deck_name: r.deck_name}});
           continue;
         }
 
@@ -58357,6 +58375,22 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       window.history.pushState({tourney: tid || null}, "", u.toString());
     } catch {}
   }, []);
+  // Leaving a tournament takes ?tourney= with it. Only the state used to be
+  // cleared, so a refresh or "Copy link to this page" reopened it, and browser
+  // Back walked into tournaments already closed. Back to the list pops the entry
+  // openTournament pushed; a delete or an ink jump just strips the param.
+  const closeTournament = useCallback((popEntry) => {
+    setSelectedTournamentId(null);
+    try {
+      const u = new URL(window.location.href);
+      const tid = u.searchParams.get("tourney");
+      if(!tid) return;
+      const st = window.history.state;
+      if(popEntry && st && st.tourney && String(st.tourney) === tid){ window.history.back(); return; }
+      u.searchParams.delete("tourney");
+      window.history.replaceState(window.history.state, "", u.toString());
+    } catch {}
+  }, []);
   // Browser back/forward sync — re-read ?deck= / ?tourney= / ?user= and update
   // the corresponding state so popstate actually unwinds sub-pages.
   //
@@ -58433,9 +58467,18 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       if(error) throw error;
       setTournaments(ts || []);
       // Pre-load all results for the tile counts + the detail view.
-      const {data: rs, error: rerr} = await sbClient.from("tournament_results_v")
-        .select("*").order("place_rank", {ascending: true, nullsFirst: false});
-      if(rerr) throw rerr;
+      // Paged: a response stops at 1000 rows, and past that the lowest finishers
+      // of every tournament would quietly drop off. result_id breaks place ties
+      // so the page edges are stable. (412 rows today.)
+      const rs = [];
+      for(let from = 0; ; from += 1000){
+        const {data, error: rerr} = await sbClient.from("tournament_results_v")
+          .select("*").order("place_rank", {ascending: true, nullsFirst: false}).order("result_id", {ascending: true})
+          .range(from, from + 999);
+        if(rerr) throw rerr;
+        rs.push(...(data || []));
+        if(!data || data.length < 1000) break;
+      }
       const grouped = {};
       for(const r of (rs || [])){
         (grouped[r.tournament_id] = grouped[r.tournament_id] || []).push(r);
@@ -59907,7 +59950,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // Jump into the all-decks grid filtered by an ink — used by the ink shields
   // inside a tournament detail and by the top ink chips while on Tournaments.
   const goAllDecksWithInk = useCallback((ink) => {
-    setSelectedTournamentId(null);
+    closeTournament(false);
     setTourneyDeckView("alldecks");
     if(ink) setInkFilter(prev => {
       if(prev.has(ink)) return prev;
@@ -60184,9 +60227,11 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     if(!oldRows.length) return;
     const totalQty = oldRows.reduce((s, c) => s + (c.quantity || 0), 0);
     if(totalQty <= 0) return;
-    // Find the preferred printing for the new card_id from the catalog.
-    const newCardRows = (raw || []).filter(r => r.card_id === newCardId);
-    const newPrinting = (newCardRows.find(r => r.tcg_printing === "Normal") || newCardRows[0] || {}).tcg_printing || "Normal";
+    // "Normal", the printing every other deck write uses (import, the card
+    // browser, quick-add, duplicate). Taking the catalog's printing stored a
+    // swapped-in Enchanted as "Holofoil", which the browser and quick-add (both
+    // keyed on Normal) read as 0, so + added it a second time as a new row.
+    const newPrinting = "Normal";
     // If the target slot already exists in the deck, sum quantities (the deck
     // limit check is the user's responsibility — surfaces in the legality pill).
     const existing = (deck.cards || []).find(c => c.card_id === newCardId && c.printing === newPrinting);
@@ -60783,7 +60828,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             loading=${!tournamentsLoaded}
             tournament=${tournaments.find(t => t.id === selectedTournamentId)}
             results=${tournamentResults[selectedTournamentId] || []}
-            onBack=${()=>setSelectedTournamentId(null)}
+            onBack=${()=>closeTournament(true)}
             onOpenDeck=${(deckId, token)=>openDeckById && openDeckById(deckId, token)}
             isAdmin=${isTournamentAdmin}
             onEdit=${()=>setEditTournamentId(selectedTournamentId)}
@@ -60793,7 +60838,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
               try {
                 const {error: derr} = await sbClient.rpc("admin_delete_tournament", {p_tid: selectedTournamentId});
                 if(derr) throw derr;
-                setSelectedTournamentId(null);
+                closeTournament(false);
                 await refreshTournaments();
               } catch(e) { flashToast(_t("Delete failed: {err}", {err: (e?.message || e)})); }
             }}
@@ -60981,7 +61026,12 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       tournamentContext=${tournamentByDeckId[posterViewState.deck.id] || null}
       visibility=${posterViewState.deck.visibility}
       isOwner=${!!(user && posterViewState.deck.user_id === user.id)}
-      onChangeVisibility=${()=>{}}
+      onChangeVisibility=${(v) => {
+        // Wired: the Options screen offers "make Unlisted / Public" to an owner,
+        // and every click was a silent no-op. Going MORE visible keeps the token.
+        updateDeckMeta(posterViewState.deck.id, {visibility: v});
+        setPosterViewState(st => st && ({...st, deck: {...st.deck, visibility: v}}));
+      }}
       onClose=${()=>setPosterViewState(null)}/>`}
 
     ${toastEl}
@@ -62289,9 +62339,25 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       .catch(()=>{});
     return () => { cancelled = true; };
   }, [deck?.id, isOwnDeck]);
-  // Owners see their own truth; a viewer only ever sees what get_shared_deck
-  // reported, which is already gated on the owner having opted in.
-  const shareVersions = isOwnDeck ? ownerShareVersions : !!viewerShareVersions;
+  // A PUBLIC deck is opened without get_shared_deck (its link carries no
+  // token, and Discover / Following / Favorites read the table directly), so
+  // the viewer never learned the owner had shared its history, and had no token
+  // to ask get_shared_deck_versions with. Ticking "Include version history" on
+  // a Public deck did nothing for anyone. One row, on demand, public decks only.
+  const [viewerPub, setViewerPub] = useState(null);   // {versions, token}
+  useEffect(() => {
+    setViewerPub(null);
+    if(isOwnDeck || !deck?.id || viewerShareVersions || deck.visibility !== "public") return;
+    let cancelled = false;
+    sbClient.from("decks").select("share_versions,share_token").eq("id", deck.id).maybeSingle()
+      .then(r => { if(!cancelled && !r.error && r.data) setViewerPub({versions: !!r.data.share_versions, token: r.data.share_token || null}); })
+      .catch(()=>{});
+    return () => { cancelled = true; };
+  }, [deck?.id, deck?.visibility, isOwnDeck, viewerShareVersions]);
+  // Owners see their own truth; a viewer sees what get_shared_deck reported or,
+  // for a public deck, the row itself, both gated on the owner having opted in.
+  const shareVersions = isOwnDeck ? ownerShareVersions : (!!viewerShareVersions || !!(viewerPub && viewerPub.versions));
+  const historyToken = shareToken || (viewerPub && viewerPub.token) || null;
   const onSetShareVersions = useCallback(async (on) => {
     if(!isOwnDeck || !deck?.id) return;
     setOwnerShareVersions(on);
@@ -62394,6 +62460,9 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
     if((deck.description || "") !== (editSnapshot.description || "")) return true;
     if((deck.youtube_url || "") !== (editSnapshot.youtube_url || "")) return true;
     if(deck.visibility !== editSnapshot.visibility) return true;
+    // A session that only picked or removed the Coconut leader is a change too:
+    // Undo reverts it and the version save counts it, so Undo must appear.
+    if((deck.coconut_card || null) !== (editSnapshot.coconut_card || null)) return true;
     const cur = deck.cards || [];
     if(cur.length !== editSnapshot.cards.length) return true;
     const SEP = "\x1f";
@@ -63721,7 +63790,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       tournamentContext=${tournamentContext || null}
       onClose=${()=>setMulliganOpen(false)}/>`}
     ${historyOpen && html`<${DeckHistoryModal} deck=${deck} cardById=${cardById}
-      isOwner=${!!isOwnDeck} shareToken=${shareToken || null}
+      isOwner=${!!isOwnDeck} shareToken=${historyToken}
       refreshNonce=${deckVersionNonce || 0}
       onClose=${()=>setHistoryOpen(false)}/>`}
     ${proxyOpen && html`<${ProxyPrintModal} deck=${deck} cardById=${cardById}
