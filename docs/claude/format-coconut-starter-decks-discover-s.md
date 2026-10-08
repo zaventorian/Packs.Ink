@@ -36,6 +36,7 @@ Beta cards land weekly, so each one announces itself and then stops, above the s
   not of when anything was shown. **The 18 Beta 1 cards carry no `revealed` and so can
   never fire this** — they all arrived together off one PDF and there is no day to date
   them to.
+- **⚠ ONLY THE NEWEST REVEAL DAY SHOWS (2026-10-08, Zaven: *"update the coconut news beat to just have merida now"*).** `coconutFreshCards` still bounds news to the window, but then keeps only the cards sharing the newest `revealed` date, so a new reveal REPLACES the previous one instead of stacking (Pete, Black Cauldron and Merida had been riding the rail together). Same-day cards still show together (the six wave-2 duals). The old stacking is one deleted filter line away. Merida is cn 28, art at `card-art/coconut/028.jpg`, deck "Wisp Season".
 - **⚠ A reveal date in the FUTURE is ignored rather than trusted.** A typo'd year would
   otherwise announce a card nobody has seen, on every home page, until someone noticed.
 - **⚠ The tile is gated on the row being in `raw`**, the same reason the standing tile's
