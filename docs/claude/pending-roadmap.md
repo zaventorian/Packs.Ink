@@ -56,7 +56,7 @@
   forged `X-Forwarded-For` only prepends, so `_client_ip()` was already unspoofable. Run against PGlite (26
   checks). Verified live by a rolled-back probe (the trade and both event rows land in the right buckets;
   nothing left behind) and an anon REST call.
-- **`supabase/189_attendance_anon_columns.sql`** — **STAGED 2026-10-06, apply after the client from the same
+- ~~`supabase/189_attendance_anon_columns.sql`~~ — **APPLIED 2026-10-08** (v536 live first; an anon read of `best_identifier` is now 401, the Store Status columns still 200). Original note: **STAGED 2026-10-06, apply after the client from the same
   commit is LIVE** (deployed + edge purged; give open tabs a day). It revokes the table-wide SELECT on
   `rph_event_attendance` from anon / authenticated and grants back only `event_id, person_key, played,
   registration_status`. Applied before that client ships, the live Store Status tab 42501s (it still selects
