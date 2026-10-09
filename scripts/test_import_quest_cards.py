@@ -73,6 +73,25 @@ ok("art slot", over[0]["image_normal"], "img/Q1/os1/552741/False")
 ok("a battleground is stored portrait, like a Location", over[1]["image_normal"], "img/Q1/os2/552745/True")
 ok("Q3 oversized go to Lorcast's Q3 set", Q.OVERSIZED_GROUPS["Q3"][1], "set_5a55ed51fe9144248bc9d1b5656bc6b4")
 
+loose = Q.numberless_rows("Q3", [
+    {"productId": 701135, "name": "Illumineer's Quest: The Great Hunny Rescue", "extendedData": []},
+    {"productId": 722201, "name": "Mickey Mouse - Rescued from the Entrance",
+     "extendedData": [{"name": "Rarity", "value": "Quest"}, {"name": "Number", "value": "1/37"}]},
+    {"productId": 722695, "name": "Vine Tendril", "extendedData": [
+        {"name": "Rarity", "value": "Quest"}, {"name": "CardType", "value": "Character"},
+        {"name": "Cost Ink", "value": "0"}, {"name": "InkwellIcononCard", "value": "Yes"},
+        {"name": "Strength", "value": "1"}, {"name": "Willpower", "value": "1"}, {"name": "Lore Value", "value": "1"},
+        {"name": "Description", "value": "<strong>[Taking Root]</strong> This character enters play exerted."}]},
+    {"productId": 1, "name": "Boss (Oversized)", "extendedData": [{"name": "Rarity", "value": "Quest"}]},
+], lambda q, slot, pid, portrait: f"img/{q}/{slot}")
+ok("only the unnumbered, non-oversized Quest product", [r["tcgplayer_product_id"] for r in loose], [722695])
+ok("id keyed on the pid", loose[0]["id"], "crd_quest_q3_p722695")
+ok("in Lorcast's Q3 set, rarity Quest", (loose[0]["set_id"], loose[0]["rarity"]), ("set_5a55ed51fe9144248bc9d1b5656bc6b4", "Quest"))
+ok("no collector number, no version", (loose[0]["collector_number"], loose[0]["version"]), (None, None))
+ok("stats and inkwell read off TCGplayer", (loose[0]["cost"], loose[0]["inkable"], loose[0]["strength"], loose[0]["willpower"], loose[0]["lore"]), (0, True, 1, 1, 1))
+ok("text", loose[0]["text"], "[Taking Root] This character enters play exerted.")
+ok("art slot", loose[0]["image_normal"], "img/Q3/p722695")
+
 ok("Q3 is a quest code", L._is_quest_code("Q3"), True)
 ok("Q12 is a quest code", L._is_quest_code("q12"), True)
 ok("bare Q is not", L._is_quest_code("Q"), False)

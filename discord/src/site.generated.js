@@ -170,6 +170,14 @@ const EXTRAS_MAP = {
   544494: {originSet:"Illumineer's Quest – Deep Trouble", variantLabel:"Deep Trouble", excludeFromBaseSet:true}, // Mulan - Elite Archer           (cn 224)
   544487: {originSet:"Illumineer's Quest – Deep Trouble", variantLabel:"Deep Trouble", excludeFromBaseSet:true}, // Piglet - Pooh Pirate Captain (cn 223) — real cards row crd_custom_544487_piglet_pooh (see supabase/82_quest_card_piglet.sql); was a client-only standalone, which left its graded eBay sales orphaned onto the booster #16
 
+  // Illumineer's Quest: Hunny Rescue (Q3) — 4 quest-reward cards that Lorcast
+  // files under main sets (collector numbers past each set's total). All four
+  // sit in TCGplayer's Q3 group 24734 and are Cold Foil, like Yen Sid.
+  721876: {originSet:"Illumineer's Quest – Hunny Rescue", variantLabel:"Hunny Rescue", excludeFromBaseSet:true}, // Christopher Robin - Hunny Sage (AotV #246)
+  721878: {originSet:"Illumineer's Quest – Hunny Rescue", variantLabel:"Hunny Rescue", excludeFromBaseSet:true}, // Violet Parr - Super Resilient  (AotV #247)
+  721882: {originSet:"Illumineer's Quest – Hunny Rescue", variantLabel:"Hunny Rescue", excludeFromBaseSet:true}, // Mr. Incredible - Super Strong  (Wilds Unknown #243)
+  721891: {originSet:"Illumineer's Quest – Hunny Rescue", variantLabel:"Hunny Rescue", excludeFromBaseSet:true}, // Sven - Leaping Reindeer        (Winterspell #243)
+
   // Illumineer's Quest: Palace Heist (Q2) — 4 quest-reward cards Lorcast
   // doesn't index. Real cards rows are inserted by patch_pid_overrides.py
   // so prices flow naturally; metadata mirrors what TCGCSV publishes.
