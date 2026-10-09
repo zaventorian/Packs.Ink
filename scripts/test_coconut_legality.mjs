@@ -87,7 +87,7 @@ console.log("\n== data integrity ==");
 // +2 Amber (Woody&Buzz, Madrigal), +2 Amethyst (Peter Pan&Tinker Bell,
 // Aladdin&Genie), +1 Ruby (Belle&Beast), +1 Sapphire (Darkwing&Launchpad).
 const COCONUT_INKS = ["Amber","Amethyst","Emerald","Ruby","Sapphire","Steel"];
-check("27 Coconut cards", COCONUT_CARDS.length, 27);
+check("28 Coconut cards", COCONUT_CARDS.length, 28);
 // The durable half of the old "3 per ink" check. A typo'd ink ("Steal") would
 // leave the card out of CoconutLeaderPicker entirely — it renders one group per
 // canonical ink — and nothing else would notice.
@@ -101,10 +101,10 @@ check("every dual leader's second ink is canonical",
 check("every ink has a leader",
   COCONUT_INKS.every(i => COCONUT_CARDS.some(c => c.ink === i)), true);
 check("per-ink counts (primary ink)", COCONUT_INKS.map(
-  i => COCONUT_CARDS.filter(c=>c.ink===i).length), [6,5,4,4,4,4]);
-check("slugs unique", new Set(COCONUT_CARDS.map(c=>c.slug)).size, 27);
-check("collector numbers 1..27", COCONUT_CARDS.map(c=>c.cn).sort((a,b)=>a-b),
-  Array.from({length:27},(_,i)=>i+1));
+  i => COCONUT_CARDS.filter(c=>c.ink===i).length), [6,6,4,4,4,4]);
+check("slugs unique", new Set(COCONUT_CARDS.map(c=>c.slug)).size, 28);
+check("collector numbers 1..28", COCONUT_CARDS.map(c=>c.cn).sort((a,b)=>a-b),
+  Array.from({length:28},(_,i)=>i+1));
 check("every associated name is '<name> - <version>' (or the bare name, for a card with no version)",
   COCONUT_CARDS.every(c => c.associated === (c.version ? `${c.name} - ${c.version}` : c.name)), true);
 
@@ -161,8 +161,20 @@ const vineAt = (offsetDays) =>
   coconutFreshCards(Date.parse(vine.revealed + "T00:00:00Z") + offsetDays * DAY)
     .map(c => c.slug);
 check("fresh on its reveal day", vineAt(0).includes("the-vine-towering-stalk"), true);
-check("still fresh just inside the window",
-  vineAt(COCONUT_REVEAL_NEWS_DAYS - 1).includes("the-vine-towering-stalk"), true);
+// Only the NEWEST reveal day is announced (2026-10-08): an older reveal inside the
+// window yields to a newer one instead of stacking beside it.
+check("an older reveal yields to a newer one inside its window",
+  vineAt(COCONUT_REVEAL_NEWS_DAYS - 1).includes("the-vine-towering-stalk"), false);
+const newestDay = dated.map(c => c.revealed).sort().pop();
+const newestSlugs = dated.filter(c => c.revealed === newestDay).map(c => c.slug).sort();
+const atNewest = (offsetDays) =>
+  coconutFreshCards(Date.parse(newestDay + "T00:00:00Z") + offsetDays * DAY).map(c => c.slug).sort();
+check("the newest reveal is announced alone, with its own day's cards",
+  atNewest(0), newestSlugs);
+check("the newest reveal is still announced just inside the window",
+  atNewest(COCONUT_REVEAL_NEWS_DAYS - 1), newestSlugs);
+check("the newest reveal goes stale once the window passes",
+  atNewest(COCONUT_REVEAL_NEWS_DAYS + 1).length, 0);
 check("stale once the window passes",
   vineAt(COCONUT_REVEAL_NEWS_DAYS + 1).includes("the-vine-towering-stalk"), false);
 // The guard against a typo'd year announcing a card nobody has seen.

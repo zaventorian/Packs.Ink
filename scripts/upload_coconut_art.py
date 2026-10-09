@@ -112,6 +112,8 @@ COCONUT_SLUGS = {
     # Revealed 2026-10-01. The first leader with no version: its associated card is the
     # Item "The Black Cauldron".
     27: "the-black-cauldron",
+    # Revealed 2026-10-08. Amethyst, associated card is the Set 13 Merida - Wisp Conjurer.
+    28: "merida-wisp-conjurer",
 }
 
 
