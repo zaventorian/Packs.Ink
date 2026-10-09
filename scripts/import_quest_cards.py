@@ -141,6 +141,39 @@ def oversized_rows(quest: str, products: list[dict], img_url_for) -> list[dict]:
     return out
 
 
+def numberless_rows(quest: str, products: list[dict], img_url_for) -> list[dict]:
+    """Quest-rarity products with no collector number and no "(Oversized)": the
+    Vine Tendril packed ten to a Great Hunny Rescue box. They are board-game
+    pieces like the numbered scenario cards, so they belong in the quest's own
+    set, not in Extras & Oddities. Id is keyed on the TCGplayer pid, which is
+    stable, so a card TCGplayer lists later can never shift another's id."""
+    _, set_id = OVERSIZED_GROUPS[quest]
+    out = []
+    for p in sorted(products, key=lambda p: p["productId"]):
+        ext = {e.get("name"): e.get("value") for e in p.get("extendedData") or []}
+        if ext.get("Rarity") != "Quest" or ext.get("Number") or "(Oversized)" in (p.get("name") or ""):
+            continue
+        name, ver = (p["name"].rsplit(" - ", 1) + [None])[:2] if " - " in p["name"] else (p["name"], None)
+
+        def num(k):
+            v = ext.get(k)
+            return int(v) if v and str(v).isdigit() else None
+        url = img_url_for(quest, f"p{p['productId']}", p["productId"], False)
+        out.append({
+            "id": f"crd_quest_{quest.lower()}_p{p['productId']}", "set_id": set_id, "collector_number": None,
+            "name": name.strip(), "version": ver.strip() if ver else None, "rarity": "Quest",
+            "ink": None, "inks": None, "cost": num("Cost Ink"),
+            "inkable": (ext.get("InkwellIcononCard") == "Yes") if ext.get("InkwellIcononCard") else None,
+            "card_type": ext.get("CardType") or "Character",
+            "classifications": None, "strength": num("Strength"), "willpower": num("Willpower"),
+            "lore": num("Lore Value"), "move_cost": None,
+            "text": strip_html(ext.get("Description")), "flavor_text": strip_html(ext.get("Flavor Text")),
+            "illustrators": None, "tcgplayer_product_id": p["productId"],
+            "image_small": url, "image_normal": url, "image_large": url,
+        })
+    return out
+
+
 def optimize(data: bytes, portrait: bool = False) -> bytes:
     """734px JPEG. portrait=True turns a landscape scan on its side (a quarter
     turn counter-clockwise), the way every Location image is framed, so the
@@ -211,10 +244,24 @@ def main():
                   + ("" if not args.commit else (" ok" if r["image_normal"] else " NO ART")))
         rows.extend(over)
         n_over += len(over)
+        loose = numberless_rows(quest, prods, lambda q, slot, pid, portrait: store(
+            q, slot, ART_OVERRIDES.get(pid) or TCG_IMG.format(pid=pid), portrait))
+        for r in loose:
+            print(f"  {quest} numberless: {r['name']} | {r['card_type']} | pid {r['tcgplayer_product_id']}"
+                  + ("" if not args.commit else (" ok" if r["image_normal"] else " NO ART")))
+        rows.extend(loose)
+        n_over += len(loose)
 
     if not args.commit:
-        print(f"\nDRY RUN: {len(cards)} numbered + {n_over} oversized card(s). Add --commit to load.")
+        print(f"\nDRY RUN: {len(cards)} numbered + {n_over} oversized / numberless card(s). Add --commit to load.")
         return
+    # A failed art upload leaves image_* None, and the upsert would blank the
+    # row's existing art (a connection reset did exactly that to Q1 #29). Skip
+    # the row; the next run retries it.
+    skipped = [r for r in rows if not r["image_normal"]]
+    for r in skipped:
+        print(f"  SKIPPED (no art this run, existing row untouched): {r['id']}")
+    rows = [r for r in rows if r["image_normal"]]
     sb.upsert("cards", rows, on_conflict="id")
     print(f"\nUpserted {len(rows)} quest card row(s).")
     for fn in ("refresh_card_prices_latest", "refresh_price_movers"):
