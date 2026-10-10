@@ -14,7 +14,7 @@ export function kayleeStats() {
     embeds: [{
       title: "Kaylee's season stats",
       color: 0xc77dff,
-      description: "**100** packs opened\n**12** Enchanteds pulled\n\n12% Enchanted rate. The rest of us are at about 1 in 72 (1.4%).\n*Totally normal. Nothing to see here.*",
+      description: "**101** packs opened\n**13** Enchanteds pulled\n\n13% Enchanted rate. The rest of us are at about 1 in 72 (1.4%).\n*Are you kidding me??*",
       footer: { text: "Statistics are 100% real and not at all rigged" },
     }],
     components: [{ type: 1, components: [{ type: 2, style: 1, label: "Open a Kaylee pack", custom_id: KAYLEE_ID }] }],

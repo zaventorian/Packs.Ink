@@ -1019,7 +1019,7 @@ const D = await mod("discord/src/data.js");
 {
   const K = await mod("discord/src/kaylee.js");
   const st = K.kayleeStats();
-  ok(/100\*\* packs opened/.test(st.embeds[0].description) && /12\*\* Enchanteds/.test(st.embeds[0].description), "kaylee stats: 100 packs, 12 enchanteds");
+  ok(/101\*\* packs opened/.test(st.embeds[0].description) && /13\*\* Enchanteds/.test(st.embeds[0].description), "kaylee stats: 101 packs, 13 enchanteds");
   ok(st.components[0].components[0].custom_id === K.KAYLEE_ID && K.isKayleeId(K.KAYLEE_ID), "kaylee button id round-trips");
   let bad = 0, empty = 0;
   for (let i = 0; i < 200; i++) {
