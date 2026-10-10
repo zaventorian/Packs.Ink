@@ -22949,9 +22949,14 @@ const SetDetailListRow = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, 
 const SetDetailCardTile = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, theme, showNormalSide, showFoilSide, subtitle, graded}) => {
   const num = (group.Number||"").split("/")[0] || "—";
   const img = group.img_small || group.img_normal;
-  const price = (group.normal && group.normal["Low Price"]) ?? (group.foil && group.foil["Low Price"]);
   const onlyNormal = showNormalSide && !showFoilSide;
   const onlyFoil   = showFoilSide   && !showNormalSide;
+  // The price follows the counter the tile shows. It always read the non-foil
+  // first, so a tile counting foils (Foil filter on) priced the non-foil.
+  const nLow = group.normal && group.normal["Low Price"];
+  const fLow = group.foil   && group.foil["Low Price"];
+  const priceIsFoil = onlyFoil ? fLow != null : (!onlyNormal && nLow == null && fLow != null);
+  const price = onlyFoil ? fLow : onlyNormal ? nLow : (nLow ?? fLow);
   return html`<div class="sd-tile" style=${{background:inkTint(group.ink,theme)}}>
     ${img
       ? html`<img class="sd-tile-img" src=${img} alt=${group["Product Name"]} loading="lazy" onClick=${onOpen}/>`
@@ -22962,7 +22967,7 @@ const SetDetailCardTile = ({group, normalQty, foilQty, onNormal, onFoil, onOpen,
         <span class="sd-tile-name" title=${cardDisplayName(group)}>${cardDisplayName(group)}</span>
         ${subtitle && html`<span class="sd-tile-subtitle">${subtitle}</span>`}
       </div>
-      ${price!=null && html`<span class="sd-tile-price">${fmtUSD(price)}</span>`}
+      ${price!=null && html`<span class=${"sd-tile-price"+(priceIsFoil && group.normal ? " foil" : "")}>${fmtUSD(price)}</span>`}
     </div>
     <div class="sd-tile-counters">
       ${onlyFoil
