@@ -14,6 +14,12 @@ slug: lorecast-oct-15-2026
 
 London runs November 13 to 15. On top of the Main Events it now has two one-day Villain Challenges, each Core Constructed with 2,400 players and 6 rounds of Swiss.
 
+![Organized Play Challenge update slide: London, Villain Challenge Gaston, Saturday November 14, 2,400 players, Core Constructed, 6 rounds of Swiss, prizing](Logos/news/lorecast-1015-london-gaston.jpg)
+*The Lorecast slide for the Gaston Villain Challenge.*
+
+![Organized Play Challenge update slide: London, Villain Challenge Ursula, Sunday November 15, 2,400 players, Core Constructed, 6 rounds of Swiss, prizing](Logos/news/lorecast-1015-london-ursula.jpg)
+*The Lorecast slide for the Ursula Villain Challenge.*
+
 | | Villain Challenge: Gaston | Villain Challenge: Ursula |
 |---|---|---|
 | Day | Saturday, November 14 | Sunday, November 15 |
@@ -34,6 +40,9 @@ Both prize cards are names that already exist as booster cards: Gaston - Superio
 - **On demand:** Format Coconut, Pack Rush, Booster Draft (4 Hyperia City booster packs).
 - **Scheduled:** Core Constructed, Infinity Constructed, Super Sealed, Full Box Sealed, Team Up Trios, and a Madam Mim - Resourceful Trickster Pin Event.
 
+![Organized Play Challenge update slide: London side events, on-demand and scheduled](Logos/news/lorecast-1015-london-side-events.jpg)
+*London's side events, as listed on the slide.*
+
 ## Ink Pair Prizing at London and Tampa
 
 Challenge London and Challenge Tampa will test Ink Pair Prizing at each Main Event.
@@ -44,9 +53,18 @@ Challenge London and Challenge Tampa will test Ink Pair Prizing at each Main Eve
 - Single-ink decks are not eligible for this prize.
 - The prize is a non-foil Mickey Mouse - Brave Little Prince promo card.
 
+![Organized Play Challenge update slide: Ink Pair Prizing at Challenge London and Challenge Tampa, with the Mickey Mouse - Brave Little Prince promo card](Logos/news/lorecast-1015-ink-pair-prizing.jpg)
+*The Ink Pair Prizing slide, with the Mickey Mouse - Brave Little Prince promo.*
+
 ## Challenge Premium and VIP packages
 
 Two paid packages for the Challenge weekends were priced on the stream.
+
+![Challenge Premium Package slide, $350 USD, 249 GBP, 299 EUR, listing tote bag, premium badge, promo cards, Hades - Dark Usurper playmat and VaultX binder](Logos/news/lorecast-1015-premium-package.jpg)
+*The Premium Package: $350 / £249 / 299 EUR.*
+
+![Challenge VIP Package slide, $800 USD, 599 GBP, 699 EUR, listing tote bag, VIP badge, 2x promo cards, Be Prepared pin, backpack, VIP lounge, Hades - Dark Usurper playmat and VaultX binder](Logos/news/lorecast-1015-vip-package.jpg)
+*The VIP Package: $800 / £599 / 699 EUR.*
 
 | | Premium Package | VIP Package |
 |---|---|---|
@@ -65,6 +83,9 @@ Both exclude Youth Division, CCQ and local qualifier promo cards. The slides sho
 
 After consulting Modern Brands and TAK Games, Ravensburger changed both the date and the venue of the Melbourne Challenge. It now takes place March 5 to 7, 2027 at Pullman Melbourne Albert Park. The earlier schedule had February 26 to 28.
 
+![Organized Play Challenge update slide: Melbourne date and venue change to March 5-7, 2027 at Pullman Melbourne Albert Park, with Steve Warner as special guest](Logos/news/lorecast-1015-melbourne.jpg)
+*The Melbourne announcement.*
+
 - Special guest: Steve Warner, co-creator of Disney Lorcana TCG, in his first appearance in the Oceania region.
 - Youth Division events will be held at DLC Melbourne 2027.
 
@@ -80,7 +101,13 @@ Infinity Constructed, Core Constructed and Super Sealed are all used at the Worl
 
 The slide shows Minnie Mouse - Amethyst Champion, the World Championship 2026 promo (LCP C2 #20, already on the site).
 
+![World Championship update slide: Super Sealed, Core Constructed and Infinity Constructed over Friday, Saturday and Sunday, with the Minnie Mouse - Amethyst Champion promo card](Logos/news/lorecast-1015-worlds-format.jpg)
+*The World Championship's three-day format.*
+
 ### How Super Sealed works
+
+![World Championship update slide: Super Sealed rules, 6 packs each of sets 12, 13 and 14, 60 minutes, three-color restricted 50-card deck](Logos/news/lorecast-1015-super-sealed.jpg)
+*The Super Sealed rules slide.*
 
 - Players are given 6 packs each of Set 12 (Wilds Unknown), Set 13 (Attack of the Vine!) and Set 14 (Hyperia City) on site.
 - They have 60 minutes to build a 50-card deck restricted to three ink colors.
