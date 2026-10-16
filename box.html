@@ -542,7 +542,8 @@ details.fold > .body > label.lbl:first-child{margin-top:12px}
             <label class="lbl">Roll loaded</label>
             <select class="field" id="setMedia" aria-label="Roll loaded"></select>
             <label class="lbl">Card size</label>
-            <div class="seg" id="scaleSeg"><button data-v="true">True size (63&times;88)</button><button data-v="fit">Fill the paper</button></div>
+            <div class="seg" id="scaleSeg"><button data-v="sleeve">Sleeve size</button><button data-v="true">True size</button><button data-v="fit">Fill paper</button></div>
+            <p class="muted" style="margin:4px 0 0">Sleeve size prints the card sideways, a little smaller, so the slip slides into a sleeve as is. True size (63&times;88) and Fill paper print it the long way.</p>
             <button class="btn small block" id="togGuides" style="margin-top:10px"></button>
             <label class="lbl">Lightness <span id="gammaVal"></span></label>
             <input type="range" id="setGamma" aria-label="Lightness" min="0.8" max="2.2" step="0.05">
@@ -1489,6 +1490,7 @@ function paintSettings() {
       : "Movers, the meta, events and the calendar are always fetched fresh.";
   }
   $("togGuides").textContent = "Trim lines beside the card: " + (s.print.guides ? "on" : "off");
+  $("togGuides").hidden = s.print.scale === "sleeve";
   $("togPrice").textContent = "Price: " + (s.print.show_price ? "shown" : "hidden");
   $("togFlavor").textContent = "Flavor text: " + (s.print.show_flavor ? "shown" : "hidden");
   $("catalogSummary").textContent = `${(s.catalog.cards || 0).toLocaleString()} cards` + (s.cloud && s.cloud.enabled ? " · linked" : "");
@@ -1497,7 +1499,7 @@ function paintSettings() {
 }
 // Resolves true only when the box took the change (busy() has already shown the error otherwise)
 const saveSettings = (patch) => busy(null, async () => { const r = await link.settings(patch); if (r && r.printer) status = r; await refreshBox(); return true; });
-paintScale = seg("scaleSeg", "true", (v) => saveSettings({ print: { scale: v } }));
+paintScale = seg("scaleSeg", "sleeve",(v) => saveSettings({ print: { scale: v } }));
 paintDither = seg("ditherSeg", "fs", (v) => saveSettings({ tone: { dither: v } }));
 paintReply = seg("replySeg", "speak", (v) => saveSettings({ voice: { reply: v } }));
 paintRadius = seg("radiusSeg", "50", (v) => saveSettings({ home: { radius: Number(v) } }));
