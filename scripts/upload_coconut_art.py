@@ -114,6 +114,9 @@ COCONUT_SLUGS = {
     27: "the-black-cauldron",
     # Revealed 2026-10-08. Amethyst, associated card is the Set 13 Merida - Wisp Conjurer.
     28: "merida-wisp-conjurer",
+    # Revealed 2026-10-15. Sapphire, associated card is Judy Hopps - Uncovering Clues
+    # (Whispers in the Well #156, TCGplayer 653916).
+    29: "judy-hopps-uncovering-clues",
 }
 
 

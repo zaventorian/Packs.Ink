@@ -106,3 +106,4 @@ Beta cards land weekly, so each one announces itself and then stops, above the s
   by the catalog transform that mints the row and by this tile's gate. A drifted prefix
   fails silently — the tile just stops appearing — so the test pins that exactly one place
   in the file builds that string.
+- **Judy Hopps - Uncovering Clues is cn 29 (revealed 2026-10-15), Sapphire, art at `card-art/coconut/029.jpg`** (uploaded with `upload_coconut_art.py`, slug added to its `COCONUT_SLUGS`). Associated card is the Whispers in the Well Super Rare / D23 promo. As with Merida, it replaces the previous reveal in the news tile because only the newest `revealed` day shows. No starter deck was built for it.
