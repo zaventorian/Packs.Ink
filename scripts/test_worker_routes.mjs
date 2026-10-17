@@ -32,5 +32,27 @@ await check("several trailing slashes too", "https://packs.ink/calendar//", 301,
 await check("a missing file is a real 404", "https://packs.ink/Logos/nope.png", 404);
 await check("www goes to the apex", "https://www.packs.ink/decks?x=1", 301, "https://packs.ink/decks?x=1");
 
+// The OBS bar may be framed anywhere (the smart mirror embeds it); the
+// Analytics embed and everything else keep _headers' frame policy.
+const tickerEnv = {
+  ASSETS: {
+    fetch: async () => new Response("ticker", { status: 200, headers: {
+      "Content-Type": "text/html", "X-Frame-Options": "SAMEORIGIN",
+      "Content-Security-Policy": "default-src 'self'; frame-ancestors 'self'; base-uri 'none'",
+    } }),
+  },
+};
+const frame = async (what, url, wantXfo, wantAncestors) => {
+  const r = await mod.default.fetch(new Request(url), tickerEnv, {});
+  const xfo = r.headers.get("X-Frame-Options");
+  const anc = /frame-ancestors\s+([^;]*)/.exec(r.headers.get("Content-Security-Policy") || "")?.[1].trim();
+  const ok = r.status === 200 && xfo === wantXfo && anc === wantAncestors && /base-uri 'none'/.test(r.headers.get("Content-Security-Policy"));
+  if(!ok){ fails++; console.log(`FAIL ${what}: ${url} -> XFO ${xfo}, frame-ancestors ${anc}`); }
+  else console.log(`ok  ${what}`);
+};
+await frame("the OBS bar can be framed by any site", "https://packs.ink/ticker?w=1d&bar=1", null, "*");
+await frame("the Analytics embed stays same-origin", "https://packs.ink/ticker?embed=1", "SAMEORIGIN", "'self'");
+await frame("bar=0 is not the overlay", "https://packs.ink/ticker?bar=0", "SAMEORIGIN", "'self'");
+
 if(fails){ console.log(`\n${fails} failure(s)`); process.exit(1); }
 console.log("\nworker routes: all passed");

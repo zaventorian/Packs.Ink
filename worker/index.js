@@ -229,6 +229,23 @@ function previewHeaders(res) {
   return headers;
 }
 
+// The bare OBS bar (/ticker?bar=1) may be framed by any site; Zaven's smart
+// mirror embeds it (2026-10-17). It is a non-interactive strip of public
+// prices with nothing to click, so framing can't be used to trick a click.
+// Everything else keeps _headers' policy, including /ticker without bar=1,
+// which is the full SPA tab, and ?embed=1, which only packs.ink frames.
+function isTickerBar(url) {
+  return url.pathname === "/ticker" && url.searchParams.get("bar") === "1";
+}
+
+function frameableBar(res) {
+  const headers = new Headers(res.headers);
+  headers.delete("X-Frame-Options");
+  const csp = headers.get("Content-Security-Policy");
+  if (csp) headers.set("Content-Security-Policy", csp.replace(/frame-ancestors\s+[^;]*/, "frame-ancestors *"));
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -303,7 +320,7 @@ export default {
       !url.searchParams.has("bar") && !url.searchParams.has("embed");
 
     const asset = tickerIsSpa ? null : await env.ASSETS.fetch(request);
-    if (asset && asset.status !== 404) return asset;
+    if (asset && asset.status !== 404) return isTickerBar(url) ? frameableBar(asset) : asset;
 
     // A missing FILE gets a real 404. Serving the SPA shell for
     // /Logos/typo.png or /scanner/old.onnx returns 200 text/html under an
