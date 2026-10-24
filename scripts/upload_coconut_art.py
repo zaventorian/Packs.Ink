@@ -117,6 +117,9 @@ COCONUT_SLUGS = {
     # Revealed 2026-10-15. Sapphire, associated card is Judy Hopps - Uncovering Clues
     # (Whispers in the Well #156, TCGplayer 653916).
     29: "judy-hopps-uncovering-clues",
+    # Revealed 2026-10-22 (assumed). Ruby, associated card is Maui - Half-Shark
+    # (Azurite Sea #124, TCGplayer 588357).
+    30: "maui-half-shark",
 }
 
 
