@@ -1083,10 +1083,17 @@ the day except:
   ones are genuinely ambiguous - a two-day regional weekend is plausible - so they
   stay as seeded. A wrong date on a calendar is worse than no date, and that cuts
   against changing five on an unverifiable source as much as it cuts for it.
-- **Set 15/16/17 dates stay out.** That schedule marks Into the Inkdark, Cosmic
+- **Set 15/16/17 dates stay out - until published.** That schedule marked Into the Inkdark, Cosmic
   Quest and Set 17 "est." - estimates off the release cadence. `SET_RELEASE_DATES`
   takes published dates only, for the reason already written there: the cadence has
-  moved before.
+  moved before. **Into the Inkdark was published afterwards (Hyperia City Special
+  Lorecast) and moved in 2026-10-24: LGS/prerelease Fri 2027-02-05, retail Fri
+  2027-02-12.** A player had reported the estimate (Fri 2027-01-15) as wrong. A set
+  that gains a date goes in `SET_RELEASE_DATES` AND comes OUT of `UPCOMING_SET_NAMES`
+  (`calSetOrdinal` concatenates the two lists, so a name left in both shifts every
+  later ordinal: Cosmic Quest would read Set 17). Its prerelease weekend is a table
+  row, migration 197 (Fri-Sun, corroborated by 706 feed listings), like Hyperia's in 141.
+  Re-run `node discord/tools/extract_site.mjs` after touching either const.
 - **⚠ The wiki cannot be re-checked from an agent sandbox** - `lorcana.fandom.com`
   is egress-blocked to both curl and the fetch tool, so `api.php` answers only from
   CI. `scripts/watch_calendar_sources.py` is what sees it daily; its `acks` were
