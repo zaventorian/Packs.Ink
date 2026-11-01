@@ -31107,8 +31107,12 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     for(const it of items){
       slots++;
       totalCopies += it.quantity;
-      uniqueCardIds.add(it.card_id);
       const meta = cardById.get(it.card_id);
+      // Challenge Promo (C1) shares one card_id between Prize Wall and Top Prize,
+      // but they are separate cards, not finishes: count each printing once.
+      uniqueCardIds.add(meta && SPLIT_BY_PRINTING_SETS_GLOBAL.has(meta.Set)
+        ? it.card_id + "|" + gradedFoilBucket(it.printing)
+        : it.card_id);
       if(meta){
         // Graded average → raw-price placeholder for cards with no graded sales
         // yet, so they still count toward collection value (not $0).
