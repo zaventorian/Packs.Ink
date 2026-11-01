@@ -1472,6 +1472,24 @@ ok("an unnamed set does not repeat its own number",
 ok("the season marker names the set AND its place in the run",
   threeDates.seasons[0].title === "Set 14 · Hyperia City", threeDates.seasons[0].title);
 
+// Into the Inkdark was announced (Hyperia City Special Lorecast): LGS Fri
+// 2027-02-05, retail Fri 2027-02-12. A player reported the cadence estimate
+// (Fri 2027-01-15) as "wrong dates". A set with a published date is NOT also
+// listed as undated: calSetOrdinal concatenates both consts, so a name left in
+// both would shift Cosmic Quest to Set 17.
+const realEst = calendarSetEstimates(SET_RELEASE_DATES, UPCOMING_SET_NAMES);
+ok("Into the Inkdark carries its published dates, not an estimate",
+  SET_RELEASE_DATES["Into the Inkdark"]?.lgs === "2027-02-05"
+  && SET_RELEASE_DATES["Into the Inkdark"]?.retail === "2027-02-12"
+  && !UPCOMING_SET_NAMES.includes("Into the Inkdark")
+  && !realEst.some(e => e.title === "Into the Inkdark"),
+  JSON.stringify(realEst));
+ok("the sets after it keep their place in the run, and walk on from its real date",
+  calSetOrdinalLabel("Into the Inkdark", SET_RELEASE_DATES, UPCOMING_SET_NAMES) === "Set 15"
+  && calSetOrdinalLabel("Cosmic Quest", SET_RELEASE_DATES, UPCOMING_SET_NAMES) === "Set 16"
+  && realEst[0]?.title === "Cosmic Quest" && realEst[0].lgs === "2027-05-07",
+  JSON.stringify(realEst[0]));
+
 ok("an empty calendar lays out without throwing",
   calendarTimeline([], TL_OPTS).total === 0 && calendarTimeline(null, TL_OPTS).lanes.length === 0);
 ok("a row with no usable date is skipped rather than placed at day zero",
