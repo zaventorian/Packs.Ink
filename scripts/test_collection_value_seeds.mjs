@@ -57,7 +57,7 @@ check("a seed dated before the set's release + 1 day is dropped",
 
 console.log("\n== wiring ==");
 check("the home cards chart fetches seeds with the history and puts them FIRST",
-  /Promise\.all\(\[fetchCollectionPriceSeeds\(seedKeys, since\), fetchCollectionPriceHistory\(productIds, since, dates \? \{dates\} : undefined\)\]\)\s*\n\s*\.then\(\(\[seeds, hist\]\) => \[\.\.\.\(seeds \|\| \[\]\), \.\.\.hist\]\)/.test(src), true);
+  /Promise\.all\(\[fetchCollectionPriceSeeds\(seedKeys, since\), fetchCollectionPriceHistory\(productIds, since, dates \? \{dates, market: true\} : \{market: true\}\)\]\)\s*\n\s*\.then\(\(\[seeds, hist\]\) => \[\.\.\.\(seeds \|\| \[\]\), \.\.\.hist\]\)/.test(src), true);
 const sealed = grab("async function fetchSealedValueHistory(", "\n}");
 check("both sealed charts seed every sealed item (fetchSealedValueHistory)",
   /fetchCollectionPriceSeeds\(\[\.\.\.new Set\(pids\.map\(Number\)\)\]\.map\(pid => \(\{pid, printing: "Normal"\}\)\), sinceDate\)/.test(sealed)
@@ -98,6 +98,54 @@ check("...about 150 dates for the whole history (a URL-sized list)", d.length > 
 check("the price fetch filters on the list when given one",
   /date: \(opts && opts\.dates\) \? "in\.\(" \+ opts\.dates\.join\(","\) \+ "\)" : "gte\." \+ sinceDate/.test(src), true);
 check("no range still reads a fixed 365 for All", /\{key:"all", label:"All", days:365\}/.test(src), false);
+
+// ── The Low / NM Market switch (2026-10-24, Zaven: "show collection value as the
+// market total versus the lowest listed"). One preference for the Home panel, the
+// Collection tab and the Sealed / Playmats tabs. The default MUST stay byte for
+// byte what every total did before it existed.
+console.log("\n== value basis ==");
+const compute2 = new Function("parseP",
+  grab("function computeCollectionValueHistory(", "\n}") + "\nreturn computeCollectionValueHistory;")(parseP);
+const mrows = [
+  {tcgplayer_product_id: 7, printing: "Normal", date: "2026-10-01", low_price: 10, low_price_smoothed: null, market_price: 14},
+  {tcgplayer_product_id: 7, printing: "Normal", date: "2026-10-02", low_price: 99, low_price_smoothed: 11, market_price: 15},
+  {tcgplayer_product_id: 8, printing: "Normal", date: "2026-10-01", low_price: 5, low_price_smoothed: null, market_price: null},
+  {tcgplayer_product_id: 8, printing: "Normal", date: "2026-10-02", low_price: 5, low_price_smoothed: null, market_price: null},
+];
+const mowned = new Map([["7|Normal", 2], ["8|Normal", 1]]);
+const vals = (s) => s.map(p => p.value);
+check("no basis is exactly the old Low rollup (smoothed Low wins)", vals(compute2(mrows, mowned)), [25, 27]);
+check("basis low is identical to no basis", vals(compute2(mrows, mowned, null, null, "low")), vals(compute2(mrows, mowned)));
+check("basis market values on NM Market, falling back to Low where there is none", vals(compute2(mrows, mowned, null, null, "market")), [33, 35]);
+
+const pick = new Function(grab("const valueBasisPx = ", ";\n") + "\nreturn valueBasisPx;")();
+check("low: Low first, Market only as a fallback", [pick(1, 2, "low"), pick(null, 2, "low"), pick(null, null, "low")], [1, 2, 0]);
+check("market: Market first, Low only as a fallback", [pick(1, 2, "market"), pick(1, null, "market"), pick(null, null, "market")], [2, 1, 0]);
+check("an unknown basis is Low (a bad stored value cannot break a total)", pick(1, 2, "garbage"), 1);
+
+const tile = new Function(grab("const tileValuePx = ", ";\n") + "\nreturn tileValuePx;")();
+check("a tile in Low mode never borrows Market (unchanged: Low or nothing)",
+  [tile({"Low Price": 3, "TCGPlayer Market": 4}, "low"), tile({"TCGPlayer Market": 4}, "low")], [3, undefined]);
+check("a tile in Market mode shows Market, else Low, else nothing",
+  [tile({"Low Price": 3, "TCGPlayer Market": 4}, "market"), tile({"Low Price": 3}, "market"), tile({}, "market"), tile(undefined, "market")], [4, 3, undefined, undefined]);
+
+const keyFn = new Function(grab("function collectionValueCacheKey(", "\n}") + "\nreturn collectionValueCacheKey;")();
+check("the Low cache key is unchanged, so nobody's cache is invalidated", keyFn("abcdef12xyz", "h4sh", "1m"), "packsink:colvalue:v3:abcdef12:h4sh:1m");
+check("a Market series can never hydrate under a Low headline (or the reverse)",
+  keyFn("abcdef12xyz", "h4sh", "1m", "market") !== keyFn("abcdef12xyz", "h4sh", "1m", "low")
+  && keyFn("abcdef12xyz", "h4sh", "1m", "low") === keyFn("abcdef12xyz", "h4sh", "1m"), true);
+
+check("the Home chart always asks for market_price, so flipping the switch never refetches",
+  /fetchCollectionPriceHistory\(productIds, since, dates \? \{dates, market: true\} : \{market: true\}\)/.test(src), true);
+check("the sealed history asks for it too",
+  /fetchCollectionPriceHistory\(pids, sinceDate, dates \? \{dates, market: true\} : \{market: true\}\)/.test(src), true);
+check("the Home panel, Collection tab, Sealed and Playmats all read the ONE hook",
+  (src.match(/useValueBasis\(\)/g) || []).length >= 7
+  && !/packsink:sealedColl:priceMode|packsink:playmats:priceMode/.test(src.replace(/\/\/.*$/gm, "")), true);
+check("the stored key is not an evictable aux prefix (a wiped preference would silently flip every total)",
+  !/AUX_EVICTABLE_PREFIXES = \[[^\]]*"packsink:valueBasis/.test(src), true);
+check("migration 199 hands the seeds a market_price",
+  /market_price numeric\)/.test(readFileSync(new URL("../supabase/199_latest_raw_prices_before_market.sql", import.meta.url), "utf8")), true);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);

@@ -1235,6 +1235,51 @@ const rawPlaceholderPx = (meta) => {
   const n = v == null ? null : Number(v);
   return (Number.isFinite(n) && n > 0) ? n : null;
 };
+// ── Value basis: ONE switch for what the collection is worth ────────────────
+// "low" (the default, and what every total used before the switch) values a card
+// on Low with a Market fallback; "market" on NM Market with a Low fallback. One
+// preference drives the Home Collection panel (headline, chart, sealed line), the
+// Collection tab's totals and tile prices, and the Sealed and Playmats tabs, so a
+// number never reads two ways a click apart. NOT graded (valued on sales) and NOT
+// the Analytics / EV / Screener `priceMode`, which are separate on purpose.
+const VALUE_BASIS_KEY = "packsink:valueBasis";
+const VALUE_BASIS_EVENT = "packsink:valueBasis";
+const readValueBasis = () => {
+  try { return localStorage.getItem(VALUE_BASIS_KEY) === "market" ? "market" : "low"; }
+  catch { return "low"; }
+};
+// The one picker. "low" is `low ?? market ?? 0`, byte for byte what each total did.
+const valueBasisPx = (low, market, basis) =>
+  basis === "market" ? (market ?? low ?? 0) : (low ?? market ?? 0);
+const rowValuePx = (row, basis) => row ? valueBasisPx(row["Low Price"], row["TCGPlayer Market"], basis) : 0;
+// A tile's printed price: Low mode is exactly what a tile always showed (Low, or
+// nothing); Market mode is NM Market, falling back to Low. null = no price.
+const tileValuePx = (row, basis) => !row ? row : (basis === "market" ? (row["TCGPlayer Market"] ?? row["Low Price"]) : row["Low Price"]);
+// Every component that reads it re-renders together through one window event;
+// the detail carries the value, so it still works when storage is blocked.
+const useValueBasis = () => {
+  const [basis, setBasisState] = useState(readValueBasis);
+  useEffect(() => {
+    const on = (e) => setBasisState(e && e.detail ? (e.detail === "market" ? "market" : "low") : readValueBasis());
+    window.addEventListener(VALUE_BASIS_EVENT, on);
+    window.addEventListener("storage", on);
+    return () => { window.removeEventListener(VALUE_BASIS_EVENT, on); window.removeEventListener("storage", on); };
+  }, []);
+  const setBasis = useCallback((b) => {
+    const v = b === "market" ? "market" : "low";
+    try { localStorage.setItem(VALUE_BASIS_KEY, v); } catch {}
+    try { window.dispatchEvent(new CustomEvent(VALUE_BASIS_EVENT, {detail: v})); } catch {}
+    setBasisState(v);
+  }, []);
+  return [basis, setBasis];
+};
+const ValueBasisToggle = () => {
+  const [basis, setBasis] = useValueBasis();
+  return html`<div class="market-sim-kind" role="group" aria-label=${_t("Price source")}>
+    <button type="button" class=${basis==="low"?"active":""} onClick=${()=>setBasis("low")}>${_t("Low")}</button>
+    <button type="button" class=${basis==="market"?"active":""} onClick=${()=>setBasis("market")}>${_t("NM Market")}</button>
+  </div>`;
+};
 // Printing options the graded Add dialog should offer for split cards whose variant
 // isn't a separate raw catalog row (Genie Two Swords, Peter Pan Text Error). Keyed by
 // card_id; values are the printing strings stored on the owned slot (must match the
@@ -6602,7 +6647,7 @@ async function fetchCollectionPriceSeeds(keys, sinceDate){
 
 async function fetchSealedValueHistory(pids, sinceDate, matPids, dates){
   const [rows, seeds] = await Promise.all([
-    fetchCollectionPriceHistory(pids, sinceDate, dates ? {dates} : undefined),
+    fetchCollectionPriceHistory(pids, sinceDate, dates ? {dates, market: true} : {market: true}),
     fetchCollectionPriceSeeds([...new Set(pids.map(Number))].map(pid => ({pid, printing: "Normal"})), sinceDate),
   ]);
   // Seeds go FIRST: the rollup groups rows per product in array order and walks
@@ -6614,7 +6659,7 @@ async function fetchSealedValueHistory(pids, sinceDate, matPids, dates){
   const mats = [...new Set((matPids || []).map(Number))].filter(p => want.has(p));
   if(!mats.length) return rows;
   const matSeeds = await Promise.all(mats.map(pid =>
-    sbClient.from("prices_daily").select("tcgplayer_product_id,printing,date,low_price")
+    sbClient.from("prices_daily").select("tcgplayer_product_id,printing,date,low_price,market_price")
       .eq("source", "tcgcsv").eq("grade", "raw").eq("printing", "Normal")
       .eq("tcgplayer_product_id", pid).lt("date", sinceDate)
       .not("low_price", "is", null)
@@ -6633,11 +6678,13 @@ function shortHash(s){
   return h.toString(36);
 }
 // localStorage key for the persisted collection-value cache.
-function collectionValueCacheKey(userId, productsHash, rangeKey){
+function collectionValueCacheKey(userId, productsHash, rangeKey, basis){
   // v3 = phantom-spike smoothing (low_price_smoothed). v2 = prerelease-spike
   // guard. Bump when the rollup logic changes so stale per-user series get
   // invalidated automatically.
-  return `packsink:colvalue:v3:${(userId||"").slice(0,8)}:${productsHash}:${rangeKey}`;
+  // The Low key is unchanged (nobody's cache is invalidated); Market gets its own,
+  // so a cached Low series can never hydrate under a Market headline.
+  return `packsink:colvalue:v3:${(userId||"").slice(0,8)}:${productsHash}:${rangeKey}` + (basis === "market" ? ":m" : "");
 }
 function readCollectionValueCache(key){
   try {
@@ -6657,7 +6704,7 @@ function writeCollectionValueCache(key, series){
 // ownedByProductPrinting: Map<"productId|printing", quantity>
 // Forward-fills missing days from the last known price (cards aren't always
 // in every daily snapshot), so a card that didn't tick today still contributes.
-function computeCollectionValueHistory(rows, ownedByProductPrinting, productEarliestDate, acquiredByKey){
+function computeCollectionValueHistory(rows, ownedByProductPrinting, productEarliestDate, acquiredByKey, basis){
   // productEarliestDate: optional map tcgplayer_product_id → "YYYY-MM-DD".
   // Any price snapshot strictly older than this date is dropped (prerelease
   // spike guard for mainline sets — typical Pre-Release lows are 20x real).
@@ -6701,7 +6748,11 @@ function computeCollectionValueHistory(rows, ownedByProductPrinting, productEarl
         // to the collection-value rollup — every other surface (card detail,
         // Price Graphing, Screener, mover banner) keeps reading raw.
         const r = series[si];
-        const p = parseP(r.low_price_smoothed ?? r.low_price);
+        // basis "market" (opt-in): NM Market, falling back to the same smoothed
+        // Low the default path reads. Market has no phantom-spike problem.
+        const p = parseP(basis === "market"
+          ? (r.market_price ?? r.low_price_smoothed ?? r.low_price)
+          : (r.low_price_smoothed ?? r.low_price));
         if(p != null) prev = p;
         si++;
       }
@@ -22878,8 +22929,9 @@ const GradedMarkBadge = ({graded}) => graded ? html`<span class=${"sd-graded-mar
 
 const SetDetailListRow = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, theme, showNormalSide, showFoilSide, subtitle, graded}) => {
   const num = (group.Number||"").split("/")[0] || "—";
-  const nLow = group.normal && group.normal["Low Price"];
-  const fLow = group.foil   && group.foil["Low Price"];
+  const [valueBasis] = useValueBasis();
+  const nLow = tileValuePx(group.normal, valueBasis);
+  const fLow = tileValuePx(group.foil, valueBasis);
   const showN = showNormalSide && group.normal && nLow != null;
   const showF = showFoilSide   && group.foil   && fLow != null;
   // When foilMode hides one side, render only the visible counter and span
@@ -22953,8 +23005,9 @@ const SetDetailCardTile = ({group, normalQty, foilQty, onNormal, onFoil, onOpen,
   const onlyFoil   = showFoilSide   && !showNormalSide;
   // The price follows the counter the tile shows. It always read the non-foil
   // first, so a tile counting foils (Foil filter on) priced the non-foil.
-  const nLow = group.normal && group.normal["Low Price"];
-  const fLow = group.foil   && group.foil["Low Price"];
+  const [valueBasis] = useValueBasis();
+  const nLow = tileValuePx(group.normal, valueBasis);
+  const fLow = tileValuePx(group.foil, valueBasis);
   const priceIsFoil = onlyFoil ? fLow != null : (!onlyNormal && nLow == null && fLow != null);
   const price = onlyFoil ? fLow : onlyNormal ? nLow : (nLow ?? fLow);
   return html`<div class="sd-tile" style=${{background:inkTint(group.ink,theme)}}>
@@ -23351,6 +23404,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   // copies the user is SHORT of the goal (goalN non-foil, goalF foil). Value
   // = short copies × current Low. Respects rarity / ink / foilMode filters
   // so toggling Enchanted off, etc., drops it from the totals.
+  const [valueBasis] = useValueBasis();
   const visibleMissing = useMemo(() => {
     let count = 0, value = 0;
     const byBucket = {nonfoil:{count:0,value:0}, foil:{count:0,value:0}, chase:{count:0,value:0}};
@@ -23359,7 +23413,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
         const qty = (collection[g.card_id+":"+g.normal.tcg_printing] || 0) + slotCover(g.card_id, g.normal.tcg_printing);
         const short = Math.max(0, targetForSide(g, "normal") - qty);
         if(short > 0){
-          const v = (g.normal["Low Price"] ?? g.normal["TCGPlayer Market"] ?? 0) * short;
+          const v = rowValuePx(g.normal, valueBasis) * short;
           count += short; value += v;
           const bk = bucketForSide(g, "normal");
           byBucket[bk].count += short; byBucket[bk].value += v;
@@ -23369,7 +23423,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
         const qty = (collection[g.card_id+":"+g.foil.tcg_printing] || 0) + slotCover(g.card_id, g.foil.tcg_printing);
         const short = Math.max(0, targetForSide(g, "foil") - qty);
         if(short > 0){
-          const v = (g.foil["Low Price"] ?? g.foil["TCGPlayer Market"] ?? 0) * short;
+          const v = rowValuePx(g.foil, valueBasis) * short;
           count += short; value += v;
           const bk = bucketForSide(g, "foil");
           byBucket[bk].count += short; byBucket[bk].value += v;
@@ -23377,7 +23431,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       }
     }
     return {count, value, byBucket};
-  }, [visibleGroups, collection, foilMode, goal, goalN, goalF, slotCover]);
+  }, [visibleGroups, collection, foilMode, goal, goalN, goalF, slotCover, valueBasis]);
 
   // Owned completion per bucket (non-foil / foil / chase) for the current view +
   // goal: `have` = cards where owned+graded ≥ the bucket's target; `total` = in-
@@ -23445,19 +23499,19 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
         const qty = collection[g.card_id+":"+g.normal.tcg_printing] || 0;
         if(qty > 0){
           count += qty;
-          value += (g.normal["Low Price"] ?? g.normal["TCGPlayer Market"] ?? 0) * qty;
+          value += rowValuePx(g.normal, valueBasis) * qty;
         }
       }
       if(fInScope(g)){
         const qty = collection[g.card_id+":"+g.foil.tcg_printing] || 0;
         if(qty > 0){
           count += qty;
-          value += (g.foil["Low Price"] ?? g.foil["TCGPlayer Market"] ?? 0) * qty;
+          value += rowValuePx(g.foil, valueBasis) * qty;
         }
       }
     }
     return {count, value};
-  }, [visibleGroups, collection, foilMode]);
+  }, [visibleGroups, collection, foilMode, valueBasis]);
   // All Cards is the whole catalog — ~2,500 rows, each with two counters —
   // and mounted every one at once, which is seconds of jank on a phone. It
   // renders in slabs and grows as you scroll, the same windowing the Cards
@@ -26909,7 +26963,8 @@ const SealedValueChart = ({sealedCollection, sealedMeta, sealedPrices, rangeKey,
     }
     return m;
   }, [sealedMeta]);
-  const valueSeries = useMemo(() => historyRows ? computeCollectionValueHistory(historyRows, owned, null, acquired) : null, [historyRows, owned, acquired]);
+  const [valueBasis] = useValueBasis();
+  const valueSeries = useMemo(() => historyRows ? computeCollectionValueHistory(historyRows, owned, null, acquired, valueBasis) : null, [historyRows, owned, acquired, valueBasis]);
   const chartSeries = useMemo(() => {
     if(!valueSeries || !valueSeries.length) return [];
     return [{
@@ -27754,7 +27809,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
               // one box had two values a click apart. Labelled. Playmats keep
               // their own toggle, so they read their own key.
               let useMkt = false;
-              try { useMkt = localStorage.getItem(mat ? PLAYMAT_MODE_KEY : "packsink:sealedColl:priceMode") === "market"; } catch {}
+              useMkt = readValueBasis() === "market";
               const unit = useMkt ? (marketToday ?? lowToday) : (lowToday ?? marketToday);
               return html`<span class="sealed-detail-owned-value muted">
                 ${_tRich("Value at {basis}: **{value}**", {basis: useMkt ? _t("NM Market") : _t("Low"), value: fmt((unit || 0) * qty)})}
@@ -27842,11 +27897,9 @@ function SealedCollectionView({raw, user, sealedPrices, sealedFailed, onRetrySea
   // Own key, NOT the Analytics one. This toggle drives the header totals and
   // the value sort here; sharing a key with MarketView meant flipping it on
   // this tab silently retargeted EV / Playset Cost / Set Breakdown.
-  const [priceMode, setPriceMode] = useState(()=>{
-    try { return localStorage.getItem("packsink:sealedColl:priceMode") || "low"; }
-    catch { return "low"; }
-  });
-  useEffect(()=>{ try { localStorage.setItem("packsink:sealedColl:priceMode", priceMode); } catch {} }, [priceMode]);
+  // (Now the shared Low / NM Market switch, not a key of its own: the Home panel's
+  // sealed line and this tab's total were two numbers a click apart.)
+  const [priceMode, setPriceMode] = useValueBasis();
   // Remembered, like the tab's display and price toggles beside it.
   const [hideUnowned, setHideUnowned] = useState(() => { try { return localStorage.getItem("packsink:sealedColl:ownedOnly") === "1"; } catch { return false; } });
   useEffect(() => { try { localStorage.setItem("packsink:sealedColl:ownedOnly", hideUnowned ? "1" : "0"); } catch {} }, [hideUnowned]);
@@ -29235,10 +29288,6 @@ const PLAYMAT_SECTION_BY_KEY = new Map(PLAYMAT_SECTIONS.map(s => [s.key, s]));
 // falls back to its own date (an override) and still sorts where it happened.
 const PLAYMAT_SET_SECTIONS = new Set(["retail", "disney", "ravensburger", "set_champ"]);
 const playmatWhen = (r) => String(r.set_released_at || r.released_on || "");
-// Same shape as the Sealed tab's own key: a collection-value preference, so it
-// persists. The detail modal reads it too, so the value it quotes and the tab's
-// total are on one basis.
-const PLAYMAT_MODE_KEY = "packsink:playmats:priceMode";
 // Price-derived, so it lives under AUX_EVICTABLE_PREFIXES and is wiped when a
 // newer price snapshot lands. v3: the section split (disney / ravensburger, the
 // Challenge tiers) and the Logos/playmats/ photos must not replay a row cached
@@ -29407,10 +29456,7 @@ const PlaymatsView = ({user, sealedCollection, sealedMeta, updateSealedQty, upda
     catch { return "all"; }
   });
   useEffect(() => { if(readOnly) return; try { localStorage.setItem("packsink:playmats:filter", filter); } catch {} }, [filter, readOnly]);
-  const [priceMode, setPriceMode] = useState(() => {
-    try { return localStorage.getItem(PLAYMAT_MODE_KEY) === "market" ? "market" : "low"; } catch { return "low"; }
-  });
-  useEffect(() => { try { localStorage.setItem(PLAYMAT_MODE_KEY, priceMode); } catch {} }, [priceMode]);
+  const [priceMode, setPriceMode] = useValueBasis();
   const [collapsed, setCollapsed] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem("packsink:playmats:collapsed") || "[]")); } catch { return new Set(); }
   });
@@ -32798,6 +32844,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   const goalN = goal ? Math.max(0, goal.n|0) : 1, goalF = goal ? Math.max(0, goal.f|0) : 1;
   // Per-printing target for a raw row: special rarities (Epic/Enchanted/Iconic/
   // Promo) use their chase target; otherwise non-foil→goalN, foil→goalF.
+  const [valueBasis] = useValueBasis();
   const needForRow = useCallback((r) =>
     isSpecialRarity(r.Rarity) ? goalChaseTarget(goal, r.Rarity)
       : (r.tcg_printing==="Normal" ? goalN : goalF), [goal, goalN, goalF]);
@@ -33023,7 +33070,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       if(seenKey.has(key)) continue;
       seenKey.add(key);
       const qty = collection[key] || 0;
-      const price = r["Low Price"] ?? r["TCGPlayer Market"] ?? 0;
+      const price = rowValuePx(r, valueBasis);
       const need = needForRow(r);
       // Graded/pending copies reduce what you're MISSING (not your owned/
       // extras value — those stay raw-priced to avoid double-counting the
@@ -33060,13 +33107,13 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       totalUnique += 1;
       const card = cardByKey[key];
       if(card){
-        const price = card["Low Price"] ?? card["TCGPlayer Market"] ?? 0;
+        const price = rowValuePx(card, valueBasis);
         totalValue += price * qty;
       }
     }
     const totalNeeded = neededByBucket.nonfoil + neededByBucket.foil + neededByBucket.chase;
     return {totalValue, totalCards, totalUnique, missing, extras, ownedTowardNeed, ownedByBucket, neededByBucket, totalNeeded};
-  }, [raw, collection, cardByKey, needForRow, gradedCompletion]);
+  }, [raw, collection, cardByKey, needForRow, gradedCompletion, valueBasis]);
 
   // For per-set missing dollar amounts — same logic, scoped to a set.
   const setMissing = useMemo(()=>{
@@ -33083,13 +33130,13 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       if(cover) creditedCover.add(ck);
       const short = Math.max(0, need - (qty + cover));
       if(short === 0) continue;
-      const price = r["Low Price"] ?? r["TCGPlayer Market"] ?? 0;
+      const price = rowValuePx(r, valueBasis);
       if(!m[r.Set]) m[r.Set] = {count:0, value:0};
       m[r.Set].count += short;
       m[r.Set].value += short * price;
     }
     return m;
-  }, [raw, collection, needForRow, gradedCompletion]);
+  }, [raw, collection, needForRow, gradedCompletion, valueBasis]);
 
   const handleImportFile = useCallback(async (file) => {
     if(!file) return;
@@ -33422,6 +33469,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         <div class="stat-card-lbl">${_t("Owned Value")}</div>
         <div class="stat-card-val green">$${totalValue.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
         <div class="stat-card-sub">${totalCards === 1 ? _t("1 card") : _t("{n} cards", {n: totalCards.toLocaleString()})} · ${_t("{n} unique", {n: totalUnique.toLocaleString()})}</div>
+        <div style=${{marginTop:6}}><${ValueBasisToggle}/></div>
       </div>
       <div class="stat-card">
         <div class="stat-card-lbl"><${Tip} text=${"Completion toward a "+goalLabel(goal)+" — how many of the copies you're targeting you already own (graded/pending copies count). Change the target with the Master / Play / Custom control above."}>${goalTitle(goal)} <span class="tip-info-glyph" aria-hidden="true">ⓘ</span><//></div>
@@ -47275,6 +47323,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   useEffect(() => {
     try { localStorage.setItem("packsink:home:colValueHidden", hideValue ? "1" : "0"); } catch {}
   }, [hideValue]);
+  const [valueBasis] = useValueBasis();
   const eyeBtn = html`<button class="panel-min-btn panel-eye-btn"
     onClick=${()=>setHideValue(v => !v)}
     title=${hideValue ? _t("Show collection value") : _t("Hide collection value")}
@@ -47319,16 +47368,16 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     return {map, ownedRows};
   }, [raw, collection, user]);
 
-  // Current value — uses today's low (with market fallback), same logic as
-  // CollectionView so the two views agree.
+  // Current value — today's price on the chosen basis (Low with a market
+  // fallback by default), same logic as CollectionView so the two views agree.
   const currentValue = useMemo(() => {
     let v = 0;
     for(const {row, qty} of owned.ownedRows){
-      const p = row["Low Price"] ?? row["TCGPlayer Market"] ?? 0;
+      const p = rowValuePx(row, valueBasis);
       v += p * qty;
     }
     return v;
-  }, [owned]);
+  }, [owned, valueBasis]);
 
   // Fetch only the active range, on demand. Cache by (productsKey, rangeKey)
   // so toggling between ranges only ever incurs one round-trip apiece.
@@ -47347,10 +47396,10 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   // network fetch below; the user just doesn't have to stare at "Loading…".
   useEffect(() => {
     if(!user || owned.map.size === 0){ setCachedSeries(null); return; }
-    const key = collectionValueCacheKey(user.id, ownedProductsHash, rangeKey);
+    const key = collectionValueCacheKey(user.id, ownedProductsHash, rangeKey, valueBasis);
     const c = readCollectionValueCache(key);
     setCachedSeries(c && c.series.length ? c.series : null);
-  }, [user, owned.map, ownedProductsHash, rangeKey]);
+  }, [user, owned.map, ownedProductsHash, rangeKey, valueBasis]);
 
   useEffect(() => {
     if(!user || owned.map.size === 0){ setHistoryState({loading:false, error:null}); return; }
@@ -47366,7 +47415,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
       return {pid: parseInt(k.slice(0, bar), 10), printing: k.slice(bar + 1)};
     });
     const dates = collectionRangeDates(rangeKey, since);
-    Promise.all([fetchCollectionPriceSeeds(seedKeys, since), fetchCollectionPriceHistory(productIds, since, dates ? {dates} : undefined)])
+    Promise.all([fetchCollectionPriceSeeds(seedKeys, since), fetchCollectionPriceHistory(productIds, since, dates ? {dates, market: true} : {market: true})])
       .then(([seeds, hist]) => [...(seeds || []), ...hist])
       .then(rows => {
         if(cancelled) return;
@@ -47407,16 +47456,16 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   // used to fetch from the range start alone.)
   const freshSeries = useMemo(() => {
     if(!historyRows) return null;
-    return computeCollectionValueHistory(historyRows, owned.map, productEarliestDate);
-  }, [historyRows, owned.map, productEarliestDate]);
+    return computeCollectionValueHistory(historyRows, owned.map, productEarliestDate, null, valueBasis);
+  }, [historyRows, owned.map, productEarliestDate, valueBasis]);
 
   // Persist the fresh series so the next page load with the same collection
   // hydrates instantly. Plain {date,value} pairs — small, JSON-stringifiable.
   useEffect(() => {
     if(!freshSeries || !freshSeries.length || !user) return;
-    const key = collectionValueCacheKey(user.id, ownedProductsHash, rangeKey);
+    const key = collectionValueCacheKey(user.id, ownedProductsHash, rangeKey, valueBasis);
     writeCollectionValueCache(key, freshSeries);
-  }, [freshSeries, user, ownedProductsHash, rangeKey]);
+  }, [freshSeries, user, ownedProductsHash, rangeKey, valueBasis]);
 
   // Prefer fresh — but fall back to whatever we hydrated from localStorage
   // so the user sees the chart immediately on return visits.
@@ -47443,9 +47492,9 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     const priceByPid = {};
     for(const p of sealedPrices || []){
       if(p.printing !== "Normal") continue;
-      priceByPid[p.tcgplayer_product_id] = parseFloat(p.low_price ?? p.market_price);
+      priceByPid[p.tcgplayer_product_id] = parseFloat(valueBasisPx(p.low_price, p.market_price, valueBasis));
     }
-    for(const [pid, r] of matPrices) priceByPid[pid] = parseFloat(r.low_price ?? r.market_price);
+    for(const [pid, r] of matPrices) priceByPid[pid] = parseFloat(valueBasisPx(r.low_price, r.market_price, valueBasis));
     let v = 0;
     for(const [k, qty] of sealedOwned){
       const pid = parseInt(k.split("|")[0],10);
@@ -47453,7 +47502,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
       if(px && !isNaN(px)) v += px * qty;
     }
     return v;
-  }, [sealedPrices, sealedOwned, matPrices]);
+  }, [sealedPrices, sealedOwned, matPrices, valueBasis]);
   const [sealedHistoryRows, setSealedHistoryRows] = useState(null);
   const sealedOwnedKey = useMemo(() => Array.from(sealedOwned.keys()).sort().join(","), [sealedOwned]);
   useEffect(() => {
@@ -47477,8 +47526,8 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     return m;
   }, [sealedMeta]);
   const sealedValueSeries = useMemo(() =>
-    sealedHistoryRows ? computeCollectionValueHistory(sealedHistoryRows, sealedOwned, null, sealedAcquired) : null,
-    [sealedHistoryRows, sealedOwned, sealedAcquired]);
+    sealedHistoryRows ? computeCollectionValueHistory(sealedHistoryRows, sealedOwned, null, sealedAcquired, valueBasis) : null,
+    [sealedHistoryRows, sealedOwned, sealedAcquired, valueBasis]);
 
   // ── Graded series ────────────────────────────────────────────────────
   // Fetches the user's graded_collection_items rows once on mount, then
@@ -47697,6 +47746,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
       ${COLLECTION_RANGES.map(r => html`<button key=${r.key}
         class=${rangeKey===r.key?"active":""}
         onClick=${()=>setRangeKey(r.key)}>${_t(r.label)}</button>`)}
+      <${ValueBasisToggle}/>
     </div>
     <div class="panel-section-toggles">
       <label title=${_t("Show Card collection value on the chart")}>

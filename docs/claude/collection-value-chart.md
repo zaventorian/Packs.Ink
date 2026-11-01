@@ -50,3 +50,13 @@ The FAQ ("Tracking your collection" section, Help bubble `?`) explains this user
 2. **30-day sustained move ($3 → $30 → $3):** 0 days smoothed (duration > 14).
 3. **3-day pump ($3 → $100 → $3):** all 3 days smoothed.
 4. **Step-up with no return ($3 → $30 forever):** 0 days smoothed (post never snaps back).
+
+### The Low / NM Market switch (2026-10-24, migration 199)
+
+Zaven, relaying a player: show the collection's value as the Market total, not the lowest listed. **One preference, `packsink:valueBasis` (`"low"` default / `"market"`), read through `useValueBasis()`**, drives the Home Collection panel (headline, cards chart, sealed line), the Collection tab (Owned Value, Extras, missing $, per-set missing, tile prices) and the Sealed and Playmats tabs (which had keys of their own and now share this one). Every reader re-renders together through a window event. `valueBasisPx` / `rowValuePx` / `tileValuePx` are the pickers: **Low mode is `low ?? market ?? 0`, byte for byte what each total did before**, and a tile in Low mode still shows Low or nothing.
+
+- **The chart always fetches `market_price`** (`{market: true}`), so flipping the switch recomputes from rows already in memory and sends NO second wave of `prices_daily` requests. Market mode values a day at `market_price ?? low_price_smoothed ?? low_price`; the phantom-spike smoothing above is a Low-only problem and Market needs none.
+- **Migration 199** makes `latest_raw_prices_before` return `market_price` too. The row chosen is unchanged (same `low_price is not null` filter), so Low seeds are identical; without it a seeded item would be valued at its Low going into a range and at Market after it, and the range pill would show a gain that never happened (the 2026-10-06 shape). A client without 199 gets seeds with no market_price and falls back to Low.
+- **`collectionValueCacheKey` takes the basis.** The Low key is unchanged (nobody's cache is invalidated); Market appends `:m`, so a cached Low series can never hydrate under a Market headline.
+- **Deliberately NOT on the switch:** Graded (valued on sales), the Analytics / EV / Screener `priceMode` (it retargets EV and Playset Cost; it must stay its own key), `rawPlaceholderPx`, deck value. The Sealed tab's own chart (`SealedValueChart`) does follow the switch.
+- Guarded in `scripts/test_collection_value_seeds.mjs` (Low rollup identical with no basis, Market fallback, cache keys, the single hook, no refetch wiring, migration 199).
