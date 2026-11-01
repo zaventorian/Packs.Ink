@@ -1043,9 +1043,16 @@ const SET_RELEASE_DATES = {
   // only — the calendar derives its three rows from it and `inferEventSet`
   // starts attributing post-Oct-16 events to Hyperia City, both correct.
   "Hyperia City":          {lgs:"2026-10-16", retail:"2026-10-23"},
+  // Set 15. Announced on the Hyperia City Special Lorecast; read 2026-10-24 on
+  // lorcanaplayer.com/set/into-the-inkdark (prereleases at game stores starting
+  // 2027-02-05, retail 2027-02-12) and ICv2's preorder story (2027-02-12). Until
+  // now it was only in UPCOMING_SET_NAMES, so the cadence estimate drew it a
+  // month early (Fri 2027-01-15) and a player reported the dates as wrong.
+  // Same MAINLINE_SETS rule as Hyperia City above: dates only.
+  "Into the Inkdark":      {lgs:"2027-02-05", retail:"2027-02-12"},
 };
 // ---- site ----
-const UPCOMING_SET_NAMES = ["Into the Inkdark", "Cosmic Quest", "Set 17"];
+const UPCOMING_SET_NAMES = ["Cosmic Quest", "Set 17"];
 // ---- site ----
 const PRODUCT_RELEASE_DATES = [
   {title: "Illumineer's Quest: The Great Hunny Rescue", on: "2026-10-02",
