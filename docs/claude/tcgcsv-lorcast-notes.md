@@ -37,3 +37,10 @@
   reach: don't delete it, and it is worth a backup off OneDrive.** Any backfill of a category we
   never pulled (the playmats were the first) can reach that range and no further;
   `backfill_playmat_prices.py` reports the missing days as "archive offline", not as failures.
+
+## A fossil Low is corrected where the row is built (2026-11-01, v547)
+
+- **Cards:** a `card_prices_latest` row with `is_stale` gets `staleLowPx`: avg of the last eBay sales for that printing, else its last NM Market, else no price. The value lands in `"Low Price"`, because tiles, the price sort and collection totals all read that field, so on these rows the field is not TCGplayer's Low. The card page's "TCGplayer Low" line reads history and still shows the real one.
+- **Sealed:** `fixSealedLows` replaces a Low under 20% of Market with Market, on all three read paths (cache, independent fetch, catalog fetch). Only Hyperia City's box tripped it when written. The Screener's sealed Low column reads `price_movers`, so it still shows TCGplayer's number.
+- Live non-stale Lows are deliberately left alone (Judy Hopps at $0.01 against $7.37 Market). Whether Low or Market leads the movers and Screener is a separate, open decision.
+- Guard: `node scripts/test_stale_low.mjs`.

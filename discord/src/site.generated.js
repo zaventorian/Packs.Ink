@@ -359,6 +359,15 @@ const TCG_PID_OVERRIDES = {
   // keys use it too. 2026-10-05, re-keyed 2026-10-07.
   "Russell - Finding Adventure|20": 722370,
   "Merlin's Shop and Smithy - Magical Market|68": 722418,
+  // Play Hub promos 1-5/RPH, Baymax 5/DIS and the Worlds 2026 Minnie 20/C2;
+  // printed numbers read off TCGplayer's photos 2026-10-27 (intake).
+  "Everyone Knows Juanita|1":             722997,
+  "Tramp - Quick on His Feet|2":          722998,
+  "Arthur - Novice Blacksmith|3":         722999,
+  "Minnie Mouse - Urban Visionary|4":     723000,
+  "Nick Wilde - Providing Backup|5":      723002,
+  "Baymax - Lab Assistant|5":             723001,
+  "Minnie Mouse - Amethyst Champion|20":  718568,
 };
 // ---- site ----
 const PULL = {

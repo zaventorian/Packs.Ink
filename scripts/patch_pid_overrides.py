@@ -135,6 +135,15 @@ OVERRIDES = {
     # keys use it too. 2026-10-05, re-keyed 2026-10-07.
     "Russell - Finding Adventure|20": 722370,
     "Merlin's Shop and Smithy - Magical Market|68": 722418,
+    # Play Hub promos 1-5/RPH, Baymax 5/DIS and the Worlds 2026 Minnie 20/C2;
+    # printed numbers read off TCGplayer's photos 2026-10-27 (intake).
+    "Everyone Knows Juanita|1":             722997,
+    "Tramp - Quick on His Feet|2":          722998,
+    "Arthur - Novice Blacksmith|3":         722999,
+    "Minnie Mouse - Urban Visionary|4":     723000,
+    "Nick Wilde - Providing Backup|5":      723002,
+    "Baymax - Lab Assistant|5":             723001,
+    "Minnie Mouse - Amethyst Champion|20":  718568,
 }
 
 
@@ -430,29 +439,22 @@ def main() -> None:
         (704672, PD1_SET, "19", "crd_pd1_19_violet_parr_super_resilient", 719968),
         # Curator's Collection: Beauty and the Beast (CC2) — announced at D23
         # 2026, six premium foil reprints sold ~$99.99 at a handful of Disney
-        # locations starting 2026-10-01. Not on TCGplayer yet (no secondary
-        # market before release), so promo_pid is None for all six and each
-        # carries a repo-local art crop pulled from the D23 reveal video —
-        # same "read off the announcement photo" call as PD1 #18/#19 above.
-        # Fill in the pid and delete the art path once TCGplayer lists it;
-        # the row updates in place (same card_id), so nobody's collection
-        # mark moves. Bases confirmed against Lorcast (cost/ink/stats/text
+        # locations starting 2026-10-01. TCGplayer listed all six on
+        # 2026-10-16 (Disney Lorcana Promo Cards #1-#6); printed 1/CC2 ..
+        # 6/CC2, read off its photos 2026-10-17. Until then each carried a
+        # repo-local art crop from the D23 reveal video; the rows updated in
+        # place (same card_id), so nobody's collection mark moved.
+        # Bases confirmed against Lorcast (cost/ink/stats/text
         # match exactly): Be Our Guest = Fabled #31, Mrs. Potts = Ursula's
         # Return #52, Belle - Hidden Archer / Gaston - Intellectual
         # Powerhouse / Beast - Tragic Hero = Rise of the Floodborn
         # #72/#147/#173, Lumiere - Fiery Friend = Fabled #121.
-        (649978, CC2_SET, "1", "crd_cc2_1_be_our_guest",                    None,
-         "Logos/cards/be-our-guest-cc2-1.jpg"),
-        (549620, CC2_SET, "2", "crd_cc2_2_mrs_potts_enchanted_teapot",      None,
-         "Logos/cards/mrs-potts-enchanted-teapot-cc2-2.jpg"),
-        (516417, CC2_SET, "3", "crd_cc2_3_belle_hidden_archer",             None,
-         "Logos/cards/belle-hidden-archer-cc2-3.jpg"),
-        (650056, CC2_SET, "4", "crd_cc2_4_lumiere_fiery_friend",            None,
-         "Logos/cards/lumiere-fiery-friend-cc2-4.jpg"),
-        (516406, CC2_SET, "5", "crd_cc2_5_gaston_intellectual_powerhouse",  None,
-         "Logos/cards/gaston-intellectual-powerhouse-cc2-5.jpg"),
-        (527629, CC2_SET, "6", "crd_cc2_6_beast_tragic_hero",               None,
-         "Logos/cards/beast-tragic-hero-cc2-6.jpg"),
+        (649978, CC2_SET, "1", "crd_cc2_1_be_our_guest",                    723031),
+        (549620, CC2_SET, "2", "crd_cc2_2_mrs_potts_enchanted_teapot",      723034),
+        (516417, CC2_SET, "3", "crd_cc2_3_belle_hidden_archer",             723035),
+        (650056, CC2_SET, "4", "crd_cc2_4_lumiere_fiery_friend",            723036),
+        (516406, CC2_SET, "5", "crd_cc2_5_gaston_intellectual_powerhouse",  723037),
+        (527629, CC2_SET, "6", "crd_cc2_6_beast_tragic_hero",               723038),
         # === AUTO-RESOLVED — lines below this point are written by
         # scripts/apply_catalog_resolutions.py from a "resolution" block in
         # catalog_watch.json, keyed by the trailing `# auto:<promo_pid>` comment.
