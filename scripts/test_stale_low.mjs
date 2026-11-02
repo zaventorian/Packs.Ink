@@ -26,9 +26,11 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const staleLowPx = (rollupRows, printing, market) => {", NL + "};"),
   grab("const SEALED_LOW_MIN_RATIO =", NL),
   grab("const fixSealedLows = (rows) => rows.map(r => {", NL + "});"),
-  "export { staleLowPx, fixSealedLows };",
+  grab("const LOW_MAX_RATIO =", NL),
+  grab("const absurdLow = (low, market) =>", ";"),
+  "export { staleLowPx, fixSealedLows, absurdLow };",
 ].join(NL)));
-const { staleLowPx, fixSealedLows } = mod;
+const { staleLowPx, fixSealedLows, absurdLow } = mod;
 
 // One-printing card: the empty bucket prices it. Cruella, not $0.25.
 assert.equal(staleLowPx([{ printing: "", avg_last_5: "944.398" }], "Holofoil", null), 944.398);
@@ -51,6 +53,16 @@ assert.equal(fixSealedLows([row("4.69", "10.22")])[0].low_price, "4.69");    // 
 assert.equal(fixSealedLows([row("499.67", "205.61")])[0].low_price, "499.67");// high Low is untouched
 assert.equal(fixSealedLows([row("9.99", null)])[0].low_price, "9.99");       // no Market to compare
 assert.equal(fixSealedLows([row(null, "20")])[0].low_price, null);           // no Low stays no Low
+
+// Live singles, from the 2026-11-02 rows.
+assert.equal(absurdLow(999.99, 197.01), true);  // Goofy - Expert Shipwright
+assert.equal(absurdLow(439.99, 67.29), true);   // Hiro Hamada - Armor Designer
+assert.equal(absurdLow(0.01, 7.47), true);      // Judy Hopps - Uncovering Clues
+assert.equal(absurdLow(3240, 938.27), false);   // Cinderella foil sells near $2,500
+assert.equal(absurdLow(10.95, 2.87), false);    // thin foil, left alone
+assert.equal(absurdLow(0.01, 0.30), false);     // bulk: only cents at stake
+assert.equal(absurdLow(9.99, null), false);     // no Market to compare
+assert.equal(absurdLow(null, 20), false);       // no Low stays no Low
 
 // Every path the rows take into the catalog.
 assert.ok(src.includes("price_date,is_stale\""), "PRICE_COLS must fetch is_stale");
