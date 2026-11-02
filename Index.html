@@ -267,7 +267,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=547">
+<link rel="stylesheet" href="styles.css?v=548">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. FIRST VISIT ONLY: once the
@@ -1257,6 +1257,14 @@ const fixSealedLows = (rows) => rows.map(r => {
   const low = parseFloat(r.low_price), mkt = parseFloat(r.market_price);
   return low < mkt * SEALED_LOW_MIN_RATIO ? {...r, low_price: r.market_price} : r;
 });
+// A live single's Low past 5x Market or under a fifth of it is a bad row too, and
+// takes the stale path: Goofy - Expert Shipwright read $999.99 against a $197 Market
+// and $246 of eBay sales. Cinderella - Stouthearted at 3.45x stays, her foil really
+// sells near $2,500. Under $1 Market is skipped: 1,757 bulk rows sit past these
+// ratios and only cents are at stake. Movers and the Screener read price_movers.
+const LOW_MAX_RATIO = 5;
+const absurdLow = (low, market) => market >= 1 && low > 0
+  && (low > market * LOW_MAX_RATIO || low < market * SEALED_LOW_MIN_RATIO);
 // ── Value basis: ONE switch for what the collection is worth ────────────────
 // "low" (the default, and what every total used before the switch) values a card
 // on Low with a Market fallback; "market" on NM Market with a Low fallback. One
@@ -4878,9 +4886,12 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById, rawRollup) => 
   }
 
   const rows = [];
-  const lowOfRow = (c, printing, priceRow) => priceRow.is_stale
-    ? staleLowPx(rawRollupByCard.get(c.id), printing, parseP(priceRow.market_price))
-    : parseP(priceRow.low_price);
+  const lowOfRow = (c, printing, priceRow) => {
+    const low = parseP(priceRow.low_price), market = parseP(priceRow.market_price);
+    return priceRow.is_stale || absurdLow(low, market)
+      ? staleLowPx(rawRollupByCard.get(c.id), printing, market)
+      : low;
+  };
   const buildRow = (c, setName, rar, name, printing, priceRow) => ({
     "Set":setName,
     "set_id":c.set_id,
@@ -5176,8 +5187,9 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById, rawRollup) => 
     const pid = parseInt(pidStr, 10);
     // Prefer the Lorcast-indexed row over a crd_custom_* duplicate (Palace Heist
     // pids ended up with BOTH) so the tile lines up with the card graded sales
-    // were attributed to.
-    const baseMatches = cardsRows.filter(c => c.tcgplayer_product_id === pid);
+    // were attributed to. A suppressed row never wins: Piglet's tile saved to
+    // Lorcast's hidden duplicate from 2026-10-03 and hid every older copy.
+    const baseMatches = cardsRows.filter(c => c.tcgplayer_product_id === pid && !SUPPRESSED_CARD_IDS.has(c.id));
     const baseCard = baseMatches.find(c => !String(c.id).startsWith("crd_custom_")) || baseMatches[0] || null;
     // Fall back to standalone metadata for cards Lorcast doesn't index
     // (e.g. Illumineer's Quest products). Both paths converge on a

@@ -27,6 +27,7 @@ const grab = (start, end) => {
 
 const mapSrc = grab("const STARTER_DECK_FOIL = ", "\n};");
 const { STARTER_DECK_FOIL, EXTRAS_MAP } = new Function(mapSrc + "\nreturn {STARTER_DECK_FOIL, EXTRAS_MAP};")();
+const SUPPRESSED_CARD_IDS = new Function(grab("const SUPPRESSED_CARD_IDS = new Set([", "\n]);") + "\nreturn SUPPRESSED_CARD_IDS;")();
 const loopSrc = grab("  for(const [pidStr, info] of Object.entries(EXTRAS_MAP)){", "\n    rows.push(row);\n  }");
 
 const run = (cardsRows, pricesByProduct) => {
@@ -34,8 +35,8 @@ const run = (cardsRows, pricesByProduct) => {
   const buildRow = (c, setName, rar, name, printing, priceRow) =>
     ({card_id: c.id, Set: setName, Rarity: rar, "Product Name": name, tcg_printing: printing,
       low: priceRow ? priceRow.low_price : null});
-  new Function("EXTRAS_MAP", "cardsRows", "pricesByProduct", "buildRow", "EXTRAS_SET_NAME", "rows", loopSrc)
-    (EXTRAS_MAP, cardsRows, pricesByProduct, buildRow, "Extras & Oddities", rows);
+  new Function("EXTRAS_MAP", "SUPPRESSED_CARD_IDS", "cardsRows", "pricesByProduct", "buildRow", "EXTRAS_SET_NAME", "rows", loopSrc)
+    (EXTRAS_MAP, SUPPRESSED_CARD_IDS, cardsRows, pricesByProduct, buildRow, "Extras & Oddities", rows);
   return rows;
 };
 
@@ -54,6 +55,10 @@ const jessie = [{id: "crd_jessie", name: "Jessie", version: "Lively Cowgirl", tc
 const three = {690204: [
   {printing: "Normal", low_price: 0.01}, {printing: "Cold Foil", low_price: 1.99}, {printing: "Holofoil", low_price: 5.54}]};
 const pick = (rows, pid) => rows.find(r => r.card_id === "extras:" + pid) || {};
+const piglet = [{id: "crd_318c41d06e2340debaba878e3c926cdc", name: "Piglet", tcgplayer_product_id: 544487},
+  {id: "crd_custom_544487_piglet_pooh", name: "Piglet", tcgplayer_product_id: 544487}];
+check("a suppressed row never becomes the tile's id (Deep Trouble Piglet)",
+  run(piglet, {}).filter(r => r.Rarity === EXTRAS_MAP[544487].variantLabel).map(r => r.card_id), ["crd_custom_544487_piglet_pooh"]);
 const row = pick(run(jessie, three), 690204);
 check("the tile is the Holofoil printing", row.tcg_printing, "Holofoil");
 check("...at the Holofoil price, not the in-pack Cold Foil's", row.low, 5.54);
