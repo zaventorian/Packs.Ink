@@ -36,7 +36,7 @@
    language saved on the account still beats the guess at sign-in (only a
    STORED choice blocks that adoption). Cards follow it like any site language. */
 (function(){
-  var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="12", l=null;
+  var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="13", l=null;
   try{
     var q=new URLSearchParams(location.search).get("hl");
     if(q && (OK[q]||q==="en")) l=q;
@@ -267,7 +267,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=549">
+<link rel="stylesheet" href="styles.css?v=550">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. FIRST VISIT ONLY: once the
@@ -403,8 +403,8 @@ const sbHeaders = (token) => ({
 // then we fire all remaining pages in parallel. One round-trip on small tables,
 // two for tables up to ~10x the page size.
 const SB_PAGE = 1000;
-// Retry wrapper for transient 5xx / network errors. Supabase has a 10s
-// statement timeout (PG error 57014) that fires intermittently on heavy
+// Retry wrapper for transient 5xx / network errors. Supabase's statement
+// timeout (PG error 57014; 3s for anon, 8s signed in) fires intermittently on heavy
 // views like card_prices_latest; one or two retries with backoff get the
 // query through the next time the server is less loaded.
 const SB_MAX_RETRIES = 3;
@@ -6617,19 +6617,29 @@ function computeSealedDeltas(history, opts){
   return out;
 }
 
-// Batch size for the parallel prices_daily IN-list queries below. Supabase has
-// a 10s statement timeout and a full-year × full-collection query blows past
-// it; 80-ID batches in parallel land each query in under a second. (This const
-// was collateral damage in the 2026-07-29 legacy-graded deletion — the graded
-// history fetch defined right below it was removed and took it along, which
-// broke every caller of this function for weeks: collection value chart,
-// sealed tile Δ%, Screener sealed mode. Keep it glued to this function.)
+// Batching for the prices_daily IN-list queries below. These run as anon, whose
+// statement timeout is 3s. A response holds at most SB_PAGE rows and sbFetchAll
+// drains the rest with OFFSET pages, each re-reading every row before it: a
+// 90-day batch of 80 ids was 14 pages and ~60k buffer reads for 13.7k rows. So
+// a batch is sized to about two pages (~2 printings per id per day; one page
+// meant hundreds of requests for a year of sealed and ran slower), and only
+// COLLECTION_HISTORY_PARALLEL batches run at once: fired together, a large
+// collection put hundreds of statements on the database and the first wave
+// timed out (the retry recovered them, seconds later; 2026-11-04 logs). (The
+// batch const was collateral damage in the 2026-07-29 legacy-graded deletion —
+// the graded history fetch defined right below it was removed and took it
+// along, which broke every caller of this function for weeks: collection value
+// chart, sealed tile Δ%, Screener sealed mode. Keep these glued to this function.)
 const COLLECTION_HISTORY_BATCH = 80;
+const COLLECTION_HISTORY_PARALLEL = 8;
 async function fetchCollectionPriceHistory(productIds, sinceDate, opts){
   if(!productIds.length) return [];
+  const days = (opts && opts.dates) ? opts.dates.length
+    : Math.max(1, Math.round((Date.now() - Date.parse(sinceDate)) / 86400000) + 1);
+  const size = Math.max(1, Math.min(COLLECTION_HISTORY_BATCH, Math.floor(2 * SB_PAGE / (days * 2))));
   const batches = [];
-  for(let i=0; i<productIds.length; i+=COLLECTION_HISTORY_BATCH){
-    batches.push(productIds.slice(i, i+COLLECTION_HISTORY_BATCH));
+  for(let i=0; i<productIds.length; i+=size){
+    batches.push(productIds.slice(i, i+size));
   }
   // `market` opts into market_price. The collection rollup values on Low and
   // never reads it, so it stays off there; computeSealedDeltas derives every
@@ -6651,14 +6661,26 @@ async function fetchCollectionPriceHistory(productIds, sinceDate, opts){
     date: (opts && opts.dates) ? "in.(" + opts.dates.join(",") + ")" : "gte." + sinceDate,
     order: "tcgplayer_product_id.asc,printing.asc,date.asc",
   });
-  try {
-    const results = await Promise.all(batches.map(b => fetchOne(b, true)));
+  // Results keep batch order. A failure stops the workers taking new batches.
+  const fetchAllBatches = async (withSmoothed) => {
+    const results = new Array(batches.length);
+    let next = 0, failed = false;
+    const worker = async () => {
+      while(!failed && next < batches.length){
+        const i = next++;
+        try { results[i] = await fetchOne(batches[i], withSmoothed); }
+        catch(e){ failed = true; throw e; }
+      }
+    };
+    await Promise.all(Array.from({length: Math.min(COLLECTION_HISTORY_PARALLEL, batches.length)}, worker));
     return results.flat();
+  };
+  try {
+    return await fetchAllBatches(true);
   } catch (e) {
     const msg = String(e?.message || e);
     if(!/42703|low_price_smoothed/i.test(msg)) throw e;
-    const results = await Promise.all(batches.map(b => fetchOne(b, false)));
-    return results.flat();
+    return await fetchAllBatches(false);
   }
 }
 
@@ -42050,6 +42072,7 @@ const loreWinners = (game) => {
 const loreNewGame = (players, {inks, arts, mods, win} = {}) => ({
   v: 1,
   startedAt: Date.now(),
+  clock: {ms: 0, at: Date.now(), away: null},
   win: loreClamp(Math.round(Number(win)) || LORE_WIN, LORE_WIN_MIN, LORE_WIN_MAX),
   players: players.map((name, i) => ({
     name: (name || "").trim() || loreDefaultName(i),
@@ -42059,6 +42082,70 @@ const loreNewGame = (players, {inks, arts, mods, win} = {}) => ({
   events: [],
   mods: mods || [],
 });
+// The game clock counts PLAY, not wall time. It used to be `now - startedAt`,
+// so it kept running after the winning lore, while the tracker was closed, and
+// overnight — reopening a finished game showed hours on the clock. Now it is
+// banked time (`ms`) plus the stretch running since `at` (null = stopped). It
+// runs only while the board is on screen and nobody has won. `away` marks when
+// the board was hidden or left: a short absence (switching apps to read a
+// card) still counts, a long one doesn't.
+const LORE_AWAY_MS = 10 * 60000;
+const loreClockMs = (g, now) => {
+  const c = g.clock;
+  return c.ms + (c.at != null ? Math.max(0, now - c.at) : 0);
+};
+// `away` true = the board was hidden or left (resume may count the gap);
+// false = stopped by the game itself (a win), which never counts.
+const loreClockStop = (g, now, away) => {
+  const c = g.clock;
+  const next = {ms: loreClockMs(g, now), at: null, away: away ? (c.at != null ? now : c.away) : null};
+  return (c.at == null && c.away === next.away) ? g : {...g, clock: next};
+};
+const loreClockRun = (g, now) => {
+  const c = g.clock;
+  if(c.at != null) return g;
+  const gap = (c.away != null && now >= c.away && now - c.away <= LORE_AWAY_MS) ? now - c.away : 0;
+  return {...g, clock: {ms: c.ms + gap, at: now, away: null}};
+};
+// A stored clock comes back STOPPED. One stored mid-run (the tab was killed
+// with no pagehide) is banked up to its last known activity — the last lore
+// change or the moment it started — never up to now. A game from before the
+// clock existed gets its first-to-last-change span.
+const loreReadClock = (g) => {
+  // Nobody has scored: it is the board auto-created on some earlier visit, and
+  // its clock starts from zero now, or every look-and-leave would add to it.
+  if(!g.events.length) return {ms: 0, at: null, away: null};
+  const lastT = g.events.reduce((a, e) => Math.max(a, Number(e && e.t) || 0), 0);
+  const c = g.clock;
+  if(c && Number.isFinite(c.ms) && c.ms >= 0){
+    const at = Number.isFinite(c.at) ? c.at : null;
+    if(at == null) return {ms: c.ms, at: null, away: Number.isFinite(c.away) ? c.away : null};
+    const seen = Math.max(at, lastT);
+    return {ms: c.ms + (seen - at), at: null, away: seen};
+  }
+  const start = Number(g.startedAt) || 0;
+  return lastT && start && lastT > start
+    ? {ms: lastT - start, at: null, away: lastT} : {ms: 0, at: null, away: null};
+};
+// The history as people read it. One quest for 3 is three taps, and a hold
+// writes ten — listed raw that is a wall of "+1"s where a mis-tap hides. So
+// consecutive same-seat, same-direction taps a moment apart become one row,
+// and every row carries the WHOLE table's score after it, which is what shows
+// a point that went to the wrong seat. Display only: undo still pops a tap.
+const LORE_LOG_GAP_MS = 3000;
+const loreLogRows = (game) => {
+  const t = game.players.map(() => 0);
+  const rows = [];
+  for(const e of game.events){
+    if(t[e.p] == null) continue;
+    t[e.p] += e.d;
+    const last = rows[rows.length - 1];
+    if(last && last.p === e.p && (last.d > 0) === (e.d > 0) && e.t - last.t1 <= LORE_LOG_GAP_MS){
+      last.d += e.d; last.t1 = e.t; last.after = t.slice();
+    } else rows.push({p: e.p, d: e.d, t: e.t, t1: e.t, after: t.slice()});
+  }
+  return rows;
+};
 // A stored game is replayed, not trusted: anything malformed collapses to null
 // and the setup screen shows instead. Same contract as normalizeHomeLayout —
 // repair or discard, never throw on the way in.
@@ -42073,6 +42160,7 @@ const loreReadGame = () => {
       // was last opened — maybe days ago. Its clock restarts now, or reopening
       // the tracker showed "1440:00" and a red overtime countdown.
       startedAt: g.events.length ? (Number(g.startedAt) || Date.now()) : Date.now(),
+      clock: loreReadClock(g),
       win: loreWinOf(g),
       players: g.players.map((p, i) => ({
         name: String((p && p.name) || loreDefaultName(i)).slice(0, 24),
@@ -42291,18 +42379,23 @@ function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim,
     setFx(f => f.concat({id, d, x, y}).slice(-6));
     setTimeout(() => setFx(f => f.filter(v => v.id !== id)), 700);
   }, []);
-  const bump = useCallback((d, e) => {
-    let x = 50, y = 50;
+  // Where the effects land, as a percentage of the SEAT — the overlay they draw
+  // in covers the whole seat, while the press lands on one half of it.
+  const fxAt = (e) => {
     const el = e && e.currentTarget;
-    if(el && e.clientX != null){
-      const r = el.getBoundingClientRect();
-      if(r.width && r.height){
-        x = loreClamp(((e.clientX - r.left) / r.width) * 100, 0, 100);
-        y = loreClamp(((e.clientY - r.top) / r.height) * 100, 0, 100);
-      }
-    }
+    const host = el && (el.closest(".lore-seat") || el);
+    if(!host || e.clientX == null) return [50, 50];
+    const r = host.getBoundingClientRect();
+    if(!r.width || !r.height) return [50, 50];
+    const x = loreClamp(((e.clientX - r.left) / r.width) * 100, 0, 100);
+    const y = loreClamp(((e.clientY - r.top) / r.height) * 100, 0, 100);
+    // The flipped seat is rotated 180deg, so its own coordinates run backwards.
+    return flip ? [100 - x, 100 - y] : [x, y];
+  };
+  const bump = useCallback((d, e) => {
+    const [x, y] = fxAt(e);
     if(delta(idx, d)) addFx(d, x, y);
-  }, [delta, idx, addFx]);
+  }, [delta, idx, addFx, flip]);
 
   const holdRef = useRef(null);
   const stop = useCallback(() => {
@@ -42314,10 +42407,7 @@ function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim,
   const press = useCallback((d) => (e) => {
     if(e.button != null && e.button !== 0) return;
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
-    const el = e.currentTarget;
-    const r = el.getBoundingClientRect();
-    const px = r.width ? loreClamp(((e.clientX - r.left) / r.width) * 100, 0, 100) : 50;
-    const py = r.height ? loreClamp(((e.clientY - r.top) / r.height) * 100, 0, 100) : 50;
+    const [px, py] = fxAt(e);
     bump(d, e);
     stop();
     const to = setTimeout(() => {
@@ -42362,27 +42452,33 @@ function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim,
         onError=${e => { e.target.style.display = "none"; }}/>`)}
       <span class="lore-seat-goal"><${LoreDiamond} size=${13}/>${total}<i>/${target}</i></span>
     </div>
-    ${/* The whole panel is the +1 target — the biggest thing on the screen is
-          also the thing you press most. */ ""}
+    ${/* A split field: the right half adds, the left half takes away. It was
+          one panel-wide +1 with a small round minus in a corner, and taking a
+          point back meant finding that circle mid-game. The number sits over
+          both halves and ignores the pointer. The flipped seat is rotated as
+          a whole, so the opponent gets their own left and right. */ ""}
     ${/* Pointer presses are handled on pointerdown (so a hold repeats). A
           keyboard Enter/Space or a screen reader sends only a CLICK, with
           detail 0 — that used to do nothing at all. */""}
-    <button class="lore-tap" onPointerDown=${press(+1)} onPointerUp=${stop}
-      onPointerCancel=${stop} onLostPointerCapture=${stop}
-      onClick=${e => { if(e.detail === 0) bump(+1); }}
-      aria-label=${_t("Add lore to {name}", {name})}>
-      <span class="lore-num-v" key=${total}>${total}</span>
-    </button>
+    <div class="lore-tap">
+      <button class="lore-half lore-half--down" onPointerDown=${press(-1)} onPointerUp=${stop}
+        onPointerCancel=${stop} onLostPointerCapture=${stop}
+        onClick=${e => { if(e.detail === 0) bump(-1); }}
+        disabled=${total <= 0} aria-label=${_t("Remove lore from {name}", {name})}>
+        <span class="lore-half-sign" aria-hidden="true">−</span></button>
+      <button class="lore-half lore-half--up" onPointerDown=${press(+1)} onPointerUp=${stop}
+        onPointerCancel=${stop} onLostPointerCapture=${stop}
+        onClick=${e => { if(e.detail === 0) bump(+1); }}
+        aria-label=${_t("Add lore to {name}", {name})}>
+        <span class="lore-half-sign" aria-hidden="true">+</span></button>
+      <span class="lore-num-v" key=${total} aria-hidden="true">${total}</span>
+    </div>
     <div class="lore-fx" aria-hidden="true">
       ${fx.map(f => html`<span key=${f.id} class=${"lore-rip"+(f.d<0?" down":"")}
         style=${{left: f.x + "%", top: f.y + "%"}}/>`)}
       ${fx.map(f => html`<span key=${"n"+f.id} class=${"lore-float"+(f.d<0?" down":"")}
         style=${{left: f.x + "%", top: f.y + "%"}}>${f.d > 0 ? "+" : ""}${f.d}</span>`)}
     </div>
-    <button class="lore-minus" onPointerDown=${press(-1)} onPointerUp=${stop}
-      onPointerCancel=${stop} onLostPointerCapture=${stop}
-      onClick=${e => { if(e.detail === 0) bump(-1); }}
-      disabled=${total <= 0} aria-label=${_t("Remove lore from {name}", {name})}>−</button>
     <div class="lore-rail" aria-hidden="true"><i style=${{transform:"scaleX("+pct+")"}}/></div>
   </div>`;
 }
@@ -42471,11 +42567,42 @@ function LoreTracker({onOpen, onHome}){
       else localStorage.removeItem(LORE_GAME_KEY);
     } catch {}
   }, [game]);
+  // The clock runs while the board is on screen and the game is undecided. A
+  // win stops it (and an undo of that win starts it again); hiding or leaving
+  // the board parks it, written straight to storage because on the way out the
+  // save effect below is already gone.
+  const clockOn = playing && !(game && loreWinners(game).length);
   useEffect(() => {
-    if(!playing) return;
+    if(!clockOn){ setGame(g => g ? loreClockStop(g, Date.now(), false) : g); return; }
+    setGame(g => g ? loreClockRun(g, Date.now()) : g);
+    setNow(Date.now());
     const iv = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(iv);
-  }, [playing]);
+    const park = () => {
+      const g = gameRef.current && loreClockStop(gameRef.current, Date.now(), true);
+      if(!g) return null;
+      gameRef.current = g;
+      try { localStorage.setItem(LORE_GAME_KEY, JSON.stringify(g)); } catch {}
+      return g;
+    };
+    const onVis = () => {
+      if(document.visibilityState === "hidden"){ const g = park(); if(g) setGame(g); }
+      else { setGame(g => g ? loreClockRun(g, Date.now()) : g); setNow(Date.now()); }
+    };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("pagehide", park);
+    return () => {
+      clearInterval(iv);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("pagehide", park);
+      park();
+    };
+  }, [clockOn]);
+  useEffect(() => {
+    if(!menuOpen) return;
+    const onKey = (e) => { if(e.key === "Escape"){ setMenuOpen(false); setArtFor(null); } };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [menuOpen]);
 
   // Settings edit the board you are looking at, not just the next one. Picking
   // an ink or a card in the menu and watching nothing change reads as broken —
@@ -42597,7 +42724,7 @@ function LoreTracker({onOpen, onHome}){
     .filter(m => m.p === i && modImgById[m.id])
     .map(m => ({id: m.id, img: modImgById[m.id],
                 card: (LORE_WIN_MODIFIERS.find(d => d.id === m.id) || {}).card || ""}));
-  const elapsedMs = now - game.startedAt;
+  const elapsedMs = loreClockMs(game, now);
   const leftMs = timerMins * 60000 - elapsedMs;
   const flipSeat = (i) => count === 2 && faceOff && i === 1;
   const seatLabel = (i) => (names[i] || "").trim() || _t("Player {n}", {n: i + 1});
@@ -42610,6 +42737,20 @@ function LoreTracker({onOpen, onHome}){
     ? [1, 0] : game.players.map((_, i) => i);
 
   const settings = html`<div class="lore-menu-body">
+    ${/* The way to restart or leave comes FIRST. It sat under every setting,
+          past a scroll on a phone, so "start over" and "go home" were the two
+          things hardest to find in the menu that exists for them. */""}
+    <div class="lore-menu-acts">
+      <button class="lore-winbtn" onClick=${() => newGame()}>${_t("New game")}</button>
+      ${/* Was "Exit full screen", which un-covered the page and left you on
+            the Analytics tab still looking at a board — a step, not an exit.
+            The board covers the nav, so the way out has to BE the way out. */""}
+      ${onHome && html`<a class="lore-winbtn lore-winbtn--ghost lore-exit" href="/"
+        onClick=${navHandler(()=>onHome())}>${uiIcon("close", 14)} ${_t("Exit to home")}</a>`}
+      ${onOpen && html`<button class="lore-winbtn lore-winbtn--ghost"
+        onClick=${()=>onOpen("dice")}>${uiIcon("die", 14)} ${_t("Roll for first player")}</button>`}
+    </div>
+    <div class="lore-menu-sec">${_t("Settings")}</div>
     <div class="lore-set-row">
       <span class="lore-set-lbl">${_t("Players")}</span>
       <div class="seg-toggle lore-count">
@@ -42696,16 +42837,6 @@ function LoreTracker({onOpen, onHome}){
         <input type="checkbox" checked=${keepAwake} onChange=${e=>setKeepAwake(e.target.checked)}/>
         ${_t("Keep the screen awake while playing")}
       </label>
-    </div>
-    <div class="lore-menu-acts">
-      <button class="lore-winbtn" onClick=${() => newGame()}>${_t("New game")}</button>
-      ${onOpen && html`<button class="lore-winbtn lore-winbtn--ghost"
-        onClick=${()=>onOpen("dice")}>${uiIcon("die", 14)} ${_t("Roll for first player")}</button>`}
-      ${/* Was "Exit full screen", which un-covered the page and left you on
-            the Analytics tab still looking at a board — a step, not an exit.
-            The board covers the nav, so the way out has to BE the way out. */""}
-      ${onHome && html`<a class="lore-winbtn lore-winbtn--ghost lore-exit" href="/"
-        onClick=${navHandler(()=>onHome())}>${uiIcon("close", 14)} ${_t("Exit to home")}</a>`}
     </div>
     ${/* The legality note used to sit under the setup screen. The screen is
           gone; the note isn't, because it's the honest part. */ ""}
@@ -42794,13 +42925,20 @@ function LoreTracker({onOpen, onHome}){
       ${!game.events.length
         ? html`<p class="lore-log-empty">${_t("Nothing yet — the first change lands here.")}</p>`
         : html`<ol class="lore-log-list">
-            ${game.events.map((e, i) => {
-              const run = game.events.slice(0, i + 1).reduce((a, x) => a + (x.p === e.p ? x.d : 0), 0);
-              return html`<li key=${i} class="lore-log-row">
-                <span class="lore-log-t">${loreFmtTime(e.t)}</span>
-                <span class="lore-log-who">${game.players[e.p] ? loreShowName(game.players[e.p].name, e.p) : "—"}</span>
-                <span class=${"lore-log-d"+(e.d>0?" up":" down")}>${e.d>0?"+":""}${e.d}</span>
-                <span class="lore-log-run">${run}</span>
+            ${loreLogRows(game).map((r, i) => {
+              const inkOf = (p) => (INK_COLORS[game.players[p].ink] || INK_COLORS.Amber).border;
+              return html`<li key=${i} class="lore-log-row" style=${{"--seat-ink": inkOf(r.p)}}>
+                <span class="lore-log-t">${loreFmtTime(r.t)}</span>
+                <span class="lore-log-who">${loreShowName(game.players[r.p].name, r.p)}</span>
+                <span class=${"lore-log-d"+(r.d>0?" up":" down")}>${r.d>0?"+":""}${r.d}</span>
+                ${/* The whole table after this change, Player 1 first, the
+                      changed seat bold — so a point on the wrong seat shows
+                      as the wrong number moving. */""}
+                <span class="lore-log-score">${r.after.map((_, p) => html`<${React.Fragment} key=${p}>
+                  ${p > 0 && html`<i>·</i>`}
+                  <b class=${p === r.p ? "on" : ""} style=${{color: inkOf(p)}}
+                    title=${loreShowName(game.players[p].name, p)}>${r.after[p]}</b>
+                <//>`)}</span>
               </li>`;
             }).reverse()}
           </ol>`}
@@ -42809,7 +42947,7 @@ function LoreTracker({onOpen, onHome}){
       <div class="lore-menu-scrim" onClick=${()=>{setMenuOpen(false); setArtFor(null);}}/>
       <div class="lore-menu" role="dialog" aria-label=${_t("Lore tracker menu")}>
         <div class="lore-menu-head">
-          <span>${_t("Settings")}</span>
+          <span>${_t("Lore Tracker")}</span>
           <button class="lore-hud" onClick=${()=>{setMenuOpen(false); setArtFor(null);}}
             aria-label=${_t("Close menu")}>${uiIcon("close", 17)}</button>
         </div>
@@ -57983,7 +58121,7 @@ const TOURNEY_TILE_PAGE = 200;
 
 // `complete` is false while only the event's top 8 is loaded (the Decks tab
 // fetches the full field on open); `total` is its real deck count meanwhile.
-const TournamentDetailView = ({tournament, results, total, complete, onBack, onOpenDeck, isAdmin, onEdit, onDelete, onAddDeck, onEditDeck, onDeleteDeck,
+const TournamentDetailView = ({tournament, results, total, complete, loadFailed, onRetryLoad, onBack, onOpenDeck, isAdmin, onEdit, onDelete, onAddDeck, onEditDeck, onDeleteDeck,
                                theme, onCopyDecklist, onCopyDeckImage, onCopyDeckLink, onViewDeckImage, onInkClick, loading}) => {
   const [shown, setShown] = useState(TOURNEY_TILE_PAGE);
   // A /decks?tourney= link lands here before the tournament list has
@@ -58032,7 +58170,12 @@ const TournamentDetailView = ({tournament, results, total, complete, onBack, onO
       <button onClick=${()=>setShown(n => n + TOURNEY_TILE_PAGE)} style=${{fontSize:13,padding:"7px 14px"}}>
         ${_t("Show {n} more", {n: Math.min(TOURNEY_TILE_PAGE, sorted.length - shown)})}</button>
     </div>`}
-    ${!complete && sorted.length > 0 && html`<div class="muted deck-feed-state">${_t("Loading decks…")}</div>`}
+    ${!complete && sorted.length > 0 && (loadFailed
+      ? html`<div class="load-fail">
+          <div>${_t("Couldn't load the decks.")}</div>
+          <button type="button" class="load-fail-retry" onClick=${onRetryLoad}>${_t("Try again")}</button>
+        </div>`
+      : html`<div class="muted deck-feed-state">${_t("Loading decks…")}</div>`)}
   </div>`;
 };
 
@@ -58935,16 +59078,23 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     }
   }, []);
   useEffect(() => { refreshTournaments(false); }, [refreshTournaments]);
-  // One event's whole field, when it opens. A failure leaves the top 8 on show.
+  // One event's whole field, when it opens. A failure leaves the top 8 on show
+  // and offers a retry — it used to only log, and nothing re-ran the load, so
+  // "Loading decks…" sat there for good.
   const fieldLoadsRef = useRef(new Map());
+  const [fieldErrIds, setFieldErrIds] = useState(() => new Set());
   const loadTournamentField = useCallback((tid) => {
     if(fieldLoadsRef.current.has(tid)) return fieldLoadsRef.current.get(tid);
+    setFieldErrIds(prev => { if(!prev.has(tid)) return prev; const s = new Set(prev); s.delete(tid); return s; });
     const p = fetchTournamentResultRows(q => q.eq("tournament_id", tid))
       .then(rows => {
         setTournamentResults(prev => ({...prev, [tid]: rows}));
         setFullTournamentIds(prev => new Set(prev).add(tid));
       })
-      .catch(e => console.warn("tournament field fetch:", e?.message || e))
+      .catch(e => {
+        console.warn("tournament field fetch:", e?.message || e);
+        setFieldErrIds(prev => new Set(prev).add(tid));
+      })
       .finally(() => fieldLoadsRef.current.delete(tid));
     fieldLoadsRef.current.set(tid, p);
     return p;
@@ -58954,8 +59104,9 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   }, [selectedTournamentId, tournamentsLoaded, fullTournamentIds, loadTournamentField]);
   // Every field, only once View all decks opens.
   const allDecksLoadingRef = useRef(false);
+  const [allDecksErr, setAllDecksErr] = useState(false);
   useEffect(() => {
-    if(tourneyDeckView !== "alldecks" || !tournamentsLoaded || allTournamentDecksLoaded || allDecksLoadingRef.current) return;
+    if(tourneyDeckView !== "alldecks" || !tournamentsLoaded || allTournamentDecksLoaded || allDecksErr || allDecksLoadingRef.current) return;
     allDecksLoadingRef.current = true;
     fetchTournamentResultRows(null)
       .then(rs => {
@@ -58965,9 +59116,9 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         setFullTournamentIds(new Set(Object.keys(grouped)));
         setAllTournamentDecksLoaded(true);
       })
-      .catch(e => console.warn("all tournament decks fetch:", e?.message || e))
+      .catch(e => { console.warn("all tournament decks fetch:", e?.message || e); setAllDecksErr(true); })
       .finally(() => { allDecksLoadingRef.current = false; });
-  }, [tourneyDeckView, tournamentsLoaded, allTournamentDecksLoaded]);
+  }, [tourneyDeckView, tournamentsLoaded, allTournamentDecksLoaded, allDecksErr]);
   // Deep-link from the home Tournament Results banner: jump straight to a
   // tournament's detail page (switch sub-section + select id).
   useEffect(() => {
@@ -61336,6 +61487,8 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             results=${tournamentResults[selectedTournamentId] || []}
             total=${tournamentDeckCounts[selectedTournamentId]}
             complete=${fullTournamentIds.has(selectedTournamentId)}
+            loadFailed=${fieldErrIds.has(selectedTournamentId)}
+            onRetryLoad=${()=>loadTournamentField(selectedTournamentId)}
             onBack=${()=>closeTournament(true)}
             onOpenDeck=${(deckId, token)=>openDeckById && openDeckById(deckId, token)}
             isAdmin=${isTournamentAdmin}
@@ -61406,7 +61559,12 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                 ${allTournamentDecks.length !== visibleAllDecks.length ? _t("{n} of {total} decks", {n: visibleAllDecks.length, total: allTournamentDecks.length}) : visibleAllDecks.length === 1 ? _t("1 deck") : _t("{n} decks", {n: visibleAllDecks.length})}
               </div>`}
               ${!allTournamentDecksLoaded
-                ? html`<div class="muted deck-feed-state">${_t("Loading decks…")}</div>`
+                ? (allDecksErr
+                  ? html`<div class="load-fail">
+                      <div>${_t("Couldn't load the decks.")}</div>
+                      <button type="button" class="load-fail-retry" onClick=${()=>setAllDecksErr(false)}>${_t("Try again")}</button>
+                    </div>`
+                  : html`<div class="muted deck-feed-state">${_t("Loading decks…")}</div>`)
                 : visibleAllDecks.length === 0
                 ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0",textAlign:"center"}}>
                     ${_t("No tournament decks match the current filters.")}

@@ -63,3 +63,26 @@ extracts the real pure functions out of Index.html.
 - **Best-of-3/5 was removed** (2026-08-27, Zaven): the match score it kept lived in a corner of
   the bar and changed nothing about play, so it cost a settings row to answer a question a table
   holds in its head. `matchLen` / `wins` / `resetMatch` and the `match` + `wins` prefs are gone.
+- **Each seat is a split field** (2026-11-04, Zaven: "hard to remove lore"): the left half takes a
+  point back, the right half adds one, and the number floats over both with `pointer-events:none`.
+  It was one panel-wide +1 with a 56px round minus in a corner. The halves stretch over the seat's
+  padding with negative margins, so the whole panel under the name row is live. The tap effects are
+  positioned against the SEAT (`fxAt` uses `closest(".lore-seat")`), not the half that was pressed,
+  and mirrored on the flipped seat, which is rotated 180deg as a whole.
+- **The clock counts play, not wall time** (2026-11-04). It was `now - startedAt`, so it ran on after
+  the winning lore, while the tracker was closed, and overnight. `game.clock = {ms, at, away}`: banked
+  ms plus the stretch running since `at` (null = stopped). It runs only while the board is on screen
+  and nobody has won (an undo of the win restarts it). Hiding or leaving the board PARKS it, written
+  straight to localStorage because on unmount the save effect is already gone; `away` records when,
+  and a resume within `LORE_AWAY_MS` (10 min) counts the gap — a quick look at another app is still
+  game time, a night away is not. ⚠ Every game field must be copied in `loreReadGame` or a reload
+  drops it; `loreReadClock` brings a clock back stopped, banking a still-running one only up to its
+  last lore change, never up to now. Testing tip: seeding the game key from a page with the board
+  open gets overwritten by the park on unload; seed it from another tab of the site.
+- **History rows are grouped and carry the whole table** (2026-11-04). `loreLogRows` merges
+  consecutive same-seat, same-direction taps under `LORE_LOG_GAP_MS` (3 s) into one row — a quest
+  for 3 is three taps and a hold writes ten — and each row shows every seat's score after it, in seat
+  ink, so a point that landed on the wrong seat is visible. Display only: undo still pops ONE tap.
+- **The menu leads with the ways out**: New game, Exit to home and Roll for first player sit at the
+  top, settings below a "Settings" label. They used to be under every setting, past a scroll on a
+  phone. Escape closes the menu.

@@ -27,6 +27,7 @@ Median (not trimmed mean) is used throughout for robustness — even when 6 of 2
 ### Wiring
 
 - **ETL:** `.github/workflows/etl.yml` `smooth` job, `needs: prices`, fires on the daily safety-net cron + `workflow_dispatch` (job=prices|both). Idempotent — re-runs the trailing 60 days and overwrites as needed. Days outside the eval window stay frozen.
+- **Batching (2026-11-04):** `fetchCollectionPriceHistory` sizes each IN-list batch to about two 1,000-row pages for its date span and runs at most `COLLECTION_HISTORY_PARALLEL` (8) at once. Fixed 80-id batches meant deep OFFSET pages that re-read every earlier row, all fired together, and big collections' first wave hit the anon role's **3 s** statement timeout (the retry recovered them). Don't go back to fixed batches or all-at-once.
 - **Client:** `fetchCollectionPriceHistory` adds `low_price_smoothed` to the SELECT with schema-tolerant 42703 retry (fetch still works pre-migration). `computeCollectionValueHistory` swaps in the coalesce. Other paths (`fetchCardHistory`, the EV/sealed price-history fetch at ~line 6439) intentionally keep `select: "...low_price..."` raw.
 - **Cache invalidation:** `packsink:colvalue:v2:...` → `v3` (rollup logic changed); `AUX_CACHE_VERSION = "2026-05-30-low-price-smoothed"` wipes every existing user's aux cache on next page load; `sw.js` CACHE_VERSION → `packsink-v111`; `?v=110` → `?v=111` on styles.css/logo.js.
 
