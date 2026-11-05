@@ -6,6 +6,8 @@
 -- tournament top 8s (as before, when only top 8s were uploaded) and every other
 -- deck, the ownerless Coconut starters included; it filters on rank, not on
 -- user_id. security_invoker, so the decks RLS (own or public) still applies.
+-- ⚠ `d.*` is expanded when the view is created: a column added to decks later
+-- is not in it until this view is recreated, so Discover selecting it would 400.
 create or replace view public.discover_decks_v
 with (security_invoker = on) as
 select d.*

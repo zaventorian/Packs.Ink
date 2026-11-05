@@ -15,6 +15,8 @@ Admin-gated bulk-upload. N player rows → N public decks linked to tournament. 
   - **Discover reads `discover_decks_v`** (migration 203): decks minus tournament decks ranked past 8. Before it, 706 Bangkok decks filled the whole 200-deck window.
   - The home banner and the Discord bot's play index (`discord/tools/build_index.mjs`) read top 8s only.
   - Any new reader of tournament decks needs the same rank filter, or a whole field swamps it.
+  - **Edit all builds one row per deck**, so on a whole field (Ghent, ~1,800) it is heavy. Fix single decks with the per-deck ✎ Edit instead.
+  - View all decks still downloads every row when it opens; only the rendering is paged. If it feels slow, page it server-side.
 - Admin ops: `admin_delete_tournament`, `admin_update_tournament_meta`, `admin_update_tournament_deck`, `admin_replace_tournament_deck_cards`, `admin_add_tournament_deck`, `admin_delete_tournament_deck`. All SECURITY DEFINER, gated on admin.
 - **`TournamentBulkEditModal`** is the canonical editor (replaces meta-only `TournamentEditModal`).
 - **Discover tile**: when `tournamentByDeckId[d.id]` is set, byline swaps to player name and prepends 🏆 strip. Don't show "Unfollow {creator}" for ownerless decks.
