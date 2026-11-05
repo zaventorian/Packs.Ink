@@ -42,7 +42,8 @@ const mod = await import("data:text/javascript;base64," + Buffer.from(
   INKS_SRC + block
         + "\nexport { INKS, LORE_WIN, LORE_MAX_PLAYERS, LORE_WIN_MODIFIERS, LORE_SEAT_INKS,"
         + " loreClamp, loreTotals, loreTargets, loreWinners, loreNewGame, loreReadGame, loreWinOf,"
-        + " loreReadPrefs, loreDefaultName, loreDefaultInk, loreInkOk, loreArtOk, loreCleanArt, loreFormatOf };"
+        + " loreReadPrefs, loreDefaultName, loreDefaultInk, loreInkOk, loreArtOk, loreCleanArt, loreFormatOf,"
+        + " LORE_AWAY_MS, loreClockMs, loreClockStop, loreClockRun, loreReadClock, loreLogRows };"
 ).toString("base64"));
 
 let failed = 0;
@@ -54,7 +55,8 @@ const eq = (name, got, want) => {
 
 const { INKS, LORE_WIN, LORE_SEAT_INKS, loreTotals, loreTargets, loreWinners,
         loreNewGame, loreReadGame, loreReadPrefs, loreDefaultInk, loreInkOk,
-        loreArtOk, loreCleanArt, loreWinOf, loreFormatOf } = mod;
+        loreArtOk, loreCleanArt, loreWinOf, loreFormatOf,
+        LORE_AWAY_MS, loreClockMs, loreClockStop, loreClockRun, loreReadClock, loreLogRows } = mod;
 const newGame = loreNewGame, targets = loreTargets;
 const game = (events, mods, n = 2) => ({
   ...loreNewGame(Array.from({length: n}, (_, i) => "P" + (i + 1)), {mods}),
@@ -227,6 +229,57 @@ const shrunk = bad(JSON.stringify({
 eq("events for a seat that no longer exists are dropped", shrunk.events.map(e => e.p), [0]);
 eq("its score does not leak into the surviving seat", loreTotals(shrunk), [3]);
 eq("a modifier on a dropped seat goes too", shrunk.mods, []);
+
+console.log("\nthe clock counts play, not wall time");
+// It was `now - startedAt`: it kept running after the win, while the tracker
+// was closed, and overnight. Banked ms + the running stretch, stopped by a win
+// or by leaving, with a short absence (switching apps) still counted.
+{
+  const g0 = {clock: {ms: 0, at: 1000, away: null}};
+  eq("a running clock counts from `at`", loreClockMs(g0, 61000), 60000);
+  const won = loreClockStop(g0, 61000, false);
+  eq("a win banks it and stops it", won.clock, {ms: 60000, at: null, away: null});
+  eq("a stopped clock ignores the wall clock", loreClockMs(won, 9e9), 60000);
+  eq("resuming after a win never counts the frozen stretch",
+    loreClockRun(won, 500000).clock, {ms: 60000, at: 500000, away: null});
+  const left = loreClockStop(g0, 61000, true);
+  eq("leaving the board marks when", left.clock, {ms: 60000, at: null, away: 61000});
+  eq("a short absence is counted (a quick look at another app)",
+    loreClockMs(loreClockRun(left, 61000 + 120000), 61000 + 120000), 180000);
+  eq("a long absence is not (the tracker closed overnight)",
+    loreClockRun(left, 61000 + LORE_AWAY_MS + 1).clock.ms, 60000);
+  eq("stopping a stopped clock for a win clears the away mark",
+    loreClockStop(left, 99999, false).clock, {ms: 60000, at: null, away: null});
+  eq("a clock stopped twice for leaving keeps the FIRST away time",
+    loreClockStop(left, 99999, true).clock.away, 61000);
+}
+eq("a stored clock still running (tab killed) banks to its last lore change, never to now",
+  loreReadClock({events: [{t: 5000, p: 0, d: 1}, {t: 9000, p: 1, d: 1}], clock: {ms: 100, at: 4000}}),
+  {ms: 5100, at: null, away: 9000});
+eq("a game from before the clock existed gets first-to-last-change time",
+  loreReadClock({startedAt: 1000, events: [{t: 4000, p: 0, d: 1}]}), {ms: 3000, at: null, away: 4000});
+eq("a pre-clock game with no changes starts at zero",
+  loreReadClock({startedAt: 1000, events: []}), {ms: 0, at: null, away: null});
+eq("the clock survives a reload through loreReadGame",
+  bad(JSON.stringify({v:1, startedAt:1, players:[{name:"A"},{name:"B"}],
+    events:[{t:50,p:0,d:1}], clock:{ms:42, at:null, away:null}})).clock, {ms:42, at:null, away:null});
+eq("a new game's clock is already running", newGame(["A", "B"]).clock.at != null, true);
+
+console.log("\nthe history groups taps and shows the whole table");
+{
+  const g = {players: [{}, {}], events: [
+    {t: 0, p: 0, d: 1}, {t: 500, p: 0, d: 1}, {t: 900, p: 0, d: 1},   // a quest for 3
+    {t: 20000, p: 1, d: 2},
+    {t: 21000, p: 1, d: -1},                                           // a take-back, its own row
+    {t: 40000, p: 0, d: 1}, {t: 50000, p: 0, d: 1},                    // two separate turns
+  ]};
+  const rows = loreLogRows(g);
+  eq("same seat, same direction, a moment apart = one row",
+    rows.map(r => r.d), [3, 2, -1, 1, 1]);
+  eq("every row carries the whole table's score after it",
+    rows.map(r => r.after), [[3, 0], [3, 2], [3, 1], [4, 1], [5, 1]]);
+  eq("the rows add up to the live totals", rows[rows.length - 1].after, loreTotals(g));
+}
 
 console.log(failed ? `\n${failed} FAILED` : "\nall lore-tracker checks passed");
 process.exit(failed ? 1 : 0);

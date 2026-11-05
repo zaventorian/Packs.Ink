@@ -10624,7 +10624,9 @@ body:has(.deck-quickadd) .offline-pill{
   color:var(--text-muted);}
 .lore-menu-body{display:flex;flex-direction:column;gap:14px;padding:14px 16px 18px;
   overflow-y:auto;}
-.lore-menu-acts{display:flex;gap:8px;flex-wrap:wrap;padding-top:2px;}
+.lore-menu-acts{display:flex;gap:8px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid var(--border);}
+.lore-menu-sec{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1px;
+  color:var(--text-muted);margin-bottom:-4px;}
 .lore-menu-note{font-size:11px;color:var(--text-muted);border-top:1px solid var(--border);
   padding-top:10px;}
 .lore-menu-note summary{cursor:pointer;font-weight:700;color:var(--text-dim);}
@@ -10763,13 +10765,32 @@ body:has(.deck-quickadd) .offline-pill{
 .lore-seats--n3 .lore-seat-mod,.lore-seats--n4 .lore-seat-mod{width:20px;height:20px;
   border-width:1px;}
 
-/* The panel IS the button. touch-action:none keeps a fast repeat from being
-   stolen by the scroller, and the number never selects under a hold. */
-.lore-tap{position:relative;z-index:1;grid-row:2;background:none;border:none;padding:0;
-  width:100%;height:100%;display:flex;align-items:center;justify-content:center;
-  cursor:pointer;touch-action:none;-webkit-user-select:none;user-select:none;
-  -webkit-tap-highlight-color:transparent;}
-.lore-tap:hover{background:none;}
+/* The panel is a split field: the left half takes a point back, the right
+   half adds one, and the number floats over both without catching the press.
+   touch-action:none keeps a fast repeat from being stolen by the scroller,
+   and the number never selects under a hold. The halves reach out over the
+   seat's padding (negative margins) so the whole panel below the name row is
+   live, edge to edge. */
+.lore-tap{position:relative;z-index:1;grid-row:2;display:grid;grid-template-columns:1fr 1fr;
+  margin:0 -14px -16px;min-height:0;
+  -webkit-user-select:none;user-select:none;}
+.lore-half{position:relative;background:none;border:none;padding:0 18px;margin:0;
+  display:flex;align-items:center;cursor:pointer;touch-action:none;color:var(--text-muted);
+  -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;
+  transition:background 0.12s ease;}
+.lore-half--down{justify-content:flex-start;}
+.lore-half--up{justify-content:flex-end;}
+/* A hairline between the halves, faded at both ends, so the split is
+   discoverable without drawing a box around either side. */
+.lore-half--down::after{content:"";position:absolute;right:0;top:12%;bottom:12%;width:1px;
+  background:linear-gradient(transparent, color-mix(in srgb,var(--seat-ink) 40%,transparent), transparent);}
+.lore-half:hover{background:none;}
+.lore-half--down:active:not(:disabled){background:color-mix(in srgb,var(--red) 10%,transparent);}
+.lore-half--up:active{background:color-mix(in srgb,var(--seat-ink) 12%,transparent);}
+.lore-half:disabled{cursor:default;}
+.lore-half:disabled .lore-half-sign{opacity:0.25;}
+.lore-half-sign{font-size:34px;font-weight:700;line-height:1;opacity:0.7;pointer-events:none;}
+.lore-num-v{position:absolute;left:50%;top:50%;translate:-50% -50%;pointer-events:none;}
 .lore-num-v{font-size:clamp(64px,20vw,132px);font-weight:900;line-height:0.9;
   font-variant-numeric:tabular-nums;letter-spacing:-0.03em;
   color:var(--text);text-shadow:0 0 30px color-mix(in srgb,var(--seat-ink) 28%,transparent);
@@ -10779,7 +10800,7 @@ body:has(.deck-quickadd) .offline-pill{
 /* Keyed on the total in JS, so the pop replays on every change — including a
    change made by undo, which is exactly when you want to see it move. */
 @keyframes lorePop{from{transform:scale(0.86);}to{transform:scale(1);}}
-.lore-tap:active .lore-num-v{transform:scale(0.95);}
+.lore-half:active:not(:disabled) ~ .lore-num-v{transform:scale(0.95);}
 
 .lore-fx{position:absolute;inset:0;z-index:3;pointer-events:none;overflow:hidden;}
 .lore-rip{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;
@@ -10797,18 +10818,6 @@ body:has(.deck-quickadd) .offline-pill{
   22%{opacity:1;transform:translate(-50%,-90%) scale(1.15);}
   100%{opacity:0;transform:translate(-50%,-210%) scale(1);}}
 
-.lore-minus{position:absolute;left:12px;bottom:16px;z-index:4;width:56px;height:56px;
-  border-radius:50%;font-size:30px;line-height:1;cursor:pointer;touch-action:none;
-  background:color-mix(in srgb,var(--bg-modal) 78%,transparent);
-  border:1px solid color-mix(in srgb,var(--seat-ink) 50%,transparent);
-  color:var(--text-dim);-webkit-user-select:none;user-select:none;
-  -webkit-tap-highlight-color:transparent;
-  display:flex;align-items:center;justify-content:center;
-  transition:transform 0.08s ease,border-color 0.12s ease;}
-.lore-minus:hover{background:color-mix(in srgb,var(--bg-modal) 92%,transparent);
-  border-color:var(--seat-ink);color:var(--text);}
-.lore-minus:active{transform:scale(0.9);}
-.lore-minus:disabled{opacity:0.28;cursor:default;}
 
 .lore-rail{position:absolute;left:0;right:0;bottom:0;height:4px;z-index:2;
   background:rgba(255,255,255,0.08);}
@@ -10833,13 +10842,22 @@ body:has(.deck-quickadd) .offline-pill{
 .lore-log-list{list-style:none;margin:0;padding:0;}
 .lore-log-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;
   align-items:center;padding:6px 2px;font-size:12px;border-bottom:1px solid var(--border);}
+.lore-log-d{min-width:3ch;text-align:right;}
 .lore-log-row:last-child{border-bottom:none;}
 .lore-log-t{color:var(--text-muted);font-variant-numeric:tabular-nums;}
 .lore-log-who{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-dim);font-weight:600;}
 .lore-log-d{font-weight:800;font-variant-numeric:tabular-nums;}
 .lore-log-d.up{color:var(--green);}
 .lore-log-d.down{color:var(--red);}
-.lore-log-run{font-weight:800;font-variant-numeric:tabular-nums;color:var(--text);min-width:2ch;text-align:right;}
+/* Each row is tagged with its seat's ink (a left rule), and ends with the whole
+   table's score after it: every seat's number in its own ink, the one that
+   moved at full weight and the rest quieter. */
+.lore-log-row{border-left:3px solid var(--seat-ink);padding-left:8px;}
+.lore-log-score{display:inline-flex;align-items:baseline;gap:5px;font-variant-numeric:tabular-nums;
+  white-space:nowrap;}
+.lore-log-score b{font-weight:600;opacity:0.6;min-width:2ch;text-align:right;}
+.lore-log-score b.on{font-weight:900;opacity:1;}
+.lore-log-score i{font-style:normal;color:var(--text-muted);}
 
 @media (max-width:640px){
   /* Three or four seats deliberately stay a 2x2 grid rather than collapsing to
@@ -10848,15 +10866,17 @@ body:has(.deck-quickadd) .offline-pill{
   .lore-set-lbl{min-width:0;}
   .lore-seats--n3 .lore-seat,.lore-seats--n4 .lore-seat{min-height:min(23vh,205px);padding:9px 10px 13px;}
   .lore-seats--n3 .lore-num-v,.lore-seats--n4 .lore-num-v{font-size:clamp(44px,13vw,72px);}
-  .lore-seats--n3 .lore-minus,.lore-seats--n4 .lore-minus{width:46px;height:46px;font-size:25px;left:9px;bottom:12px;}
+  .lore-seats--n3 .lore-tap,.lore-seats--n4 .lore-tap{margin:0 -10px -13px;}
+  .lore-seats--n3 .lore-half,.lore-seats--n4 .lore-half{padding:0 10px;}
+  .lore-seats--n3 .lore-half-sign,.lore-seats--n4 .lore-half-sign{font-size:26px;}
   .lore-seats--n3 .lore-seat-name,.lore-seats--n4 .lore-seat-name{font-size:11px;letter-spacing:0.4px;}
   .lore-seats--n3 .lore-seat-shield,.lore-seats--n4 .lore-seat-shield{width:18px;height:18px;}
   .lore-float{font-size:24px;}
 }
 @media (prefers-reduced-motion:reduce){
-  .lore-seat,.lore-rail i,.lore-minus{transition:none;}
+  .lore-seat,.lore-rail i,.lore-half{transition:none;}
   .lore-num-v{animation:none;}
-  .lore-tap:active .lore-num-v,.lore-minus:active{transform:none;}
+  .lore-half:active ~ .lore-num-v{transform:none;}
   /* The ripple and the floater ARE the "did that register" signal, so they are
      shortened rather than removed — losing them entirely would take the
      feedback away from exactly the users who benefit most from redundancy. */
