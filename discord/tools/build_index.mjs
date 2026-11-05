@@ -81,7 +81,9 @@ const [sets, prices, cards, sealed, tournaments, tdecks, gradedRoll, rawRoll] = 
   sbAll("cards", { select: CARDS_COLS, order: "id.asc" }),
   sbAll("sealed_prices_latest", { select: SEALED_COLS, order: "tcgplayer_product_id.asc,printing.asc" }),
   sbAll("tournaments", { select: "id,event_date,format", order: "id.asc" }),
-  sbAll("tournament_decks", { select: "tournament_id,deck_id,place_rank", order: "deck_id.asc" }),
+  // Top 8 only: some events hold their whole field (DLC Ghent, ~1,800 decks),
+  // and counting those would make "% of top-cut decks" a whole-field number.
+  sbAll("tournament_decks", { select: "tournament_id,deck_id,place_rank", or: "(place_rank.lte.8,place_rank.is.null)", order: "deck_id.asc" }),
   sbAll("graded_sales_rollup", { select: "card_id,sale_count", order: "card_id.asc,grader.asc,grade.asc,printing.asc" }),
   sbAll("raw_sales_rollup", { select: "card_id", order: "card_id.asc" }).catch(() => []),
 ]);
