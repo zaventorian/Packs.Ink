@@ -260,6 +260,8 @@ eq("a game from before the clock existed gets first-to-last-change time",
   loreReadClock({startedAt: 1000, events: [{t: 4000, p: 0, d: 1}]}), {ms: 3000, at: null, away: 4000});
 eq("a pre-clock game with no changes starts at zero",
   loreReadClock({startedAt: 1000, events: []}), {ms: 0, at: null, away: null});
+eq("an unscored game's clock restarts from zero on every visit",
+  loreReadClock({startedAt: 1, events: [], clock: {ms: 300000, at: null, away: 5}}), {ms: 0, at: null, away: null});
 eq("the clock survives a reload through loreReadGame",
   bad(JSON.stringify({v:1, startedAt:1, players:[{name:"A"},{name:"B"}],
     events:[{t:50,p:0,d:1}], clock:{ms:42, at:null, away:null}})).clock, {ms:42, at:null, away:null});
