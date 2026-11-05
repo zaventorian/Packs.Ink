@@ -403,8 +403,8 @@ const sbHeaders = (token) => ({
 // then we fire all remaining pages in parallel. One round-trip on small tables,
 // two for tables up to ~10x the page size.
 const SB_PAGE = 1000;
-// Retry wrapper for transient 5xx / network errors. Supabase has a 10s
-// statement timeout (PG error 57014) that fires intermittently on heavy
+// Retry wrapper for transient 5xx / network errors. Supabase's statement
+// timeout (PG error 57014; 3s for anon, 8s signed in) fires intermittently on heavy
 // views like card_prices_latest; one or two retries with backoff get the
 // query through the next time the server is less loaded.
 const SB_MAX_RETRIES = 3;
@@ -6617,19 +6617,29 @@ function computeSealedDeltas(history, opts){
   return out;
 }
 
-// Batch size for the parallel prices_daily IN-list queries below. Supabase has
-// a 10s statement timeout and a full-year × full-collection query blows past
-// it; 80-ID batches in parallel land each query in under a second. (This const
-// was collateral damage in the 2026-07-29 legacy-graded deletion — the graded
-// history fetch defined right below it was removed and took it along, which
-// broke every caller of this function for weeks: collection value chart,
-// sealed tile Δ%, Screener sealed mode. Keep it glued to this function.)
+// Batching for the prices_daily IN-list queries below. These run as anon, whose
+// statement timeout is 3s. A response holds at most SB_PAGE rows and sbFetchAll
+// drains the rest with OFFSET pages, each re-reading every row before it: a
+// 90-day batch of 80 ids was 14 pages and ~60k buffer reads for 13.7k rows. So
+// a batch is sized to about two pages (~2 printings per id per day; one page
+// meant hundreds of requests for a year of sealed and ran slower), and only
+// COLLECTION_HISTORY_PARALLEL batches run at once: fired together, a large
+// collection put hundreds of statements on the database and the first wave
+// timed out (the retry recovered them, seconds later; 2026-11-04 logs). (The
+// batch const was collateral damage in the 2026-07-29 legacy-graded deletion —
+// the graded history fetch defined right below it was removed and took it
+// along, which broke every caller of this function for weeks: collection value
+// chart, sealed tile Δ%, Screener sealed mode. Keep these glued to this function.)
 const COLLECTION_HISTORY_BATCH = 80;
+const COLLECTION_HISTORY_PARALLEL = 8;
 async function fetchCollectionPriceHistory(productIds, sinceDate, opts){
   if(!productIds.length) return [];
+  const days = (opts && opts.dates) ? opts.dates.length
+    : Math.max(1, Math.round((Date.now() - Date.parse(sinceDate)) / 86400000) + 1);
+  const size = Math.max(1, Math.min(COLLECTION_HISTORY_BATCH, Math.floor(2 * SB_PAGE / (days * 2))));
   const batches = [];
-  for(let i=0; i<productIds.length; i+=COLLECTION_HISTORY_BATCH){
-    batches.push(productIds.slice(i, i+COLLECTION_HISTORY_BATCH));
+  for(let i=0; i<productIds.length; i+=size){
+    batches.push(productIds.slice(i, i+size));
   }
   // `market` opts into market_price. The collection rollup values on Low and
   // never reads it, so it stays off there; computeSealedDeltas derives every
@@ -6651,14 +6661,26 @@ async function fetchCollectionPriceHistory(productIds, sinceDate, opts){
     date: (opts && opts.dates) ? "in.(" + opts.dates.join(",") + ")" : "gte." + sinceDate,
     order: "tcgplayer_product_id.asc,printing.asc,date.asc",
   });
-  try {
-    const results = await Promise.all(batches.map(b => fetchOne(b, true)));
+  // Results keep batch order. A failure stops the workers taking new batches.
+  const fetchAllBatches = async (withSmoothed) => {
+    const results = new Array(batches.length);
+    let next = 0, failed = false;
+    const worker = async () => {
+      while(!failed && next < batches.length){
+        const i = next++;
+        try { results[i] = await fetchOne(batches[i], withSmoothed); }
+        catch(e){ failed = true; throw e; }
+      }
+    };
+    await Promise.all(Array.from({length: Math.min(COLLECTION_HISTORY_PARALLEL, batches.length)}, worker));
     return results.flat();
+  };
+  try {
+    return await fetchAllBatches(true);
   } catch (e) {
     const msg = String(e?.message || e);
     if(!/42703|low_price_smoothed/i.test(msg)) throw e;
-    const results = await Promise.all(batches.map(b => fetchOne(b, false)));
-    return results.flat();
+    return await fetchAllBatches(false);
   }
 }
 
