@@ -267,7 +267,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=548">
+<link rel="stylesheet" href="styles.css?v=549">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. FIRST VISIT ONLY: once the
@@ -48423,9 +48423,12 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
         const tournaments = ts || [];
         if(!tournaments.length){ if(!cancelled){ setGroups([]); writeJsonCache(CACHE_KEY, []); } return; }
         const ids = tournaments.map(t => t.id);
+        // Top 8 only: an event can carry its whole field (1,800 decks), and
+        // past 1000 rows the response would cut off other events' top 8s.
         const {data: rs, error: rErr} = await sbClient.from("tournament_results_v")
           .select("tournament_id,result_id,place,place_rank,player_name,deck_id,deck_name,deck_inks,deck_share_token")
           .in("tournament_id", ids)
+          .or("place_rank.lte.8,place_rank.is.null")
           .order("place_rank", {ascending:true, nullsFirst:false});
         if(rErr) throw rErr;
         const byTournament = {};
@@ -57958,8 +57961,31 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
   </a>`;
 };
 
-const TournamentDetailView = ({tournament, results, onBack, onOpenDeck, isAdmin, onEdit, onDelete, onAddDeck, onEditDeck, onDeleteDeck,
+// tournament_results_v rows, paged: a response stops at 1000 rows, and past
+// that the lowest finishers would quietly drop off. result_id breaks place ties
+// so the page edges are stable. `filter` narrows the query (one event, top 8).
+async function fetchTournamentResultRows(filter){
+  const rs = [];
+  for(let from = 0; ; from += 1000){
+    let q = sbClient.from("tournament_results_v").select("*");
+    if(filter) q = filter(q);
+    const {data, error} = await q.order("place_rank", {ascending: true, nullsFirst: false})
+      .order("result_id", {ascending: true}).range(from, from + 999);
+    if(error) throw error;
+    rs.push(...(data || []));
+    if(!data || data.length < 1000) return rs;
+  }
+}
+
+// Tiles rendered at a time in an event and in View all decks. A whole field
+// (DLC Ghent, ~1,800 decks) rendered at once stalls the page, phones worst.
+const TOURNEY_TILE_PAGE = 200;
+
+// `complete` is false while only the event's top 8 is loaded (the Decks tab
+// fetches the full field on open); `total` is its real deck count meanwhile.
+const TournamentDetailView = ({tournament, results, total, complete, onBack, onOpenDeck, isAdmin, onEdit, onDelete, onAddDeck, onEditDeck, onDeleteDeck,
                                theme, onCopyDecklist, onCopyDeckImage, onCopyDeckLink, onViewDeckImage, onInkClick, loading}) => {
+  const [shown, setShown] = useState(TOURNEY_TILE_PAGE);
   // A /decks?tourney= link lands here before the tournament list has
   // arrived; saying "not found" then was a false claim about a real event.
   if(!tournament && loading) return html`<div class="muted deck-feed-state">${_t("Loading tournament…")}</div>`;
@@ -57969,12 +57995,13 @@ const TournamentDetailView = ({tournament, results, onBack, onOpenDeck, isAdmin,
     const br = b.place_rank == null ? 9999 : b.place_rank;
     return ar - br;
   });
+  const deckCount = complete ? sorted.length : (total ?? sorted.length);
   return html`<div>
     <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
       <button onClick=${onBack} style=${{fontSize:12,padding:"5px 10px"}}>${_t("← Back to Tournaments")}</button>
       ${isAdmin ? html`<div style=${{display:"flex",gap:6}}>
         <button onClick=${onAddDeck} style=${{fontSize:12,padding:"5px 10px"}}>${_t("+ Add deck")}</button>
-        <button onClick=${onEdit} style=${{fontSize:12,padding:"5px 10px"}}>${uiIcon("edit")} ${_t("Edit all")}</button>
+        <button onClick=${onEdit} disabled=${!complete} style=${{fontSize:12,padding:"5px 10px"}}>${uiIcon("edit")} ${_t("Edit all")}</button>
         <button onClick=${onDelete} style=${{fontSize:12,padding:"5px 10px",color:"var(--red)"}}>${uiIcon("trash")} ${_t("Delete")}</button>
       </div>` : null}
     </div>
@@ -57983,7 +58010,7 @@ const TournamentDetailView = ({tournament, results, onBack, onOpenDeck, isAdmin,
       <div style=${{fontFamily:"'Cinzel',serif",fontSize:22,fontWeight:800,color:"var(--accent)"}}>${tournament.name}</div>
       <div class="muted" style=${{fontSize:12,marginTop:4}}>
         ${tournament.event_date ? fmtIsoDate(tournament.event_date) + " · " : ""}
-        ${sorted.length === 1 ? _t("1 deck") : _t("{n} decks", {n: sorted.length})}
+        ${deckCount === 1 ? _t("1 deck") : _t("{n} decks", {n: deckCount})}
         ${tournament.num_players ? " · " + _t("{n} players", {n: tournament.num_players}) : ""}
         ${tournament.format ? " · " + (tournament.format === "core" ? _t("Core Constructed") : _t("Infinity")) : ""}
       </div>
@@ -57993,7 +58020,7 @@ const TournamentDetailView = ({tournament, results, onBack, onOpenDeck, isAdmin,
     ${sorted.length === 0
       ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0",textAlign:"center"}}>${_t("No decks linked to this tournament.")}${isAdmin ? " " + _t("Click + Add deck above.") : ""}</div>`
       : html`<div class="deck-list">
-          ${sorted.map(r => html`<${TournamentDeckTile} key=${r.result_id}
+          ${sorted.slice(0, shown).map(r => html`<${TournamentDeckTile} key=${r.result_id}
             r=${r} theme=${theme} isAdmin=${isAdmin}
             onOpenDeck=${onOpenDeck}
             onCopyDeckLink=${onCopyDeckLink} onCopyDecklist=${onCopyDecklist} onCopyDeckImage=${onCopyDeckImage}
@@ -58001,6 +58028,11 @@ const TournamentDetailView = ({tournament, results, onBack, onOpenDeck, isAdmin,
             onEditDeck=${onEditDeck} onDeleteDeck=${onDeleteDeck}
             onInkClick=${onInkClick}/>`)}
         </div>`}
+    ${sorted.length > shown && html`<div style=${{textAlign:"center",margin:"14px 0"}}>
+      <button onClick=${()=>setShown(n => n + TOURNEY_TILE_PAGE)} style=${{fontSize:13,padding:"7px 14px"}}>
+        ${_t("Show {n} more", {n: Math.min(TOURNEY_TILE_PAGE, sorted.length - shown)})}</button>
+    </div>`}
+    ${!complete && sorted.length > 0 && html`<div class="muted deck-feed-state">${_t("Loading decks…")}</div>`}
   </div>`;
 };
 
@@ -58745,6 +58777,14 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   const [tournamentsLoaded, setTournamentsLoaded] = useState(false);
   const [tournamentsErr, setTournamentsErr] = useState(null);
   const [tournamentResults, setTournamentResults] = useState({});  // {tournament_id: [results...]}
+  // On load each event holds only its top 8 (a field can be 1,800 decks); the
+  // rest arrives when the event or View all decks opens. Nothing may treat a
+  // top-8 array as the whole field: counts come from tournamentDeckCounts, and
+  // fullTournamentIds says which arrays are complete (Edit all needs that).
+  const [tournamentDeckCounts, setTournamentDeckCounts] = useState({});
+  const [fullTournamentIds, setFullTournamentIds] = useState(() => new Set());
+  const [allTournamentDecksLoaded, setAllTournamentDecksLoaded] = useState(false);
+  const [allDecksShown, setAllDecksShown] = useState(TOURNEY_TILE_PAGE);
   const [selectedTournamentId, setSelectedTournamentId] = useState(null);
   // Tournaments sub-view: "events" (the per-event grid, default) vs "alldecks"
   // (one flat grid of every tournament deck, filterable by ink / format / event).
@@ -58863,30 +58903,29 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       // that 2h cache away every time anyone opened the Decks tab.
       if(bustHomeCache){ try { localStorage.removeItem("packsink:home:tourneys:v1"); } catch {} }
       const {data: ts, error} = await sbClient.from("tournaments")
-        .select("id,name,event_date,format,num_players,inserted_at")
+        .select("id,name,event_date,format,num_players,inserted_at,tournament_decks(count)")
         .order("event_date", {ascending: false, nullsFirst: false})
         .order("inserted_at", {ascending: false})
         .limit(500);
       if(error) throw error;
-      setTournaments(ts || []);
-      // Pre-load all results for the tile counts + the detail view.
-      // Paged: a response stops at 1000 rows, and past that the lowest finishers
-      // of every tournament would quietly drop off. result_id breaks place ties
-      // so the page edges are stable. (412 rows today.)
-      const rs = [];
-      for(let from = 0; ; from += 1000){
-        const {data, error: rerr} = await sbClient.from("tournament_results_v")
-          .select("*").order("place_rank", {ascending: true, nullsFirst: false}).order("result_id", {ascending: true})
-          .range(from, from + 999);
-        if(rerr) throw rerr;
-        rs.push(...(data || []));
-        if(!data || data.length < 1000) break;
-      }
+      const counts = {};
+      const list = (ts || []).map(({tournament_decks, ...t}) => {
+        counts[t.id] = tournament_decks?.[0]?.count ?? 0;
+        return t;
+      });
+      // Each event's top 8, for the tiles; whole fields load on demand. A
+      // place that didn't parse (place_rank null) is kept, as the tile always did.
+      const rs = await fetchTournamentResultRows(q => q.or("place_rank.lte.8,place_rank.is.null"));
       const grouped = {};
-      for(const r of (rs || [])){
+      for(const r of rs){
         (grouped[r.tournament_id] = grouped[r.tournament_id] || []).push(r);
       }
+      setTournaments(list);
+      setTournamentDeckCounts(counts);
       setTournamentResults(grouped);
+      // A top-8-only event is already complete.
+      setFullTournamentIds(new Set(list.filter(t => (grouped[t.id] || []).length === counts[t.id]).map(t => t.id)));
+      setAllTournamentDecksLoaded(false);
       setTournamentsErr(null);
     } catch(e) {
       console.warn("tournaments fetch:", e?.message || e);
@@ -58896,6 +58935,39 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     }
   }, []);
   useEffect(() => { refreshTournaments(false); }, [refreshTournaments]);
+  // One event's whole field, when it opens. A failure leaves the top 8 on show.
+  const fieldLoadsRef = useRef(new Map());
+  const loadTournamentField = useCallback((tid) => {
+    if(fieldLoadsRef.current.has(tid)) return fieldLoadsRef.current.get(tid);
+    const p = fetchTournamentResultRows(q => q.eq("tournament_id", tid))
+      .then(rows => {
+        setTournamentResults(prev => ({...prev, [tid]: rows}));
+        setFullTournamentIds(prev => new Set(prev).add(tid));
+      })
+      .catch(e => console.warn("tournament field fetch:", e?.message || e))
+      .finally(() => fieldLoadsRef.current.delete(tid));
+    fieldLoadsRef.current.set(tid, p);
+    return p;
+  }, []);
+  useEffect(() => {
+    if(selectedTournamentId && tournamentsLoaded && !fullTournamentIds.has(selectedTournamentId)) loadTournamentField(selectedTournamentId);
+  }, [selectedTournamentId, tournamentsLoaded, fullTournamentIds, loadTournamentField]);
+  // Every field, only once View all decks opens.
+  const allDecksLoadingRef = useRef(false);
+  useEffect(() => {
+    if(tourneyDeckView !== "alldecks" || !tournamentsLoaded || allTournamentDecksLoaded || allDecksLoadingRef.current) return;
+    allDecksLoadingRef.current = true;
+    fetchTournamentResultRows(null)
+      .then(rs => {
+        const grouped = {};
+        for(const r of rs) (grouped[r.tournament_id] = grouped[r.tournament_id] || []).push(r);
+        setTournamentResults(grouped);
+        setFullTournamentIds(new Set(Object.keys(grouped)));
+        setAllTournamentDecksLoaded(true);
+      })
+      .catch(e => console.warn("all tournament decks fetch:", e?.message || e))
+      .finally(() => { allDecksLoadingRef.current = false; });
+  }, [tourneyDeckView, tournamentsLoaded, allTournamentDecksLoaded]);
   // Deep-link from the home Tournament Results banner: jump straight to a
   // tournament's detail page (switch sub-section + select id).
   useEffect(() => {
@@ -58925,8 +58997,11 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // place_rank, player_name, num_players} lookup. Used by the deck-detail
   // banner to show "Tournament X · 1st" instead of "by Zaven" for any deck
   // that's linked to a tournament.
+  // Field decks outside a top 8 that were looked up one by one (a share link,
+  // a favorite) because their event's field isn't loaded.
+  const [extraTournamentCtx, setExtraTournamentCtx] = useState({});
   const tournamentByDeckId = useMemo(() => {
-    const m = {};
+    const m = {...extraTournamentCtx};
     for(const [tid, rs] of Object.entries(tournamentResults || {})){
       for(const r of rs){
         if(r.deck_id) m[r.deck_id] = {
@@ -58941,9 +59016,25 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       }
     }
     return m;
-  }, [tournamentResults]);
+  }, [tournamentResults, extraTournamentCtx]);
   const tournamentByDeckIdRef = useRef(tournamentByDeckId);
   tournamentByDeckIdRef.current = tournamentByDeckId;
+  const tournamentCtxAskedRef = useRef(new Set());
+  const ensureTournamentCtx = useCallback(async (deckIds) => {
+    const want = deckIds.filter(id => id && !tournamentByDeckIdRef.current[id] && !tournamentCtxAskedRef.current.has(id)).slice(0, 100);
+    if(!want.length) return;
+    for(const id of want) tournamentCtxAskedRef.current.add(id);
+    const {data, error} = await sbClient.from("tournament_results_v")
+      .select("deck_id,tournament_id,tournament_name,event_date,num_players,place,place_rank,player_name")
+      .in("deck_id", want);
+    if(error){ console.warn("tournament context fetch:", error.message); return; }
+    if(!data?.length) return;
+    setExtraTournamentCtx(prev => {
+      const next = {...prev};
+      for(const {deck_id, ...ctx} of data) next[deck_id] = ctx;
+      return next;
+    });
+  }, []);
   // Set of deck_ids the current user has favorited (their saved bookmarks
   // of specific decks). Populated from public.deck_favorites.
   const [favorites, setFavorites] = useState(new Set());
@@ -58957,6 +59048,14 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   const [followingFeed, setFollowingFeed] = useState([]);
   const [favLoaded, setFavLoaded] = useState(false);
   const [favErr, setFavErr] = useState(null);
+  // Ownerless decks shown outside the Tournaments tab still get their trophy line.
+  useEffect(() => {
+    const d = externalDeck?.deck;
+    if(d && !d.user_id) ensureTournamentCtx([d.id]);
+  }, [externalDeck, ensureTournamentCtx]);
+  useEffect(() => {
+    ensureTournamentCtx(favoritedDecks.filter(e => e.deck && !e.deck.user_id).map(e => e.deck.id));
+  }, [favoritedDecks, ensureTournamentCtx]);
   const [followLoaded, setFollowLoaded] = useState(false);
   const [followErr, setFollowErr] = useState(null);
   // Discover feed: recent public decks from anyone (excluding the current
@@ -59050,6 +59149,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:decks:sort", yourDeckSort); } catch {} }, [yourDeckSort]);
   const [inkFilter, setInkFilter] = useState(new Set());
+  useEffect(() => { setAllDecksShown(TOURNEY_TILE_PAGE); }, [tourneyFormat, tourneyEvent, inkFilter]);
   const [err, setErr] = useState(null);
   // In-flight Supabase write counter — drives the "Saved / Saving…" badge.
   // Incremented when a mutation fires, decremented in its finally. Local
@@ -59505,7 +59605,10 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     setDiscoverLoading(true);
     try {
       const fetchWindow = async (cutoff) => {
-        let q = sbClient.from("decks")
+        // discover_decks_v (migration 203) is `decks` minus tournament decks
+        // that finished outside a top 8: whole fields are imported, and 700
+        // decks from one event used to fill this entire window.
+        let q = sbClient.from("discover_decks_v")
           .select("id,user_id,name,description,youtube_url,inks,tags,visibility,coconut_card,updated_at")
           .eq("visibility", "public")
           .order("updated_at", {ascending:false})
@@ -61227,10 +61330,12 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
           style=${{padding:"7px 14px",fontSize:13}}>${_t("+ Bulk Upload Tournament")}</button>
       </div>`}
       ${selectedTournamentId
-        ? html`<${TournamentDetailView}
+        ? html`<${TournamentDetailView} key=${selectedTournamentId}
             loading=${!tournamentsLoaded}
             tournament=${tournaments.find(t => t.id === selectedTournamentId)}
             results=${tournamentResults[selectedTournamentId] || []}
+            total=${tournamentDeckCounts[selectedTournamentId]}
+            complete=${fullTournamentIds.has(selectedTournamentId)}
             onBack=${()=>closeTournament(true)}
             onOpenDeck=${(deckId, token)=>openDeckById && openDeckById(deckId, token)}
             isAdmin=${isTournamentAdmin}
@@ -61297,15 +61402,17 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                 ${inkFilter.size > 0 && html`<button class="deck-filter-clear"
                   onClick=${()=>setInkFilter(new Set())}>${_t("✕ Clear inks")}</button>`}
               </div>
-              <div class="muted" style=${{fontSize:12,margin:"2px 0 10px"}}>
+              ${allTournamentDecksLoaded && html`<div class="muted" style=${{fontSize:12,margin:"2px 0 10px"}}>
                 ${allTournamentDecks.length !== visibleAllDecks.length ? _t("{n} of {total} decks", {n: visibleAllDecks.length, total: allTournamentDecks.length}) : visibleAllDecks.length === 1 ? _t("1 deck") : _t("{n} decks", {n: visibleAllDecks.length})}
-              </div>
-              ${visibleAllDecks.length === 0
+              </div>`}
+              ${!allTournamentDecksLoaded
+                ? html`<div class="muted deck-feed-state">${_t("Loading decks…")}</div>`
+                : visibleAllDecks.length === 0
                 ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0",textAlign:"center"}}>
                     ${_t("No tournament decks match the current filters.")}
                   </div>`
                 : html`<div class=${tourneyDensity === "compact" ? "tdeck-compact-list" : "deck-list"}>
-                    ${visibleAllDecks.map(r => html`<${TournamentDeckTile} key=${r.result_id}
+                    ${visibleAllDecks.slice(0, allDecksShown).map(r => html`<${TournamentDeckTile} key=${r.result_id}
                       r=${r} theme=${theme} event=${r._event} showEvent=${true}
                       compact=${tourneyDensity === "compact"}
                       onOpenDeck=${(deckId, token)=>openDeckById && openDeckById(deckId, token)}
@@ -61313,6 +61420,10 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                       onViewDeckImage=${viewDeckImageFromResult}
                       onInkClick=${toggleInkFilter}/>`)}
                   </div>`}
+              ${allTournamentDecksLoaded && visibleAllDecks.length > allDecksShown && html`<div style=${{textAlign:"center",margin:"14px 0"}}>
+                <button onClick=${()=>setAllDecksShown(n => n + TOURNEY_TILE_PAGE)} style=${{fontSize:13,padding:"7px 14px"}}>
+                  ${_t("Show {n} more", {n: Math.min(TOURNEY_TILE_PAGE, visibleAllDecks.length - allDecksShown)})}</button>
+              </div>`}
             </div>`
         : !tournamentsLoaded
           ? html`<div class="muted deck-feed-state">${_t("Loading tournaments…")}</div>`
@@ -61334,6 +61445,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             <div class="tournament-grid">
               ${tournaments.map(t => {
                 const rs = tournamentResults[t.id] || [];
+                const deckCount = tournamentDeckCounts[t.id] ?? rs.length;
                 // Sort by place_rank (1, 2, 3...) and take top 8. Nulls
                 // (places that didn't parse cleanly) sort to the bottom.
                 const top8 = rs.slice().sort((a, b) => {
@@ -61347,7 +61459,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                   <div class="tournament-card-name">${t.name}</div>
                   <div class="tournament-card-meta muted">
                     ${t.event_date ? fmtIsoDate(t.event_date) + " · " : ""}
-                    ${rs.length === 1 ? _t("1 deck") : _t("{n} decks", {n: rs.length})}
+                    ${deckCount === 1 ? _t("1 deck") : _t("{n} decks", {n: deckCount})}
                     ${t.num_players ? " · " + _t("{n} players", {n: t.num_players}) : ""}
                     ${t.format ? " · " + (t.format === "core" ? _t("Core") : _t("Infinity")) : ""}
                   </div>
@@ -61379,8 +61491,8 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                       </li>`;
                     })}
                   </ul>`}
-                  ${rs.length > 8 && html`<div class="tournament-card-more muted">
-                    ${_t("+{n} more · click to view all", {n: rs.length - 8})}
+                  ${deckCount > top8.length && html`<div class="tournament-card-more muted">
+                    ${_t("+{n} more · click to view all", {n: deckCount - top8.length})}
                   </div>`}
                 </a>`;
               })}
@@ -61393,7 +61505,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       onClose=${()=>setBulkUploadOpen(false)}
       onUploaded=${async ()=>{ setBulkUploadOpen(false); await refreshTournaments(); }}/>`}
 
-    ${editTournamentId && html`<${TournamentBulkEditModal}
+    ${editTournamentId && fullTournamentIds.has(editTournamentId) && html`<${TournamentBulkEditModal}
       tournament=${tournaments.find(t => t.id === editTournamentId)}
       results=${tournamentResults[editTournamentId] || []}
       raw=${raw}

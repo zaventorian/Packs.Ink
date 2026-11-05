@@ -7,6 +7,14 @@ Admin-gated bulk-upload. N player rows → N public decks linked to tournament. 
 - Migrations 35/37: tables + `tournament_results_v` view (security_invoker on).
 - Admin gate: `is_tournament_admin(uuid)` SECURITY DEFINER helper. **⚠ It answers only for the caller (migration 191, 2026-10-06)**, and so does `is_elo_admin(uuid)`: asked from anon / authenticated about any id but `auth.uid()`, it returns false (service_role, the SQL editor and other server code can still ask about anyone; the API role comes from the `role` setting, which a SECURITY DEFINER call leaves alone). Before 191 any signed-in account could ask "is <user> an admin" for any user id, and user ids are public. Every caller already passed its own id — 12 RLS policies `(select auth.uid())`, the admin RPCs `v_uid := auth.uid()`, `can_scout` / `can_view_store_report` / `scout_member_*`, and the client `user.id` — so nothing moved. **A new caller must pass the caller's own id too**, or it silently gets false. Guarded by `node scripts/test_admin_checks_caller.mjs`, which checks every SQL and client call site.
 - Bulk upload RPC: `bulk_upload_tournament(p_name, p_event_date, p_format, p_num_players, p_rows jsonb) returns uuid`. One transactional round-trip.
+- **Whole fields, not just top 8s (v549, 2026-11-04).** Events can carry every published list. DLC Bangkok has 706, DLC Ghent about 1,800. They are imported with `scripts/upload_tournament.py` from RPH (migrations 201/202). So **nothing may load every tournament deck up front**:
+  - The Decks tab loads each event's top 8 (`place_rank <= 8` or null) plus `tournament_decks(count)`.
+  - An event's field loads when it opens (`loadTournamentField`). View all decks loads everything only when it opens. Both render `TOURNEY_TILE_PAGE` (200) tiles at a time.
+  - `fullTournamentIds` says which arrays are complete. Edit all opens only on a complete one.
+  - A field deck opened from a link or favorites gets its trophy line from `ensureTournamentCtx`.
+  - **Discover reads `discover_decks_v`** (migration 203): decks minus tournament decks ranked past 8. Before it, 706 Bangkok decks filled the whole 200-deck window.
+  - The home banner and the Discord bot's play index (`discord/tools/build_index.mjs`) read top 8s only.
+  - Any new reader of tournament decks needs the same rank filter, or a whole field swamps it.
 - Admin ops: `admin_delete_tournament`, `admin_update_tournament_meta`, `admin_update_tournament_deck`, `admin_replace_tournament_deck_cards`, `admin_add_tournament_deck`, `admin_delete_tournament_deck`. All SECURITY DEFINER, gated on admin.
 - **`TournamentBulkEditModal`** is the canonical editor (replaces meta-only `TournamentEditModal`).
 - **Discover tile**: when `tournamentByDeckId[d.id]` is set, byline swaps to player name and prepends 🏆 strip. Don't show "Unfollow {creator}" for ownerless decks.
