@@ -169,6 +169,7 @@ def existing_card_pids(sb: Supabase) -> set[int]:
 # map left empty. The set id must exist in `sets` or the upsert FK-fails loudly.
 SEALED_SET_OVERRIDES: dict[int, str] = {
     702474: "set_curators_cc1",  # Curator's Collection: Heroines Edition
+    712752: "set_curators_cc2",  # Curator's Collection: Beauty and the Beast Edition
 }
 
 
