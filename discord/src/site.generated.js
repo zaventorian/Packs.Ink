@@ -359,6 +359,14 @@ const TCG_PID_OVERRIDES = {
   // keys use it too. 2026-10-05, re-keyed 2026-10-07.
   "Russell - Finding Adventure|20": 722370,
   "Merlin's Shop and Smithy - Magical Market|68": 722418,
+  // PD1 #9-#14, the Hyperia City product promos. TCGplayer listed them 2026-10-16
+  // (Disney Lorcana Promo Cards); printed 9/PD1 .. 14/PD1, read off its photos 2026-10-17.
+  "Nick Wilde - Inquisitive Harbormaster|9": 722990,
+  "Merlin - Ink Drop Tinkerer|10": 722992,
+  "Above the Crowd|11": 722993,
+  "Goofy - Dancing Superstar|12": 722994,
+  "Judy Hopps - Day Camp Instructor|13": 722995,
+  "Berlioz - Tiny Rascal|14": 722996,
   // Play Hub promos 1-5/RPH, Baymax 5/DIS and the Worlds 2026 Minnie 20/C2;
   // printed numbers read off TCGplayer's photos 2026-10-27 (intake).
   "Everyone Knows Juanita|1":             722997,

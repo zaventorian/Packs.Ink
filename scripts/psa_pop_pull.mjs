@@ -131,9 +131,12 @@ function assertNotWall(res, what) {
 // DataTable is client-side), so one GET each gives the whole list. Fetching the
 // document rather than navigating to it is also ~30 fewer requests: no scripts,
 // styles or images come along.
+// Both fetches take ABSOLUTE urls: since Oct 2026 the page's window.fetch is an
+// analytics wrapper that calls an about:blank iframe's fetch, where a bare
+// "/pop/..." path fails to parse before any request is sent.
 const discoverExpr = (path) => `
 (async () => {
-  const r = await fetch(${JSON.stringify(path)}, {credentials: "same-origin"});
+  const r = await fetch(location.origin + ${JSON.stringify(path)}, {credentials: "same-origin"});
   const text = await r.text();
   const doc = new DOMParser().parseFromString(text, "text/html");
   const sets = Array.from(doc.querySelectorAll('a[href*="disney-lorcana"]')).map(a => {
@@ -153,7 +156,7 @@ const itemsExpr = (headingID, start) => `
     search: "", headingID: ${JSON.stringify(String(headingID))},
     categoryID: ${JSON.stringify(CATEGORY_ID)}, isPSADNA: "false"
   });
-  const r = await fetch("/Pop/GetSetItems", {
+  const r = await fetch(location.origin + "/Pop/GetSetItems", {
     method: "POST",
     credentials: "same-origin",
     headers: {
