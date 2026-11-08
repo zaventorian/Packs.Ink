@@ -55,7 +55,15 @@ ok("sending checks the allow-list", /inkbox_send_job[\s\S]*?is_inkbox_user\(\)/.
 ok("noindex meta", /<meta name="robots" content="noindex">/.test(page));
 ok("robots.txt disallows /box", /^Disallow: \/box$/m.test(robots) && /^Disallow: \/box\.html$/m.test(robots));
 ok("not in the sitemap", !/packs\.ink\/box\b/.test(sitemap));
-ok("nothing in the app links to it", !/["'`(\/]box\.html|href=["'`$]{0,3}\/box\b|packs\.ink\/box\b/.test(index));
+// The one way in from the app is the settings-menu item an allow-listed account sees (asked for
+// 2026-11-08). Take that block out and nothing else may link to the page.
+const LINKS_TO_BOX = /["'`(\/]box\.html|href=["'`$]{0,3}\/box\b|packs\.ink\/box\b|location\.href\s*=\s*["'`]\/box\b/;
+const gated = index.match(/\$\{isInkboxUser && html`[\s\S]*?<\/button>`\}/g) || [];
+ok("the app's one link to it is the owners' menu item", gated.length === 1 && LINKS_TO_BOX.test(gated[0]));
+ok("…which only shows when is_inkbox_user() says yes",
+  /sbClient\.rpc\("is_inkbox_user"\)[\s\S]{0,120}setIsInkboxUser\(!!data\)/.test(index)
+  && /if\(!user\)\{ setIsInkboxUser\(false\); return; \}/.test(index));
+ok("nothing else in the app links to it", !LINKS_TO_BOX.test(gated.reduce((s, g) => s.replace(g, ""), index)));
 ok("build_dist publishes it", /^\s*"box\.html",$/m.test(build));
 
 console.log(failed ? `\n${failed} FAILED` : "\nall box-page guards passed");
