@@ -66389,6 +66389,8 @@ function App(){
   const [isGradedAdmin, setIsGradedAdmin] = useState(false);
   // Scouting team membership (can_scout, migration 143) — see ScoutContext.
   const [canScout, setCanScout] = useState(false);
+  // Ink.Box owners (inkbox_testers allow-list, migration 177): the settings menu gets a way into /box.
+  const [isInkboxUser, setIsInkboxUser] = useState(false);
 
   // Track auth state. Supabase SDK auto-detects OAuth redirect on page load.
   useEffect(()=>{
@@ -66495,6 +66497,23 @@ function App(){
     sbClient.rpc("can_scout")
       .then(({data}) => { if(!cancelled) setCanScout(!!data); })
       .catch(() => { if(!cancelled) setCanScout(false); });
+    return () => { cancelled = true; };
+  }, [user]);
+
+  // Ink.Box (migration 177). Same shape: only an allow-listed account ever sees the menu item,
+  // and /box plus every inkbox_* function check the same list server-side, so hiding it here is
+  // tidiness, not the gate. Localhost preview: packsink:inkboxPreview=1 (UI only).
+  useEffect(()=>{
+    try {
+      if(location.hostname === "localhost" && localStorage.getItem("packsink:inkboxPreview") === "1"){
+        setIsInkboxUser(true); return;
+      }
+    } catch {}
+    if(!user){ setIsInkboxUser(false); return; }
+    let cancelled = false;
+    sbClient.rpc("is_inkbox_user")
+      .then(({data}) => { if(!cancelled) setIsInkboxUser(!!data); })
+      .catch(() => { if(!cancelled) setIsInkboxUser(false); });
     return () => { cancelled = true; };
   }, [user]);
 
@@ -68361,6 +68380,17 @@ function App(){
               onClick=${()=>{ setSettingsOpen(false); setAlertsOpen(true); }}
               title=${_t("Price alerts on your watchlists")}>
               ${uiIcon("warn")} ${unreadAlerts > 0 ? _t("Price alerts ({n} new)", {n: unreadAlerts}) : _t("Price alerts")}
+            </button>`}
+            ${isInkboxUser && html`<button class="settings-action"
+              onClick=${()=>{
+                setSettingsOpen(false);
+                // The app's own pages are bundled; /box lives on the site, so the native app opens it there
+                if(IS_NATIVE_APP && window.Capacitor.Plugins && window.Capacitor.Plugins.Browser){
+                  window.Capacitor.Plugins.Browser.open({url: "https://packs.ink/box"});
+                } else location.href = "/box";
+              }}
+              title=${_t("Your Ink.Box printer: print cards, decks and anything else, from anywhere")}>
+              ${uiIcon("print")} ${_t("Ink.Box")}
             </button>`}
             <div class="settings-row settings-row--block">
               <span class="settings-row-label">${_t("Home page layout")}</span>
