@@ -32,6 +32,10 @@ check("copies are counted per part", parts.reduce((n, p) => n + p.copies, 0) ===
 check("a small list is one cart", tcgMassEntryParts(big.slice(0, 20)).length === 1);
 check("an empty list is no carts", tcgMassEntryParts([]).length === 0);
 check("links go through the affiliate wrapper", parts.every((p) => p.url.startsWith("https://partner.tcgplayer.com/")));
+// Decks are not capped at 60: imported lists reach 240 copies, and the deck
+// builder once kept only parts[0], silently dropping the rest of the cart.
+check("the deck builder keeps every cart part",
+  !/tcgMassEntryParts\([^\n]*\)\s*;\s*\n\s*return parts\[0\]/.test(src) && /massEntry\.map\(\(p, i\)/.test(src));
 check("no call site builds a mass-entry URL of its own",
   (src.match(/tcgplayer\.com\/massentry/g) || []).length === 1);
 

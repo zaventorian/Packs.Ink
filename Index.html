@@ -63659,7 +63659,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
   const tcgNames = useTcgNames();
   // TCGPlayer mass-entry affiliate URL pre-filled with missing cards.
   // Format: ?productline=Lorcana TCG&c=4 Card Name||4 Card Name|...
-  const massEntryUrl = useMemo(() => {
+  const massEntry = useMemo(() => {
     // Aggregate missing copies by card NAME (mass-entry matches on name + set,
     // buyer picks foil/non-foil in the cart). Summing by name means a card
     // short in both printings becomes one line instead of two duplicates.
@@ -63675,10 +63675,11 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       }
     }
     if(!byName.size) return null;
-    // A deck is at most 60 cards, which is always one part.
-    const parts = tcgMassEntryParts(Array.from(byName, ([name, qty]) => `${qty} ${name}`));
-    return parts[0]?.url || null;
+    // Not "a deck is at most 60 cards": imported lists run past 200 copies, so
+    // a deck can need more than one cart link.
+    return tcgMassEntryParts(Array.from(byName, ([name, qty]) => `${qty} ${name}`));
   }, [deck.cards, cardById, ownedShortByKey, tcgNames]);
+  const massEntryUrl = massEntry?.[0]?.url || null;
 
   return html`<div>
     ${((readOnly && !isOwnDeck) || tournamentContext) && html`<div class="deck-readonly-banner">
@@ -64008,7 +64009,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                            : _t("Open the whole deck on TCGplayer in one mass-entry cart (affiliate link)")}>
               <div class="deck-stat-lbl">${user ? _t("Missing") : _t("Buy the deck")}</div>
               <div class="deck-stat-val">${fmtUSD(missingValue)}</div>
-              <div class="deck-stat-sub">${_t("Shop on TCGplayer")} ${extIcon()}</div>
+              <div class="deck-stat-sub">${massEntry.length > 1 ? _t("Buy bulk — part 1 of {n}", {n: massEntry.length}) : _t("Shop on TCGplayer")} ${extIcon()}</div>
             </a>`
           : html`<div class="deck-stat">
               <div class="deck-stat-lbl">${user ? _t("Missing") : _t("Buy the deck")}</div>
@@ -64016,6 +64017,10 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
               <div class="deck-stat-sub">${user ? _t("to complete") : _t("at today's prices")}</div>
             </div>`}
       </div>
+      ${massEntry && massEntry.length > 1 && html`<div class="setdet-buy-parts">
+        <span class="muted">${_t("Too many for one TCGplayer cart link — add each part (they all go into the same cart):")}</span>
+        ${massEntry.map((p, i) => html`<a key=${i} class="setdet-buy-part" href=${p.url} target="_blank" rel="noopener nofollow sponsored">${_t("Part {i} · {n} copies", {i: i + 1, n: p.copies})} ${extIcon()}</a>`)}
+      </div>`}
       ${totalCount > 0 && html`<div class="deck-charts">
         <${DeckCostChart} costByInk=${aggregates.costByInk} cardCountLabel=${cardCountLabel} uniqueCount=${uniqueCount}/>
         <div class="deck-pie-row">
