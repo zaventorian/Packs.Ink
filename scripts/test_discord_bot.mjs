@@ -1628,6 +1628,25 @@ const D = await mod("discord/src/data.js");
     const lbl = R.sealedLabel(box);
     ok(lbl.includes(E.money(box.low)) && !lbl.includes(E.money(box.mkt)), `a sealed suggestion leads with Low (${lbl})`);
   }
+
+  // A button or menu on an old message whose card has since left the index
+  // answers the clicker privately and leaves the message alone — it used to
+  // replace the card, for everyone, with "No card matched 'c|crd_…|N'".
+  {
+    const pending = [];
+    const deps = { R, index, db: {}, origin: "https://bot.example", appId: "123", fetch: async () => new Response("{}"), waitUntil: (p) => pending.push(p), log: () => {} };
+    const gone = "c|crd_00000000000000000000000000000000|N";
+    for (const [label, data] of [
+      ["range button", { custom_id: E.rangeId("1y", "chart", gone), component_type: 2 }],
+      ["versions menu", { custom_id: E.pickId("chart", "3m"), component_type: 3, values: [gone] }],
+      ["sealed range button", { custom_id: E.rangeId("1y", "chart", "s|999999999"), component_type: 2 }],
+    ]) {
+      const r = await I.handleInteraction({ type: 3, token: "st", application_id: "123", data }, deps);
+      ok(r.type === 4 && r.data.flags === 64 && /no longer listed/.test(r.data.content) && !pending.length,
+        `a stale ${label} answers privately and leaves the message (${JSON.stringify(r).slice(0, 120)})`);
+      pending.length = 0;
+    }
+  }
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

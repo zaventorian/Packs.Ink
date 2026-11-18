@@ -369,12 +369,20 @@ function component(it, deps) {
   }
   // A card reply keeps the layout it was sent in (layout.js).
   const keep = async (p) => ({ ...(await p), _layout: layoutOfMessage(it.message) });
+  // A key on an old message whose card has left the index: tell the clicker,
+  // and leave the message as it is for everyone else.
+  const gone = (key) => !deps.R.resolve(key).exact;
+  const goneReply = { type: R_.MESSAGE, data: { content: "That card is no longer listed on packs.ink.", flags: EPHEMERAL } };
   const rg = E.parseRangeId(id);
-  if (rg) return deferredUpdate(it, deps, () => keep(byKey(rg.key, rg.view, rg.range, deps, rg.grade)));
+  if (rg) {
+    if (gone(rg.key)) return goneReply;
+    return deferredUpdate(it, deps, () => keep(byKey(rg.key, rg.view, rg.range, deps, rg.grade)));
+  }
   const pk = E.parsePickId(id);
   if (pk) {
     const key = (it.data.values || [])[0];
     if (!key) return { type: R_.DEFERRED_UPDATE };
+    if (gone(key)) return goneReply;
     return deferredUpdate(it, deps, () => keep(byKey(key, pk.view === "graded" ? "chart" : pk.view, pk.range, deps)));
   }
   // "Look at a card" from a set, /new or /meta list: a NEW reply that
