@@ -1767,6 +1767,11 @@ const D = await mod("discord/src/data.js");
     const png = async (rows) => new Uint8Array(await (await chartResponse(new URL(`https://bot.example/chart/p/${box.pid}/N/1m.png?s=1&d=x`), { async all() { return rows; } })).arrayBuffer());
     const [dirty, clean] = [await png(hist), await png(G.fixSealedLows(hist))];
     ok(dirty.length === clean.length && dirty.every((b, i) => b === clean[i]), "a sealed chart draws the cleaned Low");
+    // The index's sealed snapshot (/set's box price, /open's cost, the
+    // autocomplete label) is cleaned too, as the site cleans its snapshot.
+    // No offline index can show it, so the build's source is checked.
+    const build = readFileSync(new URL("discord/tools/build_index.mjs", ROOT), "utf8");
+    ok(/for \(const p of site\.fixSealedLows\(sealed\)\)/.test(build), "the build cleans the sealed snapshot with fixSealedLows");
   }
 
   // Sets that don't exist yet. "/set set 15" and "/open set 15" showed The

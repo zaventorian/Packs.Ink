@@ -378,7 +378,9 @@ const reveals = revealInputs(rows, { now: revealNow, indexed: indexedIds });
 // Same admission rule as the site's searchSealedProducts: priced rows only,
 // never a promo single or a hidden multi-unit listing.
 const sealedOut = [];
-for (const p of sealed) {
+// The site cleans its sealed snapshot with fixSealedLows: a $1.00 Low on a
+// $125 box would be /set's box price, /open's box cost and the autocomplete's.
+for (const p of site.fixSealedLows(sealed)) {
   if (p.printing !== "Normal" || p.product_type === "Promo Single") continue;
   if (site.isUnpricedSealed(p) || site.isHiddenSealedListing(p)) continue;
   if (p.low_price == null && p.market_price == null) continue;
