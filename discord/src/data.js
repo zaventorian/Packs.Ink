@@ -55,14 +55,11 @@ export function priceSummary(rows, asOf) {
   const mkt = computeSeriesDeltas(rows, "market_price", asOf);
   const low = computeSeriesDeltas(rows, "low_price", asOf);
   const last = rows.length ? rows[rows.length - 1] : null;
-  // The standing judges the field the change line shows: Low when there is
-  // one (the bot leads with Low), else Market — never one beside the other.
-  const field = low.now != null ? "low_price" : "market_price";
   return {
     date: last ? String(last.date).slice(0, 10) : null,
     market: mkt.now, low: low.now,
     mktDelta: mkt.byWin, lowDelta: low.byWin,
-    standing: seriesPricedOn(rows, field, asOf) ? priceStanding(rows, { field }) : null,
+    standing: seriesPricedOn(rows, "market_price", asOf) ? priceStanding(rows) : null,
   };
 }
 

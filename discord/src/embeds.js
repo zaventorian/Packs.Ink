@@ -228,7 +228,8 @@ export function cardMessage(ctx) {
     const ch = [["1d", "1D"], ["1w", "1W"], ["1m", "1M"], ["1y", "1Y"]]
       .map(([k, l]) => (d && d[k] != null ? `${l} ${pct(d[k])}` : null)).filter(Boolean);
     if (ch.length) lines.push(ch.join(" · "));
-    if (price.standing) lines.push((price.standing.tone === "high" ? "↗ " : "↘ ") + price.standing.label);
+    const stLine = standingLine(price);
+    if (stLine) lines.push(stLine);
   }
   // The card's OTHER finish, priced, on the same reply: "and the foil?" is the
   // one follow-up every price reply gets, and it cost a menu pick. Prices are
@@ -461,7 +462,8 @@ export function sealedMessage(ctx) {
     const ch = [["1d", "1D"], ["1w", "1W"], ["1m", "1M"], ["1y", "1Y"]]
       .map(([k, l]) => (d && d[k] != null ? `${l} ${pct(d[k])}` : null)).filter(Boolean);
     if (ch.length) lines.push(ch.join(" · "));
-    if (price.standing) lines.push((price.standing.tone === "high" ? "↗ " : "↘ ") + price.standing.label);
+    const stLine = standingLine(price);
+    if (stLine) lines.push(stLine);
   }
   // A booster box is the one product somebody asks the price of while deciding
   // whether to OPEN it, and the site's box EV is the answer — the same number
@@ -819,6 +821,17 @@ export function helpMessage(ids) {
 const PLACE_MARK = { 1: "🥇", 2: "🥈", 3: "🥉" };
 // Player and deck names are free text: escape what Discord would read as
 // markdown, or "[OSA] Moluk" and a name with an underscore render wrong.
+// The standing chip judges MARKET on purpose: a phantom Low (one $0.01
+// listing) must never read "Cheapest in 12 months". The change line above it
+// reads Low whenever there is one, so beside a Low line the chip says whose
+// it is — Ursula - Deceiver showed "1Y ▼80%" over an untagged "Near its
+// 12-month high", which read as a contradiction.
+export function standingLine(price) {
+  const st = price && price.standing;
+  if (!st) return null;
+  return (st.tone === "high" ? "↗ " : "↘ ") + st.label + (price.low != null ? " (Market)" : "");
+}
+
 export const escMd = (s) => String(s || "").replace(/[\\*_~`|>[\]()]/g, "\\$&");
 export function deckPageUrl(r) {
   const u = new URL(SITE + "/decks");
