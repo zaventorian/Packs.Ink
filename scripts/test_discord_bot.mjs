@@ -1766,6 +1766,46 @@ const D = await mod("discord/src/data.js");
     const [dirty, clean] = [await png(hist), await png(G.fixSealedLows(hist))];
     ok(dirty.length === clean.length && dirty.every((b, i) => b === clean[i]), "a sealed chart draws the cleaned Low");
   }
+
+  // Sets that don't exist yet. "/set set 15" and "/open set 15" showed The
+  // First Chapter (one edit from "set 1"); "/price set 15 box" found the card
+  // Weight Set; "/set inkdark" said there was no such set. A set number never
+  // falls back to another set, and a set the site has dated but the catalog
+  // holds no cards of yet says it isn't out (SET_RELEASE_DATES, copied).
+  {
+    const G = await mod("discord/src/site.generated.js");
+    const S = await mod("discord/src/set.js");
+    // Numbering is SET_RELEASE_DATES in date order — pinned against the mainline list.
+    const byDate = Object.entries(G.SET_RELEASE_DATES).sort((a, b) => String(a[1].lgs).localeCompare(String(b[1].lgs))).map((e) => e[0]);
+    eq(byDate.slice(0, G.MAINLINE_SETS.length).join("|"), G.MAINLINE_SETS.join("|"), "SET_RELEASE_DATES in date order starts with the mainline sets, so its position is the set number");
+    const tfc = R.sets.findIndex((s) => s.main === 1);
+    eq(R.resolveSet("set 1"), tfc, "set 1 is The First Chapter");
+    for (const q of ["set 15", "s15", "set 99", "15"]) eq(R.resolveSet(q), -1, `"${q}" matches no indexed set`);
+    const deps = { R, index, origin: "https://bot.example" };
+    const up = D.upcomingSets(R).find((u) => u.n === "Into the Inkdark");
+    ok(up && up.num === 15 && up.lgs === "2027-02-05", `Into the Inkdark is upcoming set 15 (${JSON.stringify(up)})`);
+    for (const [label, m] of [["/set set 15", I.setReply("set 15", deps)], ["/set inkdark", I.setReply("inkdark", deps)],
+      ["/open set 15", I.packReply("set 15", 1, null, deps)], ["/open into the inkdark", I.packReply("into the inkdark", 1, null, deps)]]) {
+      const t = JSON.stringify(m);
+      ok(/Into the Inkdark/.test(t) && /isn't out yet/.test(t) && /Feb 5, 2027/.test(t) && !/First Chapter/.test(t), `${label} says it isn't out yet (${(m.content || "").slice(0, 120)})`);
+    }
+    const none = I.setReply("set 99", deps);
+    ok(/no set 99/i.test(none.content) && !/First Chapter/.test(JSON.stringify(none)), `/set set 99 says there is none (${none.content})`);
+    const pr = await I.lookup("set 15 box", "chart", null, { ...deps, db: {}, commandIds: {} });
+    ok(/No match/.test(pr.embeds[0].title) && /Into the Inkdark/.test(pr.embeds[0].description) && !(pr.components || []).length,
+      `/price set 15 box names the set, not a card (${pr.embeds[0].description.split("\n")[0]})`);
+    // /open honours "released" for a NAMED set too: a dated set still in reveals opens nothing.
+    const hc = R.sets.find((s) => s.main && s.rel && s.rel.lgs);
+    const Rf = createResolver({ ...index, sets: index.sets.map((s) => (s.n === hc.n ? { ...s, rel: { ...s.rel, lgs: "2099-01-08" } } : s)) });
+    const fut = I.packReply(hc.n, 1, null, { R: Rf, index, origin: "https://bot.example" });
+    ok(/isn't out yet/.test(fut.content || "") && !(fut.embeds || []).length, `/open ${hc.n} before release opens nothing (${fut.content})`);
+    // A pack with nothing in it sends no empty menu (Discord refuses 0 options).
+    checkMessage(S.packMessage(R, index, tfc, { pulls: [], total: 0, n: 1 }, {}), "an empty pack");
+    // A reply that throws while answering at once is an apology, not "interaction failed".
+    const boom = await I.handleInteraction({ type: 2, token: "b", application_id: "123", data: { type: 1, name: "set", options: [{ type: 3, name: "set", value: "azurite" }] } },
+      { ...deps, R: { ...R, resolveSet: () => { throw new Error("boom"); }, resolveSetScored: () => { throw new Error("boom"); } }, log: () => {} });
+    ok(boom.type === 4 && boom.data.flags === 64 && /went wrong/.test(boom.data.content), `an instant reply that throws apologises privately (${JSON.stringify(boom).slice(0, 100)})`);
+  }
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

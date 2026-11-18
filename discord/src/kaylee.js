@@ -41,7 +41,7 @@ export function kayleePack(R, index, origin, opener) {
   }
   const m = packMessage(R, index, si, result, { origin, who: "Kaylee" });
   // The buttons that came with it open ordinary packs; this one only opens hers.
-  const rows = m.components.slice(0, 1);
+  const rows = m.components.filter((r) => r.components.some((c) => c.type === 3));
   rows.push({ type: 1, components: [{ type: 2, style: 1, label: "Open another Kaylee pack", custom_id: KAYLEE_ID }] });
   // Discord labels a button reply with the app, not the person, so say who pressed it.
   const who = escMd(String(opener || "").slice(0, 32));

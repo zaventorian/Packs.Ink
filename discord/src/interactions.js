@@ -9,6 +9,8 @@ import * as D from "./data.js";
 import { kayleeStats, kayleePack, isKayleeId } from "./kaylee.js";
 import { setOverview, setMessage, openPacks, packMessage, parsePackId, newCards, newCardsMessage, freshRevealRows } from "./set.js";
 import { CALENDAR_REGIONS } from "./site.generated.js";
+import { setNumber, setQuery, setScore } from "./resolver.js";
+import { norm } from "./text.js";
 import { chartResponse } from "./charts.js";
 
 export const T = { PING: 1, COMMAND: 2, COMPONENT: 3, AUTOCOMPLETE: 4, MODAL_SUBMIT: 5 };
@@ -25,11 +27,19 @@ const opt = (options, name) => (options || []).find((o) => o.name === name);
 const optVal = (options, name, dflt) => { const o = opt(options, name); return o ? o.value : dflt; };
 
 export async function handleInteraction(it, deps) {
-  if (it.type === T.PING) return { type: R_.PONG };
-  if (it.type === T.AUTOCOMPLETE) return autocomplete(it, deps);
-  if (it.type === T.COMMAND) return command(it, deps);
-  if (it.type === T.COMPONENT) return component(it, deps);
-  if (it.type === T.MODAL_SUBMIT) return modalSubmit(it, deps);
+  // The replies built here and now (/set, /open, the pack buttons) have no
+  // deferred fallback: a throw used to be a 500 and "interaction failed".
+  try {
+    if (it.type === T.PING) return { type: R_.PONG };
+    if (it.type === T.AUTOCOMPLETE) return autocomplete(it, deps);
+    if (it.type === T.COMMAND) return command(it, deps);
+    if (it.type === T.COMPONENT) return component(it, deps);
+    if (it.type === T.MODAL_SUBMIT) return modalSubmit(it, deps);
+  } catch (e) {
+    deps.log && deps.log("interaction threw", e && e.stack || e);
+    if (it.type === T.AUTOCOMPLETE) return { type: R_.AUTOCOMPLETE, data: { choices: [] } };
+    return { type: R_.MESSAGE, data: { content: "Something went wrong answering that — try again in a moment.", flags: EPHEMERAL, allowed_mentions: QUIET } };
+  }
   return { type: R_.MESSAGE, data: { content: "Unsupported interaction.", flags: EPHEMERAL } };
 }
 
@@ -535,28 +545,50 @@ async function reportSend(it, deps) {
 const setChoiceLabel = (s) => [s.n, s.main ? `Set ${s.main}` : null, s.rel && s.rel.lgs ? E.shortDate(s.rel.lgs) : null].filter(Boolean).join(" · ");
 // No name: the newest booster set — for /open the newest one that is OUT, since
 // a pack from a set with no prices yet is worth "$0.00" and says nothing.
+// Returns {si} for an indexed set, {up} for one the site has dated but the
+// catalog holds no cards of yet (Into the Inkdark), or {si: -1, num}.
 function pickSet(R, index, name, { released = false } = {}) {
-  if (name) return R.resolveSet(name);
+  if (name) return findSet(R, name);
   const today = new Date().toISOString().slice(0, 10);
   const mains = R.sets.map((s, i) => i).filter((i) => R.sets[i].main).sort((a, b) => R.sets[b].main - R.sets[a].main);
-  return (released ? mains.find((i) => !(R.sets[i].rel && R.sets[i].rel.lgs > today)) : mains[0]) ?? -1;
+  return { si: (released ? mains.find((i) => !(R.sets[i].rel && R.sets[i].rel.lgs > today)) : mains[0]) ?? -1 };
 }
-const noSet = (name) => ({ content: `No set called “${E.escMd(String(name).slice(0, 60))}”. Try a name or a number — \`hyperia city\`, \`azurite\`, \`set 5\`.`, embeds: [], components: [] });
+function findSet(R, name) {
+  const hit = R.resolveSetScored(name);
+  const num = setNumber(name);
+  const ups = D.upcomingSets(R);
+  let up = null, upScore = 0;
+  if (num != null) up = hit.si < 0 ? ups.find((u) => u.num === num) || null : null;
+  else for (const u of ups) { const s = setScore(setQuery(name), norm(u.n)); if (s > upScore) { upScore = s; up = u; } }
+  if (up && (num != null || upScore > hit.score)) return { up };
+  return { si: hit.si, num };
+}
+const noSet = (name, num) => ({ content: num != null
+  ? `There's no set ${num} on packs.ink. Try a name or a number — \`hyperia city\`, \`azurite\`, \`set 5\`.`
+  : `No set called “${E.escMd(String(name).slice(0, 60))}”. Try a name or a number — \`hyperia city\`, \`azurite\`, \`set 5\`.`, embeds: [], components: [] });
+const notOutYet = (s, more = "") => ({ content: E.notOutYetText(s) + more, embeds: [], components: [] });
 
 export function setReply(name, deps) {
-  const si = pickSet(deps.R, deps.index, name);
-  if (si < 0) return noSet(name);
-  return setReplyAt(si, deps);
+  const f = pickSet(deps.R, deps.index, name);
+  if (f.up) return notOutYet(f.up, " No cards of it are on packs.ink yet — `/calendar` has what's coming.");
+  if (f.si < 0) return noSet(name, f.num);
+  return setReplyAt(f.si, deps);
 }
 export function setReplyAt(si, deps) {
   return setMessage(setOverview(deps.R, deps.index, si), { origin: deps.origin });
 }
 
 export function packReply(name, n, it, deps) {
-  const si = pickSet(deps.R, deps.index, name, { released: true });
-  if (si < 0) return noSet(name);
+  const f = pickSet(deps.R, deps.index, name, { released: true });
+  if (f.up) return notOutYet(f.up, " Nothing to open until then.");
+  const si = f.si;
+  if (si < 0) return noSet(name, f.num);
   const set = deps.R.sets[si];
   if (!set.main) return { content: `${set.n} isn't sold in booster packs — try a main set, like \`${deps.index.newestMain}\`.`, embeds: [], components: [] };
+  // A named set still being revealed: pre-sale prices, and an empty pool.
+  if (set.rel && set.rel.lgs && set.rel.lgs > new Date().toISOString().slice(0, 10)) {
+    return notOutYet({ n: set.n, num: set.main, lgs: set.rel.lgs }, ` \`/set ${set.n}\` shows what's been revealed so far.`);
+  }
   const u = (it && ((it.member && it.member.user) || it.user)) || {};
   const who = E.escMd(String(u.global_name || u.username || "").slice(0, 32));
   return packMessage(deps.R, deps.index, si, openPacks(deps.R, si, n), { origin: deps.origin, who });

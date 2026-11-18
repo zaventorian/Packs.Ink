@@ -2,7 +2,7 @@
 // has already been fetched and returns {embeds, components} JSON, which is what
 // lets the guard test check a reply without a network.
 import { tcgUrl, tcgSetSearchUrl, amazonForSealed, calEventTitle, calEventSubtitle, scLocalTime12 } from "./site.generated.js";
-import { FIN_PRINTING, RANGES, DEFAULT_RANGE, CAL_FILTERS, META_FALLBACK_DAYS } from "./data.js";
+import { FIN_PRINTING, RANGES, DEFAULT_RANGE, CAL_FILTERS, META_FALLBACK_DAYS, upcomingSets } from "./data.js";
 import { tileUrl } from "./tile.js";
 import { INK_MARK, inkMarks, statsLineFor } from "./stats.js";
 export { INK_MARK, inkMarks };
@@ -520,6 +520,13 @@ export function sealedMessage(ctx) {
 // (escMd), so "[free](https://…)" is not a link the bot posted; inside a code
 // span only a backtick can break out, so it is swapped for a quote.
 const codeSafe = (s) => String(s || "").replace(/`/g, "'");
+// A set that isn't out: "**Into the Inkdark** (set 15) isn't out yet — it
+// releases Feb 5, 2027." The year always shows: it is a date ahead.
+export function notOutYetText(s) {
+  const d = /^(\d{4})-\d{2}-\d{2}/.exec(String(s.lgs || ""));
+  const when = d ? shortDate(s.lgs).replace(/, \d{4}$/, "") + ", " + d[1] : null;
+  return `**${s.n}**${s.num ? ` (set ${s.num})` : ""} isn't out yet` + (when ? ` — it releases ${when}.` : ".");
+}
 export function notFoundMessage(R, res, query, ids) {
   const sug = (res.suggestions || []).slice(0, 5);
   const lines = [res.dimsOnly
@@ -527,7 +534,13 @@ export function notFoundMessage(R, res, query, ids) {
     : `No card or product matched “${escMd(clip(query, 60))}”.`];
   // What someone probably meant when the words aren't a card at all.
   const q = String(query || "").trim();
-  if (/^(?:\d{5}(?:-\d{4})?|[a-z]\d[a-z] ?\d[a-z]\d|[a-z]{1,2}\d[a-z\d]? ?\d[a-z]{2})$/i.test(q)) {
+  const noSet = res.dims && res.dims.noSet;
+  if (noSet != null) {
+    // "set 15 box": a set that isn't in the catalog — say which, and when.
+    const up = upcomingSets(R).find((u) => u.num === noSet);
+    lines[0] = up ? notOutYetText(up) : `There's no set ${noSet} on packs.ink.`;
+    lines.push(`${cmdMention(ids, "calendar")} shows what's coming.`);
+  } else if (/^(?:\d{5}(?:-\d{4})?|[a-z]\d[a-z] ?\d[a-z]\d|[a-z]{1,2}\d[a-z\d]? ?\d[a-z]{2})$/i.test(q)) {
     lines.push(`Looks like a postal code — for events near there, try ${cmdMention(ids, "events")} \`${clip(q, 12)}\`.`);
   } else if (R.resolveSet && R.resolveSet(q) >= 0 && /\S/.test(q)) {
     lines.push(`For a whole set, try ${cmdMention(ids, "set")} \`${codeSafe(clip(q, 30))}\`.`);

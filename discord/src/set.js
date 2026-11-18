@@ -541,7 +541,8 @@ export function packMessage(R, index, si, result, { origin, who } = {}) {
   return {
     embeds,
     components: [
-      { type: 1, components: [{ type: 3, custom_id: openId("card"), placeholder: "Look at a card you pulled", options }] },
+      // Discord refuses a menu with no options, and a pack can come up empty.
+      ...(options.length ? [{ type: 1, components: [{ type: 3, custom_id: openId("card"), placeholder: "Look at a card you pulled", options }] }] : []),
       { type: 1, components: [
         { type: 2, style: 1, label: "Open another pack", custom_id: packId(si, 1) },
         { type: 2, style: 2, label: "Open a box", custom_id: packId(si, 24) },

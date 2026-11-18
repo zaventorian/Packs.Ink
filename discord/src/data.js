@@ -339,6 +339,19 @@ export async function nearbyByKind(db, place, { radius = 50, kind = "all" } = {}
   return out;
 }
 
+// ── sets the site has dated but the catalog holds no cards of ──────────
+// The build drops a set with no cards (its name would match nothing), so a
+// set like Into the Inkdark is only known from SET_RELEASE_DATES, which lists
+// the booster sets in release order — its position is the set number (the
+// guard pins that its first entries are MAINLINE_SETS).
+export function upcomingSets(R) {
+  const have = new Set(((R && R.sets) || []).map((s) => s.n));
+  return Object.entries(SET_RELEASE_DATES)
+    .sort((a, b) => String(a[1].lgs).localeCompare(String(b[1].lgs)))
+    .map(([n, d], k) => ({ n, num: k + 1, lgs: d.lgs || null, retail: d.retail || null }))
+    .filter((u) => !have.has(u.n));
+}
+
 // ── the release + competitive calendar ───────────────────────────────────
 const CAL_COLS = "id,kind,title,subtitle,starts_on,ends_on,location,url,set_name,country";
 export async function calendarEvents(db) {
