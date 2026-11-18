@@ -533,7 +533,7 @@ export function packReply(name, n, it, deps) {
   const set = deps.R.sets[si];
   if (!set.main) return { content: `${set.n} isn't sold in booster packs — try a main set, like \`${deps.index.newestMain}\`.`, embeds: [], components: [] };
   const u = (it && ((it.member && it.member.user) || it.user)) || {};
-  const who = String(u.global_name || u.username || "").slice(0, 32).replace(/[*_~`|>\\]/g, "\\$&");
+  const who = E.escMd(String(u.global_name || u.username || "").slice(0, 32));
   return packMessage(deps.R, deps.index, si, openPacks(deps.R, si, n), { origin: deps.origin, who });
 }
 

@@ -3,6 +3,7 @@
 // are invented; the pack is the real simulator with one slot rigged. Temporary:
 // delete this file, its command, and the two hooks in interactions.js to retire.
 import { openPacks, packMessage, packPools } from "./set.js";
+import { escMd } from "./embeds.js";
 
 export const KAYLEE_ID = "kay|1";
 export const isKayleeId = (id) => id === KAYLEE_ID;
@@ -43,6 +44,6 @@ export function kayleePack(R, index, origin, opener) {
   const rows = m.components.slice(0, 1);
   rows.push({ type: 1, components: [{ type: 2, style: 1, label: "Open another Kaylee pack", custom_id: KAYLEE_ID }] });
   // Discord labels a button reply with the app, not the person, so say who pressed it.
-  const who = String(opener || "").slice(0, 32).replace(/[*_~`|>\\]/g, "\\$&");
+  const who = escMd(String(opener || "").slice(0, 32));
   return { ...m, ...(who ? { content: `${who} opened Kaylee's pack:` } : {}), components: rows };
 }

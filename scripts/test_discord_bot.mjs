@@ -1609,5 +1609,19 @@ const D = await mod("discord/src/data.js");
   }
 }
 
+// ── 14. audit fixes (2026-11-18) ─────────────────────────────────────────
+// Each block names the reply it kept from going out wrong.
+{
+  const I = await mod("discord/src/interactions.js");
+  const K = await mod("discord/src/kaylee.js");
+  // A display name is free text: "[x](https://…)" in message content is a
+  // clickable link the bot posted. Both places a presser's name lands escape it.
+  const evil = "[x](https://evil.example)";
+  const kp = K.kayleePack(R, index, "https://example.test", evil);
+  ok(!/\[x\]\(/.test(kp.content || ""), `a display name can't post a link in Kaylee's pack (${kp.content})`);
+  const op = I.packReply("azurite", 1, { user: { global_name: evil } }, { R, index, origin: "https://example.test" });
+  ok(!/\[x\]\(/.test(op.embeds[0].title), `a display name can't post a link in /open (${op.embeds[0].title})`);
+}
+
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
