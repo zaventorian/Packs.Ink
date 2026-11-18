@@ -8,7 +8,7 @@
 // so a new day's prices need a new URL, and an old message keeps the chart it
 // was sent with. s=1 marks sealed product; r= overlays a card's eBay raw sales.
 import { renderChart, THEME } from "./chart.js";
-import { priceHistory, gradedSales, rawSales, RANGES, FIN_PRINTING } from "./data.js";
+import { priceHistory, sealedHistory, gradedSales, rawSales, RANGES, FIN_PRINTING } from "./data.js";
 import { gradedSlotBucket } from "./site.generated.js";
 
 const DAY = 86400000;
@@ -97,12 +97,13 @@ export async function chartResponse(url, db) {
     const range = RANGES[p[3]];
     if (!range) return new Response("unknown range", { status: 404 });
     const rawCard = q("r");
+    const sealed = q("s") === "1";
     const [rows, raw] = await Promise.all([
-      priceHistory(db, Number(p[1]), FIN_PRINTING[p[2]], { sinceDays: range.days }),
+      (sealed ? sealedHistory : priceHistory)(db, Number(p[1]), FIN_PRINTING[p[2]], { sinceDays: range.days }),
       rawCard ? salesIn(() => rawSales(db, rawCard), q("rb"), range.days).catch(() => []) : null,
     ]);
     const rawDots = raw ? raw.map((x) => [tOf(x.sold_date), Number(x.sale_price)]).filter((d) => Number.isFinite(d[0]) && d[1] > 0) : null;
-    return png(renderChart(priceChartSpec(rows, p[3], { sealed: q("s") === "1", rawDots })));
+    return png(renderChart(priceChartSpec(rows, p[3], { sealed, rawDots })));
   }
   const g = url.pathname.match(/^\/chart\/g\/([^/]{1,80})\/([A-Za-z]{2,4})\/(10|[1-9](?:\.5)?)\/([a-z0-9]+)\.png$/);
   if (g) {

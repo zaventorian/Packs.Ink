@@ -1,6 +1,6 @@
 // data.js — what the bot asks the database, shaped the way the site shapes it.
 import {
-  computeSeriesDeltas, priceStanding, seriesPricedOn, gradedSlotBucket, rawSaleMatch,
+  computeSeriesDeltas, priceStanding, seriesPricedOn, fixSealedLows, gradedSlotBucket, rawSaleMatch,
   gradedCatalogBuckets, gradedSplitTiers, buildGradedPriceIndex, makeGradedPrintingLookup,
   canonicalGradedSlot, SPLIT_PRINTING_CARD_IDS,
   calendarMergeEvents, calendarSetEntries, calendarEstimatedSetEntries, calendarSetEstimates,
@@ -35,6 +35,12 @@ export async function priceHistory(db, pid, printing, { sinceDays = 400 } = {}) 
   };
   if (sinceDays) params.date = "gte." + ymd(Date.now() - sinceDays * DAY);
   return db.all("prices_daily", params);
+}
+
+// Sealed product's history, with the site's fixSealedLows: a Low under a fifth
+// of Market is one bad listing ($1.00 on a $125 box), and Market stands in.
+export async function sealedHistory(db, pid, printing = "Normal", opts) {
+  return fixSealedLows(await priceHistory(db, pid, printing, opts));
 }
 
 // Everything the card view says about a price, from one history fetch.

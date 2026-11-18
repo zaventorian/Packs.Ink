@@ -1741,6 +1741,31 @@ const D = await mod("discord/src/data.js");
     ok(m.standing && m.standing.label === G.priceStanding(noLow).label && m.mktDelta["1y"] > 0,
       `with no Low, both judge Market (${m.standing && m.standing.label})`);
   }
+
+  // A sealed Low under a fifth of Market is one bad listing (the site's
+  // fixSealedLows): Hyperia City's box read $1.00 Low against ~$125 Market for
+  // five days, and /price said "1W 120x". The bot cleans sealed history before
+  // its changes and its chart, as the site cleans its sealed rows.
+  {
+    const G = await mod("discord/src/site.generated.js");
+    const { chartResponse } = await mod("discord/src/charts.js");
+    ok(typeof G.fixSealedLows === "function", "fixSealedLows is copied from the site");
+    const day = (i) => new Date(Date.UTC(2026, 9, 1) + i * 86400000).toISOString().slice(0, 10);
+    const hist = Array.from({ length: 40 }, (_, i) => ({ date: day(i), low_price: i >= 30 && i < 36 ? 1 : 120, market_price: 125 }));
+    const box = index.sealed.find((s) => s.ty === "Booster Boxes");
+    const sent = [], pending = [];
+    const db = { async get() { return []; }, async all(t) { return t === "prices_daily" ? hist : []; }, async rpc() { return []; } };
+    await I.handleInteraction({ type: 2, token: "sl", application_id: "123", data: { type: 1, name: "price", options: [{ type: 3, name: "name", value: "s|" + box.pid }] } },
+      { R, index: { ...index, priceDate: day(39) }, db, origin: "https://bot.example", appId: "123", log: () => {},
+        fetch: async (u, init) => { sent.push(init.body instanceof FormData ? JSON.parse(init.body.get("payload_json")) : JSON.parse(init.body)); return new Response("{}"); },
+        waitUntil: (p) => pending.push(p) });
+    await Promise.all(pending.splice(0));
+    const d = sent[0] && sent[0].embeds[0].description || "";
+    ok(/\*\*\$120\.00\*\* Low/.test(d) && !/\d+x\b|▲\d{3,}/.test(d), `a sealed reply ignores a one-listing Low (${d.split("\n").slice(1, 4).join(" | ")})`);
+    const png = async (rows) => new Uint8Array(await (await chartResponse(new URL(`https://bot.example/chart/p/${box.pid}/N/1m.png?s=1&d=x`), { async all() { return rows; } })).arrayBuffer());
+    const [dirty, clean] = [await png(hist), await png(G.fixSealedLows(hist))];
+    ok(dirty.length === clean.length && dirty.every((b, i) => b === clean[i]), "a sealed chart draws the cleaned Low");
+  }
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

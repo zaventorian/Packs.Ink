@@ -337,7 +337,7 @@ export async function cardPayload(res, { view, range, query }, deps) {
 }
 
 async function sealedPayload(res, { view, range }, deps) {
-  const price = await D.priceHistory(deps.db, res.item.pid, "Normal").then((rows) => D.priceSummary(rows, deps.index.priceDate), () => null);
+  const price = await D.sealedHistory(deps.db, res.item.pid, "Normal").then((rows) => D.priceSummary(rows, deps.index.priceDate), () => null);
   return E.sealedMessage({ R: deps.R, res, price, view, range, origin: deps.origin, today: deps.today });
 }
 
