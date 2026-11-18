@@ -31,7 +31,8 @@ export function pct(p) {
   if (p >= 1000) return (1 + p / 100).toFixed(p >= 9900 ? 0 : 1).replace(/\.0$/, "") + "x";
   const a = Math.abs(p);
   const s = a >= 100 ? a.toFixed(0) : a >= 10 ? a.toFixed(1) : a.toFixed(1);
-  return (p > 0 ? "▲" : p < 0 ? "▼" : "") + s + "%";
+  // The arrow follows what is SHOWN: "▲0.0%" said a flat price moved.
+  return (Number(s) === 0 ? "" : p > 0 ? "▲" : "▼") + s + "%";
 }
 export const shortDate = (ymd) => {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(ymd || ""));

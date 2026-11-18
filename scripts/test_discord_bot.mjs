@@ -1860,6 +1860,10 @@ const D = await mod("discord/src/data.js");
     ok(/\[Cards \\\] Games\]\(/.test(txt) && /\[Dice \\\[&\\\] Co\]\(/.test(txt), `brackets in a store name are escaped (${txt.slice(0, 160)})`);
     checkMessage(br, "events with brackets in store names");
   }
+
+  // A change that rounds to nothing carries no arrow ("▲0.0%" said it moved).
+  for (const v of [0.04, -0.04, 0]) eq(E.pct(v), "0.0%", `pct(${v}) has no arrow`);
+  eq(E.pct(0.05), "▲0.1%", "a change that shows keeps its arrow");
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);
