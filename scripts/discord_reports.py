@@ -241,6 +241,8 @@ def drop_stale(sb, rows, price_date):
         if id(r) in keep:
             out.append(r)
             continue
+        if r.get("low_date") and str(r["low_date"])[:10] != price_date.isoformat():
+            continue          # its last Low is older: the move is not today's
         v = today.get((r.get("tcgplayer_product_id"), r.get("printing") or "Normal"))
         mine = r.get(REPORT_PRICE_COL)
         if v is not None and mine is not None and abs(float(v) - float(mine)) < 0.005:
@@ -826,11 +828,22 @@ def market_chart_series(sb, price_date, pulse, sets_meta):
 def fetch_candidates(sb, window):
     pct_col = REPORT_PCT_PREFIX + window
     floor = min(s["min_price"] for s in SECTIONS.values())
-    cols = ("card_id,name,version,rarity,set_id,printing,tcgplayer_product_id,"
+    cols = ("card_id,name,version,rarity,set_id,printing,tcgplayer_product_id,low_date,"
             f"{REPORT_PRICE_COL},{pct_col}")
     return sb.select("price_movers", columns=cols,
                      filters={REPORT_PRICE_COL: f"gte.{floor}", pct_col: "neq.0"},
                      order="card_id.asc,printing.asc")
+
+
+def movers_current(sb, price_date):
+    """Is price_movers built from the price date's prices? ⚠ The ETL refreshes
+    card_prices_latest (the price date) BEFORE price_movers, so a failed or
+    unfinished movers refresh leaves yesterday's build behind today's date —
+    and a card whose Low did not move today would pass drop_stale carrying
+    yesterday's move."""
+    rows = sb.select("price_movers", columns="low_date", filters={"low_date": "not.is.null"},
+                     order="low_date.desc", limit=1, page_size=1)
+    return bool(rows) and str(rows[0]["low_date"])[:10] == price_date.isoformat()
 
 
 def load_sets(sb):
@@ -1302,6 +1315,12 @@ def run(args, sb=None, session=requests, now=None):
         print(f"Newest price date is {price_date} at {now:%Y-%m-%d %H:%M} UTC: no daily is due "
               "(today's ETL has not landed) and it is outside the weekly's Monday 9 AM-3 PM "
               "Chicago window. Skipping.")
+        return 0
+    # Before anything is built or kept: a report on a stale build would be
+    # recorded as the day's, and the real one never sent.
+    if not movers_current(sb, price_date):
+        print(f"::warning::price_movers is not built from {price_date}'s prices yet (its refresh failed "
+              "or has not run): no report posts or is kept until it is.")
         return 0
     print(f"Open now: {', '.join(open_now)} (price date {price_date}).")
 

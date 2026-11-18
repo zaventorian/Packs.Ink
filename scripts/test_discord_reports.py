@@ -103,8 +103,9 @@ def index_rows(latest=TODAY):
 
 class FakeSb:
     def __init__(self, subs, price_date=TODAY, table_missing=False, movers=None, index_latest=TODAY, latest=None,
-                 ebay=None):
+                 ebay=None, movers_date=None):
         self.subs = subs
+        self.movers_date = movers_date or price_date   # price_movers' newest low_date
         self.ebay = ebay or {}        # {"roll": [...], "cards": [...], "sales": [...]}
         self.latest = latest          # None: migration 175 not applied
         self.upserts = []
@@ -138,10 +139,13 @@ class FakeSb:
         if table == "price_movers" and "card_id" in filters:
             ids = set(re.findall(r'"([^"]+)"', filters["card_id"]))
             return [dict(m) for m in self.movers if m["card_id"] in ids]
+        if table == "price_movers" and "low_date" in filters:     # how current is the matview?
+            return [{"low_date": self.movers_date.isoformat()}]
         if table == "price_movers":
             pct = next(k for k in filters if k.startswith("pct_"))
             floor = float(filters[rep.REPORT_PRICE_COL].split(".", 1)[1])
-            return [dict(m) for m in self.movers if m[pct] not in (None, 0) and m["low_today"] >= floor]
+            return [{"low_date": self.movers_date.isoformat(), **m} for m in self.movers
+                    if m[pct] not in (None, 0) and m["low_today"] >= floor]
         if table == "prices_daily" and filters.get("date", "").startswith("eq."):
             return [{"tcgplayer_product_id": m["tcgplayer_product_id"], "printing": m["printing"],
                      "low_price": (m["low_today"] - 1 if m["tcgplayer_product_id"] in STALE_PIDS else m["low_today"])}
@@ -552,6 +556,28 @@ again = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_
 disc_again = FakeDiscord()
 run(again, disc_again, now=at(TODAY + dt.timedelta(days=1), 1, 45))
 check(not disc_again.posts, "a late run never re-sends a report the channel already has")
+
+# ⚠ The ETL refreshes card_prices_latest BEFORE price_movers. If the movers
+# refresh fails, the price date says today while price_movers is yesterday's
+# build: a card whose Low did not move today passes drop_stale carrying
+# YESTERDAY's move, and the report would post it as today's and record the day.
+behind = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}],
+                latest=[], movers_date=TODAY - dt.timedelta(days=1))
+disc_behind = FakeDiscord()
+code_b, out_b = run(behind, disc_behind)
+check(code_b == 0 and not disc_behind.posts and "::warning::" in out_b,
+      "price_movers behind the price date: nothing posts, and the run warns")
+check(not any("last_posted_on" in u[2] for u in behind.updates) and not behind.upserts,
+      "...and nothing is recorded or kept, so the day's report still goes out once it catches up")
+one_old = FakeSb([], movers=[{**m, "low_date": (TODAY - dt.timedelta(days=1)).isoformat()} if m["card_id"] == "b_max" else m
+                             for m in MOVERS])
+with redirect_stdout(io.StringIO()):
+    r_old = rep.build_report(one_old, TODAY, "1d", session=FakeCdn(), now=EVENING)
+check("Max Goof" not in all_text(r_old["embeds"]) and "Eeyore" in all_text(r_old["embeds"]),
+      "a row whose last Low is not from the price date carries no move")
+wf = (HERE.parent / ".github" / "workflows" / "discord_reports.yml").read_text(encoding="utf-8")
+check("github.event.workflow_run.conclusion == 'success'" in wf,
+      "the workflow reacts only to ETL runs that succeeded")
 
 code5, out5 = run(FakeSb([], table_missing=True), FakeDiscord())
 check(code5 == 0 and "migration 173" in out5, "missing table is a clean exit 0")
