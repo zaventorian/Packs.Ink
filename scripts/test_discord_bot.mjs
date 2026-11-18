@@ -1699,6 +1699,30 @@ const D = await mod("discord/src/data.js");
     const longest = Math.max(...index.cards.flatMap((c) => c.p.map((p) => R.cardKey(p, 0).length)));
     ok(longest + "|BGS9.5".length <= 100, `a graded key fits 100 characters (${longest + 7})`);
   }
+
+  // "mowgli last year" was parsed to a range and the range thrown away; the
+  // chart drew 3M. Range words drive the chart unless the range option was
+  // given; 6M has no button, so it shows 1Y (the window that covers it).
+  {
+    const sent = [], pending = [];
+    const db = { async get() { return []; }, async all() { return []; }, async rpc() { return []; } };
+    const deps = { R, index, db, origin: "https://bot.example", appId: "123", log: () => {},
+      fetch: async (u, init) => { sent.push(init.body instanceof FormData ? JSON.parse(init.body.get("payload_json")) : JSON.parse(init.body)); return new Response("{}"); },
+      waitUntil: (p) => pending.push(p) };
+    const shown = async (name, range) => {
+      sent.length = 0;
+      const options = [{ type: 3, name: "name", value: name }, ...(range ? [{ type: 3, name: "range", value: range }] : [])];
+      await I.handleInteraction({ type: 2, token: "rg", application_id: "123", data: { type: 1, name: "price", options } }, deps);
+      await Promise.all(pending.splice(0));
+      const b = (sent[0] && sent[0].components || []).flatMap((r) => r.components).find((c) => c.type === 2 && c.style === 1 && c.disabled);
+      return b && b.label;
+    };
+    eq(await shown("mowgli last year"), "1Y", "/price mowgli last year charts a year");
+    eq(await shown("mowgli 1 month"), "1M", "/price mowgli 1 month charts a month");
+    eq(await shown("mowgli 6 months"), "1Y", "/price mowgli 6 months charts the year that covers it");
+    eq(await shown("mowgli last year", "1m"), "1M", "the range option, when given, wins over range words");
+    eq(await shown("mowgli"), "3M", "no range words: the default 3M");
+  }
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

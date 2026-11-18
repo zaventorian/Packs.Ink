@@ -59,7 +59,8 @@ function command(it, deps) {
   switch (d.name) {
     // /card answers in the big layout (layout.js); /price stays an embed.
     case "card": return deferred(it, deps, priv, async () => ({ ...(await lookup(String(optVal(o, "name", "")), "card", D.DEFAULT_RANGE, deps)), _layout: "big" }));
-    case "price": return deferred(it, deps, priv, () => lookup(String(optVal(o, "name", "")), "chart", String(optVal(o, "range", D.DEFAULT_RANGE)), deps));
+    // No range option given: null, so range words in the name can choose one.
+    case "price": return deferred(it, deps, priv, () => lookup(String(optVal(o, "name", "")), "chart", opt(o, "range") ? String(opt(o, "range").value) : null, deps));
     case "events": return deferred(it, deps, priv, () => events(o, deps));
     case "calendar": return deferred(it, deps, priv, () => calendar(deps));
     case "meta": return deferred(it, deps, priv, () => meta(deps));
@@ -281,6 +282,9 @@ export function plainFallback(payload) {
 export async function lookup(query, view, range, deps) {
   const res = deps.R.resolve(query);
   if (res.kind === "none") return E.notFoundMessage(deps.R, res, query, deps.commandIds);
+  // Range words ("last year", "1 month") when no range was asked for. 6M has
+  // no button, so it shows 1Y, the window that covers it.
+  if (range == null && res.dims && res.dims.range) range = res.dims.range === "6m" ? "1y" : res.dims.range;
   if (!D.RANGES[range]) range = D.DEFAULT_RANGE;
   return res.kind === "sealed"
     ? sealedPayload(res, { view, range }, deps)
