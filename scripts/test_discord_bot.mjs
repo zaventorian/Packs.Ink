@@ -1888,6 +1888,13 @@ const D = await mod("discord/src/data.js");
     const m = await I.lookup(q, "card", null, { R, index, db: {}, origin: "https://bot.example", commandIds: {} });
     ok(/type a card name/i.test(m.content || "") && !(m.components || []).length && !(m.embeds || []).length, `a blank /card query asks for a name (${JSON.stringify(m).slice(0, 90)})`);
   }
+
+  // A bare number after a name is a collector number, like "#42".
+  for (const [bare, hash] of [["elsa 42", "elsa #42"], ["elsa 207", "elsa #207"]]) {
+    const a = card(bare), b = card(hash);
+    ok(a && b && a.printing.id === b.printing.id && a.fi === b.fi, `"${bare}" opens the same printing as "${hash}" (${a && a.printing.no} vs ${b && b.printing.no})`);
+  }
+  eq(R.parse("42").A.dims.number, null, "a number on its own is not a collector number");
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

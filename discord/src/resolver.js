@@ -321,6 +321,11 @@ export function createResolver(index) {
         const t = toks[i];
         const fz = t.length >= 6 && !nameVocab.has(t) ? RARITY_FUZZ.find((w) => dl(t, w, 2) <= (w.length >= 8 ? 2 : 1)) : null;
         if (fz) { A.dims.rarity = B.dims.rarity = RARITY_WORDS[fz]; i++; continue; }
+        // A bare number AFTER a name ("elsa 42") is a collector number, like
+        // "#42" — unless some card's name carries that number as a word.
+        if (/^\d{1,3}$/.test(t) && A.dims.number == null && !nameVocab.has(t) && A.name.some((w) => !FILLER.has(w) && !STOP.has(w))) {
+          A.dims.number = B.dims.number = t; i++; continue;
+        }
         A.name.push(t); B.name.push(t); i++; continue;
       }
       const span = toks.slice(i, i + len);
