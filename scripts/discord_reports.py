@@ -884,7 +884,6 @@ def key_of(row):
 # every read is wrapped, and a failure simply leaves the embed out.
 REVEAL_COLOR = 0x8E7CC3
 CALENDAR_COLOR = 0x4FA3D1
-REVEAL_DAYS = {"1d": 1, "7d": 7}
 REVEAL_SETS = 4            # sets named in the embed
 REVEAL_NAMES = 6           # card names listed per set
 CALENDAR_DAYS = 7
@@ -899,17 +898,19 @@ def card_label(row):
     return row.get("name") or "" if v in (None, "", "None") else f"{row.get('name')} - {v}"
 
 
-def new_reveals(sb, now, days, sets):
-    """[(set name, [card label, ...])] for cards first added in the last `days`
-    days, newest set first. A name that already existed before the cutoff is a
-    new PRINTING, not a reveal, and is left out."""
-    cutoff = (now - dt.timedelta(days=days)).isoformat()
+def new_reveals(sb, cutoff, end, sets):
+    """[(set name, [card label, ...])] for cards first added after `cutoff` and
+    by `end` (aware UTC datetimes), newest set first. A name that already
+    existed by the cutoff is a new PRINTING, not a reveal, and is left out; a
+    card added after `end` is the next report's."""
     rows = sb.select("cards", columns="id,name,version,set_id,inserted_at", order="id.asc")
-    old = {card_label(r) for r in rows if str(r.get("inserted_at") or "") < cutoff}
+    when = {id(r): _utc(r.get("inserted_at")) for r in rows}
+    old = {card_label(r) for r in rows if not when[id(r)] or when[id(r)] <= cutoff}
     by_set, seen = {}, set()
     for r in sorted(rows, key=lambda r: str(r.get("inserted_at") or ""), reverse=True):
         label = card_label(r)
-        if str(r.get("inserted_at") or "") < cutoff or not label or label in old or label in seen:
+        t = when[id(r)]
+        if not t or not cutoff < t <= end or not label or label in old or label in seen:
             continue
         seen.add(label)
         by_set.setdefault(set_display(sets.get(r.get("set_id"), "")) or "Other", []).append(label)
@@ -996,7 +997,11 @@ def extra_embeds(sb, price_date, window, sets, now=None):
     weekly = window != "1d"
     out = []
     try:
-        e = reveals_embed(new_reveals(sb, now, REVEAL_DAYS.get(window, 1), sets), weekly)
+        # The eBay section's window: from where the previous report of this
+        # cadence was built, so no card is listed twice or skipped between two
+        # posts that went out at different hours.
+        cutoff, end = ebay_window(sb, price_date, window, now)
+        e = reveals_embed(new_reveals(sb, cutoff, end, sets), weekly)
         if e:
             out.append(e)
     except Exception as ex:   # never the report's problem

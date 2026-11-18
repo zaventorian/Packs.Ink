@@ -763,13 +763,14 @@ NOW = dt.datetime(2026, 9, 28, 22, 0, tzinfo=dt.timezone.utc)
 
 
 class ExtraSb:
-    def __init__(self, cards=(), events=(), boom=False):
-        self.cards, self.events, self.boom = list(cards), list(events), boom
+    def __init__(self, cards=(), events=(), boom=False, latest=()):
+        self.cards, self.events, self.boom, self.latest = list(cards), list(events), boom, list(latest)
 
     def select(self, table, columns="*", limit=None, filters=None, page_size=1000, order=None):
         if self.boom:
             raise RuntimeError("down")
-        return [dict(r) for r in (self.cards if table == "cards" else self.events if table == "calendar_events" else [])]
+        return [dict(r) for r in (self.cards if table == "cards" else self.events if table == "calendar_events"
+                                  else self.latest if table == rep.LATEST_TABLE else [])]
 
 
 CARDS = [
@@ -780,11 +781,37 @@ CARDS = [
     {"id": "e", "name": "Song", "version": None, "set_id": "s1", "inserted_at": "2026-09-28T13:00:00+00:00"},
 ]
 sets_x = {"s1": "Hyperia City", "s2": "Lorcana Challenge Year 3"}
-day = rep.new_reveals(ExtraSb(CARDS), NOW, 1, sets_x)
+day = rep.new_reveals(ExtraSb(CARDS), NOW - dt.timedelta(days=1), NOW, sets_x)
 check(day == [("Hyperia City", ["Song", "Fresh - Today"])], f"daily reveals: only names first seen in the last day ({day})")
-week = rep.new_reveals(ExtraSb(CARDS), NOW, 7, sets_x)
+week = rep.new_reveals(ExtraSb(CARDS), NOW - dt.timedelta(days=7), NOW, sets_x)
 check(sum(len(c) for _, c in week) == 3, "weekly reveals reach back seven days")
 check(not any("Old Card" in " ".join(c) for _, c in week), "a new printing of an existing card is not a reveal")
+# The window opens where the previous report of the same cadence was built
+# (discord_report_latest.built_at), as the eBay window does, not at "now - 24 h":
+# the daily posts anywhere from ~21:50 to past midnight, so a fixed 24 hours
+# showed some cards twice and skipped others.
+def reveal_names(cards, built):
+    sbx = ExtraSb(cards, latest=[{"cadence": "daily", "price_date": "2026-09-27", "built_at": built.isoformat()}])
+    e = rep.extra_embeds(sbx, TODAY, "1d", sets_x, now=NOW)
+    return e[0]["description"] if e else ""
+
+
+late_card = [{"id": "f", "name": "Gap", "version": "Card", "set_id": "s1", "inserted_at": "2026-09-27T21:00:00+00:00"}]
+check("Gap - Card" in reveal_names(late_card, NOW - dt.timedelta(hours=26)),
+      "a card added after the last daily was built, 25 h ago, is new tonight")
+seen_card = [{"id": "g", "name": "Seen", "version": "Card", "set_id": "s1", "inserted_at": "2026-09-27T22:30:00.123456+00:00"}]
+check("Seen - Card" not in reveal_names(seen_card, NOW - dt.timedelta(hours=23)),
+      "a card the last daily (built 23 h ago) already listed is not listed again")
+check(rep.extra_embeds(ExtraSb(CARDS), TODAY, "1d", sets_x, now=NOW)[0]["description"].count("Fresh - Today") == 1,
+      "with no report kept, the window is the last day")
+# A second build for the same price date (a re-post) says what the first said:
+# a card added after that first build waits for the next report.
+same_day = ExtraSb(CARDS + [{"id": "h", "name": "After", "version": "Build", "set_id": "s1",
+                              "inserted_at": "2026-09-28T21:30:00+00:00"}],
+                   latest=[{"cadence": "daily", "price_date": TODAY.isoformat(), "built_at": "2026-09-28T21:00:00+00:00"}])
+rebuilt = rep.extra_embeds(same_day, TODAY, "1d", sets_x, now=NOW)[0]["description"]
+check("After - Build" not in rebuilt and "Fresh - Today" in rebuilt,
+      "a same-day rebuild keeps the first build's window")
 check(rep.reveals_embed([], False) is None, "no reveals, no embed")
 big = rep.reveals_embed([("Hyperia City", [f"Card {i}" for i in range(20)])], True)
 check("and 14 more" in big["description"] and "20 added this week" in big["author"]["name"], "a long list is cut and counted")
