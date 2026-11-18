@@ -908,7 +908,7 @@ export function createResolver(index) {
     return c.n + " — " + fitParts([statParts(c, { marks: true }), printing], room, ["inkable", "~set", "kw", "uninkable", "type", "set"], " | ", 0);
   }
   function sealedLabel(p) {
-    const px = money(p.mkt ?? p.low);
+    const px = money(p.low ?? p.mkt);
     let label = p.n + (px ? " · " + px : "");
     if (label.length > 100) label = label.slice(0, 99) + "…";
     return label;

@@ -1621,6 +1621,13 @@ const D = await mod("discord/src/data.js");
   ok(!/\[x\]\(/.test(kp.content || ""), `a display name can't post a link in Kaylee's pack (${kp.content})`);
   const op = I.packReply("azurite", 1, { user: { global_name: evil } }, { R, index, origin: "https://example.test" });
   ok(!/\[x\]\(/.test(op.embeds[0].title), `a display name can't post a link in /open (${op.embeds[0].title})`);
+
+  // A sealed suggestion quotes Low, as the reply it opens does.
+  const box = index.sealed.find((s) => s.low != null && s.mkt != null && E.money(s.low) !== E.money(s.mkt));
+  if (box) {
+    const lbl = R.sealedLabel(box);
+    ok(lbl.includes(E.money(box.low)) && !lbl.includes(E.money(box.mkt)), `a sealed suggestion leads with Low (${lbl})`);
+  }
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);
