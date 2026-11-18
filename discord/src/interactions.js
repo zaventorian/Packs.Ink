@@ -290,6 +290,8 @@ export function plainFallback(payload) {
 
 // ── /card and /price ─────────────────────────────────────────────────────
 export async function lookup(query, view, range, deps) {
+  // A blank name used to answer with random "Did you mean" cards.
+  if (!String(query || "").trim()) return { content: "Type a card name — e.g. `mowgli`, `elsa enchanted`, `azurite box`.", embeds: [], components: [] };
   const res = deps.R.resolve(query);
   if (res.kind === "none") return E.notFoundMessage(deps.R, res, query, deps.commandIds);
   // Range words ("last year", "1 month") when no range was asked for. 6M has

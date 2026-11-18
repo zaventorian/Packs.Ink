@@ -1882,6 +1882,12 @@ const D = await mod("discord/src/data.js");
     const best = m.embeds[0].description.split("**Best pulls**")[1].trim().split("\n");
     ok(best.length === 2 && /×2$/.test(best.find((l) => l.startsWith(R.cards[a.i].n)) || ""), `duplicate best pulls collapse to ×2 (${best.join(" | ")})`);
   }
+
+  // A blank name ("   ") answered with five random "Did you mean" cards.
+  for (const q of ["", "   "]) {
+    const m = await I.lookup(q, "card", null, { R, index, db: {}, origin: "https://bot.example", commandIds: {} });
+    ok(/type a card name/i.test(m.content || "") && !(m.components || []).length && !(m.embeds || []).length, `a blank /card query asks for a name (${JSON.stringify(m).slice(0, 90)})`);
+  }
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);
