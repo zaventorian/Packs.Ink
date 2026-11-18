@@ -1723,6 +1723,24 @@ const D = await mod("discord/src/data.js");
     eq(await shown("mowgli last year", "1m"), "1M", "the range option, when given, wins over range words");
     eq(await shown("mowgli"), "3M", "no range words: the default 3M");
   }
+
+  // The change line reads Low whenever there is one (Zaven: lead with Low),
+  // and the standing chip read Market: Ursula - Deceiver showed "1Y ▼80%"
+  // beside "↗ Near its 12-month high". Both now come from the same field.
+  {
+    const G = await mod("discord/src/site.generated.js");
+    const day = (i) => new Date(Date.UTC(2025, 10, 1) + i * 86400000).toISOString().slice(0, 10);
+    const rows = Array.from({ length: 380 }, (_, i) => ({ date: day(i), low_price: +(5 - i * 0.013).toFixed(2), market_price: +(3 + i * 0.01).toFixed(2) }));
+    const asOf = rows[rows.length - 1].date;
+    const s = D.priceSummary(rows, asOf);
+    const lowSt = G.priceStanding(rows, { field: "low_price" });
+    ok(s.lowDelta["1y"] < 0 && s.standing && lowSt && s.standing.label === lowSt.label && s.standing.tone !== "high",
+      `the standing judges Low, like the change line beside it (${s.standing && s.standing.label}; Low 1Y ${s.lowDelta["1y"]})`);
+    const noLow = rows.map((r) => ({ ...r, low_price: null }));
+    const m = D.priceSummary(noLow, asOf);
+    ok(m.standing && m.standing.label === G.priceStanding(noLow).label && m.mktDelta["1y"] > 0,
+      `with no Low, both judge Market (${m.standing && m.standing.label})`);
+  }
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);
