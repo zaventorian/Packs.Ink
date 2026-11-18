@@ -1659,6 +1659,29 @@ const D = await mod("discord/src/data.js");
       ok(t && !/\btext\b|\bstats\b|ink \/ cost/i.test(t), `${where} doesn't promise /card shows rules text or stats (${t})`);
     }
   }
+
+  // A grader without a grade ("elsa psa") printed "No PSA null sales on record"
+  // even with PSA sales in hand. Now: that grader's best-selling tier leads;
+  // "gem mint" makes it a 10; an impossible grade says so, then the best tier.
+  {
+    const elsa = card("elsa enchanted");
+    const id = elsa.printing.id;
+    const rows = [[10, 12, 500], [9, 30, 200]].map(([grade, sale_count, last_sold_price]) =>
+      ({ card_id: id, printing: null, grader: "PSA", grade: String(grade), sale_count, last_sold_price, avg_last_5: last_sold_price, last_sold_date: "2026-11-01" }));
+    const db = { async get(t) { return t === "graded_sales_rollup" ? rows : []; }, async all() { return []; }, async rpc() { return []; } };
+    const lead = async (q) => (await I.lookup(q, "chart", "3m", { R, index, db, origin: "https://bot.example", commandIds: {} })).embeds[0];
+    for (const [q, want, note] of [
+      ["elsa enchanted psa", /\*\*\$200\.00\*\* last PSA 9 sale/, null],
+      ["elsa enchanted psa gem mint", /\*\*\$500\.00\*\* last PSA 10 sale/, null],
+      ["elsa enchanted psa 11", /\*\*\$200\.00\*\* last PSA 9 sale/, /PSA grades top out at 10/],
+    ]) {
+      const e = await lead(q);
+      const d = e.description;
+      ok(want.test(d) && !/null/.test(d + e.title) && (!note || note.test(d)), `"${q}" answers with a real tier (${d.split("\n").slice(0, 3).join(" | ")})`);
+    }
+    const none = await lead("elsa enchanted cgc");
+    ok(/No CGC sales on record/.test(none.description) && !/null/.test(none.description), `a grader with no sales says so plainly (${none.description.split("\n")[0]})`);
+  }
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

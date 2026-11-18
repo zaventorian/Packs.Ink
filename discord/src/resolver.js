@@ -261,12 +261,23 @@ export function createResolver(index) {
       base.grade = { grader: GRADERS[g], grade: n };
       return " ";
     });
+    // A grade no grader gives ("psa 11"): kept as `bad`, so the reply can say
+    // so and show the grader's best tier instead.
+    s = s.replace(/\b(psa|cgc|bgs|beckett|sgc)\s*-?\s*(\d{1,3}(?:\.\d+)?)\b/g, (_, g, n) => {
+      if (!base.grade) base.grade = { grader: GRADERS[g], grade: null, bad: n };
+      return " ";
+    });
+    // A grader alone ("elsa psa"): grade null means that grader's best-selling tier.
     s = s.replace(/\b(psa|cgc|bgs|beckett|sgc)\b/g, (_, g) => {
       if (!base.grade) base.grade = { grader: GRADERS[g], grade: null };
       return " ";
     });
     if (/\bblack\s*label\b/.test(s)) { base.grade = { grader: "BGS", grade: "10" }; s = s.replace(/\bblack\s*label\b/g, " "); }
-    if (/\bgem\s*mint\b/.test(s)) { if (!base.grade) base.grade = { grader: "PSA", grade: "10" }; s = s.replace(/\bgem\s*mint\b/g, " "); }
+    if (/\bgem\s*mint\b/.test(s)) {
+      if (!base.grade) base.grade = { grader: "PSA", grade: "10" };
+      else if (base.grade.grade == null) base.grade = { grader: base.grade.grader, grade: "10" };
+      s = s.replace(/\bgem\s*mint\b/g, " ");
+    }
     if (/\b(graded|slab|slabs|slabbed)\b/.test(s)) { base.graded = true; s = s.replace(/\b(graded|slab|slabs|slabbed)\b/g, " "); }
     if (base.grade) base.graded = true;
     // Collector numbers: "#42", "42/204", "no. 42", "#215 error".

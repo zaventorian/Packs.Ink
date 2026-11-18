@@ -301,13 +301,21 @@ export async function cardPayload(res, { view, range, query }, deps) {
   let graded = D.topGradedTiers(forPrinting, 6);
   let grade = null;
   if (wantGrade) {
-    const hit = forPrinting.find((r) => r.grader === wantGrade.grader && String(r.grade) === String(wantGrade.grade));
+    const g = wantGrade.grader;
+    const ofGrader = forPrinting.filter((r) => r.grader === g);
+    // No grade named (or one that doesn't exist): the grader's best-selling tier.
+    const hit = wantGrade.grade != null
+      ? ofGrader.find((r) => String(r.grade) === String(wantGrade.grade))
+      : ofGrader.slice().sort((a, b) => (b.sale_count || 0) - (a.sale_count || 0) || Number(b.grade) - Number(a.grade))[0];
+    const notes = [];
+    if (wantGrade.bad) notes.push(`There's no ${g} ${wantGrade.bad} — ${g} grades top out at 10.`);
     if (hit) {
       grade = { grader: hit.grader, grade: String(hit.grade) };
       graded = [hit, ...graded.filter((r) => r !== hit)].slice(0, 6);
     } else {
-      res.notes = [...(res.notes || []), `No ${wantGrade.grader} ${wantGrade.grade} sales on record for this printing.`];
+      notes.push(`No ${g}${wantGrade.grade != null ? " " + wantGrade.grade : ""} sales on record for this printing.`);
     }
+    res.notes = [...(res.notes || []), ...notes];
   }
   return E.cardMessage({
     R, res, price, graded, view: grade && view === "chart" ? "graded" : view, range, query,
