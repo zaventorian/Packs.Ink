@@ -42,7 +42,12 @@ function autocomplete(it, { R }) {
     const choices = R.suggestSets(q, 25).map((si) => ({ name: setChoiceLabel(R.sets[si]).slice(0, 100), value: R.sets[si].n.slice(0, 100) }));
     return { type: R_.AUTOCOMPLETE, data: { choices } };
   }
-  const choices = R.suggest(q, 25).map((s) => ({ name: s.label.slice(0, 100), value: s.value.slice(0, 100) }));
+  // A grade typed ("elsa psa 10") rides on each card's value, or picking a
+  // suggestion would answer with the raw price. A finish is in the key already.
+  const g = q ? R.parse(q).A.dims.grade : null;
+  const gTok = g ? "|" + g.grader + (g.grade || "") : "";
+  const choices = R.suggest(q, 25).map((s) => ({ name: s.label.slice(0, 100),
+    value: s.kind === "card" && (s.value + gTok).length <= 100 ? s.value + gTok : s.value.slice(0, 100) }));
   return { type: R_.AUTOCOMPLETE, data: { choices } };
 }
 

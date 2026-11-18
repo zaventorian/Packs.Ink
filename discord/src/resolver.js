@@ -642,12 +642,15 @@ export function createResolver(index) {
   const cardKey = (p, fi) => "c|" + p.id + "|" + ((p.f[fi] || p.f[0] || ["N"])[0]);
   const sealedKey = (it) => "s|" + it.pid;
   function resolveKey(q) {
-    let m = q.match(/^c\|([^|\s]+)(?:\|([NCHF]))?$/);
+    // An autocomplete pick may carry the grade that was typed: "c|<id>|N|PSA10",
+    // or "|PSA" for a grader alone (its best tier).
+    let m = q.match(/^c\|([^|\s]+)(?:\|([NCHF]))?(?:\|([A-Z]{2,4})(10|[1-9](?:\.5)?)?)?$/);
     if (m && byCardId.has(m[1])) {
       const { i, p } = byCardId.get(m[1]);
       const k = m[2] ? p.f.findIndex((f) => f[0] === m[2]) : -1;
       const fi = k >= 0 ? k : defaultFinish(p);
-      return { kind: "card", card: cards[i], index: i, printing: p, fi, dims: {}, notes: [], score: 1, exact: true, alts: sameCharAlts(i), basis: "play" };
+      const dims = m[3] ? { grade: { grader: m[3], grade: m[4] || null }, graded: true } : {};
+      return { kind: "card", card: cards[i], index: i, printing: p, fi, dims, notes: [], score: 1, exact: true, alts: sameCharAlts(i), basis: m[3] ? "collector" : "play" };
     }
     m = q.match(/^s\|(\d+)$/);
     if (m && sealedByPid.has(m[1])) {

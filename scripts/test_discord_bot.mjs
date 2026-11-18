@@ -1681,6 +1681,23 @@ const D = await mod("discord/src/data.js");
     }
     const none = await lead("elsa enchanted cgc");
     ok(/No CGC sales on record/.test(none.description) && !/null/.test(none.description), `a grader with no sales says so plainly (${none.description.split("\n")[0]})`);
+
+    // Picking an autocomplete suggestion for "elsa psa 10" used to drop the
+    // grade: the value was the bare card key, so the reply was the raw price.
+    const ac = await I.handleInteraction({ type: 4, data: { name: "price", options: [{ type: 3, name: "name", value: "elsa enchanted psa 10", focused: true }] } }, { R });
+    const v = ac.data.choices[0] && ac.data.choices[0].value;
+    ok(v && v.endsWith("|PSA10") && v.length <= 100, `a graded suggestion keeps its grade (${v})`);
+    if (v) ok(/\*\*\$500\.00\*\* last PSA 10 sale/.test((await lead(v)).description), "picking it answers with the PSA 10 view");
+    const bare = await I.handleInteraction({ type: 4, data: { name: "price", options: [{ type: 3, name: "name", value: "elsa enchanted psa", focused: true }] } }, { R });
+    ok(bare.data.choices[0] && bare.data.choices[0].value.endsWith("|PSA"), `a bare grader survives the pick too (${bare.data.choices[0] && bare.data.choices[0].value})`);
+    // Old keys, from buttons and menus already in channels, still open exactly.
+    for (const k of ["c|" + id, "c|" + id + "|" + elsa.printing.f[0][0], "c|" + id + "|" + elsa.printing.f[0][0] + "|BGS9.5"]) {
+      const r = R.resolve(k);
+      ok(r.kind === "card" && r.exact && r.printing.id === id, `key ${k.slice(-20)} still opens exactly`);
+    }
+    // The longest key in the fixture still fits Discord's 100 with the longest grade.
+    const longest = Math.max(...index.cards.flatMap((c) => c.p.map((p) => R.cardKey(p, 0).length)));
+    ok(longest + "|BGS9.5".length <= 100, `a graded key fits 100 characters (${longest + 7})`);
   }
 }
 
