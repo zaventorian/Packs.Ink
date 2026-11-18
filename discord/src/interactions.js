@@ -438,7 +438,9 @@ async function events(o, deps) {
   const near = String(optVal(o, "near", "")).trim();
   const radius = Math.min(250, Math.max(5, Number(optVal(o, "radius", 50)) || 50));
   const kind = D.EVENT_KINDS.includes(String(optVal(o, "kind", "all"))) ? String(optVal(o, "kind", "all")) : "all";
-  const place = await D.resolvePlace(deps.db, near);
+  // A lookup that failed twice is not "no such place".
+  const place = await D.resolvePlace(deps.db, near).catch((e) => { deps.log && deps.log("place lookup failed", e && e.message); return "failed"; });
+  if (place === "failed") return { content: `Couldn't look up “${E.escMd(near.slice(0, 60))}” just now — try again in a moment.`, embeds: [], components: [] };
   if (!place) return { content: `Couldn't place “${E.escMd(near.slice(0, 60))}”. Try a postal code, or a town name.`, embeds: [], components: [] };
   return eventsBoard({ place, radius, kind, query: near }, deps);
 }

@@ -1806,6 +1806,60 @@ const D = await mod("discord/src/data.js");
       { ...deps, R: { ...R, resolveSet: () => { throw new Error("boom"); }, resolveSetScored: () => { throw new Error("boom"); } }, log: () => {} });
     ok(boom.type === 4 && boom.data.flags === 64 && /went wrong/.test(boom.data.content), `an instant reply that throws apologises privately (${JSON.stringify(boom).slice(0, 100)})`);
   }
+
+  // /events.
+  {
+    const town = (city, state, lat, lng) => ({ city, state, country: "US", latitude: lat, longitude: lng });
+    const elgins = [town("Elgin", "TX", 30.35, -97.37), town("Elgin", "IL", 42.04, -88.28)];
+    // A failed town lookup was "Couldn't place 'Elgin'", as if no such town:
+    // it is retried once, and a second failure says to try again.
+    let calls = 0;
+    const flaky = { async get() { if (++calls === 1) throw new Error("503"); return elgins; } };
+    const p = await D.resolvePlace(flaky, "Elgin");
+    ok(p && calls === 2 && p.city === "Elgin", `a failed town lookup is retried once (${calls} calls)`);
+    const sent = [], pending = [];
+    const down = { async get() { throw new Error("503"); }, async rpc() { return []; }, async all() { return []; } };
+    await I.handleInteraction({ type: 2, token: "ev", application_id: "123", data: { type: 1, name: "events", options: [{ type: 3, name: "near", value: "Elgin" }] } },
+      { R, index, db: down, origin: "https://bot.example", appId: "123", log: () => {},
+        fetch: async (u, init) => { sent.push(JSON.parse(init.body)); return new Response("{}"); }, waitUntil: (x) => pending.push(x) });
+    await Promise.all(pending.splice(0));
+    ok(sent[0] && /try again/i.test(sent[0].content) && !/Couldn't place/.test(sent[0].content), `a lookup that keeps failing says to try again (${sent[0] && sent[0].content})`);
+    // A bare town with several matches says how to pick another.
+    const amb = await D.resolvePlace({ async get() { return elgins; } }, "Elgin");
+    const m = E.eventsMessage({ place: amb, byKind: { sc: [], prerelease: [], other: [] }, radius: 50, kind: "all", query: "Elgin" });
+    const other = amb.state === "TX" ? "IL" : "TX";
+    ok(new RegExp(`Elgin, ${other}`).test(JSON.stringify(m.embeds[0])), `an ambiguous town offers the other one (${m.embeds[0].description})`);
+    const one = await D.resolvePlace({ async get() { return elgins; } }, "Elgin IL");
+    ok(one.state === "IL" && !E.eventsMessage({ place: one, byKind: { sc: [], prerelease: [], other: [] }, radius: 50, kind: "all", query: "Elgin IL" }).embeds[0].description,
+      "a town with its state gets no hint");
+    // A count at the RPC's cap is "15+", not 15.
+    const place = { lat: 41.9, lng: -87.6, city: "Chicago", state: "IL" };
+    const sc = (n) => Array.from({ length: n }, (_, i) => ({ kind: "sc", store_name: "Store " + i, distance_mi: i, next_start: "2026-12-0" + (1 + (i % 9)) + "T18:00:00Z", occurrences: [{ event_id: 100 + i }] }));
+    const capped = E.eventsMessage({ place, byKind: { sc: sc(D.EVENT_MAX_SERIES.sc), prerelease: [], other: [] }, radius: 50, kind: "sc", query: "Chicago" });
+    ok(/· 15\+$/.test(capped.embeds[0].fields[0].name) && /\d+\+ more/.test(capped.embeds[0].fields[0].value), `a capped count reads 15+ (${capped.embeds[0].fields[0].name})`);
+    const few = E.eventsMessage({ place, byKind: { sc: sc(3), prerelease: [], other: [] }, radius: 50, kind: "sc", query: "Chicago" });
+    ok(/· 3$/.test(few.embeds[0].fields[0].name), `an uncapped count is exact (${few.embeds[0].fields[0].name})`);
+    // Weekly play: the RPC returns the SOONEST series, capped, so at 50 mi a
+    // store 2 mi away fell off behind forty sooner, farther nights. Nearer
+    // radii are asked too, so a wider radius never drops a nearer store.
+    const weekly = (name, mi, key) => ({ series_key: key, kind: "other", store_id: key, store_name: name, distance_mi: mi, dow: 2, local_time: "18:00", next_start: "2026-12-01T18:00:00Z", occurrences: [{ event_id: key }] });
+    const radii = [];
+    const ringDb = { async rpc(fn, b) {
+      if (b.p_kind !== "other") return [];
+      radii.push(b.p_radius_mi);
+      return b.p_radius_mi <= 10 ? [weekly("Corner Store", 2, 1)] : Array.from({ length: 40 }, (_, i) => weekly("Far " + i, 30 + i, 100 + i));
+    } };
+    const bk = await D.nearbyByKind(ringDb, place, { radius: 50, kind: "other" });
+    const wk = E.eventsMessage({ place, byKind: bk, radius: 50, kind: "other", query: "Chicago" });
+    ok(radii.includes(10) && radii.includes(50) && /Corner Store/.test(wk.embeds[0].fields[0].value.split("\n")[0]),
+      `the nearest weekly store survives a wider radius (${radii.join(",")}; ${wk.embeds[0].fields[0].value.split("\n")[0].slice(0, 60)})`);
+    ok(/stores?\b.*$/.test(wk.embeds[0].fields[0].name) && /\+ stores/.test(wk.embeds[0].fields[0].name), `a capped weekly count reads N+ (${wk.embeds[0].fields[0].name})`);
+    // A "]" in a store name no longer closes the link early.
+    const br = E.eventsMessage({ place, byKind: { sc: [{ ...sc(1)[0], store_name: "Cards ] Games" }], prerelease: [], other: [weekly("Dice [&] Co", 3, 7)] }, radius: 50, kind: "all", query: "Chicago" });
+    const txt = br.embeds[0].fields.map((f) => f.value).join("\n");
+    ok(/\[Cards \\\] Games\]\(/.test(txt) && /\[Dice \\\[&\\\] Co\]\(/.test(txt), `brackets in a store name are escaped (${txt.slice(0, 160)})`);
+    checkMessage(br, "events with brackets in store names");
+  }
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

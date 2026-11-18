@@ -303,16 +303,25 @@ export async function resolvePlace(db, query, home = "US") {
   const m = /^(.*?)[,\s]+([A-Za-z]{2})$/.exec(raw);
   const town = m && m[1].trim().length >= 2 ? m[1].trim() : raw;
   const st = m && m[1].trim().length >= 2 ? m[2].toUpperCase() : null;
-  const rows = await db.get("lorcana_events", {
+  // ⚠ A failed read is not "no such town": it is retried once, and a second
+  // failure throws, so the reply can say to try again.
+  const read = () => db.get("lorcana_events", {
     select: "city,state,country,latitude,longitude",
     city: "ilike." + town.replace(/[%_*,]/g, "") + "%",
     latitude: "not.is.null", order: "city.asc", limit: 400,
-  }).catch(() => []);
+  });
+  const rows = await read().catch(() => read());
   // …or a country: "london gb" is not London, Kentucky.
   const inState = st ? (rows || []).filter((r) => String(r.state || "").toUpperCase() === st
     || String(r.country || "").toUpperCase() === st) : [];
   const places = scRankPlaces(inState.length ? inState : rows || [], town, home);
-  return places[0] || null;
+  const top = places[0];
+  if (!top) return null;
+  // A bare town that names several places (Elgin TX and Elgin IL): the reply
+  // says how to pick another — `alt` is one other's state or country.
+  const other = !st && places.find((p) => p !== top && p.city.toLowerCase() === top.city.toLowerCase()
+    && (p.state || p.country) !== (top.state || top.country));
+  return other ? { ...top, alt: other.state || other.country } : top;
 }
 
 export async function nearbyEvents(db, place, { radius = 50, kind = null, maxSeries = 60, maxOcc = 4 } = {}) {
@@ -329,13 +338,29 @@ export async function nearbyEvents(db, place, { radius = 50, kind = null, maxSer
 // occurrence per series: the next date is all a list needs, and each
 // occurrence carries a description of up to 1,000 characters.
 export const EVENT_KINDS = ["sc", "prerelease", "other"];
+// How many series the RPC is asked for per kind. A list that comes back this
+// long was CUT, so its count reads "15+", never 15.
+export const EVENT_MAX_SERIES = { sc: 15, prerelease: 15, other: 40 };
+// ⚠ Weekly play is asked at every radius button up to the one chosen, merged:
+// the RPC keeps the SOONEST series, so at 50 mi forty sooner, farther nights
+// pushed out the store 2 mi away. A nearer radius's answer is always kept, so
+// a wider radius never drops a nearer store.
+const EVENT_RINGS = [10, 25, 50, 100];
 export async function nearbyByKind(db, place, { radius = 50, kind = "all" } = {}) {
   const want = kind === "all" ? EVENT_KINDS : EVENT_KINDS.filter((k) => k === kind);
-  const out = { sc: [], prerelease: [], other: [] };
-  const got = await Promise.all(want.map((k) => nearbyEvents(db, place, {
-    radius, kind: k, maxSeries: k === "other" ? 40 : 15, maxOcc: 1,
-  }).then((rows) => [k, rows || []], () => [k, null])));
-  for (const [k, rows] of got) out[k] = rows;
+  const out = { sc: [], prerelease: [], other: [], capped: {} };
+  const ask = (k, r) => nearbyEvents(db, place, { radius: r, kind: k, maxSeries: EVENT_MAX_SERIES[k], maxOcc: 1 });
+  const got = await Promise.all(want.map(async (k) => {
+    const radii = k === "other" ? [...EVENT_RINGS.filter((r) => r < radius), radius] : [radius];
+    // The chosen radius failing is "couldn't load"; a nearer ring failing just adds nothing.
+    const res = await Promise.all(radii.map((r, i) => ask(k, r).then((x) => x || [], () => (i === radii.length - 1 ? null : []))));
+    const outer = res[res.length - 1];
+    if (outer === null) return [k, null, false];
+    const byKey = new Map();
+    for (const s of res.flat()) if (s) byKey.set(s.series_key ?? JSON.stringify([s.store_id, s.dow, s.local_time, s.gameplay_format, s.next_start]), s);
+    return [k, [...byKey.values()], outer.length >= EVENT_MAX_SERIES[k]];
+  }));
+  for (const [k, rows, cut] of got) { out[k] = rows; out.capped[k] = cut; }
   return out;
 }
 

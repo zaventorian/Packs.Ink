@@ -2,7 +2,7 @@
 // has already been fetched and returns {embeds, components} JSON, which is what
 // lets the guard test check a reply without a network.
 import { tcgUrl, tcgSetSearchUrl, amazonForSealed, calEventTitle, calEventSubtitle, scLocalTime12 } from "./site.generated.js";
-import { FIN_PRINTING, RANGES, DEFAULT_RANGE, CAL_FILTERS, META_FALLBACK_DAYS, upcomingSets } from "./data.js";
+import { FIN_PRINTING, RANGES, DEFAULT_RANGE, CAL_FILTERS, META_FALLBACK_DAYS, upcomingSets, EVENT_MAX_SERIES } from "./data.js";
 import { tileUrl } from "./tile.js";
 import { INK_MARK, inkMarks, statsLineFor } from "./stats.js";
 export { INK_MARK, inkMarks };
@@ -589,13 +589,16 @@ export function eventsMessage({ place, byKind, radius, kind = "all", query }) {
   const byTime = (a, b) => String(a.next_start).localeCompare(String(b.next_start));
   const fields = [];
   const within = `within ${radius} mi`;
+  // A list as long as the RPC was asked for was CUT: its count is "15+".
+  const plus = (k) => ((byKind.capped ? byKind.capped[k] : (byKind[k] || []).length >= EVENT_MAX_SERIES[k]) ? "+" : "");
   const oneOff = (s) => {
     const occ = (s.occurrences || [])[0] || {};
     const unix = Math.floor(Date.parse(occ.start_datetime || s.next_start) / 1000);
     const when = Number.isFinite(unix) ? `<t:${unix}:f>` : shortDate(s.next_start);
     const name = clip(s.store_name || s.name, 48);
     const page = eventPageUrl(occ.event_id != null ? "ev:" + occ.event_id : null) || occ.url;
-    const store = page ? `[${name}](${page})` : name;
+    // Escaped: a "]" in a store name closed the link early.
+    const store = page ? `[${escMd(name)}](${page})` : escMd(name);
     const bits = [`**${when}**`, store, `${Math.round(s.distance_mi || 0)} mi`];
     const fmt = FORMAT_SHORT[s.gameplay_format] ?? s.gameplay_format;
     if (fmt && s.kind !== "sc") bits.push(fmt);
@@ -606,7 +609,7 @@ export function eventsMessage({ place, byKind, radius, kind = "all", query }) {
     if (occ.cost_cents > 0) bits.push((occ.currency || "USD").toUpperCase() === "USD" ? money(occ.cost_cents / 100).replace(/\.00$/, "") : `${(occ.cost_cents / 100).toFixed(0)} ${occ.currency}`);
     return bits.join(" · ");
   };
-  const listField = (title, rows, cap, empty) => {
+  const listField = (title, rows, cap, empty, more = "") => {
     const lines = [];
     for (const s of rows.slice(0, cap)) {
       const line = oneOff(s);
@@ -614,13 +617,13 @@ export function eventsMessage({ place, byKind, radius, kind = "all", query }) {
       lines.push(line);
     }
     const rest = rows.length - lines.length;
-    if (rest > 0) lines.push(`*…and ${rest} more ${within}*`);
-    return { name: title + (rows.length ? ` · ${rows.length}` : ""), value: lines.length ? lines.join("\n") : empty };
+    if (rest > 0) lines.push(`*…and ${rest}${more} more ${within}*`);
+    return { name: title + (rows.length ? ` · ${rows.length}${more}` : ""), value: lines.length ? lines.join("\n") : empty };
   };
   if (kind === "all" || kind === "sc") {
     const rows = (byKind.sc || []).slice().sort(byTime);
     fields.push(listField("🏆 Set Championships", rows, kind === "sc" ? 12 : 5,
-      byKind.sc == null ? "*Couldn't load these just now.*" : `None listed ${within} yet — stores post them a few weeks ahead.`));
+      byKind.sc == null ? "*Couldn't load these just now.*" : `None listed ${within} yet — stores post them a few weeks ahead.`, plus("sc")));
   }
   // A set's prereleases all fall on one weekend, so the question is WHERE:
   // nearest first. Set Championships spread over months: soonest first.
@@ -628,7 +631,7 @@ export function eventsMessage({ place, byKind, radius, kind = "all", query }) {
     const rows = (byKind.prerelease || []).slice().sort((a, b) => (a.distance_mi || 0) - (b.distance_mi || 0) || byTime(a, b));
     if (rows.length || kind === "prerelease") {
       fields.push(listField("✨ Prereleases", rows, kind === "prerelease" ? 12 : 5,
-        byKind.prerelease == null ? "*Couldn't load these just now.*" : `None listed ${within} right now.`));
+        byKind.prerelease == null ? "*Couldn't load these just now.*" : `None listed ${within} right now.`, plus("prerelease")));
     }
   }
   if (kind === "all" || kind === "other") {
@@ -659,12 +662,13 @@ export function eventsMessage({ place, byKind, radius, kind = "all", query }) {
           return `${DOW[x.dow] || ""} ${scLocalTime12(x.time)}${label}`.trim();
         });
       const name = clip(g.name, 40);
-      const line = `${g.url ? `[${name}](${g.url})` : `**${name}**`} · ${Math.round(g.mi)} mi — ${slots.join(", ")}`;
+      const line = `${g.url ? `[${escMd(name)}](${g.url})` : `**${escMd(name)}**`} · ${Math.round(g.mi)} mi — ${slots.join(", ")}`;
       if (lines.join("\n").length + line.length + 1 > EVENT_FIELD_MAX - EVENT_TAIL_ROOM || lines.length >= (kind === "other" ? 12 : 6)) break;
       lines.push(line);
     }
-    if (list.length > lines.length) lines.push(`*…and ${list.length - lines.length} more stores ${within}*`);
-    fields.push({ name: `🗓️ Weekly play${list.length ? ` · ${list.length} store${list.length === 1 ? "" : "s"}` : ""}`,
+    const more = plus("other");
+    if (list.length > lines.length) lines.push(`*…and ${list.length - lines.length}${more} more stores ${within}*`);
+    fields.push({ name: `🗓️ Weekly play${list.length ? ` · ${list.length}${more} store${list.length === 1 && !more ? "" : "s"}` : ""}`,
       value: lines.length ? lines.join("\n") : (byKind.other == null ? "*Couldn't load these just now.*" : `No weekly events listed ${within}.`) });
   }
   const state = { lat: place.lat, lng: place.lng, radius, kind, label: where };
@@ -675,6 +679,8 @@ export function eventsMessage({ place, byKind, radius, kind = "all", query }) {
   return {
     embeds: [{
       title: clip(`${heading} near ${where}`, 256), color: BRAND_COLOR, fields,
+      // A bare town that names several places: how to ask for another.
+      ...(place.alt && place.city ? { description: `Not the ${escMd(place.city)} you meant? Add the state or country — e.g. \`${codeSafe(place.city)}, ${codeSafe(place.alt)}\`.` } : {}),
       footer: { text: `Within ${radius} mi · dates in your time zone, weekly times in the store's · from Ravensburger Play · packs.ink` },
     }],
     components: [
