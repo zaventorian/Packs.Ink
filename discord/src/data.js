@@ -25,7 +25,8 @@ export async function latestPriceDate(db) {
 // The same query the site's fetchCardHistory runs (source=tcgcsv, grade=raw),
 // bounded to what is actually needed: a year and a bit covers every delta
 // window and the 12-month price standing; "all" asks for everything.
-export async function priceHistory(db, pid, printing, { sinceDays = 400 } = {}) {
+export const HISTORY_DAYS = 400;
+export async function priceHistory(db, pid, printing, { sinceDays = HISTORY_DAYS } = {}) {
   if (!pid) return [];
   const params = {
     select: "date,low_price,market_price",

@@ -90,7 +90,10 @@ async function salesIn(fetcher, bucket, days) {
   return sales;
 }
 
-export async function chartResponse(url, db) {
+// `history`: rows a reply already read for this product ({pid, printing, days,
+// rows}, from cardPayload). A chart whose window they cover is drawn from
+// them — the same rows a second read would return — instead of reading again.
+export async function chartResponse(url, db, { history = null } = {}) {
   const q = (k) => url.searchParams.get(k) || "";
   const p = url.pathname.match(/^\/chart\/p\/(\d{1,9})\/([NCHF])\/([a-z0-9]+)\.png$/);
   if (p) {
@@ -98,8 +101,12 @@ export async function chartResponse(url, db) {
     if (!range) return new Response("unknown range", { status: 404 });
     const rawCard = q("r");
     const sealed = q("s") === "1";
+    const reuse = !sealed && history && history.pid === Number(p[1]) && history.printing === FIN_PRINTING[p[2]] &&
+      range.days && range.days <= history.days;
+    const since = reuse ? new Date(Date.now() - range.days * DAY).toISOString().slice(0, 10) : null;
     const [rows, raw] = await Promise.all([
-      (sealed ? sealedHistory : priceHistory)(db, Number(p[1]), FIN_PRINTING[p[2]], { sinceDays: range.days }),
+      reuse ? history.rows.filter((r) => String(r.date).slice(0, 10) >= since)
+        : (sealed ? sealedHistory : priceHistory)(db, Number(p[1]), FIN_PRINTING[p[2]], { sinceDays: range.days }),
       rawCard ? salesIn(() => rawSales(db, rawCard), q("rb"), range.days).catch(() => []) : null,
     ]);
     const rawDots = raw ? raw.map((x) => [tOf(x.sold_date), Number(x.sale_price)]).filter((d) => Number.isFinite(d[0]) && d[1] > 0) : null;

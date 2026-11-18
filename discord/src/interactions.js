@@ -131,7 +131,9 @@ const retryable = (status) => status === 0 || status === 429 || status >= 500;
 
 async function patchOriginal(it, deps, payload, { update = false } = {}) {
   const layout = (payload && payload._layout) || "embed";
-  if (payload && "_layout" in payload) { payload = { ...payload }; delete payload._layout; }
+  // The price history cardPayload already read, so the chart needn't read it again.
+  const history = (payload && payload._history) || null;
+  if (payload && ("_layout" in payload || "_history" in payload)) { payload = { ...payload }; delete payload._layout; delete payload._history; }
   const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
   const once = async (method, url, body, files) => {
     try {
@@ -164,7 +166,7 @@ async function patchOriginal(it, deps, payload, { update = false } = {}) {
   // its uploaded picture to the chart would otherwise keep the old file,
   // shown loose under the embed. A payload's own list wins.
   const plainBody = { attachments: [], ...payload };
-  const up = await withUploads(payload, deps).catch((e) => { deps.log && deps.log("upload prep failed", e && e.message); return null; });
+  const up = await withUploads(payload, deps, history).catch((e) => { deps.log && deps.log("upload prep failed", e && e.message); return null; });
   let r = await send("PATCH", orig, applyLayout(up ? up.body : plainBody, layout), up && up.files);
   if (r.ok) return;
   if (deps.log) deps.log("patch failed", r.status, (await r.text().catch(() => "")).slice(0, 800));
@@ -229,7 +231,7 @@ export function ownChartUrl(url, origin) {
 // {body, files} for a multipart edit, or null when there is nothing to upload.
 // Anything that can't be produced here (a file the asset store lacks, a chart
 // whose database read fails) keeps its link, which is how it worked before.
-export async function withUploads(payload, deps) {
+export async function withUploads(payload, deps, history = null) {
   if (!deps.origin || !payload || !Array.isArray(payload.embeds)) return null;
   const refs = [];
   payload.embeds.forEach((e, ei) => {
@@ -246,7 +248,7 @@ export async function withUploads(payload, deps) {
   if (!refs.length) return null;
   const got = await Promise.all(refs.map(async (ref) => {
     if (ref.chart) {
-      const r = await chartResponse(ref.chart, deps.db).catch((e) => { deps.log && deps.log("chart upload failed", e && e.message); return null; });
+      const r = await chartResponse(ref.chart, deps.db, { history }).catch((e) => { deps.log && deps.log("chart upload failed", e && e.message); return null; });
       if (!r || !r.ok) return null;
       return { ...ref, data: await r.arrayBuffer(), type: "image/png", ext: "png" };
     }
@@ -311,8 +313,12 @@ export async function cardPayload(res, { view, range, query }, deps) {
   const gt = D.gradedTarget(p, f && f[0]);
   const wantGrade = res.dims && res.dims.grade ? res.dims.grade : null;
   const settle = (pr) => pr.then((v) => v, (e) => { deps.log && deps.log("fetch failed", e && e.message); return null; });
+  let history = null;
   const [price, gradedAll, rawRows] = await Promise.all([
-    pid && !(f && f[6]) ? settle(D.priceHistory(db, pid, printingStr).then((rows) => D.priceSummary(rows, deps.index.priceDate))) : null,
+    pid && !(f && f[6]) ? settle(D.priceHistory(db, pid, printingStr).then((rows) => {
+      history = { pid: Number(pid), printing: printingStr, days: D.HISTORY_DAYS, rows };
+      return D.priceSummary(rows, deps.index.priceDate);
+    })) : null,
     (c.gs > 0 || p.g > 0 || wantGrade) ? settle(D.gradedRollup(db, gt.cardId)) : null,
     p.raw ? settle(D.rawRollup(db, gt.cardId)) : null,
   ]);
@@ -338,7 +344,7 @@ export async function cardPayload(res, { view, range, query }, deps) {
     }
     res.notes = [...(res.notes || []), ...notes];
   }
-  return E.cardMessage({
+  const msg = E.cardMessage({
     R, res, price, graded, view: grade && view === "chart" ? "graded" : view, range, query,
     raw: D.rawRowFor(rawRows || [], printingStr),
     rawTarget: { cardId: gt.cardId, bucket: rawSingle ? "" : gt.bucket },
@@ -346,6 +352,7 @@ export async function cardPayload(res, { view, range, query }, deps) {
     origin: deps.origin, inkColors: deps.index.inkColors, playSet: deps.index.playSet,
     priceDate: deps.index.priceDate,
   });
+  return history ? { ...msg, _history: history } : msg;
 }
 
 async function sealedPayload(res, { view, range }, deps) {

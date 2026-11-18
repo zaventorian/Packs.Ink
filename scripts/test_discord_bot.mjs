@@ -1108,7 +1108,9 @@ const D = await mod("discord/src/data.js");
   // of the history read that drew it, not in a URL.
   const yearAgo = Date.now() - 365 * 86400000;
   ok(patches[0] && patches[0].multipart && /^attachment:\/\/.+\.png$/.test(patches[0].body.embeds[0].image.url), "the 1Y button uploads the redrawn chart");
-  ok(dbCalls.some((c) => c.table === "prices_daily" && /^gte\./.test(String(c.params.date)) && Math.abs(Date.parse(c.params.date.slice(4) + "T00:00:00Z") - yearAgo) < 2 * 86400000),
+  // (Since 2026-11-18 the chart is drawn from the reply's own history read,
+  // which reaches back past a year, rather than from a second read of exactly one.)
+  ok(dbCalls.some((c) => c.table === "prices_daily" && /^gte\./.test(String(c.params.date)) && Date.parse(c.params.date.slice(4) + "T00:00:00Z") <= yearAgo + 2 * 86400000),
     "the 1Y button redraws the chart over one year of history");
 
   // "Look at a card" opens a NEW private reply, leaving the list where it is
@@ -1895,6 +1897,32 @@ const D = await mod("discord/src/data.js");
     ok(a && b && a.printing.id === b.printing.id && a.fi === b.fi, `"${bare}" opens the same printing as "${hash}" (${a && a.printing.no} vs ${b && b.printing.no})`);
   }
   eq(R.parse("42").A.dims.number, null, "a number on its own is not a collector number");
+
+  // /price read a card's history twice — once for its numbers, once more to
+  // draw the chart. The chart now reuses the first read when it covers the
+  // window ("All" still reads its own), and draws the identical picture.
+  {
+    const { chartResponse } = await mod("discord/src/charts.js");
+    const DAYMS = 86400000, now = Date.now();
+    const hist = Array.from({ length: 420 }, (_, i) => ({ date: new Date(now - (420 - i) * DAYMS).toISOString().slice(0, 10), low_price: 2 + (i % 7) / 10, market_price: 3 + (i % 5) / 10 }));
+    const reads = [];
+    const db = { async get() { return []; }, async rpc() { return []; },
+      async all(t, p) { if (t !== "prices_daily") return []; reads.push(p.date || "all"); return p.date ? hist.filter((r) => r.date >= p.date.slice(4)) : hist; } };
+    const pending = [];
+    const deps = { R, index, db, origin: "https://bot.example", appId: "123", log: () => {}, fetch: async () => new Response("{}"), waitUntil: (p) => pending.push(p) };
+    for (const [range, want] of [["3m", 1], ["1y", 1], ["all", 2]]) {
+      reads.length = 0;
+      await I.handleInteraction({ type: 2, token: "h", application_id: "123", data: { type: 1, name: "price", options: [{ type: 3, name: "name", value: "mowgli" }, { type: 3, name: "range", value: range }] } }, deps);
+      await Promise.all(pending.splice(0));
+      eq(reads.length, want, `/price ${range} reads the history ${want === 1 ? "once" : "twice (All needs more)"}`);
+    }
+    const p = R.resolve("mowgli"), f = p.printing.f[p.fi];
+    const url = new URL(`https://bot.example/chart/p/${f[1]}/${f[0]}/3m.png?d=x`);
+    const printing = D.FIN_PRINTING[f[0]];
+    const fresh = new Uint8Array(await (await chartResponse(url, db)).arrayBuffer());
+    const reused = new Uint8Array(await (await chartResponse(url, db, { history: { pid: Number(f[1]), printing, days: D.HISTORY_DAYS, rows: hist.filter((r) => r.date >= new Date(now - D.HISTORY_DAYS * DAYMS).toISOString().slice(0, 10)) } })).arrayBuffer());
+    ok(fresh.length === reused.length && fresh.every((b, i) => b === reused[i]), "a chart drawn from the reused rows is the chart a fresh read draws");
+  }
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);
