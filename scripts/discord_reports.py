@@ -187,7 +187,7 @@ MAINLINE_MIN_COMPONENTS = 100   # a set index this wide is a booster set, not a 
 def load_subscriptions(sb):
     """Rows, or None when migration 173 is not applied yet."""
     try:
-        return sb.select(TABLE, columns="guild_id,channel_id,cadence,last_posted_on,last_error,updated_at",
+        return sb.select(TABLE, columns="guild_id,channel_id,cadence,last_posted_on,last_error,updated_at,created_at",
                          order="guild_id.asc,channel_id.asc,cadence.asc")
     except RuntimeError as e:
         msg = str(e)
@@ -216,6 +216,52 @@ def resting(sub, now):
         return False
     t = _utc(sub.get("updated_at"))
     return bool(t) and now - t < dt.timedelta(hours=DEAD_RETRY_HOURS)
+
+
+MISSED_WEEKLY = "missed the weekly of {:%b %d}: it did not go out in Monday's 9 AM-3 PM Chicago window"
+
+
+def missed_weeklies(subs, now):
+    """(Monday, [weekly rows that Monday's window closed on undelivered]).
+
+    The last Monday whose window has CLOSED by `now`. A row counts when it
+    existed before that window opened, its last weekly is older than the
+    oldest price date that window could post (Monday - WEEKLY_MAX_LAG_DAYS),
+    and last_error is empty or an OLDER week's marker: a post that failed was
+    already loud, and this Monday's MISSED_WEEKLY marker, written on the first
+    alarm, keeps every later run that week quiet."""
+    local = now.astimezone(WEEKLY_TZ)
+    monday = local.date() - dt.timedelta(days=local.weekday())
+    if local.weekday() == 0 and local.hour < WEEKLY_LAST_HOUR:
+        monday -= dt.timedelta(days=7)
+    opened = dt.datetime.combine(monday, dt.time(WEEKLY_FIRST_HOUR), tzinfo=WEEKLY_TZ)
+    oldest_ok = monday - dt.timedelta(days=WEEKLY_MAX_LAG_DAYS)
+    marker = MISSED_WEEKLY.format(monday)
+    out = []
+    for s in subs:
+        made = _utc(s.get("created_at"))
+        last = s.get("last_posted_on")
+        err = s.get("last_error") or ""
+        quiet = err == marker or (err and not err.startswith(MISSED_WEEKLY.split("{")[0]))
+        if (s["cadence"] == "weekly" and made and made < opened and not quiet
+                and (not last or dt.date.fromisoformat(str(last)[:10]) < oldest_ok)):
+            out.append(s)
+    return monday, out
+
+
+def missed_weekly_alarm(sb, subs, now):
+    """1 (and ::error::) the first run after a Monday window closes on a weekly
+    nobody delivered, else 0. GitHub's Monday crons did not run inside the
+    window on 2026-11-02, -09 or -16; only an ETL-triggered run that happened
+    to land there sent those weeklies."""
+    monday, missed = missed_weeklies(subs, now)
+    for s in missed:
+        print(f"::error::The weekly report for channel {s['channel_id']} (server {s['guild_id']}) "
+              f"did not go out in Monday {monday}'s 9 AM-3 PM Chicago window (see that day's runs). "
+              "Send it with the workflow's force_weekly.")
+        record(sb, {"guild_id": s["guild_id"], "channel_id": s["channel_id"], "cadence": "weekly"},
+               {"last_error": MISSED_WEEKLY.format(monday)})
+    return 1 if missed else 0
 
 
 def weekly_open(price_date, now):
@@ -1321,9 +1367,17 @@ def run(args, sb=None, session=requests, now=None):
             return 1
         print("No DISCORD_BOT_TOKEN set — nothing can be posted. Exiting 0.")
         return 0
+    now = now or dt.datetime.now(dt.timezone.utc)
+    # Checked before any early return below ("Skipping", "Nothing owed"...),
+    # which is exactly where a missed weekly would otherwise stay green.
+    alarm = missed_weekly_alarm(sb, subs, now) if args.post else 0
+    return max(alarm, deliver(args, sb, subs, token, session, now))
+
+
+def deliver(args, sb, subs, token, session, now):
+    """Post what is owed now. Returns the exit code."""
     preview = getattr(args, "preview", None)
     price_date = digest.latest_price_date(sb)
-    now = now or dt.datetime.now(dt.timezone.utc)
     if not price_date:
         print("No price date available; refusing to post.")
         return 0

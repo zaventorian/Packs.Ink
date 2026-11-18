@@ -515,6 +515,53 @@ check(wk_posts(MORNING, SUNDAY, last=(TODAY - dt.timedelta(days=6)).isoformat())
 check(wk_posts(MORNING, SUNDAY, last=(SUNDAY - dt.timedelta(days=1)).isoformat()) == 0,
       "a weekly sent this morning on Saturday's prices is not re-sent on Sunday's")
 
+# ── a weekly no run delivered is LOUD, once ──
+# GitHub's Monday crons never ran inside the window on 11/2, 11/9 or 11/16;
+# the weeklies went out only because an ETL-triggered run happened to land in
+# it. The first run after the window closes on a weekly that is owed raises
+# ::error:: and writes a marker into last_error, which keeps every later run
+# that week quiet (and shows on /reports status) until a weekly posts.
+class LiveSb(FakeSb):
+    """update() really changes the subscription rows, as the table would."""
+    def update(self, table, match, patch, params=None):
+        super().update(table, match, patch, params)
+        for s in self.subs:
+            if all(s.get(k) == v for k, v in match.items()):
+                s.update(patch)
+
+
+def wk_sub(last, created="2026-10-01T12:00:00+00:00", err=None):
+    return {"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": last,
+            "last_error": err, "updated_at": None, "created_at": created}
+
+
+NOV16 = dt.date(2026, 11, 16)   # a Monday on standard time: the window closes 21:00 UTC
+missed = LiveSb([wk_sub("2026-11-08")], price_date=NOV16)
+code_m1, out_m1 = run(missed, FakeDiscord(), now=at(NOV16, 21, 50))
+check(code_m1 == 1 and "::error::" in out_m1, "the first run after the window, with the weekly undelivered, is red")
+check(any((u[2].get("last_error") or "").startswith("missed") for u in missed.updates),
+      "...and records the miss in last_error (/reports status shows it)")
+code_m2, out_m2 = run(missed, FakeDiscord(), now=at(NOV16, 23, 2))
+check(code_m2 == 0 and "::error::" not in out_m2, "the next run that week is not red again")
+two = LiveSb([wk_sub("2026-11-01", err=rep.MISSED_WEEKLY.format(NOV16 - dt.timedelta(days=7)))], price_date=NOV16)
+code_m4, out_m4 = run(two, FakeDiscord(), now=at(NOV16, 21, 50))
+check(code_m4 == 1 and "::error::" in out_m4, "a second missed week in a row alarms again (once per missed week)")
+tue = LiveSb([wk_sub("2026-11-08")], price_date=NOV16)
+code_m3, out_m3 = run(tue, FakeDiscord(), now=at(NOV16 + dt.timedelta(days=1), 13, 0))
+check(code_m3 == 1 and "Skipping" in out_m3, "it is red even on a run that posts nothing (the Skipping path)")
+for last, created, err, why in (
+        ("2026-11-15", "2026-10-01T12:00:00+00:00", None, "a weekly that went out on Sunday's prices (today's live row)"),
+        ("2026-11-14", "2026-10-01T12:00:00+00:00", None, "a weekly on Saturday's prices (Sunday's ETL failed)"),
+        (None, "2026-11-16T16:00:00+00:00", None, "a subscription made after that window opened"),
+        ("2026-11-08", "2026-10-01T12:00:00+00:00", rep.DEAD_REASONS[403], "a channel whose post failed (already reported)"),
+        ("2026-11-08", None, None, "a row with no created_at")):
+    code_q, out_q = run(LiveSb([wk_sub(last, created, err)], price_date=NOV16), FakeDiscord(), now=at(NOV16, 21, 50))
+    check(code_q == 0 and "::error::" not in out_q, f"no alarm for {why}")
+code_e, out_e = run(LiveSb([wk_sub("2026-11-08")], price_date=NOV16), FakeDiscord(), now=at(NOV16, 18, 0))
+check(code_e == 0 and "::error::" not in out_e, "no alarm while Monday's window is still open")
+code_d, out_d = run(LiveSb([wk_sub("2026-11-08")], price_date=NOV16), FakeDiscord(), now=at(NOV16, 21, 50), post=False)
+check(code_d == 0 and "::error::" not in out_d, "a dry run raises no alarm")
+
 # ── 11. the old delivery rules, unchanged ──
 sb2 = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": TODAY.isoformat()}])
 disc2 = FakeDiscord()
