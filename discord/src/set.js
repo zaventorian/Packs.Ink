@@ -512,7 +512,14 @@ export function packMessage(R, index, si, result, { origin, who } = {}) {
     const tally = ["Iconic", "Enchanted", "Epic", "Legendary", "Super Rare"].map((r) => [r, count(r)]).filter((x) => x[1]).map(([r, k]) => `${k} ${r}`).join(" · ");
     if (tally) lines.push(tally);
     lines.push("**Best pulls**");
-    for (const e of byValue.slice(0, 8)) lines.push(`${pullLabel(R, e)} — ${e.price != null ? money(e.price) : "no price"}`);
+    // The same card pulled twice is one line, "×2".
+    const best = new Map();
+    for (const e of byValue) {
+      const k = R.cardKey(e.p, e.fi);
+      if (best.has(k)) best.get(k).n++;
+      else if (best.size < 8) best.set(k, { e, n: 1 });
+    }
+    for (const { e, n: times } of best.values()) lines.push(`${pullLabel(R, e)} — ${e.price != null ? money(e.price) : "no price"}${times > 1 ? ` ×${times}` : ""}`);
   }
   const url = setPageUrl(set.n);
   const title = `${who ? who + " opened" : "Opened"} ${/^[aeiou]/i.test(set.n) ? "an" : "a"} ${set.n} ${n === 1 ? "booster pack" : "booster box"}`;

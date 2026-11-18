@@ -1871,6 +1871,17 @@ const D = await mod("discord/src/data.js");
     const empty = S.newCardsMessage(R, index, [], {});
     ok(!/week/i.test(empty.embeds[0].title) && /four days/.test(empty.embeds[0].title + empty.embeds[0].description), `/new's empty title agrees with its four days (${empty.embeds[0].title})`);
   }
+
+  // A box's best pulls listed the same card twice in a row; now "×2".
+  {
+    const S = await mod("discord/src/set.js");
+    const si = R.sets.findIndex((s) => s.n === "Azurite Sea");
+    const pools = S.packPools(R, si);
+    const [a, b] = [...pools.leg, ...pools.sr].filter((e) => e.price != null);
+    const m = S.packMessage(R, index, si, { pulls: [{ ...a, pack: 0 }, { ...a, pack: 3 }, { ...b, pack: 5 }], total: 2 * a.price + b.price, n: 24 }, {});
+    const best = m.embeds[0].description.split("**Best pulls**")[1].trim().split("\n");
+    ok(best.length === 2 && /×2$/.test(best.find((l) => l.startsWith(R.cards[a.i].n)) || ""), `duplicate best pulls collapse to ×2 (${best.join(" | ")})`);
+  }
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);
