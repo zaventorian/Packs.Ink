@@ -1150,7 +1150,7 @@ def post(token, channel_id, report, session=requests, nonce=None):
     r = session.post(url, headers=auth, data={"payload_json": json.dumps(payload)},
                      files={f"files[{i}]": (n, b, "image/png") for i, (n, b) in enumerate(files)},
                      timeout=60)
-    if r.status_code == 400:
+    if r.status_code in (400, 413):   # 413: the pictures are too big
         print("  (Discord refused the pictures; sending the report without them)")
         return as_json(report["plain"])
     return r

@@ -200,16 +200,17 @@ class FakeCdn:
 
 
 class FakeDiscord(FakeCdn):
-    def __init__(self, status=200, refuse_files=False):
+    def __init__(self, status=200, refuse_files=False, refuse_status=400):
         super().__init__()
         self.status = status
         self.refuse_files = refuse_files
+        self.refuse_status = refuse_status
         self.posts = []
 
     def post(self, url, headers=None, json=None, data=None, files=None, timeout=None):
         body = json if json is not None else __import__("json").loads(data["payload_json"])
         self.posts.append({"url": url, "headers": headers, "json": body, "files": files})
-        status = 400 if (files and self.refuse_files) else self.status
+        status = self.refuse_status if (files and self.refuse_files) else self.status
         return SimpleNamespace(status_code=status, text="{}")
 
 
@@ -331,6 +332,15 @@ plain = disc5.posts[-1] if disc5.posts else {}
 check(not plain.get("files") and "attachment://" not in all_text(plain.get("json", {}).get("embeds", [])),
       "the re-send carries no attachment references")
 check(any(u[2].get("last_posted_on") for u in sb5.updates), "the text-only re-send counts as posted")
+# A 413 (the pictures are too big) is refused for the same reason, every run:
+# it gets the same text-only re-send instead of failing the channel all day.
+sb5b = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}],
+              price_date=SUN, index_latest=SUN)
+disc5b = FakeDiscord(refuse_files=True, refuse_status=413)
+run(sb5b, disc5b, now=MORNING)
+check(len(disc5b.posts) == 2 and not disc5b.posts[-1].get("files")
+      and any(u[2].get("last_posted_on") for u in sb5b.updates),
+      f"a 413 on the pictures is re-sent as text and counts as posted ({len(disc5b.posts)})")
 
 # ── 6. no pictures when the art cannot be fetched, and no crash ──
 strip = art.card_strip([{"pid": 1, "name": "A", "version": "B", "price": 10, "pct": 5, "usd": 0.5, "spark": []}] * 4,
