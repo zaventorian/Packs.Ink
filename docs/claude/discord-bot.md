@@ -388,7 +388,9 @@ Zaven: *"lets use low, like we do on the site"*, and on /card: the price lines a
   - **The standing chip still judges `market_price`** — that is the site's own
     `priceStanding` rule, and a phantom Low must never read "Cheapest in 12 months".
     Beside a Low change line it is tagged "(Market)" (`standingLine`, 2026-11-18):
-    Ursula - Deceiver read "1Y ▼80%" over an untagged "Near its 12-month high".
+    Ursula - Deceiver read "1Y ▼80%" over an untagged "Near its 12-month high". A
+    chip pointing the other way from the Low line's longest change (1Y, else 1M,
+    else 1W) is left off: the tag alone still read as a contradiction.
   - **The channel reports switched too (same day)**: `discord_reports.py` ranks and
     quotes Low (`REPORT_PRICE_COL` / `REPORT_PCT_PREFIX` / `REPORT_DAILY_COL`), the
     stale check compares today's `low_price`, and the weekly picture strips draw the

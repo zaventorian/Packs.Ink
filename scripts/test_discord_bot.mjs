@@ -1736,6 +1736,9 @@ const D = await mod("discord/src/data.js");
     eq(E2.standingLine({ low: 0.01, standing: st }), "↗ Near its 12-month high (Market)", "beside a Low change line the standing says it is Market's");
     eq(E2.standingLine({ low: null, standing: st }), "↗ Near its 12-month high", "with no Low the line is Market's already, no tag");
     eq(E2.standingLine({ low: 2, standing: null }), null, "no standing, no line");
+    eq(E2.standingLine({ low: 0.01, lowDelta: { "1y": -80 }, standing: st }), null, "a Market high is left off under a Low line that fell over the year");
+    eq(E2.standingLine({ low: 3, lowDelta: { "1m": 12 }, standing: { tone: "low", label: "Cheapest in 12 months" } }), null, "a Market low is left off under a Low line that rose");
+    eq(E2.standingLine({ low: 3, lowDelta: { "1y": 40 }, standing: st }), "↗ Near its 12-month high (Market)", "a chip that agrees with the Low line stays, tagged");
   }
 
   // A sealed Low under a fifth of Market is one bad listing (the site's

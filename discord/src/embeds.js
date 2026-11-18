@@ -826,9 +826,17 @@ const PLACE_MARK = { 1: "🥇", 2: "🥈", 3: "🥉" };
 // reads Low whenever there is one, so beside a Low line the chip says whose
 // it is — Ursula - Deceiver showed "1Y ▼80%" over an untagged "Near its
 // 12-month high", which read as a contradiction.
+// A tag alone still left "near its 12-month high" under "1Y ▼80%", so a chip
+// pointing the other way from the Low line's longest change is left off.
 export function standingLine(price) {
   const st = price && price.standing;
   if (!st) return null;
+  if (price.low != null) {
+    const d = price.lowDelta || {};
+    const k = ["1y", "1m", "1w"].find((w) => d[w] != null);
+    const v = k ? d[k] : null;
+    if (v != null && (st.tone === "high" ? v < 0 : v > 0)) return null;
+  }
   return (st.tone === "high" ? "↗ " : "↘ ") + st.label + (price.low != null ? " (Market)" : "");
 }
 
