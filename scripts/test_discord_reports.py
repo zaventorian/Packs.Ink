@@ -591,10 +591,40 @@ check(code6b == 0 and not disc6.posts, "no token and no subscribers is a clean e
 os.environ["DISCORD_BOT_TOKEN"] = "secret-bot-token-value"
 
 sb8 = FakeSb([{"guild_id": "g", "channel_id": "c9", "cadence": "daily", "last_posted_on": None}])
-run(sb8, FakeDiscord(status=403))
+code8, _ = run(sb8, FakeDiscord(status=403))
 errs = [u for u in sb8.updates if u[2].get("last_error")]
 check(errs and "can't post" in errs[0][2]["last_error"], "a 403 is recorded in last_error")
 check(not any(u[2].get("last_posted_on") for u in sb8.updates), "a failed post is not marked posted")
+check(code8 == 1, "a channel's FIRST 403 is a red run: somebody should look once")
+
+# A channel that answered 403/404 is not rebuilt and re-posted on every run
+# (~8 a day) forever: it is tried at most once per DEAD_RETRY_HOURS, and a
+# repeat of the same refusal only warns, so one dead channel never turns
+# every run red.
+def dead_row(hours_ago, status=403):
+    return {"guild_id": "g", "channel_id": "c_gone", "cadence": "daily", "last_posted_on": None,
+            "last_error": rep.DEAD_REASONS[status], "updated_at": (EVENING - dt.timedelta(hours=hours_ago)).isoformat()}
+
+
+sb_rest = FakeSb([dead_row(2)])
+d_rest = FakeDiscord(status=403)
+code_r, out_r = run(sb_rest, d_rest)
+check(code_r == 0 and not d_rest.posts and "c_gone" in out_r,
+      f"a channel that refused within the last day is skipped, and the log says so ({len(d_rest.posts)} posts)")
+sb_again = FakeSb([dead_row(rep.DEAD_RETRY_HOURS + 1, 404)])
+d_again = FakeDiscord(status=404)
+code_a, out_a = run(sb_again, d_again)
+check(len(d_again.posts) == 1 and code_a == 0 and "::warning::" in out_a,
+      f"...retried once a day, and the same refusal again only warns ({code_a})")
+check(any(u[2].get("last_error") == rep.DEAD_REASONS[404] for u in sb_again.updates),
+      "...and the retry is recorded, which starts the next day's wait")
+sb_back = FakeSb([dead_row(rep.DEAD_RETRY_HOURS + 1)])
+d_back = FakeDiscord()
+run(sb_back, d_back)
+check(len(d_back.posts) == 1 and any(u[2].get("last_posted_on") for u in sb_back.updates),
+      "a channel whose access came back posts on its daily retry")
+code401, _ = run(FakeSb([dead_row(rep.DEAD_RETRY_HOURS + 1)]), FakeDiscord(status=401))
+check(code401 == 1, "a 401 (a bad token) is always red, even on a channel that was dead")
 
 # ⚠ One channel's timeout must never end the run for the others, and a post
 # that went out is recorded even when the first write of it fails — a post

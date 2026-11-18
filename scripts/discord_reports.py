@@ -106,6 +106,14 @@ WEEKLY_MIN_LAG_DAYS = 1        # never Monday's own: that is the daily's report
 # late ETL), so 3 never posts twice; 6 let a weekly forced on a Tuesday cost
 # the channel the next Monday's.
 WEEKLY_REPEAT_DAYS = 3
+# A channel that refused a post (bot removed, permission lost, channel
+# deleted) — these exact words in last_error — is tried again at most once per
+# this many hours, not rebuilt and re-posted on every run (~8 a day). 20, not
+# 24: the daily's window is ~15 h, so each day still gets one try. Running
+# /reports in that channel again clears last_error and with it the wait.
+DEAD_REASONS = {403: "the bot can't post in that channel (missing access or permission)",
+                404: "that channel no longer exists"}
+DEAD_RETRY_HOURS = 20
 
 # ── links: the site's tcgUrl, exactly (test_discord_reports.py checks Index.html) ──
 TCG_AFFILIATE_BASE = "https://partner.tcgplayer.com/c/7285926/1780961/21018"
@@ -179,7 +187,7 @@ MAINLINE_MIN_COMPONENTS = 100   # a set index this wide is a booster set, not a 
 def load_subscriptions(sb):
     """Rows, or None when migration 173 is not applied yet."""
     try:
-        return sb.select(TABLE, columns="guild_id,channel_id,cadence,last_posted_on",
+        return sb.select(TABLE, columns="guild_id,channel_id,cadence,last_posted_on,last_error,updated_at",
                          order="guild_id.asc,channel_id.asc,cadence.asc")
     except RuntimeError as e:
         msg = str(e)
@@ -200,6 +208,14 @@ def due(sub, today, force_weekly=False):
         # channel that already has this week's.
         return force_weekly or last is None or (today - last).days >= WEEKLY_REPEAT_DAYS
     return False
+
+
+def resting(sub, now):
+    """Did this channel refuse us (403/404) less than DEAD_RETRY_HOURS ago?"""
+    if sub.get("last_error") not in DEAD_REASONS.values():
+        return False
+    t = _utc(sub.get("updated_at"))
+    return bool(t) and now - t < dt.timedelta(hours=DEAD_RETRY_HOURS)
 
 
 def weekly_open(price_date, now):
@@ -1342,6 +1358,10 @@ def run(args, sb=None, session=requests, now=None):
         return 0
 
     owed = [s for s in subs if s["cadence"] in open_now and due(s, price_date, args.force_weekly)]
+    for s in [s for s in owed if resting(s, now)]:
+        print(f"  skip {s['cadence']} → channel {s['channel_id']} (server {s['guild_id']}): {s['last_error']}; "
+              f"tried again at most once every {DEAD_RETRY_HOURS} h")
+        owed.remove(s)
     if preview:
         for cadence in ("daily", "weekly"):
             rep = report_for(cadence)
@@ -1356,7 +1376,7 @@ def run(args, sb=None, session=requests, now=None):
         return 0
     reports = {cadence: report_for(cadence) for cadence in sorted({s["cadence"] for s in owed})}
 
-    posted = failed = 0
+    posted = failed = still_dead = 0
     for s in owed:
         rep = reports.get(s["cadence"])
         where = f"{s['cadence']} → channel {s['channel_id']} (server {s['guild_id']})"
@@ -1382,15 +1402,23 @@ def run(args, sb=None, session=requests, now=None):
                 print(f"::warning::posted {where} but could not record it; the next run may post it again")
             print(f"  posted {where}")
         else:
-            failed += 1
             # The bot's own words about why — never the token, never the URL.
             if status is not None:
-                reason = {403: "the bot can't post in that channel (missing access or permission)",
-                          404: "that channel no longer exists"}.get(status, f"Discord said HTTP {status}")
+                reason = DEAD_REASONS.get(status, f"Discord said HTTP {status}")
+            # The same refusal as last time was already reported: it warns,
+            # so one dead channel never turns every day's run red.
+            if status in DEAD_REASONS and s.get("last_error") == reason:
+                still_dead += 1
+            else:
+                failed += 1
             record(sb, match, {"last_error": reason[:300]})
             print(f"  FAILED {where}: {reason}")
         time.sleep(0.4)   # well under Discord's per-route rate limits
-    print(f"Done: {posted} posted, {failed} failed, {len(owed) - posted - failed} skipped.")
+    print(f"Done: {posted} posted, {failed} failed, {still_dead} still refused, "
+          f"{len(owed) - posted - failed - still_dead} skipped.")
+    if still_dead:
+        print(f"::warning::{still_dead} channel(s) still refuse the bot (403/404, as last time); "
+              f"tried again at most once every {DEAD_RETRY_HOURS} h until /reports off (or deleting its row) ends it.")
     if failed:
         # One channel refusing is that server's business (the bot was removed,
         # the channel deleted) and is already on /reports status. EVERY post
