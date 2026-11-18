@@ -1780,6 +1780,10 @@ const D = await mod("discord/src/data.js");
   // falls back to another set, and a set the site has dated but the catalog
   // holds no cards of yet says it isn't out (SET_RELEASE_DATES, copied).
   {
+    // Once Into the Inkdark has cards, a rebuilt fixture indexes it: this block
+    // keeps it un-indexed (renamed, unnumbered) so it always has a dated set
+    // the catalog holds nothing of.
+    const R = createResolver({ ...index, sets: index.sets.map((s) => (s.n === "Into the Inkdark" ? { ...s, n: "zz guard placeholder", main: 0, alias: [] } : s)) });
     const G = await mod("discord/src/site.generated.js");
     const S = await mod("discord/src/set.js");
     // Numbering is SET_RELEASE_DATES in date order — pinned against the mainline list.
