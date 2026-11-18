@@ -167,6 +167,12 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
     no run inside the window posts no weekly: Actions -> Discord reports ->
     `force_weekly` (and `dry_run` off) sends it now to every weekly channel, even
     ones that already had it.
+    **⚠ Those Monday crons have never fired inside the window** (checked 2026-11-18:
+    no scheduled run on 11/2, 11/9 or 11/16 in 14:00-21:00 UTC). Each weekly went out
+    from an ETL-triggered run that happened to land ~16:20-16:47 UTC. Delivery needs
+    a cron-job.org dispatch of `discord_reports.yml` (`dry_run=false`) on Mondays
+    ~15:10 and ~17:10 UTC, like the ETL's. A miss is no longer silent: see the
+    missed-weekly alarm below.
 - **Secrets live in GitHub**: `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`,
   `DISCORD_BOT_TOKEN` (all set 2026-09-28). The deploy syncs the first two into
   the Worker, plus, for `/reports`, the repo's own `SUPABASE_SERVICE_KEY`, reused
@@ -381,6 +387,8 @@ Zaven: *"lets use low, like we do on the site"*, and on /card: the price lines a
   on an eBay-led promo Low is still left off and Market takes the gold.
   - **The standing chip still judges `market_price`** — that is the site's own
     `priceStanding` rule, and a phantom Low must never read "Cheapest in 12 months".
+    Beside a Low change line it is tagged "(Market)" (`standingLine`, 2026-11-18):
+    Ursula - Deceiver read "1Y ▼80%" over an untagged "Near its 12-month high".
   - **The channel reports switched too (same day)**: `discord_reports.py` ranks and
     quotes Low (`REPORT_PRICE_COL` / `REPORT_PCT_PREFIX` / `REPORT_DAILY_COL`), the
     stale check compares today's `low_price`, and the weekly picture strips draw the
@@ -553,3 +561,72 @@ Each is guarded (section 10 of `test_discord_bot.mjs`, and `test_discord_reports
   Index.html); one channel's timeout no longer ends the run, `last_posted_on` writes
   are retried, and every post carries a per (channel, cadence, price date) `nonce` with
   `enforce_nonce`.
+
+### 2026-11-18: audit fixes
+
+Found by an audit (three reviewers: the Worker code, the reports, ~60 real commands
+through the simulator). Each is guarded: section 14 of `test_discord_bot.mjs`, and
+`test_discord_reports.py`.
+
+**Bot**
+- **Sets are exact.** "set 15" showed The First Chapter (a missing number fell back
+  to set 1), `/price set 15 box` matched the card Weight Set, `/set inkdark` said no
+  such set. A set number that doesn't exist matches nothing; a DATED set with no
+  cards (from the copied `SET_RELEASE_DATES`, numbered by date) says "isn't out
+  yet — it releases <date>"; a named `/open` honours `released`; no select menu is
+  ever sent with 0 options; `handleInteraction` turns a throw on an instant (type 4)
+  reply into a private apology. The build still drops sets with no cards. Into the
+  Inkdark has `sets.code` NULL in the DB (proposed: `'15'`, not applied).
+- **Grades.** A grader with no grade ("elsa psa") leads with that grader's
+  best-selling tier; "gem mint" makes a missing grade 10; "psa 11" says PSA tops out
+  at 10. "No PSA null sales" is gone.
+- **Autocomplete keeps the grade**: a card value may end `|PSA10` or `|PSA`
+  (`c|<id>|<fin>|PSA10`). Every older key still parses; a value that would pass 100
+  characters falls back to the bare key.
+- **Range words** ("last year", "1 month") choose the chart when the `range` option
+  is absent (`opt()`, not `optVal`'s default). "6 months" → 1Y (no sixth button: five
+  per row).
+- **Sealed Lows are cleaned with the site's `fixSealedLows`** (copied) — in the
+  build's sealed snapshot and deltas, and in `/price`'s sealed history and chart.
+  Hyperia City's box carried a $1.00 Low 11/06-11/10 and read "1W 120x". ⚠ The
+  site's sealed CHART still draws TCGplayer's raw history; the bot's does not.
+- **/events**: a failed town lookup retries once, then says "try again" instead of
+  blaming the input; an ambiguous bare town (Elgin → TX) hints `Elgin, IL`; a list at
+  the RPC's cap reads "15+" / "40+ stores"; weekly play merges every radius up to the
+  chosen one (the RPC keeps the SOONEST series, not the nearest), so a wider radius
+  never drops a nearer store; store names are escaped.
+- Smaller: display names through `escMd` (Kaylee, /open); a stale `r|`/`p|` control
+  answers privately and leaves the message; sealed suggestions quote Low; no arrow on
+  0.0%; /new's empty title says four days; /open box collapses repeats to ×N; a blank
+  name asks for one; "elsa 42" = "elsa #42"; /help, the /card description and the
+  README stop promising rules text and stats; `/price` charts reuse the reply's
+  400-day history read (one Supabase read, not two; "All" still reads its own).
+- **Not done**: caching `/chart/*` — the Cache API does nothing on `*.workers.dev`.
+  The chart render alone measured ~11-14 ms locally against the free plan's 10 ms;
+  it works live, so the plan is either paid or lenient — check `exceededCpu` in
+  Workers observability if replies ever hang on "thinking…".
+
+**Reports**
+- **Movers must be current**: unless `price_movers`' newest `low_date` is the price
+  date, the run warns and posts/records/keeps nothing (`movers_current`);
+  `drop_stale` drops a row whose Low isn't the price date's. The workflow reacts only
+  to SUCCESSFUL ETL runs.
+- **Nonce retry**: a timeout or 5xx is retried once, 2 s later, with the same nonce,
+  so Discord's dedupe can work (it remembers a nonce for minutes, not hours).
+- **Dead channels** (no migration): a row whose `last_error` is a 403/404 text in
+  `DEAD_REASONS` and whose `updated_at` is under 20 h old is skipped before building;
+  a repeat refusal only warns. A first refusal, another status, or a 401 stay red.
+  `/reports` in that channel clears `last_error`.
+- **No token** with `--post` and at least one subscription: `::error::`, exit 1.
+- **413 is treated like 400**: re-sent without pictures.
+- **"New cards"** opens at the previous report's `built_at` (`ebay_window`), not
+  now − 24 h, so posts landing 21:50-02:13 neither repeat nor skip a card.
+- **Missed-weekly alarm** (`--post` runs only): for the most recent Monday whose
+  9 AM-3 PM Chicago window has closed, a weekly row created before that window,
+  whose `last_posted_on` is older than Monday − `WEEKLY_MAX_LAG_DAYS` and whose
+  `last_error` is empty (or an OLDER week's marker), fails the run (`::error::`,
+  exit 1) and writes `missed the weekly of <Mon dd>…` into `last_error`. Later runs
+  that week see the marker and stay quiet, so it is red ONCE; a posted weekly clears
+  it. The marker shows in `/reports status`.
+- Not done: a cheap gate before `pip install` — it would copy `due`/`fresh_enough`/
+  `weekly_open`/the alarm into shell, and drift there would hide a post (~25 s/run).
