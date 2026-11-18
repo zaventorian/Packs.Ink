@@ -557,8 +557,11 @@ code5, out5 = run(FakeSb([], table_missing=True), FakeDiscord())
 check(code5 == 0 and "migration 173" in out5, "missing table is a clean exit 0")
 os.environ["DISCORD_BOT_TOKEN"] = ""
 disc6 = FakeDiscord()
-code6, _ = run(FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}]), disc6)
-check(code6 == 0 and not disc6.posts, "no token is a clean exit 0")
+code6, out6 = run(FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}]), disc6)
+check(code6 == 1 and not disc6.posts and "::error::" in out6,
+      "no token while a channel subscribes is a red run, not a silent green one")
+code6b, _ = run(FakeSb([]), disc6)
+check(code6b == 0 and not disc6.posts, "no token and no subscribers is a clean exit 0")
 os.environ["DISCORD_BOT_TOKEN"] = "secret-bot-token-value"
 
 sb8 = FakeSb([{"guild_id": "g", "channel_id": "c9", "cadence": "daily", "last_posted_on": None}])

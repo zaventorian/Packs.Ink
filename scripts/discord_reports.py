@@ -1273,13 +1273,19 @@ def record(sb, match, patch, tries=3):
 
 def run(args, sb=None, session=requests, now=None):
     token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
-    if args.post and not token:
-        print("No DISCORD_BOT_TOKEN set — nothing can be posted. Exiting 0.")
-        return 0
     sb = sb or Supabase()
     subs = load_subscriptions(sb)
     if subs is None:
         print(f"{TABLE} does not exist yet (migration 173 not applied). Exiting 0.")
+        return 0
+    if args.post and not token:
+        # Green only while nobody is owed anything: once a channel subscribes,
+        # a missing token means every report silently stops.
+        if subs:
+            print(f"::error::No DISCORD_BOT_TOKEN set, and {len(subs)} report subscription(s) exist: "
+                  "nothing can be posted.")
+            return 1
+        print("No DISCORD_BOT_TOKEN set — nothing can be posted. Exiting 0.")
         return 0
     preview = getattr(args, "preview", None)
     price_date = digest.latest_price_date(sb)
