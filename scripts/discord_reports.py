@@ -1126,7 +1126,8 @@ def report_nonce(sub, price_date):
     """Discord's nonce for one (channel, cadence, price date). Sent with
     enforce_nonce, a second post of the same report inside Discord's dedupe
     window (a few minutes) gets the first message back instead of a duplicate:
-    a post that timed out on our side but landed, then went again. ≤25 chars."""
+    a post that timed out on our side but landed, then went again — which is
+    why post() retries a timeout or 5xx at once, inside that window. ≤25 chars."""
     key = f"{sub['channel_id']}|{sub['cadence']}|{price_date.isoformat()}"
     return hashlib.sha1(key.encode()).hexdigest()[:25]
 
@@ -1138,18 +1139,32 @@ def post(token, channel_id, report, session=requests, nonce=None):
     auth = {"Authorization": f"Bot {token}"}
     once = {"nonce": nonce, "enforce_nonce": True} if nonce else {}
 
+    def retried(send):
+        # ⚠ A timeout or a 5xx may have landed. The nonce dedupes only inside
+        # Discord's few-minute window, so the retry has to be NOW, not the next
+        # run hours later (which would post the report twice).
+        try:
+            r = send()
+            if r.status_code < 500:
+                return r
+        except requests.RequestException:
+            pass
+        time.sleep(2)
+        return send()
+
     def as_json(embeds):
-        return session.post(url, headers={**auth, "Content-Type": "application/json"},
-                            json={"embeds": embeds, "allowed_mentions": {"parse": []}, **once}, timeout=30)
+        return retried(lambda: session.post(url, headers={**auth, "Content-Type": "application/json"},
+                                            json={"embeds": embeds, "allowed_mentions": {"parse": []}, **once},
+                                            timeout=30))
 
     files = report.get("files") or []
     if not files:
         return as_json(report["embeds"])
     payload = {"embeds": report["embeds"], "allowed_mentions": {"parse": []}, **once,
                "attachments": [{"id": i, "filename": n} for i, (n, _) in enumerate(files)]}
-    r = session.post(url, headers=auth, data={"payload_json": json.dumps(payload)},
-                     files={f"files[{i}]": (n, b, "image/png") for i, (n, b) in enumerate(files)},
-                     timeout=60)
+    r = retried(lambda: session.post(url, headers=auth, data={"payload_json": json.dumps(payload)},
+                                     files={f"files[{i}]": (n, b, "image/png") for i, (n, b) in enumerate(files)},
+                                     timeout=60))
     if r.status_code in (400, 413):   # 413: the pictures are too big
         print("  (Discord refused the pictures; sending the report without them)")
         return as_json(report["plain"])

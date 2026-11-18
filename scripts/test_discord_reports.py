@@ -619,6 +619,35 @@ check(all(n and len(n) <= 25 for n in nonces) and len(set(nonces)) == len(nonces
 check(len(disc5.posts) == 2 and disc5.posts[0]["json"].get("nonce") == disc5.posts[1]["json"].get("nonce"),
       "the text-only re-send of a report carries the same nonce")
 
+# The nonce only dedupes inside Discord's few-minute window, so it is worth
+# something only if a post that timed out (and may have landed) or met a 5xx is
+# retried AT ONCE with the same nonce; the next run is hours away.
+class OnceFlakyDiscord(FakeDiscord):
+    def __init__(self, first):
+        super().__init__()
+        self.first = first
+
+    def post(self, url, *a, **kw):
+        r = super().post(url, *a, **kw)
+        if len(self.posts) == 1:
+            if self.first == "timeout":
+                raise rep.requests.Timeout("read timed out")
+            return SimpleNamespace(status_code=503, text="{}")
+        return r
+
+
+for first in ("timeout", "503"):
+    sbn = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}])
+    dn = OnceFlakyDiscord(first)
+    code_n, _ = run(sbn, dn)
+    check(code_n == 0 and len(dn.posts) == 2 and dn.posts[0]["json"].get("nonce")
+          and dn.posts[0]["json"].get("nonce") == dn.posts[1]["json"].get("nonce")
+          and any(u[2].get("last_posted_on") == TODAY.isoformat() for u in sbn.updates),
+          f"a {first} is retried at once with the same nonce and recorded ({len(dn.posts)} posts)")
+d4 = FakeDiscord(status=429)
+run(FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}]), d4)
+check(len(d4.posts) == 1, "a 4xx (429 included) is not retried in the run")
+
 sb9 = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}])
 disc9 = FakeDiscord()
 _, out9 = run(sb9, disc9, post=False)
