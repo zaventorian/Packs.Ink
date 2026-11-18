@@ -103,8 +103,9 @@ def index_rows(latest=TODAY):
 
 class FakeSb:
     def __init__(self, subs, price_date=TODAY, table_missing=False, movers=None, index_latest=TODAY, latest=None,
-                 ebay=None):
+                 ebay=None, movers_date=None):
         self.subs = subs
+        self.movers_date = movers_date or price_date   # price_movers' newest low_date
         self.ebay = ebay or {}        # {"roll": [...], "cards": [...], "sales": [...]}
         self.latest = latest          # None: migration 175 not applied
         self.upserts = []
@@ -138,10 +139,13 @@ class FakeSb:
         if table == "price_movers" and "card_id" in filters:
             ids = set(re.findall(r'"([^"]+)"', filters["card_id"]))
             return [dict(m) for m in self.movers if m["card_id"] in ids]
+        if table == "price_movers" and "low_date" in filters:     # how current is the matview?
+            return [{"low_date": self.movers_date.isoformat()}]
         if table == "price_movers":
             pct = next(k for k in filters if k.startswith("pct_"))
             floor = float(filters[rep.REPORT_PRICE_COL].split(".", 1)[1])
-            return [dict(m) for m in self.movers if m[pct] not in (None, 0) and m["low_today"] >= floor]
+            return [{"low_date": self.movers_date.isoformat(), **m} for m in self.movers
+                    if m[pct] not in (None, 0) and m["low_today"] >= floor]
         if table == "prices_daily" and filters.get("date", "").startswith("eq."):
             return [{"tcgplayer_product_id": m["tcgplayer_product_id"], "printing": m["printing"],
                      "low_price": (m["low_today"] - 1 if m["tcgplayer_product_id"] in STALE_PIDS else m["low_today"])}
@@ -200,16 +204,17 @@ class FakeCdn:
 
 
 class FakeDiscord(FakeCdn):
-    def __init__(self, status=200, refuse_files=False):
+    def __init__(self, status=200, refuse_files=False, refuse_status=400):
         super().__init__()
         self.status = status
         self.refuse_files = refuse_files
+        self.refuse_status = refuse_status
         self.posts = []
 
     def post(self, url, headers=None, json=None, data=None, files=None, timeout=None):
         body = json if json is not None else __import__("json").loads(data["payload_json"])
         self.posts.append({"url": url, "headers": headers, "json": body, "files": files})
-        status = 400 if (files and self.refuse_files) else self.status
+        status = self.refuse_status if (files and self.refuse_files) else self.status
         return SimpleNamespace(status_code=status, text="{}")
 
 
@@ -331,6 +336,15 @@ plain = disc5.posts[-1] if disc5.posts else {}
 check(not plain.get("files") and "attachment://" not in all_text(plain.get("json", {}).get("embeds", [])),
       "the re-send carries no attachment references")
 check(any(u[2].get("last_posted_on") for u in sb5.updates), "the text-only re-send counts as posted")
+# A 413 (the pictures are too big) is refused for the same reason, every run:
+# it gets the same text-only re-send instead of failing the channel all day.
+sb5b = FakeSb([{"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": None}],
+              price_date=SUN, index_latest=SUN)
+disc5b = FakeDiscord(refuse_files=True, refuse_status=413)
+run(sb5b, disc5b, now=MORNING)
+check(len(disc5b.posts) == 2 and not disc5b.posts[-1].get("files")
+      and any(u[2].get("last_posted_on") for u in sb5b.updates),
+      f"a 413 on the pictures is re-sent as text and counts as posted ({len(disc5b.posts)})")
 
 # ── 6. no pictures when the art cannot be fetched, and no crash ──
 strip = art.card_strip([{"pid": 1, "name": "A", "version": "B", "price": 10, "pct": 5, "usd": 0.5, "spark": []}] * 4,
@@ -501,6 +515,53 @@ check(wk_posts(MORNING, SUNDAY, last=(TODAY - dt.timedelta(days=6)).isoformat())
 check(wk_posts(MORNING, SUNDAY, last=(SUNDAY - dt.timedelta(days=1)).isoformat()) == 0,
       "a weekly sent this morning on Saturday's prices is not re-sent on Sunday's")
 
+# ── a weekly no run delivered is LOUD, once ──
+# GitHub's Monday crons never ran inside the window on 11/2, 11/9 or 11/16;
+# the weeklies went out only because an ETL-triggered run happened to land in
+# it. The first run after the window closes on a weekly that is owed raises
+# ::error:: and writes a marker into last_error, which keeps every later run
+# that week quiet (and shows on /reports status) until a weekly posts.
+class LiveSb(FakeSb):
+    """update() really changes the subscription rows, as the table would."""
+    def update(self, table, match, patch, params=None):
+        super().update(table, match, patch, params)
+        for s in self.subs:
+            if all(s.get(k) == v for k, v in match.items()):
+                s.update(patch)
+
+
+def wk_sub(last, created="2026-10-01T12:00:00+00:00", err=None):
+    return {"guild_id": "g", "channel_id": "c2", "cadence": "weekly", "last_posted_on": last,
+            "last_error": err, "updated_at": None, "created_at": created}
+
+
+NOV16 = dt.date(2026, 11, 16)   # a Monday on standard time: the window closes 21:00 UTC
+missed = LiveSb([wk_sub("2026-11-08")], price_date=NOV16)
+code_m1, out_m1 = run(missed, FakeDiscord(), now=at(NOV16, 21, 50))
+check(code_m1 == 1 and "::error::" in out_m1, "the first run after the window, with the weekly undelivered, is red")
+check(any((u[2].get("last_error") or "").startswith("missed") for u in missed.updates),
+      "...and records the miss in last_error (/reports status shows it)")
+code_m2, out_m2 = run(missed, FakeDiscord(), now=at(NOV16, 23, 2))
+check(code_m2 == 0 and "::error::" not in out_m2, "the next run that week is not red again")
+two = LiveSb([wk_sub("2026-11-01", err=rep.MISSED_WEEKLY.format(NOV16 - dt.timedelta(days=7)))], price_date=NOV16)
+code_m4, out_m4 = run(two, FakeDiscord(), now=at(NOV16, 21, 50))
+check(code_m4 == 1 and "::error::" in out_m4, "a second missed week in a row alarms again (once per missed week)")
+tue = LiveSb([wk_sub("2026-11-08")], price_date=NOV16)
+code_m3, out_m3 = run(tue, FakeDiscord(), now=at(NOV16 + dt.timedelta(days=1), 13, 0))
+check(code_m3 == 1 and "Skipping" in out_m3, "it is red even on a run that posts nothing (the Skipping path)")
+for last, created, err, why in (
+        ("2026-11-15", "2026-10-01T12:00:00+00:00", None, "a weekly that went out on Sunday's prices (today's live row)"),
+        ("2026-11-14", "2026-10-01T12:00:00+00:00", None, "a weekly on Saturday's prices (Sunday's ETL failed)"),
+        (None, "2026-11-16T16:00:00+00:00", None, "a subscription made after that window opened"),
+        ("2026-11-08", "2026-10-01T12:00:00+00:00", rep.DEAD_REASONS[403], "a channel whose post failed (already reported)"),
+        ("2026-11-08", None, None, "a row with no created_at")):
+    code_q, out_q = run(LiveSb([wk_sub(last, created, err)], price_date=NOV16), FakeDiscord(), now=at(NOV16, 21, 50))
+    check(code_q == 0 and "::error::" not in out_q, f"no alarm for {why}")
+code_e, out_e = run(LiveSb([wk_sub("2026-11-08")], price_date=NOV16), FakeDiscord(), now=at(NOV16, 18, 0))
+check(code_e == 0 and "::error::" not in out_e, "no alarm while Monday's window is still open")
+code_d, out_d = run(LiveSb([wk_sub("2026-11-08")], price_date=NOV16), FakeDiscord(), now=at(NOV16, 21, 50), post=False)
+check(code_d == 0 and "::error::" not in out_d, "a dry run raises no alarm")
+
 # ── 11. the old delivery rules, unchanged ──
 sb2 = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": TODAY.isoformat()}])
 disc2 = FakeDiscord()
@@ -543,19 +604,74 @@ disc_again = FakeDiscord()
 run(again, disc_again, now=at(TODAY + dt.timedelta(days=1), 1, 45))
 check(not disc_again.posts, "a late run never re-sends a report the channel already has")
 
+# ⚠ The ETL refreshes card_prices_latest BEFORE price_movers. If the movers
+# refresh fails, the price date says today while price_movers is yesterday's
+# build: a card whose Low did not move today passes drop_stale carrying
+# YESTERDAY's move, and the report would post it as today's and record the day.
+behind = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}],
+                latest=[], movers_date=TODAY - dt.timedelta(days=1))
+disc_behind = FakeDiscord()
+code_b, out_b = run(behind, disc_behind)
+check(code_b == 0 and not disc_behind.posts and "::warning::" in out_b,
+      "price_movers behind the price date: nothing posts, and the run warns")
+check(not any("last_posted_on" in u[2] for u in behind.updates) and not behind.upserts,
+      "...and nothing is recorded or kept, so the day's report still goes out once it catches up")
+one_old = FakeSb([], movers=[{**m, "low_date": (TODAY - dt.timedelta(days=1)).isoformat()} if m["card_id"] == "b_max" else m
+                             for m in MOVERS])
+with redirect_stdout(io.StringIO()):
+    r_old = rep.build_report(one_old, TODAY, "1d", session=FakeCdn(), now=EVENING)
+check("Max Goof" not in all_text(r_old["embeds"]) and "Eeyore" in all_text(r_old["embeds"]),
+      "a row whose last Low is not from the price date carries no move")
+wf = (HERE.parent / ".github" / "workflows" / "discord_reports.yml").read_text(encoding="utf-8")
+check("github.event.workflow_run.conclusion == 'success'" in wf,
+      "the workflow reacts only to ETL runs that succeeded")
+
 code5, out5 = run(FakeSb([], table_missing=True), FakeDiscord())
 check(code5 == 0 and "migration 173" in out5, "missing table is a clean exit 0")
 os.environ["DISCORD_BOT_TOKEN"] = ""
 disc6 = FakeDiscord()
-code6, _ = run(FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}]), disc6)
-check(code6 == 0 and not disc6.posts, "no token is a clean exit 0")
+code6, out6 = run(FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}]), disc6)
+check(code6 == 1 and not disc6.posts and "::error::" in out6,
+      "no token while a channel subscribes is a red run, not a silent green one")
+code6b, _ = run(FakeSb([]), disc6)
+check(code6b == 0 and not disc6.posts, "no token and no subscribers is a clean exit 0")
 os.environ["DISCORD_BOT_TOKEN"] = "secret-bot-token-value"
 
 sb8 = FakeSb([{"guild_id": "g", "channel_id": "c9", "cadence": "daily", "last_posted_on": None}])
-run(sb8, FakeDiscord(status=403))
+code8, _ = run(sb8, FakeDiscord(status=403))
 errs = [u for u in sb8.updates if u[2].get("last_error")]
 check(errs and "can't post" in errs[0][2]["last_error"], "a 403 is recorded in last_error")
 check(not any(u[2].get("last_posted_on") for u in sb8.updates), "a failed post is not marked posted")
+check(code8 == 1, "a channel's FIRST 403 is a red run: somebody should look once")
+
+# A channel that answered 403/404 is not rebuilt and re-posted on every run
+# (~8 a day) forever: it is tried at most once per DEAD_RETRY_HOURS, and a
+# repeat of the same refusal only warns, so one dead channel never turns
+# every run red.
+def dead_row(hours_ago, status=403):
+    return {"guild_id": "g", "channel_id": "c_gone", "cadence": "daily", "last_posted_on": None,
+            "last_error": rep.DEAD_REASONS[status], "updated_at": (EVENING - dt.timedelta(hours=hours_ago)).isoformat()}
+
+
+sb_rest = FakeSb([dead_row(2)])
+d_rest = FakeDiscord(status=403)
+code_r, out_r = run(sb_rest, d_rest)
+check(code_r == 0 and not d_rest.posts and "c_gone" in out_r,
+      f"a channel that refused within the last day is skipped, and the log says so ({len(d_rest.posts)} posts)")
+sb_again = FakeSb([dead_row(rep.DEAD_RETRY_HOURS + 1, 404)])
+d_again = FakeDiscord(status=404)
+code_a, out_a = run(sb_again, d_again)
+check(len(d_again.posts) == 1 and code_a == 0 and "::warning::" in out_a,
+      f"...retried once a day, and the same refusal again only warns ({code_a})")
+check(any(u[2].get("last_error") == rep.DEAD_REASONS[404] for u in sb_again.updates),
+      "...and the retry is recorded, which starts the next day's wait")
+sb_back = FakeSb([dead_row(rep.DEAD_RETRY_HOURS + 1)])
+d_back = FakeDiscord()
+run(sb_back, d_back)
+check(len(d_back.posts) == 1 and any(u[2].get("last_posted_on") for u in sb_back.updates),
+      "a channel whose access came back posts on its daily retry")
+code401, _ = run(FakeSb([dead_row(rep.DEAD_RETRY_HOURS + 1)]), FakeDiscord(status=401))
+check(code401 == 1, "a 401 (a bad token) is always red, even on a channel that was dead")
 
 # ⚠ One channel's timeout must never end the run for the others, and a post
 # that went out is recorded even when the first write of it fails — a post
@@ -608,6 +724,35 @@ check(all(n and len(n) <= 25 for n in nonces) and len(set(nonces)) == len(nonces
       f"each report post carries its own enforce_nonce nonce ({nonces})")
 check(len(disc5.posts) == 2 and disc5.posts[0]["json"].get("nonce") == disc5.posts[1]["json"].get("nonce"),
       "the text-only re-send of a report carries the same nonce")
+
+# The nonce only dedupes inside Discord's few-minute window, so it is worth
+# something only if a post that timed out (and may have landed) or met a 5xx is
+# retried AT ONCE with the same nonce; the next run is hours away.
+class OnceFlakyDiscord(FakeDiscord):
+    def __init__(self, first):
+        super().__init__()
+        self.first = first
+
+    def post(self, url, *a, **kw):
+        r = super().post(url, *a, **kw)
+        if len(self.posts) == 1:
+            if self.first == "timeout":
+                raise rep.requests.Timeout("read timed out")
+            return SimpleNamespace(status_code=503, text="{}")
+        return r
+
+
+for first in ("timeout", "503"):
+    sbn = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}])
+    dn = OnceFlakyDiscord(first)
+    code_n, _ = run(sbn, dn)
+    check(code_n == 0 and len(dn.posts) == 2 and dn.posts[0]["json"].get("nonce")
+          and dn.posts[0]["json"].get("nonce") == dn.posts[1]["json"].get("nonce")
+          and any(u[2].get("last_posted_on") == TODAY.isoformat() for u in sbn.updates),
+          f"a {first} is retried at once with the same nonce and recorded ({len(dn.posts)} posts)")
+d4 = FakeDiscord(status=429)
+run(FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}]), d4)
+check(len(d4.posts) == 1, "a 4xx (429 included) is not retried in the run")
 
 sb9 = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}])
 disc9 = FakeDiscord()
@@ -665,13 +810,14 @@ NOW = dt.datetime(2026, 9, 28, 22, 0, tzinfo=dt.timezone.utc)
 
 
 class ExtraSb:
-    def __init__(self, cards=(), events=(), boom=False):
-        self.cards, self.events, self.boom = list(cards), list(events), boom
+    def __init__(self, cards=(), events=(), boom=False, latest=()):
+        self.cards, self.events, self.boom, self.latest = list(cards), list(events), boom, list(latest)
 
     def select(self, table, columns="*", limit=None, filters=None, page_size=1000, order=None):
         if self.boom:
             raise RuntimeError("down")
-        return [dict(r) for r in (self.cards if table == "cards" else self.events if table == "calendar_events" else [])]
+        return [dict(r) for r in (self.cards if table == "cards" else self.events if table == "calendar_events"
+                                  else self.latest if table == rep.LATEST_TABLE else [])]
 
 
 CARDS = [
@@ -682,11 +828,37 @@ CARDS = [
     {"id": "e", "name": "Song", "version": None, "set_id": "s1", "inserted_at": "2026-09-28T13:00:00+00:00"},
 ]
 sets_x = {"s1": "Hyperia City", "s2": "Lorcana Challenge Year 3"}
-day = rep.new_reveals(ExtraSb(CARDS), NOW, 1, sets_x)
+day = rep.new_reveals(ExtraSb(CARDS), NOW - dt.timedelta(days=1), NOW, sets_x)
 check(day == [("Hyperia City", ["Song", "Fresh - Today"])], f"daily reveals: only names first seen in the last day ({day})")
-week = rep.new_reveals(ExtraSb(CARDS), NOW, 7, sets_x)
+week = rep.new_reveals(ExtraSb(CARDS), NOW - dt.timedelta(days=7), NOW, sets_x)
 check(sum(len(c) for _, c in week) == 3, "weekly reveals reach back seven days")
 check(not any("Old Card" in " ".join(c) for _, c in week), "a new printing of an existing card is not a reveal")
+# The window opens where the previous report of the same cadence was built
+# (discord_report_latest.built_at), as the eBay window does, not at "now - 24 h":
+# the daily posts anywhere from ~21:50 to past midnight, so a fixed 24 hours
+# showed some cards twice and skipped others.
+def reveal_names(cards, built):
+    sbx = ExtraSb(cards, latest=[{"cadence": "daily", "price_date": "2026-09-27", "built_at": built.isoformat()}])
+    e = rep.extra_embeds(sbx, TODAY, "1d", sets_x, now=NOW)
+    return e[0]["description"] if e else ""
+
+
+late_card = [{"id": "f", "name": "Gap", "version": "Card", "set_id": "s1", "inserted_at": "2026-09-27T21:00:00+00:00"}]
+check("Gap - Card" in reveal_names(late_card, NOW - dt.timedelta(hours=26)),
+      "a card added after the last daily was built, 25 h ago, is new tonight")
+seen_card = [{"id": "g", "name": "Seen", "version": "Card", "set_id": "s1", "inserted_at": "2026-09-27T22:30:00.123456+00:00"}]
+check("Seen - Card" not in reveal_names(seen_card, NOW - dt.timedelta(hours=23)),
+      "a card the last daily (built 23 h ago) already listed is not listed again")
+check(rep.extra_embeds(ExtraSb(CARDS), TODAY, "1d", sets_x, now=NOW)[0]["description"].count("Fresh - Today") == 1,
+      "with no report kept, the window is the last day")
+# A second build for the same price date (a re-post) says what the first said:
+# a card added after that first build waits for the next report.
+same_day = ExtraSb(CARDS + [{"id": "h", "name": "After", "version": "Build", "set_id": "s1",
+                              "inserted_at": "2026-09-28T21:30:00+00:00"}],
+                   latest=[{"cadence": "daily", "price_date": TODAY.isoformat(), "built_at": "2026-09-28T21:00:00+00:00"}])
+rebuilt = rep.extra_embeds(same_day, TODAY, "1d", sets_x, now=NOW)[0]["description"]
+check("After - Build" not in rebuilt and "Fresh - Today" in rebuilt,
+      "a same-day rebuild keeps the first build's window")
 check(rep.reveals_embed([], False) is None, "no reveals, no embed")
 big = rep.reveals_embed([("Hyperia City", [f"Card {i}" for i in range(20)])], True)
 check("and 14 more" in big["description"] and "20 added this week" in big["author"]["name"], "a long list is cut and counted")
