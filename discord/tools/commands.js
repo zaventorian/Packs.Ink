@@ -19,7 +19,7 @@ const rangeChoices = [
 export const COMMANDS = [
   {
     name: "card", type: 1, ...EVERYWHERE,
-    description: "A Lorcana card: its picture, text, stats, price and how much it's played",
+    description: "A Lorcana card, big: its picture with prices and recent changes, and how much it's played",
     options: [nameOpt, privOpt],
   },
   {

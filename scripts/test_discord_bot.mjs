@@ -991,7 +991,7 @@ const D = await mod("discord/src/data.js");
   const nf = E.notFoundMessage(R, R.resolve("asdfgh"), "asdfgh", { help: "5234567890123" });
   ok(/<\/help:5234567890123>/.test(nf.embeds[0].description), "a dead-end no-match points at /help");
   const helpTxt = JSON.stringify(E.helpMessage());
-  ok(/the card: picture, text, stats/.test(helpTxt) && /price chart, recent changes/.test(helpTxt), "help tells /card and /price apart");
+  ok(/the card, big: its picture/.test(helpTxt) && /price chart, recent changes/.test(helpTxt), "help tells /card and /price apart");
 }
 
 // ── commands ─────────────────────────────────────────────────────────────
@@ -1645,6 +1645,18 @@ const D = await mod("discord/src/data.js");
       ok(r.type === 4 && r.data.flags === 64 && /no longer listed/.test(r.data.content) && !pending.length,
         `a stale ${label} answers privately and leaves the message (${JSON.stringify(r).slice(0, 120)})`);
       pending.length = 0;
+    }
+  }
+
+  // /card is the picture (2026-10-04): its rules text, stats and ink line are
+  // printed on the card, so nothing that describes /card may promise them.
+  {
+    const { COMMANDS } = await mod("discord/tools/commands.js");
+    const helpCard = E.helpMessage({}).embeds[0].fields[0].value.split("\n").find((l) => l.includes("/card"));
+    const cmdCard = COMMANDS.find((c) => c.name === "card").description;
+    const readme = readFileSync(new URL("discord/README.md", ROOT), "utf8").split(/\r?\n/).find((l) => l.startsWith("| `/card"));
+    for (const [where, t] of [["/help", helpCard], ["the /card command", cmdCard], ["README", readme]]) {
+      ok(t && !/\btext\b|\bstats\b|ink \/ cost/i.test(t), `${where} doesn't promise /card shows rules text or stats (${t})`);
     }
   }
 }

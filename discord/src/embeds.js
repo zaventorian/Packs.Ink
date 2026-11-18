@@ -768,7 +768,7 @@ export function helpMessage(ids) {
         "No subtitle? You get the version people actually play — switch versions from the menu under any card.",
       fields: [
         { name: "Look something up", value: [
-          `${c("card")} \`mowgli\` — the card: picture, text, stats, price and how much it's played`,
+          `${c("card")} \`mowgli\` — the card, big: its picture with prices and recent changes, and how much it's played`,
           `${c("price")} \`mowgli foil\` — the price chart, recent changes, both finishes`,
           `${c("price")} \`elsa psa 10\` — a slab: last sale, average of the last 5, and a chart of its sales`,
           `${c("set")} \`azurite\` — box price vs box EV, chase cards, sealed prices`,
