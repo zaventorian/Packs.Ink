@@ -326,7 +326,7 @@ export function newCardsMessage(R, index, cards, { origin, now = Date.now() } = 
   const label = revealSetLabel(cards);
   const url = label ? setPageUrl(label) : "https://packs.ink/cards";
   if (!cards.length) {
-    return { embeds: [{ title: "Nothing new this week", color: BRAND_COLOR,
+    return { embeds: [{ title: "Nothing new in the last four days", color: BRAND_COLOR,
       description: "No new cards have reached packs.ink in the last four days. While a set is being revealed they land daily — try again soon, or see what's coming with `/calendar`.",
       footer: { text: "packs.ink" } }],
       components: [{ type: 1, components: [{ type: 2, style: 5, label: "Release calendar", url: "https://packs.ink/calendar" }] }] };

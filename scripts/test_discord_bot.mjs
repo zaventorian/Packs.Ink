@@ -1864,6 +1864,13 @@ const D = await mod("discord/src/data.js");
   // A change that rounds to nothing carries no arrow ("▲0.0%" said it moved).
   for (const v of [0.04, -0.04, 0]) eq(E.pct(v), "0.0%", `pct(${v}) has no arrow`);
   eq(E.pct(0.05), "▲0.1%", "a change that shows keeps its arrow");
+
+  // /new looks back four days; its empty title said "this week".
+  {
+    const S = await mod("discord/src/set.js");
+    const empty = S.newCardsMessage(R, index, [], {});
+    ok(!/week/i.test(empty.embeds[0].title) && /four days/.test(empty.embeds[0].title + empty.embeds[0].description), `/new's empty title agrees with its four days (${empty.embeds[0].title})`);
+  }
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);
