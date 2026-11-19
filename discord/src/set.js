@@ -326,8 +326,8 @@ export function newCardsMessage(R, index, cards, { origin, now = Date.now() } = 
   const label = revealSetLabel(cards);
   const url = label ? setPageUrl(label) : "https://packs.ink/cards";
   if (!cards.length) {
-    return { embeds: [{ title: "Nothing new this week", color: BRAND_COLOR,
-      description: "No new cards have reached packs.ink in the last four days. While a set is being revealed they land daily — try again soon, or see what's coming with `/calendar`.",
+    return { embeds: [{ title: "Nothing new in the last four days", color: BRAND_COLOR,
+      description: "No new cards have reached packs.ink in the last four days. While a set is being revealed they land daily — try again soon, or see what's coming with `/events`.",
       footer: { text: "packs.ink" } }],
       components: [{ type: 1, components: [{ type: 2, style: 5, label: "Release calendar", url: "https://packs.ink/calendar" }] }] };
   }
@@ -512,7 +512,14 @@ export function packMessage(R, index, si, result, { origin, who } = {}) {
     const tally = ["Iconic", "Enchanted", "Epic", "Legendary", "Super Rare"].map((r) => [r, count(r)]).filter((x) => x[1]).map(([r, k]) => `${k} ${r}`).join(" · ");
     if (tally) lines.push(tally);
     lines.push("**Best pulls**");
-    for (const e of byValue.slice(0, 8)) lines.push(`${pullLabel(R, e)} — ${e.price != null ? money(e.price) : "no price"}`);
+    // The same card pulled twice is one line, "×2".
+    const best = new Map();
+    for (const e of byValue) {
+      const k = R.cardKey(e.p, e.fi);
+      if (best.has(k)) best.get(k).n++;
+      else if (best.size < 8) best.set(k, { e, n: 1 });
+    }
+    for (const { e, n: times } of best.values()) lines.push(`${pullLabel(R, e)} — ${e.price != null ? money(e.price) : "no price"}${times > 1 ? ` ×${times}` : ""}`);
   }
   const url = setPageUrl(set.n);
   const title = `${who ? who + " opened" : "Opened"} ${/^[aeiou]/i.test(set.n) ? "an" : "a"} ${set.n} ${n === 1 ? "booster pack" : "booster box"}`;
@@ -541,7 +548,8 @@ export function packMessage(R, index, si, result, { origin, who } = {}) {
   return {
     embeds,
     components: [
-      { type: 1, components: [{ type: 3, custom_id: openId("card"), placeholder: "Look at a card you pulled", options }] },
+      // Discord refuses a menu with no options, and a pack can come up empty.
+      ...(options.length ? [{ type: 1, components: [{ type: 3, custom_id: openId("card"), placeholder: "Look at a card you pulled", options }] }] : []),
       { type: 1, components: [
         { type: 2, style: 1, label: "Open another pack", custom_id: packId(si, 1) },
         { type: 2, style: 2, label: "Open a box", custom_id: packId(si, 24) },

@@ -16,6 +16,8 @@ import { closureSource } from "./sitecode.mjs";
 export const WANT = [
   // prices
   "computeSeriesDeltas", "CARD_DELTA_WINDOWS", "priceStanding", "seriesPricedOn",
+  // a sealed Low under a fifth of Market is one bad listing: Market stands in
+  "fixSealedLows", "SEALED_LOW_MIN_RATIO",
   // links
   "tcgUrl", "tcgSetSearchUrl", "TCG_AFFILIATE_BASE", "amazonForSealed",
   // release calendar

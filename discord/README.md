@@ -9,16 +9,16 @@ on workers.dev), so deploying it can never touch packs.ink.
 
 | | |
 |---|---|
-| `/card mowgli` | The site's card tile (the art, Low / Market and the 1D / 1W / 1M changes, drawn by the site's own code — the reply doesn't repeat those prices in text), with the card's rules text and stats as printed, graded sales, its ink / cost / type, and how much it's played in the current set's tournament top cuts. |
-| `/price mowgli` | The number: price, changes, the other finish, a playset's cost on a played card, and a price chart (1M / 3M / 1Y / All buttons) — the rules text stays on `/card`. |
+| `/card mowgli` | The card, big: the site's card tile (the art, Low / Market and the 1D / 1W / 1M changes, drawn by the site's own code), its set, how much it's played in the current set's tournament top cuts, and graded sales on chase cards and promos. |
+| `/price mowgli` | The number: price, changes, the other finish, a playset's cost on a played card, and a price chart (1M / 3M / 1Y / All buttons) — the card itself is `/card`. |
 | `/price elsa psa 10` | Graded: that grade's last sale (with its date) and average of the last 5 lead, the raw price follows, every other grade is a field, and the chart is the PSA 10 sales. |
 | `/price azurite sea box` | Sealed product: price, changes, chart, TCGplayer + Amazon links. A booster box adds the set's box EV ("worth about 50% of the box"), an **Open a box** button and **Set at a glance**. |
 | `/set azurite` | A set at a glance: release dates, booster box price vs box EV (the site's own EV maths) with an open-or-hold verdict, chase cards, sealed prices. |
 | `/new` | The newest cards: everything added to packs.ink in the last four days (the site's reveal reel), grouped by day, with a picture grid and a menu to open any of them. Cards added since the bot's daily rebuild are included. |
 | `/open` | Open a simulated booster pack — or `box: True`, a whole box — with the site's pull rates and real prices. |
 | `/meta` | What's winning: every top-8 deck since the newest set came out, by ink pair (share, top 4s, wins); the most-played cards; and the top four of the three biggest events of the last three weeks, with links to their decks. |
-| `/events 60614` | Near a postal code or town: Set Championships, prereleases (nearest first, seats and fees), and weekly play one line per store, each linking to its page on packs.ink. Buttons change the kind and the radius. |
-| `/calendar` | Set releases, Challenges and qualifiers by month, each linking to its page on packs.ink (which links on to the organiser); buttons and a menu narrow the kind and the region. |
+| `/events` | Every upcoming DLC and CCQ, plus set and product releases, by month, each linking to its page on packs.ink (which links on to the organiser). `kind:` picks DLCs, CCQs, both or releases; `region:` narrows them (a `near:` place picks its region). Buttons and a menu change the kind and region; Previous/Next page through all of them. |
+| `/events near: 60614` | Near a postal code or town: Set Championships, prereleases (nearest first, seats and fees), and weekly play one line per store, each linking to its page on packs.ink. Buttons change the kind and the radius. |
 | `/help` | What it does, with clickable commands and "Try it" buttons. |
 | `/reports daily` | (Server managers) the daily movers report, posted into a channel; `weekly` on Mondays. |
 | `/reports send` | (Server managers) post the latest daily or weekly report here, now. |
@@ -181,7 +181,7 @@ discord/
   A card links to TCGplayer only when its printing has a listing of its own: a
   card still being revealed has none, and a search link on every line left room
   for 13 of 36 reveals.
-- **Boards are browsed, not re-typed**: /events and /calendar carry
+- **Boards are browsed, not re-typed**: both /events boards carry
   their state in each control's custom_id and redraw in place. Every control
   in a message has a DIFFERENT custom_id — Discord refuses a message with two
   the same, and the guard checks every reply for it.

@@ -106,6 +106,14 @@ WEEKLY_MIN_LAG_DAYS = 1        # never Monday's own: that is the daily's report
 # late ETL), so 3 never posts twice; 6 let a weekly forced on a Tuesday cost
 # the channel the next Monday's.
 WEEKLY_REPEAT_DAYS = 3
+# A channel that refused a post (bot removed, permission lost, channel
+# deleted) — these exact words in last_error — is tried again at most once per
+# this many hours, not rebuilt and re-posted on every run (~8 a day). 20, not
+# 24: the daily's window is ~15 h, so each day still gets one try. Running
+# /reports in that channel again clears last_error and with it the wait.
+DEAD_REASONS = {403: "the bot can't post in that channel (missing access or permission)",
+                404: "that channel no longer exists"}
+DEAD_RETRY_HOURS = 20
 
 # ── links: the site's tcgUrl, exactly (test_discord_reports.py checks Index.html) ──
 TCG_AFFILIATE_BASE = "https://partner.tcgplayer.com/c/7285926/1780961/21018"
@@ -179,7 +187,7 @@ MAINLINE_MIN_COMPONENTS = 100   # a set index this wide is a booster set, not a 
 def load_subscriptions(sb):
     """Rows, or None when migration 173 is not applied yet."""
     try:
-        return sb.select(TABLE, columns="guild_id,channel_id,cadence,last_posted_on",
+        return sb.select(TABLE, columns="guild_id,channel_id,cadence,last_posted_on,last_error,updated_at,created_at",
                          order="guild_id.asc,channel_id.asc,cadence.asc")
     except RuntimeError as e:
         msg = str(e)
@@ -200,6 +208,60 @@ def due(sub, today, force_weekly=False):
         # channel that already has this week's.
         return force_weekly or last is None or (today - last).days >= WEEKLY_REPEAT_DAYS
     return False
+
+
+def resting(sub, now):
+    """Did this channel refuse us (403/404) less than DEAD_RETRY_HOURS ago?"""
+    if sub.get("last_error") not in DEAD_REASONS.values():
+        return False
+    t = _utc(sub.get("updated_at"))
+    return bool(t) and now - t < dt.timedelta(hours=DEAD_RETRY_HOURS)
+
+
+MISSED_WEEKLY = "missed the weekly of {:%b %d}: it did not go out in Monday's 9 AM-3 PM Chicago window"
+
+
+def missed_weeklies(subs, now):
+    """(Monday, [weekly rows that Monday's window closed on undelivered]).
+
+    The last Monday whose window has CLOSED by `now`. A row counts when it
+    existed before that window opened, its last weekly is older than the
+    oldest price date that window could post (Monday - WEEKLY_MAX_LAG_DAYS),
+    and last_error is empty or an OLDER week's marker: a post that failed was
+    already loud, and this Monday's MISSED_WEEKLY marker, written on the first
+    alarm, keeps every later run that week quiet."""
+    local = now.astimezone(WEEKLY_TZ)
+    monday = local.date() - dt.timedelta(days=local.weekday())
+    if local.weekday() == 0 and local.hour < WEEKLY_LAST_HOUR:
+        monday -= dt.timedelta(days=7)
+    opened = dt.datetime.combine(monday, dt.time(WEEKLY_FIRST_HOUR), tzinfo=WEEKLY_TZ)
+    oldest_ok = monday - dt.timedelta(days=WEEKLY_MAX_LAG_DAYS)
+    marker = MISSED_WEEKLY.format(monday)
+    out = []
+    for s in subs:
+        made = _utc(s.get("created_at"))
+        last = s.get("last_posted_on")
+        err = s.get("last_error") or ""
+        quiet = err == marker or (err and not err.startswith(MISSED_WEEKLY.split("{")[0]))
+        if (s["cadence"] == "weekly" and made and made < opened and not quiet
+                and (not last or dt.date.fromisoformat(str(last)[:10]) < oldest_ok)):
+            out.append(s)
+    return monday, out
+
+
+def missed_weekly_alarm(sb, subs, now):
+    """1 (and ::error::) the first run after a Monday window closes on a weekly
+    nobody delivered, else 0. GitHub's Monday crons did not run inside the
+    window on 2026-11-02, -09 or -16; only an ETL-triggered run that happened
+    to land there sent those weeklies."""
+    monday, missed = missed_weeklies(subs, now)
+    for s in missed:
+        print(f"::error::The weekly report for channel {s['channel_id']} (server {s['guild_id']}) "
+              f"did not go out in Monday {monday}'s 9 AM-3 PM Chicago window (see that day's runs). "
+              "Send it with the workflow's force_weekly.")
+        record(sb, {"guild_id": s["guild_id"], "channel_id": s["channel_id"], "cadence": "weekly"},
+               {"last_error": MISSED_WEEKLY.format(monday)})
+    return 1 if missed else 0
 
 
 def weekly_open(price_date, now):
@@ -241,6 +303,8 @@ def drop_stale(sb, rows, price_date):
         if id(r) in keep:
             out.append(r)
             continue
+        if r.get("low_date") and str(r["low_date"])[:10] != price_date.isoformat():
+            continue          # its last Low is older: the move is not today's
         v = today.get((r.get("tcgplayer_product_id"), r.get("printing") or "Normal"))
         mine = r.get(REPORT_PRICE_COL)
         if v is not None and mine is not None and abs(float(v) - float(mine)) < 0.005:
@@ -826,11 +890,22 @@ def market_chart_series(sb, price_date, pulse, sets_meta):
 def fetch_candidates(sb, window):
     pct_col = REPORT_PCT_PREFIX + window
     floor = min(s["min_price"] for s in SECTIONS.values())
-    cols = ("card_id,name,version,rarity,set_id,printing,tcgplayer_product_id,"
+    cols = ("card_id,name,version,rarity,set_id,printing,tcgplayer_product_id,low_date,"
             f"{REPORT_PRICE_COL},{pct_col}")
     return sb.select("price_movers", columns=cols,
                      filters={REPORT_PRICE_COL: f"gte.{floor}", pct_col: "neq.0"},
                      order="card_id.asc,printing.asc")
+
+
+def movers_current(sb, price_date):
+    """Is price_movers built from the price date's prices? ⚠ The ETL refreshes
+    card_prices_latest (the price date) BEFORE price_movers, so a failed or
+    unfinished movers refresh leaves yesterday's build behind today's date —
+    and a card whose Low did not move today would pass drop_stale carrying
+    yesterday's move."""
+    rows = sb.select("price_movers", columns="low_date", filters={"low_date": "not.is.null"},
+                     order="low_date.desc", limit=1, page_size=1)
+    return bool(rows) and str(rows[0]["low_date"])[:10] == price_date.isoformat()
 
 
 def load_sets(sb):
@@ -855,7 +930,6 @@ def key_of(row):
 # every read is wrapped, and a failure simply leaves the embed out.
 REVEAL_COLOR = 0x8E7CC3
 CALENDAR_COLOR = 0x4FA3D1
-REVEAL_DAYS = {"1d": 1, "7d": 7}
 REVEAL_SETS = 4            # sets named in the embed
 REVEAL_NAMES = 6           # card names listed per set
 CALENDAR_DAYS = 7
@@ -870,17 +944,19 @@ def card_label(row):
     return row.get("name") or "" if v in (None, "", "None") else f"{row.get('name')} - {v}"
 
 
-def new_reveals(sb, now, days, sets):
-    """[(set name, [card label, ...])] for cards first added in the last `days`
-    days, newest set first. A name that already existed before the cutoff is a
-    new PRINTING, not a reveal, and is left out."""
-    cutoff = (now - dt.timedelta(days=days)).isoformat()
+def new_reveals(sb, cutoff, end, sets):
+    """[(set name, [card label, ...])] for cards first added after `cutoff` and
+    by `end` (aware UTC datetimes), newest set first. A name that already
+    existed by the cutoff is a new PRINTING, not a reveal, and is left out; a
+    card added after `end` is the next report's."""
     rows = sb.select("cards", columns="id,name,version,set_id,inserted_at", order="id.asc")
-    old = {card_label(r) for r in rows if str(r.get("inserted_at") or "") < cutoff}
+    when = {id(r): _utc(r.get("inserted_at")) for r in rows}
+    old = {card_label(r) for r in rows if not when[id(r)] or when[id(r)] <= cutoff}
     by_set, seen = {}, set()
     for r in sorted(rows, key=lambda r: str(r.get("inserted_at") or ""), reverse=True):
         label = card_label(r)
-        if str(r.get("inserted_at") or "") < cutoff or not label or label in old or label in seen:
+        t = when[id(r)]
+        if not t or not cutoff < t <= end or not label or label in old or label in seen:
             continue
         seen.add(label)
         by_set.setdefault(set_display(sets.get(r.get("set_id"), "")) or "Other", []).append(label)
@@ -967,7 +1043,11 @@ def extra_embeds(sb, price_date, window, sets, now=None):
     weekly = window != "1d"
     out = []
     try:
-        e = reveals_embed(new_reveals(sb, now, REVEAL_DAYS.get(window, 1), sets), weekly)
+        # The eBay section's window: from where the previous report of this
+        # cadence was built, so no card is listed twice or skipped between two
+        # posts that went out at different hours.
+        cutoff, end = ebay_window(sb, price_date, window, now)
+        e = reveals_embed(new_reveals(sb, cutoff, end, sets), weekly)
         if e:
             out.append(e)
     except Exception as ex:   # never the report's problem
@@ -1126,7 +1206,8 @@ def report_nonce(sub, price_date):
     """Discord's nonce for one (channel, cadence, price date). Sent with
     enforce_nonce, a second post of the same report inside Discord's dedupe
     window (a few minutes) gets the first message back instead of a duplicate:
-    a post that timed out on our side but landed, then went again. ≤25 chars."""
+    a post that timed out on our side but landed, then went again — which is
+    why post() retries a timeout or 5xx at once, inside that window. ≤25 chars."""
     key = f"{sub['channel_id']}|{sub['cadence']}|{price_date.isoformat()}"
     return hashlib.sha1(key.encode()).hexdigest()[:25]
 
@@ -1138,19 +1219,33 @@ def post(token, channel_id, report, session=requests, nonce=None):
     auth = {"Authorization": f"Bot {token}"}
     once = {"nonce": nonce, "enforce_nonce": True} if nonce else {}
 
+    def retried(send):
+        # ⚠ A timeout or a 5xx may have landed. The nonce dedupes only inside
+        # Discord's few-minute window, so the retry has to be NOW, not the next
+        # run hours later (which would post the report twice).
+        try:
+            r = send()
+            if r.status_code < 500:
+                return r
+        except requests.RequestException:
+            pass
+        time.sleep(2)
+        return send()
+
     def as_json(embeds):
-        return session.post(url, headers={**auth, "Content-Type": "application/json"},
-                            json={"embeds": embeds, "allowed_mentions": {"parse": []}, **once}, timeout=30)
+        return retried(lambda: session.post(url, headers={**auth, "Content-Type": "application/json"},
+                                            json={"embeds": embeds, "allowed_mentions": {"parse": []}, **once},
+                                            timeout=30))
 
     files = report.get("files") or []
     if not files:
         return as_json(report["embeds"])
     payload = {"embeds": report["embeds"], "allowed_mentions": {"parse": []}, **once,
                "attachments": [{"id": i, "filename": n} for i, (n, _) in enumerate(files)]}
-    r = session.post(url, headers=auth, data={"payload_json": json.dumps(payload)},
-                     files={f"files[{i}]": (n, b, "image/png") for i, (n, b) in enumerate(files)},
-                     timeout=60)
-    if r.status_code == 400:
+    r = retried(lambda: session.post(url, headers=auth, data={"payload_json": json.dumps(payload)},
+                                     files={f"files[{i}]": (n, b, "image/png") for i, (n, b) in enumerate(files)},
+                                     timeout=60))
+    if r.status_code in (400, 413):   # 413: the pictures are too big
         print("  (Discord refused the pictures; sending the report without them)")
         return as_json(report["plain"])
     return r
@@ -1258,17 +1353,31 @@ def record(sb, match, patch, tries=3):
 
 def run(args, sb=None, session=requests, now=None):
     token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
-    if args.post and not token:
-        print("No DISCORD_BOT_TOKEN set — nothing can be posted. Exiting 0.")
-        return 0
     sb = sb or Supabase()
     subs = load_subscriptions(sb)
     if subs is None:
         print(f"{TABLE} does not exist yet (migration 173 not applied). Exiting 0.")
         return 0
+    if args.post and not token:
+        # Green only while nobody is owed anything: once a channel subscribes,
+        # a missing token means every report silently stops.
+        if subs:
+            print(f"::error::No DISCORD_BOT_TOKEN set, and {len(subs)} report subscription(s) exist: "
+                  "nothing can be posted.")
+            return 1
+        print("No DISCORD_BOT_TOKEN set — nothing can be posted. Exiting 0.")
+        return 0
+    now = now or dt.datetime.now(dt.timezone.utc)
+    # Checked before any early return below ("Skipping", "Nothing owed"...),
+    # which is exactly where a missed weekly would otherwise stay green.
+    alarm = missed_weekly_alarm(sb, subs, now) if args.post else 0
+    return max(alarm, deliver(args, sb, subs, token, session, now))
+
+
+def deliver(args, sb, subs, token, session, now):
+    """Post what is owed now. Returns the exit code."""
     preview = getattr(args, "preview", None)
     price_date = digest.latest_price_date(sb)
-    now = now or dt.datetime.now(dt.timezone.utc)
     if not price_date:
         print("No price date available; refusing to post.")
         return 0
@@ -1281,6 +1390,12 @@ def run(args, sb=None, session=requests, now=None):
         print(f"Newest price date is {price_date} at {now:%Y-%m-%d %H:%M} UTC: no daily is due "
               "(today's ETL has not landed) and it is outside the weekly's Monday 9 AM-3 PM "
               "Chicago window. Skipping.")
+        return 0
+    # Before anything is built or kept: a report on a stale build would be
+    # recorded as the day's, and the real one never sent.
+    if not movers_current(sb, price_date):
+        print(f"::warning::price_movers is not built from {price_date}'s prices yet (its refresh failed "
+              "or has not run): no report posts or is kept until it is.")
         return 0
     print(f"Open now: {', '.join(open_now)} (price date {price_date}).")
 
@@ -1302,6 +1417,10 @@ def run(args, sb=None, session=requests, now=None):
         return 0
 
     owed = [s for s in subs if s["cadence"] in open_now and due(s, price_date, args.force_weekly)]
+    for s in [s for s in owed if resting(s, now)]:
+        print(f"  skip {s['cadence']} → channel {s['channel_id']} (server {s['guild_id']}): {s['last_error']}; "
+              f"tried again at most once every {DEAD_RETRY_HOURS} h")
+        owed.remove(s)
     if preview:
         for cadence in ("daily", "weekly"):
             rep = report_for(cadence)
@@ -1316,7 +1435,7 @@ def run(args, sb=None, session=requests, now=None):
         return 0
     reports = {cadence: report_for(cadence) for cadence in sorted({s["cadence"] for s in owed})}
 
-    posted = failed = 0
+    posted = failed = still_dead = 0
     for s in owed:
         rep = reports.get(s["cadence"])
         where = f"{s['cadence']} → channel {s['channel_id']} (server {s['guild_id']})"
@@ -1342,15 +1461,23 @@ def run(args, sb=None, session=requests, now=None):
                 print(f"::warning::posted {where} but could not record it; the next run may post it again")
             print(f"  posted {where}")
         else:
-            failed += 1
             # The bot's own words about why — never the token, never the URL.
             if status is not None:
-                reason = {403: "the bot can't post in that channel (missing access or permission)",
-                          404: "that channel no longer exists"}.get(status, f"Discord said HTTP {status}")
+                reason = DEAD_REASONS.get(status, f"Discord said HTTP {status}")
+            # The same refusal as last time was already reported: it warns,
+            # so one dead channel never turns every day's run red.
+            if status in DEAD_REASONS and s.get("last_error") == reason:
+                still_dead += 1
+            else:
+                failed += 1
             record(sb, match, {"last_error": reason[:300]})
             print(f"  FAILED {where}: {reason}")
         time.sleep(0.4)   # well under Discord's per-route rate limits
-    print(f"Done: {posted} posted, {failed} failed, {len(owed) - posted - failed} skipped.")
+    print(f"Done: {posted} posted, {failed} failed, {still_dead} still refused, "
+          f"{len(owed) - posted - failed - still_dead} skipped.")
+    if still_dead:
+        print(f"::warning::{still_dead} channel(s) still refuse the bot (403/404, as last time); "
+              f"tried again at most once every {DEAD_RETRY_HOURS} h until /reports off (or deleting its row) ends it.")
     if failed:
         # One channel refusing is that server's business (the bot was removed,
         # the channel deleted) and is already on /reports status. EVERY post

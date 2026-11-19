@@ -343,6 +343,32 @@ const D = await mod("discord/src/data.js");
     ok(eu.some((e) => e.kind === "set") && eu.some((e) => e.kind === "ccq") && !eu.some((e) => e.kind === "dlc"),
       `calendar region filter keeps releases, keeps Europe's qualifier, drops the US Challenge (${eu.map((e) => e.kind)})`);
     eq(D.upcomingFiltered(far, { kind: "release", n: 12 }).map((e) => e.kind).join(), "set", "calendar Releases keeps only releases");
+    eq(D.upcomingFiltered(far, { kind: "comp", n: 0 }).map((e) => e.kind).sort().join(), "ccq,dlc", "DLCs + CCQs keeps both and nothing else");
+    for (const pg of [0, 1, 7]) {
+      const back = E.parseCalendarId(E.calendarId("p", { kind: "comp", region: "eu", page: pg }));
+      ok(back && back.kind === "comp" && back.region === "eu" && back.page === pg, `calendar page id round-trips: ${pg}`);
+    }
+    eq(JSON.stringify(E.parseCalendarId("cl|k|dlc|na")), JSON.stringify({ kind: "dlc", region: "na", page: 0 }), "an old calendar button (no page) still parses");
+    // A busy month: every event is listed; the month carries on in a second field.
+    const busy = Array.from({ length: 15 }, (_, k) => ({ ...crowd[k % 12], id: "b" + k, starts_on: "2026-10-0" + (1 + (k % 9)) }));
+    const bm = E.calendarMessage({ events: busy, kind: "comp", region: "all", regions: [] });
+    checkMessage(bm, "calendar, 15 events in one month");
+    const bl = bm.embeds[0].fields.flatMap((f) => f.value.split("\n"));
+    ok(bl.length === 15 && !bl.some((l) => /more\*$/.test(l)) && bm.embeds[0].fields.length > 1 && /\(cont\.\)$/.test(bm.embeds[0].fields[1].name),
+      `a busy month lists all 15 and carries on (${bm.embeds[0].fields.map((f) => f.name)})`);
+    // Pages: 40 events are 15 / 15 / 10, and the buttons stop at the ends.
+    const forty = Array.from({ length: 40 }, (_, k) => ({ ...crowd[k % 12], id: "f" + k }));
+    for (const [pg, want, n] of [[0, 1, 15], [1, 2, 15], [9, 3, 10]]) {
+      const m = E.calendarMessage({ events: forty, kind: "all", region: "all", regions: [], page: pg });
+      checkMessage(m, `calendar page ${pg}`);
+      const [prev, next] = m.components[2].components;
+      ok(m.embeds[0].description === `40 coming up · page ${want} of 3` && m.embeds[0].fields.flatMap((f) => f.value.split("\n")).length === n,
+        `calendar page ${pg} shows page ${want} of 3 with ${n} events (${m.embeds[0].description})`);
+      ok(prev.disabled === (want === 1) && next.disabled === (want === 3) && E.parseCalendarId(next.custom_id).page === want,
+        `calendar page ${want}: Previous/Next stop at the ends`);
+    }
+    const one = E.calendarMessage({ events: calEvents, kind: "all", region: "all", regions: [] });
+    ok(!one.embeds[0].description && one.components[2].components.length === 1, "a one-page calendar has no page line and no Previous/Next");
   }
   const byKind = {
     sc: [{ next_start: "2026-11-04T17:00:00Z", store_name: "SC Shop", name: "Set Championship", kind: "sc", distance_mi: 12, dow: 6, local_time: "12:00", occurrence_count: 1, gameplay_format: "Core Constructed",
@@ -991,7 +1017,7 @@ const D = await mod("discord/src/data.js");
   const nf = E.notFoundMessage(R, R.resolve("asdfgh"), "asdfgh", { help: "5234567890123" });
   ok(/<\/help:5234567890123>/.test(nf.embeds[0].description), "a dead-end no-match points at /help");
   const helpTxt = JSON.stringify(E.helpMessage());
-  ok(/the card: picture, text, stats/.test(helpTxt) && /price chart, recent changes/.test(helpTxt), "help tells /card and /price apart");
+  ok(/the card, big: its picture/.test(helpTxt) && /price chart, recent changes/.test(helpTxt), "help tells /card and /price apart");
 }
 
 // ── commands ─────────────────────────────────────────────────────────────
@@ -1108,7 +1134,9 @@ const D = await mod("discord/src/data.js");
   // of the history read that drew it, not in a URL.
   const yearAgo = Date.now() - 365 * 86400000;
   ok(patches[0] && patches[0].multipart && /^attachment:\/\/.+\.png$/.test(patches[0].body.embeds[0].image.url), "the 1Y button uploads the redrawn chart");
-  ok(dbCalls.some((c) => c.table === "prices_daily" && /^gte\./.test(String(c.params.date)) && Math.abs(Date.parse(c.params.date.slice(4) + "T00:00:00Z") - yearAgo) < 2 * 86400000),
+  // (Since 2026-11-18 the chart is drawn from the reply's own history read,
+  // which reaches back past a year, rather than from a second read of exactly one.)
+  ok(dbCalls.some((c) => c.table === "prices_daily" && /^gte\./.test(String(c.params.date)) && Date.parse(c.params.date.slice(4) + "T00:00:00Z") <= yearAgo + 2 * 86400000),
     "the 1Y button redraws the chart over one year of history");
 
   // "Look at a card" opens a NEW private reply, leaving the list where it is
@@ -1145,6 +1173,45 @@ const D = await mod("discord/src/data.js");
   await Promise.all(pending.splice(0));
   ok(patches[0] && patches[0].body.embeds && patches[0].body.embeds[0].title, `/new edits in the reel (${patches[0] && patches[0].body.embeds && patches[0].body.embeds[0].title})`);
   patches.length = 0;
+  {
+    // /events is one command, two boards: the calendar (DLCs, CCQs, releases;
+    // by region) with no place, the store board with one.
+    const rows = [
+      ...Array.from({ length: 20 }, (_, k) => ({ id: "d" + k, kind: "dlc", title: "DLC " + k, starts_on: `2099-0${1 + (k % 9)}-1${k % 10}`, location: "Hall · Springfield, IL 62701", country: k % 2 ? "US" : "FR" })),
+      ...Array.from({ length: 25 }, (_, k) => ({ id: "q" + k, kind: "ccq", title: "CCQ " + k, starts_on: `2099-0${1 + (k % 9)}-2${k % 8}`, location: "Store · Paris", country: k % 2 ? "FR" : "US" })),
+    ];
+    const calDb = { ...fakeDb, async get(table, params) {
+      if (table === "calendar_events") return rows;
+      if (table === "lorcana_events") return [{ city: "Paris", state: null, country: "FR", latitude: 48.85, longitude: 2.35 }];
+      return fakeDb.get(table, params);
+    } };
+    const cd = { ...deps, db: calDb };
+    const last = async () => { await Promise.all(pending); return patches[patches.length - 1].body; };
+    const ev = async (options, tok) => { await handleInteraction({ type: 2, token: tok, application_id: "123", data: { type: 1, name: "events", options } }, cd); return last(); };
+    const click = async (custom_id, tok, values) => { await handleInteraction({ type: 3, token: tok, application_id: "123", message: { flags: 0 }, data: { custom_id, component_type: values ? 3 : 2, ...(values ? { values } : {}) } }, cd); return last(); };
+    const names = (b) => b.embeds[0].fields.flatMap((f) => f.value.match(/(?:DLC|CCQ) \d+/g) || []);
+    const s = (v) => ({ type: 3, name: "kind", value: v });
+    let b = await ev([s("comp")], "ev1");
+    eq(b.embeds[0].title, "Upcoming DLCs and CCQs", "/events kind:DLCs + CCQs, no place: the calendar");
+    eq(b.embeds[0].description, "45 coming up · page 1 of 3", "/events DLCs + CCQs counts every one and pages them");
+    const seen = [...names(b)];
+    for (let p = 1; p < 3; p++) {
+      const next = b.components[2].components.find((c) => /Next/.test(c.label));
+      b = await click(next.custom_id, "ev-p" + p);
+      seen.push(...names(b));
+    }
+    ok(seen.length === 45 && new Set(seen).size === 45, `Next walks through all 45 DLCs and CCQs once each (${seen.length}, ${new Set(seen).size} unique)`);
+    b = await ev([s("comp"), { type: 3, name: "region", value: "eu" }], "ev2");
+    ok(/Europe$/.test(b.embeds[0].title) && b.embeds[0].description === "22 coming up · page 1 of 2", `/events region:Europe keeps Europe's 22 (${b.embeds[0].title} · ${b.embeds[0].description})`);
+    b = await ev([s("dlc"), { type: 3, name: "near", value: "Paris FR" }], "ev3");
+    ok(b.embeds[0].title === "Upcoming DLCs · Europe" && names(b).length === 10 && names(b).every((x) => /^DLC/.test(x)), `/events DLCs near Paris: Europe's DLCs (${b.embeds[0].title}, ${names(b).length})`);
+    b = await ev([], "ev4");
+    eq(b.embeds[0].title, "Coming up in Lorcana", "/events with nothing: everything coming up");
+    b = await click(E.calendarId("r", { kind: "ccq", region: "all" }), "ev5", ["eu"]);
+    ok(b.embeds[0].title === "Upcoming CCQs · Europe" && names(b).every((x) => /^CCQ/.test(x)), "the region menu narrows the CCQs");
+    b = await ev([s("sc")], "ev6");
+    ok(/add `near:`/.test(b.content) && !b.embeds.length, "/events Set Championships with no place asks for one");
+  }
   const dbDown = { ...deps, db: { ...fakeDb, async get() { throw new Error("database down"); } } };
   await handleInteraction({ type: 2, token: "t21", application_id: "123", data: { type: 1, name: "new", options: [] } }, dbDown);
   await Promise.all(pending.splice(0));
@@ -1606,6 +1673,326 @@ const D = await mod("discord/src/data.js");
     await Promise.all(pending.splice(0));
     const d = sent[0] && sent[0].embeds && sent[0].embeds[0] ? sent[0].embeds[0].description : "";
     ok(/\*\*\$1,547\*\* last PSA 9 sale/.test(d) && !/No PSA 9 sales/.test(d), `"/price let it go c1 psa 9" leads with that sale (${d.split("\n").slice(0, 3).join(" | ")})`);
+  }
+}
+
+// ── 14. audit fixes (2026-11-18) ─────────────────────────────────────────
+// Each block names the reply it kept from going out wrong.
+{
+  const I = await mod("discord/src/interactions.js");
+  const K = await mod("discord/src/kaylee.js");
+  // A display name is free text: "[x](https://…)" in message content is a
+  // clickable link the bot posted. Both places a presser's name lands escape it.
+  const evil = "[x](https://evil.example)";
+  const kp = K.kayleePack(R, index, "https://example.test", evil);
+  ok(!/\[x\]\(/.test(kp.content || ""), `a display name can't post a link in Kaylee's pack (${kp.content})`);
+  const op = I.packReply("azurite", 1, { user: { global_name: evil } }, { R, index, origin: "https://example.test" });
+  ok(!/\[x\]\(/.test(op.embeds[0].title), `a display name can't post a link in /open (${op.embeds[0].title})`);
+
+  // A sealed suggestion quotes Low, as the reply it opens does.
+  const box = index.sealed.find((s) => s.low != null && s.mkt != null && E.money(s.low) !== E.money(s.mkt));
+  if (box) {
+    const lbl = R.sealedLabel(box);
+    ok(lbl.includes(E.money(box.low)) && !lbl.includes(E.money(box.mkt)), `a sealed suggestion leads with Low (${lbl})`);
+  }
+
+  // A button or menu on an old message whose card has since left the index
+  // answers the clicker privately and leaves the message alone — it used to
+  // replace the card, for everyone, with "No card matched 'c|crd_…|N'".
+  {
+    const pending = [];
+    const deps = { R, index, db: {}, origin: "https://bot.example", appId: "123", fetch: async () => new Response("{}"), waitUntil: (p) => pending.push(p), log: () => {} };
+    const gone = "c|crd_00000000000000000000000000000000|N";
+    for (const [label, data] of [
+      ["range button", { custom_id: E.rangeId("1y", "chart", gone), component_type: 2 }],
+      ["versions menu", { custom_id: E.pickId("chart", "3m"), component_type: 3, values: [gone] }],
+      ["sealed range button", { custom_id: E.rangeId("1y", "chart", "s|999999999"), component_type: 2 }],
+    ]) {
+      const r = await I.handleInteraction({ type: 3, token: "st", application_id: "123", data }, deps);
+      ok(r.type === 4 && r.data.flags === 64 && /no longer listed/.test(r.data.content) && !pending.length,
+        `a stale ${label} answers privately and leaves the message (${JSON.stringify(r).slice(0, 120)})`);
+      pending.length = 0;
+    }
+  }
+
+  // /card is the picture (2026-10-04): its rules text, stats and ink line are
+  // printed on the card, so nothing that describes /card may promise them.
+  {
+    const { COMMANDS } = await mod("discord/tools/commands.js");
+    const helpCard = E.helpMessage({}).embeds[0].fields[0].value.split("\n").find((l) => l.includes("/card"));
+    const cmdCard = COMMANDS.find((c) => c.name === "card").description;
+    const readme = readFileSync(new URL("discord/README.md", ROOT), "utf8").split(/\r?\n/).find((l) => l.startsWith("| `/card"));
+    for (const [where, t] of [["/help", helpCard], ["the /card command", cmdCard], ["README", readme]]) {
+      ok(t && !/\btext\b|\bstats\b|ink \/ cost/i.test(t), `${where} doesn't promise /card shows rules text or stats (${t})`);
+    }
+  }
+
+  // A grader without a grade ("elsa psa") printed "No PSA null sales on record"
+  // even with PSA sales in hand. Now: that grader's best-selling tier leads;
+  // "gem mint" makes it a 10; an impossible grade says so, then the best tier.
+  {
+    const elsa = card("elsa enchanted");
+    const id = elsa.printing.id;
+    const rows = [[10, 12, 500], [9, 30, 200]].map(([grade, sale_count, last_sold_price]) =>
+      ({ card_id: id, printing: null, grader: "PSA", grade: String(grade), sale_count, last_sold_price, avg_last_5: last_sold_price, last_sold_date: "2026-11-01" }));
+    const db = { async get(t) { return t === "graded_sales_rollup" ? rows : []; }, async all() { return []; }, async rpc() { return []; } };
+    const lead = async (q) => (await I.lookup(q, "chart", "3m", { R, index, db, origin: "https://bot.example", commandIds: {} })).embeds[0];
+    for (const [q, want, note] of [
+      ["elsa enchanted psa", /\*\*\$200\.00\*\* last PSA 9 sale/, null],
+      ["elsa enchanted psa gem mint", /\*\*\$500\.00\*\* last PSA 10 sale/, null],
+      ["elsa enchanted psa 11", /\*\*\$200\.00\*\* last PSA 9 sale/, /PSA grades top out at 10/],
+    ]) {
+      const e = await lead(q);
+      const d = e.description;
+      ok(want.test(d) && !/null/.test(d + e.title) && (!note || note.test(d)), `"${q}" answers with a real tier (${d.split("\n").slice(0, 3).join(" | ")})`);
+    }
+    const none = await lead("elsa enchanted cgc");
+    ok(/No CGC sales on record/.test(none.description) && !/null/.test(none.description), `a grader with no sales says so plainly (${none.description.split("\n")[0]})`);
+
+    // Picking an autocomplete suggestion for "elsa psa 10" used to drop the
+    // grade: the value was the bare card key, so the reply was the raw price.
+    const ac = await I.handleInteraction({ type: 4, data: { name: "price", options: [{ type: 3, name: "name", value: "elsa enchanted psa 10", focused: true }] } }, { R });
+    const v = ac.data.choices[0] && ac.data.choices[0].value;
+    ok(v && v.endsWith("|PSA10") && v.length <= 100, `a graded suggestion keeps its grade (${v})`);
+    if (v) ok(/\*\*\$500\.00\*\* last PSA 10 sale/.test((await lead(v)).description), "picking it answers with the PSA 10 view");
+    const bare = await I.handleInteraction({ type: 4, data: { name: "price", options: [{ type: 3, name: "name", value: "elsa enchanted psa", focused: true }] } }, { R });
+    ok(bare.data.choices[0] && bare.data.choices[0].value.endsWith("|PSA"), `a bare grader survives the pick too (${bare.data.choices[0] && bare.data.choices[0].value})`);
+    // Old keys, from buttons and menus already in channels, still open exactly.
+    for (const k of ["c|" + id, "c|" + id + "|" + elsa.printing.f[0][0], "c|" + id + "|" + elsa.printing.f[0][0] + "|BGS9.5"]) {
+      const r = R.resolve(k);
+      ok(r.kind === "card" && r.exact && r.printing.id === id, `key ${k.slice(-20)} still opens exactly`);
+    }
+    // The longest key in the fixture still fits Discord's 100 with the longest grade.
+    const longest = Math.max(...index.cards.flatMap((c) => c.p.map((p) => R.cardKey(p, 0).length)));
+    ok(longest + "|BGS9.5".length <= 100, `a graded key fits 100 characters (${longest + 7})`);
+  }
+
+  // "mowgli last year" was parsed to a range and the range thrown away; the
+  // chart drew 3M. Range words drive the chart unless the range option was
+  // given; 6M has no button, so it shows 1Y (the window that covers it).
+  {
+    const sent = [], pending = [];
+    const db = { async get() { return []; }, async all() { return []; }, async rpc() { return []; } };
+    const deps = { R, index, db, origin: "https://bot.example", appId: "123", log: () => {},
+      fetch: async (u, init) => { sent.push(init.body instanceof FormData ? JSON.parse(init.body.get("payload_json")) : JSON.parse(init.body)); return new Response("{}"); },
+      waitUntil: (p) => pending.push(p) };
+    const shown = async (name, range) => {
+      sent.length = 0;
+      const options = [{ type: 3, name: "name", value: name }, ...(range ? [{ type: 3, name: "range", value: range }] : [])];
+      await I.handleInteraction({ type: 2, token: "rg", application_id: "123", data: { type: 1, name: "price", options } }, deps);
+      await Promise.all(pending.splice(0));
+      const b = (sent[0] && sent[0].components || []).flatMap((r) => r.components).find((c) => c.type === 2 && c.style === 1 && c.disabled);
+      return b && b.label;
+    };
+    eq(await shown("mowgli last year"), "1Y", "/price mowgli last year charts a year");
+    eq(await shown("mowgli 1 month"), "1M", "/price mowgli 1 month charts a month");
+    eq(await shown("mowgli 6 months"), "1Y", "/price mowgli 6 months charts the year that covers it");
+    eq(await shown("mowgli last year", "1m"), "1M", "the range option, when given, wins over range words");
+    eq(await shown("mowgli"), "3M", "no range words: the default 3M");
+  }
+
+  // The change line reads Low whenever there is one (Zaven: lead with Low);
+  // the standing chip judges MARKET on purpose (a phantom Low must never read
+  // "Cheapest in 12 months"). Ursula - Deceiver showed "1Y ▼80%" beside an
+  // unqualified "Near its 12-month high", so beside a Low line it names Market.
+  {
+    const E2 = await mod("discord/src/embeds.js");
+    const st = { tone: "high", label: "Near its 12-month high" };
+    eq(E2.standingLine({ low: 0.01, standing: st }), "↗ Near its 12-month high (Market)", "beside a Low change line the standing says it is Market's");
+    eq(E2.standingLine({ low: null, standing: st }), "↗ Near its 12-month high", "with no Low the line is Market's already, no tag");
+    eq(E2.standingLine({ low: 2, standing: null }), null, "no standing, no line");
+    eq(E2.standingLine({ low: 0.01, lowDelta: { "1y": -80 }, standing: st }), null, "a Market high is left off under a Low line that fell over the year");
+    eq(E2.standingLine({ low: 3, lowDelta: { "1m": 12 }, standing: { tone: "low", label: "Cheapest in 12 months" } }), null, "a Market low is left off under a Low line that rose");
+    eq(E2.standingLine({ low: 3, lowDelta: { "1y": 40 }, standing: st }), "↗ Near its 12-month high (Market)", "a chip that agrees with the Low line stays, tagged");
+  }
+
+  // A sealed Low under a fifth of Market is one bad listing (the site's
+  // fixSealedLows): Hyperia City's box read $1.00 Low against ~$125 Market for
+  // five days, and /price said "1W 120x". The bot cleans sealed history before
+  // its changes and its chart, as the site cleans its sealed rows.
+  {
+    const G = await mod("discord/src/site.generated.js");
+    const { chartResponse } = await mod("discord/src/charts.js");
+    ok(typeof G.fixSealedLows === "function", "fixSealedLows is copied from the site");
+    const day = (i) => new Date(Date.UTC(2026, 9, 1) + i * 86400000).toISOString().slice(0, 10);
+    const hist = Array.from({ length: 40 }, (_, i) => ({ date: day(i), low_price: i >= 30 && i < 36 ? 1 : 120, market_price: 125 }));
+    const box = index.sealed.find((s) => s.ty === "Booster Boxes");
+    const sent = [], pending = [];
+    const db = { async get() { return []; }, async all(t) { return t === "prices_daily" ? hist : []; }, async rpc() { return []; } };
+    await I.handleInteraction({ type: 2, token: "sl", application_id: "123", data: { type: 1, name: "price", options: [{ type: 3, name: "name", value: "s|" + box.pid }] } },
+      { R, index: { ...index, priceDate: day(39) }, db, origin: "https://bot.example", appId: "123", log: () => {},
+        fetch: async (u, init) => { sent.push(init.body instanceof FormData ? JSON.parse(init.body.get("payload_json")) : JSON.parse(init.body)); return new Response("{}"); },
+        waitUntil: (p) => pending.push(p) });
+    await Promise.all(pending.splice(0));
+    const d = sent[0] && sent[0].embeds[0].description || "";
+    ok(/\*\*\$120\.00\*\* Low/.test(d) && !/\d+x\b|▲\d{3,}/.test(d), `a sealed reply ignores a one-listing Low (${d.split("\n").slice(1, 4).join(" | ")})`);
+    const png = async (rows) => new Uint8Array(await (await chartResponse(new URL(`https://bot.example/chart/p/${box.pid}/N/1m.png?s=1&d=x`), { async all() { return rows; } })).arrayBuffer());
+    const [dirty, clean] = [await png(hist), await png(G.fixSealedLows(hist))];
+    ok(dirty.length === clean.length && dirty.every((b, i) => b === clean[i]), "a sealed chart draws the cleaned Low");
+    // The index's sealed snapshot (/set's box price, /open's cost, the
+    // autocomplete label) is cleaned too, as the site cleans its snapshot.
+    // No offline index can show it, so the build's source is checked.
+    const build = readFileSync(new URL("discord/tools/build_index.mjs", ROOT), "utf8");
+    ok(/for \(const p of site\.fixSealedLows\(sealed\)\)/.test(build), "the build cleans the sealed snapshot with fixSealedLows");
+  }
+
+  // Sets that don't exist yet. "/set set 15" and "/open set 15" showed The
+  // First Chapter (one edit from "set 1"); "/price set 15 box" found the card
+  // Weight Set; "/set inkdark" said there was no such set. A set number never
+  // falls back to another set, and a set the site has dated but the catalog
+  // holds no cards of yet says it isn't out (SET_RELEASE_DATES, copied).
+  {
+    // Once Into the Inkdark has cards, a rebuilt fixture indexes it: this block
+    // keeps it un-indexed (renamed, unnumbered) so it always has a dated set
+    // the catalog holds nothing of.
+    const R = createResolver({ ...index, sets: index.sets.map((s) => (s.n === "Into the Inkdark" ? { ...s, n: "zz guard placeholder", main: 0, alias: [] } : s)) });
+    const G = await mod("discord/src/site.generated.js");
+    const S = await mod("discord/src/set.js");
+    // Numbering is SET_RELEASE_DATES in date order — pinned against the mainline list.
+    const byDate = Object.entries(G.SET_RELEASE_DATES).sort((a, b) => String(a[1].lgs).localeCompare(String(b[1].lgs))).map((e) => e[0]);
+    eq(byDate.slice(0, G.MAINLINE_SETS.length).join("|"), G.MAINLINE_SETS.join("|"), "SET_RELEASE_DATES in date order starts with the mainline sets, so its position is the set number");
+    const tfc = R.sets.findIndex((s) => s.main === 1);
+    eq(R.resolveSet("set 1"), tfc, "set 1 is The First Chapter");
+    for (const q of ["set 15", "s15", "set 99", "15"]) eq(R.resolveSet(q), -1, `"${q}" matches no indexed set`);
+    const deps = { R, index, origin: "https://bot.example" };
+    const up = D.upcomingSets(R).find((u) => u.n === "Into the Inkdark");
+    ok(up && up.num === 15 && up.lgs === "2027-02-05", `Into the Inkdark is upcoming set 15 (${JSON.stringify(up)})`);
+    for (const [label, m] of [["/set set 15", I.setReply("set 15", deps)], ["/set inkdark", I.setReply("inkdark", deps)],
+      ["/open set 15", I.packReply("set 15", 1, null, deps)], ["/open into the inkdark", I.packReply("into the inkdark", 1, null, deps)]]) {
+      const t = JSON.stringify(m);
+      ok(/Into the Inkdark/.test(t) && /isn't out yet/.test(t) && /Feb 5, 2027/.test(t) && !/First Chapter/.test(t), `${label} says it isn't out yet (${(m.content || "").slice(0, 120)})`);
+    }
+    const none = I.setReply("set 99", deps);
+    ok(/no set 99/i.test(none.content) && !/First Chapter/.test(JSON.stringify(none)), `/set set 99 says there is none (${none.content})`);
+    const pr = await I.lookup("set 15 box", "chart", null, { ...deps, db: {}, commandIds: {} });
+    ok(/No match/.test(pr.embeds[0].title) && /Into the Inkdark/.test(pr.embeds[0].description) && !(pr.components || []).length,
+      `/price set 15 box names the set, not a card (${pr.embeds[0].description.split("\n")[0]})`);
+    // /open honours "released" for a NAMED set too: a dated set still in reveals opens nothing.
+    const hc = R.sets.find((s) => s.main && s.rel && s.rel.lgs);
+    const Rf = createResolver({ ...index, sets: index.sets.map((s) => (s.n === hc.n ? { ...s, rel: { ...s.rel, lgs: "2099-01-08" } } : s)) });
+    const fut = I.packReply(hc.n, 1, null, { R: Rf, index, origin: "https://bot.example" });
+    ok(/isn't out yet/.test(fut.content || "") && !(fut.embeds || []).length, `/open ${hc.n} before release opens nothing (${fut.content})`);
+    // A pack with nothing in it sends no empty menu (Discord refuses 0 options).
+    checkMessage(S.packMessage(R, index, tfc, { pulls: [], total: 0, n: 1 }, {}), "an empty pack");
+    // A reply that throws while answering at once is an apology, not "interaction failed".
+    const boom = await I.handleInteraction({ type: 2, token: "b", application_id: "123", data: { type: 1, name: "set", options: [{ type: 3, name: "set", value: "azurite" }] } },
+      { ...deps, R: { ...R, resolveSet: () => { throw new Error("boom"); }, resolveSetScored: () => { throw new Error("boom"); } }, log: () => {} });
+    ok(boom.type === 4 && boom.data.flags === 64 && /went wrong/.test(boom.data.content), `an instant reply that throws apologises privately (${JSON.stringify(boom).slice(0, 100)})`);
+  }
+
+  // /events.
+  {
+    const town = (city, state, lat, lng) => ({ city, state, country: "US", latitude: lat, longitude: lng });
+    const elgins = [town("Elgin", "TX", 30.35, -97.37), town("Elgin", "IL", 42.04, -88.28)];
+    // A failed town lookup was "Couldn't place 'Elgin'", as if no such town:
+    // it is retried once, and a second failure says to try again.
+    let calls = 0;
+    const flaky = { async get() { if (++calls === 1) throw new Error("503"); return elgins; } };
+    const p = await D.resolvePlace(flaky, "Elgin");
+    ok(p && calls === 2 && p.city === "Elgin", `a failed town lookup is retried once (${calls} calls)`);
+    const sent = [], pending = [];
+    const down = { async get() { throw new Error("503"); }, async rpc() { return []; }, async all() { return []; } };
+    await I.handleInteraction({ type: 2, token: "ev", application_id: "123", data: { type: 1, name: "events", options: [{ type: 3, name: "near", value: "Elgin" }] } },
+      { R, index, db: down, origin: "https://bot.example", appId: "123", log: () => {},
+        fetch: async (u, init) => { sent.push(JSON.parse(init.body)); return new Response("{}"); }, waitUntil: (x) => pending.push(x) });
+    await Promise.all(pending.splice(0));
+    ok(sent[0] && /try again/i.test(sent[0].content) && !/Couldn't place/.test(sent[0].content), `a lookup that keeps failing says to try again (${sent[0] && sent[0].content})`);
+    // A bare town with several matches says how to pick another.
+    const amb = await D.resolvePlace({ async get() { return elgins; } }, "Elgin");
+    const m = E.eventsMessage({ place: amb, byKind: { sc: [], prerelease: [], other: [] }, radius: 50, kind: "all", query: "Elgin" });
+    const other = amb.state === "TX" ? "IL" : "TX";
+    ok(new RegExp(`Elgin, ${other}`).test(JSON.stringify(m.embeds[0])), `an ambiguous town offers the other one (${m.embeds[0].description})`);
+    const one = await D.resolvePlace({ async get() { return elgins; } }, "Elgin IL");
+    ok(one.state === "IL" && !E.eventsMessage({ place: one, byKind: { sc: [], prerelease: [], other: [] }, radius: 50, kind: "all", query: "Elgin IL" }).embeds[0].description,
+      "a town with its state gets no hint");
+    // A count at the RPC's cap is "15+", not 15.
+    const place = { lat: 41.9, lng: -87.6, city: "Chicago", state: "IL" };
+    const sc = (n) => Array.from({ length: n }, (_, i) => ({ kind: "sc", store_name: "Store " + i, distance_mi: i, next_start: "2026-12-0" + (1 + (i % 9)) + "T18:00:00Z", occurrences: [{ event_id: 100 + i }] }));
+    const capped = E.eventsMessage({ place, byKind: { sc: sc(D.EVENT_MAX_SERIES.sc), prerelease: [], other: [] }, radius: 50, kind: "sc", query: "Chicago" });
+    ok(/· 15\+$/.test(capped.embeds[0].fields[0].name) && /\d+\+ more/.test(capped.embeds[0].fields[0].value), `a capped count reads 15+ (${capped.embeds[0].fields[0].name})`);
+    const few = E.eventsMessage({ place, byKind: { sc: sc(3), prerelease: [], other: [] }, radius: 50, kind: "sc", query: "Chicago" });
+    ok(/· 3$/.test(few.embeds[0].fields[0].name), `an uncapped count is exact (${few.embeds[0].fields[0].name})`);
+    // Weekly play: the RPC returns the SOONEST series, capped, so at 50 mi a
+    // store 2 mi away fell off behind forty sooner, farther nights. Nearer
+    // radii are asked too, so a wider radius never drops a nearer store.
+    const weekly = (name, mi, key) => ({ series_key: key, kind: "other", store_id: key, store_name: name, distance_mi: mi, dow: 2, local_time: "18:00", next_start: "2026-12-01T18:00:00Z", occurrences: [{ event_id: key }] });
+    const radii = [];
+    const ringDb = { async rpc(fn, b) {
+      if (b.p_kind !== "other") return [];
+      radii.push(b.p_radius_mi);
+      return b.p_radius_mi <= 10 ? [weekly("Corner Store", 2, 1)] : Array.from({ length: 40 }, (_, i) => weekly("Far " + i, 30 + i, 100 + i));
+    } };
+    const bk = await D.nearbyByKind(ringDb, place, { radius: 50, kind: "other" });
+    const wk = E.eventsMessage({ place, byKind: bk, radius: 50, kind: "other", query: "Chicago" });
+    ok(radii.includes(10) && radii.includes(50) && /Corner Store/.test(wk.embeds[0].fields[0].value.split("\n")[0]),
+      `the nearest weekly store survives a wider radius (${radii.join(",")}; ${wk.embeds[0].fields[0].value.split("\n")[0].slice(0, 60)})`);
+    ok(/stores?\b.*$/.test(wk.embeds[0].fields[0].name) && /\+ stores/.test(wk.embeds[0].fields[0].name), `a capped weekly count reads N+ (${wk.embeds[0].fields[0].name})`);
+    // A "]" in a store name no longer closes the link early.
+    const br = E.eventsMessage({ place, byKind: { sc: [{ ...sc(1)[0], store_name: "Cards ] Games" }], prerelease: [], other: [weekly("Dice [&] Co", 3, 7)] }, radius: 50, kind: "all", query: "Chicago" });
+    const txt = br.embeds[0].fields.map((f) => f.value).join("\n");
+    ok(/\[Cards \\\] Games\]\(/.test(txt) && /\[Dice \\\[&\\\] Co\]\(/.test(txt), `brackets in a store name are escaped (${txt.slice(0, 160)})`);
+    checkMessage(br, "events with brackets in store names");
+  }
+
+  // A change that rounds to nothing carries no arrow ("▲0.0%" said it moved).
+  for (const v of [0.04, -0.04, 0]) eq(E.pct(v), "0.0%", `pct(${v}) has no arrow`);
+  eq(E.pct(0.05), "▲0.1%", "a change that shows keeps its arrow");
+
+  // /new looks back four days; its empty title said "this week".
+  {
+    const S = await mod("discord/src/set.js");
+    const empty = S.newCardsMessage(R, index, [], {});
+    ok(!/week/i.test(empty.embeds[0].title) && /four days/.test(empty.embeds[0].title + empty.embeds[0].description), `/new's empty title agrees with its four days (${empty.embeds[0].title})`);
+  }
+
+  // A box's best pulls listed the same card twice in a row; now "×2".
+  {
+    const S = await mod("discord/src/set.js");
+    const si = R.sets.findIndex((s) => s.n === "Azurite Sea");
+    const pools = S.packPools(R, si);
+    const [a, b] = [...pools.leg, ...pools.sr].filter((e) => e.price != null);
+    const m = S.packMessage(R, index, si, { pulls: [{ ...a, pack: 0 }, { ...a, pack: 3 }, { ...b, pack: 5 }], total: 2 * a.price + b.price, n: 24 }, {});
+    const best = m.embeds[0].description.split("**Best pulls**")[1].trim().split("\n");
+    ok(best.length === 2 && /×2$/.test(best.find((l) => l.startsWith(R.cards[a.i].n)) || ""), `duplicate best pulls collapse to ×2 (${best.join(" | ")})`);
+  }
+
+  // A blank name ("   ") answered with five random "Did you mean" cards.
+  for (const q of ["", "   "]) {
+    const m = await I.lookup(q, "card", null, { R, index, db: {}, origin: "https://bot.example", commandIds: {} });
+    ok(/type a card name/i.test(m.content || "") && !(m.components || []).length && !(m.embeds || []).length, `a blank /card query asks for a name (${JSON.stringify(m).slice(0, 90)})`);
+  }
+
+  // A bare number after a name is a collector number, like "#42".
+  for (const [bare, hash] of [["elsa 42", "elsa #42"], ["elsa 207", "elsa #207"]]) {
+    const a = card(bare), b = card(hash);
+    ok(a && b && a.printing.id === b.printing.id && a.fi === b.fi, `"${bare}" opens the same printing as "${hash}" (${a && a.printing.no} vs ${b && b.printing.no})`);
+  }
+  eq(R.parse("42").A.dims.number, null, "a number on its own is not a collector number");
+
+  // /price read a card's history twice — once for its numbers, once more to
+  // draw the chart. The chart now reuses the first read when it covers the
+  // window ("All" still reads its own), and draws the identical picture.
+  {
+    const { chartResponse } = await mod("discord/src/charts.js");
+    const DAYMS = 86400000, now = Date.now();
+    const hist = Array.from({ length: 420 }, (_, i) => ({ date: new Date(now - (420 - i) * DAYMS).toISOString().slice(0, 10), low_price: 2 + (i % 7) / 10, market_price: 3 + (i % 5) / 10 }));
+    const reads = [];
+    const db = { async get() { return []; }, async rpc() { return []; },
+      async all(t, p) { if (t !== "prices_daily") return []; reads.push(p.date || "all"); return p.date ? hist.filter((r) => r.date >= p.date.slice(4)) : hist; } };
+    const pending = [];
+    const deps = { R, index, db, origin: "https://bot.example", appId: "123", log: () => {}, fetch: async () => new Response("{}"), waitUntil: (p) => pending.push(p) };
+    for (const [range, want] of [["3m", 1], ["1y", 1], ["all", 2]]) {
+      reads.length = 0;
+      await I.handleInteraction({ type: 2, token: "h", application_id: "123", data: { type: 1, name: "price", options: [{ type: 3, name: "name", value: "mowgli" }, { type: 3, name: "range", value: range }] } }, deps);
+      await Promise.all(pending.splice(0));
+      eq(reads.length, want, `/price ${range} reads the history ${want === 1 ? "once" : "twice (All needs more)"}`);
+    }
+    const p = R.resolve("mowgli"), f = p.printing.f[p.fi];
+    const url = new URL(`https://bot.example/chart/p/${f[1]}/${f[0]}/3m.png?d=x`);
+    const printing = D.FIN_PRINTING[f[0]];
+    const fresh = new Uint8Array(await (await chartResponse(url, db)).arrayBuffer());
+    const reused = new Uint8Array(await (await chartResponse(url, db, { history: { pid: Number(f[1]), printing, days: D.HISTORY_DAYS, rows: hist.filter((r) => r.date >= new Date(now - D.HISTORY_DAYS * DAYMS).toISOString().slice(0, 10)) } })).arrayBuffer());
+    ok(fresh.length === reused.length && fresh.every((b, i) => b === reused[i]), "a chart drawn from the reused rows is the chart a fresh read draws");
   }
 }
 

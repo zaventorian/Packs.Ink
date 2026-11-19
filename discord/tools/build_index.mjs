@@ -60,7 +60,7 @@ const site = loadSite([
   "SPLIT_BY_PRINTING_SETS_GLOBAL", "SET_DISPLAY_NAMES", "INK_COLORS", "RARITY_ALIASES", "cardFamilyKey",
   // /set's box EV and /movers' sealed movers: the site's own maths, run here
   // once a day so the Worker answers from the index with no database read.
-  "processData", "calcEV", "computeSealedDeltas", "SEALED_MOVER_KIND_OF_TYPE", "lorcanaSetArt",
+  "processData", "calcEV", "computeSealedDeltas", "fixSealedLows", "SEALED_MOVER_KIND_OF_TYPE", "lorcanaSetArt",
   // /new: the site's own reveal reel, to check the inputs stored below still
   // reproduce it.
   "revealRotation", "REVEAL_WINDOW_HOURS",
@@ -378,7 +378,9 @@ const reveals = revealInputs(rows, { now: revealNow, indexed: indexedIds });
 // Same admission rule as the site's searchSealedProducts: priced rows only,
 // never a promo single or a hidden multi-unit listing.
 const sealedOut = [];
-for (const p of sealed) {
+// The site cleans its sealed snapshot with fixSealedLows: a $1.00 Low on a
+// $125 box would be /set's box price, /open's box cost and the autocomplete's.
+for (const p of site.fixSealedLows(sealed)) {
   if (p.printing !== "Normal" || p.product_type === "Promo Single") continue;
   if (site.isUnpricedSealed(p) || site.isHiddenSealedListing(p)) continue;
   if (p.low_price == null && p.market_price == null) continue;
@@ -417,7 +419,12 @@ sealedOut.sort((a, b) => a.n.localeCompare(b.n));
       order: "tcgplayer_product_id.asc,date.asc",
     }));
   }
-  const byPid = new Map(site.computeSealedDeltas(hist, { asOf: priceDate }).map((d) => [d.tcgplayer_product_id, d]));
+  // The site's fixSealedLows first: a Low under a fifth of Market is one bad
+  // listing (Hyperia City's box read $1.00 for five days, and its 1W was
+  // "+11900%"). computeSealedDeltas reads the smoothed Low when there is one,
+  // so that is the Low the fix judges.
+  const clean = site.fixSealedLows(hist.map((r) => ({ ...r, low_price: r.low_price_smoothed ?? r.low_price, low_price_smoothed: null })));
+  const byPid = new Map(site.computeSealedDeltas(clean, { asOf: priceDate }).map((d) => [d.tcgplayer_product_id, d]));
   const W = [["1d", "1d"], ["1w", "7d"], ["1m", "30d"], ["3m", "90d"], ["6m", "180d"], ["1y", "365d"]];
   const pct = (v) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10) / 10);
   let withMoves = 0;

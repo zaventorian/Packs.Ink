@@ -8,7 +8,9 @@ import * as E from "./embeds.js";
 import * as D from "./data.js";
 import { kayleeStats, kayleePack, isKayleeId } from "./kaylee.js";
 import { setOverview, setMessage, openPacks, packMessage, parsePackId, newCards, newCardsMessage, freshRevealRows } from "./set.js";
-import { CALENDAR_REGIONS } from "./site.generated.js";
+import { CALENDAR_REGIONS, calRegionOf } from "./site.generated.js";
+import { setNumber, setQuery, setScore } from "./resolver.js";
+import { norm } from "./text.js";
 import { chartResponse } from "./charts.js";
 
 export const T = { PING: 1, COMMAND: 2, COMPONENT: 3, AUTOCOMPLETE: 4, MODAL_SUBMIT: 5 };
@@ -25,11 +27,19 @@ const opt = (options, name) => (options || []).find((o) => o.name === name);
 const optVal = (options, name, dflt) => { const o = opt(options, name); return o ? o.value : dflt; };
 
 export async function handleInteraction(it, deps) {
-  if (it.type === T.PING) return { type: R_.PONG };
-  if (it.type === T.AUTOCOMPLETE) return autocomplete(it, deps);
-  if (it.type === T.COMMAND) return command(it, deps);
-  if (it.type === T.COMPONENT) return component(it, deps);
-  if (it.type === T.MODAL_SUBMIT) return modalSubmit(it, deps);
+  // The replies built here and now (/set, /open, the pack buttons) have no
+  // deferred fallback: a throw used to be a 500 and "interaction failed".
+  try {
+    if (it.type === T.PING) return { type: R_.PONG };
+    if (it.type === T.AUTOCOMPLETE) return autocomplete(it, deps);
+    if (it.type === T.COMMAND) return command(it, deps);
+    if (it.type === T.COMPONENT) return component(it, deps);
+    if (it.type === T.MODAL_SUBMIT) return modalSubmit(it, deps);
+  } catch (e) {
+    deps.log && deps.log("interaction threw", e && e.stack || e);
+    if (it.type === T.AUTOCOMPLETE) return { type: R_.AUTOCOMPLETE, data: { choices: [] } };
+    return { type: R_.MESSAGE, data: { content: "Something went wrong answering that — try again in a moment.", flags: EPHEMERAL, allowed_mentions: QUIET } };
+  }
   return { type: R_.MESSAGE, data: { content: "Unsupported interaction.", flags: EPHEMERAL } };
 }
 
@@ -42,7 +52,12 @@ function autocomplete(it, { R }) {
     const choices = R.suggestSets(q, 25).map((si) => ({ name: setChoiceLabel(R.sets[si]).slice(0, 100), value: R.sets[si].n.slice(0, 100) }));
     return { type: R_.AUTOCOMPLETE, data: { choices } };
   }
-  const choices = R.suggest(q, 25).map((s) => ({ name: s.label.slice(0, 100), value: s.value.slice(0, 100) }));
+  // A grade typed ("elsa psa 10") rides on each card's value, or picking a
+  // suggestion would answer with the raw price. A finish is in the key already.
+  const g = q ? R.parse(q).A.dims.grade : null;
+  const gTok = g ? "|" + g.grader + (g.grade || "") : "";
+  const choices = R.suggest(q, 25).map((s) => ({ name: s.label.slice(0, 100),
+    value: s.kind === "card" && (s.value + gTok).length <= 100 ? s.value + gTok : s.value.slice(0, 100) }));
   return { type: R_.AUTOCOMPLETE, data: { choices } };
 }
 
@@ -54,8 +69,11 @@ function command(it, deps) {
   switch (d.name) {
     // /card answers in the big layout (layout.js); /price stays an embed.
     case "card": return deferred(it, deps, priv, async () => ({ ...(await lookup(String(optVal(o, "name", "")), "card", D.DEFAULT_RANGE, deps)), _layout: "big" }));
-    case "price": return deferred(it, deps, priv, () => lookup(String(optVal(o, "name", "")), "chart", String(optVal(o, "range", D.DEFAULT_RANGE)), deps));
+    // No range option given: null, so range words in the name can choose one.
+    case "price": return deferred(it, deps, priv, () => lookup(String(optVal(o, "name", "")), "chart", opt(o, "range") ? String(opt(o, "range").value) : null, deps));
     case "events": return deferred(it, deps, priv, () => events(o, deps));
+    // /calendar is folded into /events; a client that still lists it for a
+    // while after the commands are re-registered gets the same board.
     case "calendar": return deferred(it, deps, priv, () => calendar(deps));
     case "meta": return deferred(it, deps, priv, () => meta(deps));
     case "new": return deferred(it, deps, priv, () => newReply(deps));
@@ -115,7 +133,9 @@ const retryable = (status) => status === 0 || status === 429 || status >= 500;
 
 async function patchOriginal(it, deps, payload, { update = false } = {}) {
   const layout = (payload && payload._layout) || "embed";
-  if (payload && "_layout" in payload) { payload = { ...payload }; delete payload._layout; }
+  // The price history cardPayload already read, so the chart needn't read it again.
+  const history = (payload && payload._history) || null;
+  if (payload && ("_layout" in payload || "_history" in payload)) { payload = { ...payload }; delete payload._layout; delete payload._history; }
   const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
   const once = async (method, url, body, files) => {
     try {
@@ -148,7 +168,7 @@ async function patchOriginal(it, deps, payload, { update = false } = {}) {
   // its uploaded picture to the chart would otherwise keep the old file,
   // shown loose under the embed. A payload's own list wins.
   const plainBody = { attachments: [], ...payload };
-  const up = await withUploads(payload, deps).catch((e) => { deps.log && deps.log("upload prep failed", e && e.message); return null; });
+  const up = await withUploads(payload, deps, history).catch((e) => { deps.log && deps.log("upload prep failed", e && e.message); return null; });
   let r = await send("PATCH", orig, applyLayout(up ? up.body : plainBody, layout), up && up.files);
   if (r.ok) return;
   if (deps.log) deps.log("patch failed", r.status, (await r.text().catch(() => "")).slice(0, 800));
@@ -213,7 +233,7 @@ export function ownChartUrl(url, origin) {
 // {body, files} for a multipart edit, or null when there is nothing to upload.
 // Anything that can't be produced here (a file the asset store lacks, a chart
 // whose database read fails) keeps its link, which is how it worked before.
-export async function withUploads(payload, deps) {
+export async function withUploads(payload, deps, history = null) {
   if (!deps.origin || !payload || !Array.isArray(payload.embeds)) return null;
   const refs = [];
   payload.embeds.forEach((e, ei) => {
@@ -230,7 +250,7 @@ export async function withUploads(payload, deps) {
   if (!refs.length) return null;
   const got = await Promise.all(refs.map(async (ref) => {
     if (ref.chart) {
-      const r = await chartResponse(ref.chart, deps.db).catch((e) => { deps.log && deps.log("chart upload failed", e && e.message); return null; });
+      const r = await chartResponse(ref.chart, deps.db, { history }).catch((e) => { deps.log && deps.log("chart upload failed", e && e.message); return null; });
       if (!r || !r.ok) return null;
       return { ...ref, data: await r.arrayBuffer(), type: "image/png", ext: "png" };
     }
@@ -274,8 +294,13 @@ export function plainFallback(payload) {
 
 // ── /card and /price ─────────────────────────────────────────────────────
 export async function lookup(query, view, range, deps) {
+  // A blank name used to answer with random "Did you mean" cards.
+  if (!String(query || "").trim()) return { content: "Type a card name — e.g. `mowgli`, `elsa enchanted`, `azurite box`.", embeds: [], components: [] };
   const res = deps.R.resolve(query);
   if (res.kind === "none") return E.notFoundMessage(deps.R, res, query, deps.commandIds);
+  // Range words ("last year", "1 month") when no range was asked for. 6M has
+  // no button, so it shows 1Y, the window that covers it.
+  if (range == null && res.dims && res.dims.range) range = res.dims.range === "6m" ? "1y" : res.dims.range;
   if (!D.RANGES[range]) range = D.DEFAULT_RANGE;
   return res.kind === "sealed"
     ? sealedPayload(res, { view, range }, deps)
@@ -290,8 +315,12 @@ export async function cardPayload(res, { view, range, query }, deps) {
   const gt = D.gradedTarget(p, f && f[0]);
   const wantGrade = res.dims && res.dims.grade ? res.dims.grade : null;
   const settle = (pr) => pr.then((v) => v, (e) => { deps.log && deps.log("fetch failed", e && e.message); return null; });
+  let history = null;
   const [price, gradedAll, rawRows] = await Promise.all([
-    pid && !(f && f[6]) ? settle(D.priceHistory(db, pid, printingStr).then((rows) => D.priceSummary(rows, deps.index.priceDate))) : null,
+    pid && !(f && f[6]) ? settle(D.priceHistory(db, pid, printingStr).then((rows) => {
+      history = { pid: Number(pid), printing: printingStr, days: D.HISTORY_DAYS, rows };
+      return D.priceSummary(rows, deps.index.priceDate);
+    })) : null,
     (c.gs > 0 || p.g > 0 || wantGrade) ? settle(D.gradedRollup(db, gt.cardId)) : null,
     p.raw ? settle(D.rawRollup(db, gt.cardId)) : null,
   ]);
@@ -301,15 +330,23 @@ export async function cardPayload(res, { view, range, query }, deps) {
   let graded = D.topGradedTiers(forPrinting, 6);
   let grade = null;
   if (wantGrade) {
-    const hit = forPrinting.find((r) => r.grader === wantGrade.grader && String(r.grade) === String(wantGrade.grade));
+    const g = wantGrade.grader;
+    const ofGrader = forPrinting.filter((r) => r.grader === g);
+    // No grade named (or one that doesn't exist): the grader's best-selling tier.
+    const hit = wantGrade.grade != null
+      ? ofGrader.find((r) => String(r.grade) === String(wantGrade.grade))
+      : ofGrader.slice().sort((a, b) => (b.sale_count || 0) - (a.sale_count || 0) || Number(b.grade) - Number(a.grade))[0];
+    const notes = [];
+    if (wantGrade.bad) notes.push(`There's no ${g} ${wantGrade.bad} — ${g} grades top out at 10.`);
     if (hit) {
       grade = { grader: hit.grader, grade: String(hit.grade) };
       graded = [hit, ...graded.filter((r) => r !== hit)].slice(0, 6);
     } else {
-      res.notes = [...(res.notes || []), `No ${wantGrade.grader} ${wantGrade.grade} sales on record for this printing.`];
+      notes.push(`No ${g}${wantGrade.grade != null ? " " + wantGrade.grade : ""} sales on record for this printing.`);
     }
+    res.notes = [...(res.notes || []), ...notes];
   }
-  return E.cardMessage({
+  const msg = E.cardMessage({
     R, res, price, graded, view: grade && view === "chart" ? "graded" : view, range, query,
     raw: D.rawRowFor(rawRows || [], printingStr),
     rawTarget: { cardId: gt.cardId, bucket: rawSingle ? "" : gt.bucket },
@@ -317,10 +354,11 @@ export async function cardPayload(res, { view, range, query }, deps) {
     origin: deps.origin, inkColors: deps.index.inkColors, playSet: deps.index.playSet,
     priceDate: deps.index.priceDate,
   });
+  return history ? { ...msg, _history: history } : msg;
 }
 
 async function sealedPayload(res, { view, range }, deps) {
-  const price = await D.priceHistory(deps.db, res.item.pid, "Normal").then((rows) => D.priceSummary(rows, deps.index.priceDate), () => null);
+  const price = await D.sealedHistory(deps.db, res.item.pid, "Normal").then((rows) => D.priceSummary(rows, deps.index.priceDate), () => null);
   return E.sealedMessage({ R: deps.R, res, price, view, range, origin: deps.origin, today: deps.today });
 }
 
@@ -360,7 +398,7 @@ function component(it, deps) {
       if (!(r === "all" || CALENDAR_REGIONS.some((x) => x.key === r))) return { type: R_.DEFERRED_UPDATE };
       cal.region = r;
     }
-    return deferredUpdate(it, deps, () => calendar(deps, cal.kind, cal.region));
+    return deferredUpdate(it, deps, () => calendar(deps, cal.kind, cal.region, cal.page));
   }
   const ev = E.parseEventsId(id);
   if (ev) {
@@ -369,12 +407,20 @@ function component(it, deps) {
   }
   // A card reply keeps the layout it was sent in (layout.js).
   const keep = async (p) => ({ ...(await p), _layout: layoutOfMessage(it.message) });
+  // A key on an old message whose card has left the index: tell the clicker,
+  // and leave the message as it is for everyone else.
+  const gone = (key) => !deps.R.resolve(key).exact;
+  const goneReply = { type: R_.MESSAGE, data: { content: "That card is no longer listed on packs.ink.", flags: EPHEMERAL } };
   const rg = E.parseRangeId(id);
-  if (rg) return deferredUpdate(it, deps, () => keep(byKey(rg.key, rg.view, rg.range, deps, rg.grade)));
+  if (rg) {
+    if (gone(rg.key)) return goneReply;
+    return deferredUpdate(it, deps, () => keep(byKey(rg.key, rg.view, rg.range, deps, rg.grade)));
+  }
   const pk = E.parsePickId(id);
   if (pk) {
     const key = (it.data.values || [])[0];
     if (!key) return { type: R_.DEFERRED_UPDATE };
+    if (gone(key)) return goneReply;
     return deferredUpdate(it, deps, () => keep(byKey(key, pk.view === "graded" ? "chart" : pk.view, pk.range, deps)));
   }
   // "Look at a card" from a set, /new or /meta list: a NEW reply that
@@ -399,11 +445,29 @@ async function byKey(key, view, range, deps, grade) {
 }
 
 // ── /events ──────────────────────────────────────────────────────────────
+// One command, two boards. DLCs, CCQs and releases are the calendar, by
+// region; Set Championships, prereleases and weekly play are store events,
+// by place. "Everything" is the calendar with no place and the store board
+// with one. A place given for the calendar picks its region.
+const CAL_KINDS = ["release", "dlc", "ccq", "comp"];
 async function events(o, deps) {
   const near = String(optVal(o, "near", "")).trim();
   const radius = Math.min(250, Math.max(5, Number(optVal(o, "radius", 50)) || 50));
-  const kind = D.EVENT_KINDS.includes(String(optVal(o, "kind", "all"))) ? String(optVal(o, "kind", "all")) : "all";
-  const place = await D.resolvePlace(deps.db, near);
+  const asked = String(optVal(o, "kind", "all"));
+  const r = String(optVal(o, "region", "all"));
+  let region = CALENDAR_REGIONS.some((x) => x.key === r) ? r : "all";
+  if (CAL_KINDS.includes(asked) || (asked === "all" && !near)) {
+    if (near && region === "all") {
+      const at = await D.resolvePlace(deps.db, near).catch(() => null);
+      if (at && at.country) region = calRegionOf(at.country);
+    }
+    return calendar(deps, asked, region);
+  }
+  const kind = D.EVENT_KINDS.includes(asked) ? asked : "all";
+  if (!near) return { content: "Set Championships, prereleases and weekly play are found by place — add `near:` with a postal code or town.", embeds: [], components: [] };
+  // A lookup that failed twice is not "no such place".
+  const place = await D.resolvePlace(deps.db, near).catch((e) => { deps.log && deps.log("place lookup failed", e && e.message); return "failed"; });
+  if (place === "failed") return { content: `Couldn't look up “${E.escMd(near.slice(0, 60))}” just now — try again in a moment.`, embeds: [], components: [] };
   if (!place) return { content: `Couldn't place “${E.escMd(near.slice(0, 60))}”. Try a postal code, or a town name.`, embeds: [], components: [] };
   return eventsBoard({ place, radius, kind, query: near }, deps);
 }
@@ -429,10 +493,10 @@ async function meta(deps) {
   return E.metaMessage({ R: deps.R, index: deps.index, meta: m });
 }
 
-// ── /calendar ────────────────────────────────────────────────────────────
-async function calendar(deps, kind = "all", region = "all") {
+// ── the calendar (/events with no place) ─────────────────────────────────
+async function calendar(deps, kind = "all", region = "all", page = 0) {
   const all = await D.calendarEvents(deps.db);
-  return E.calendarMessage({ events: D.upcomingFiltered(all, { kind, region, n: 12 }), kind, region, regions: CALENDAR_REGIONS });
+  return E.calendarMessage({ events: D.upcomingFiltered(all, { kind, region, n: 0 }), kind, region, regions: CALENDAR_REGIONS, page });
 }
 
 // ── /reports (server managers) ───────────────────────────────────────────
@@ -510,30 +574,52 @@ async function reportSend(it, deps) {
 const setChoiceLabel = (s) => [s.n, s.main ? `Set ${s.main}` : null, s.rel && s.rel.lgs ? E.shortDate(s.rel.lgs) : null].filter(Boolean).join(" · ");
 // No name: the newest booster set — for /open the newest one that is OUT, since
 // a pack from a set with no prices yet is worth "$0.00" and says nothing.
+// Returns {si} for an indexed set, {up} for one the site has dated but the
+// catalog holds no cards of yet (Into the Inkdark), or {si: -1, num}.
 function pickSet(R, index, name, { released = false } = {}) {
-  if (name) return R.resolveSet(name);
+  if (name) return findSet(R, name);
   const today = new Date().toISOString().slice(0, 10);
   const mains = R.sets.map((s, i) => i).filter((i) => R.sets[i].main).sort((a, b) => R.sets[b].main - R.sets[a].main);
-  return (released ? mains.find((i) => !(R.sets[i].rel && R.sets[i].rel.lgs > today)) : mains[0]) ?? -1;
+  return { si: (released ? mains.find((i) => !(R.sets[i].rel && R.sets[i].rel.lgs > today)) : mains[0]) ?? -1 };
 }
-const noSet = (name) => ({ content: `No set called “${E.escMd(String(name).slice(0, 60))}”. Try a name or a number — \`hyperia city\`, \`azurite\`, \`set 5\`.`, embeds: [], components: [] });
+function findSet(R, name) {
+  const hit = R.resolveSetScored(name);
+  const num = setNumber(name);
+  const ups = D.upcomingSets(R);
+  let up = null, upScore = 0;
+  if (num != null) up = hit.si < 0 ? ups.find((u) => u.num === num) || null : null;
+  else for (const u of ups) { const s = setScore(setQuery(name), norm(u.n)); if (s > upScore) { upScore = s; up = u; } }
+  if (up && (num != null || upScore > hit.score)) return { up };
+  return { si: hit.si, num };
+}
+const noSet = (name, num) => ({ content: num != null
+  ? `There's no set ${num} on packs.ink. Try a name or a number — \`hyperia city\`, \`azurite\`, \`set 5\`.`
+  : `No set called “${E.escMd(String(name).slice(0, 60))}”. Try a name or a number — \`hyperia city\`, \`azurite\`, \`set 5\`.`, embeds: [], components: [] });
+const notOutYet = (s, more = "") => ({ content: E.notOutYetText(s) + more, embeds: [], components: [] });
 
 export function setReply(name, deps) {
-  const si = pickSet(deps.R, deps.index, name);
-  if (si < 0) return noSet(name);
-  return setReplyAt(si, deps);
+  const f = pickSet(deps.R, deps.index, name);
+  if (f.up) return notOutYet(f.up, " No cards of it are on packs.ink yet — `/events` has what's coming.");
+  if (f.si < 0) return noSet(name, f.num);
+  return setReplyAt(f.si, deps);
 }
 export function setReplyAt(si, deps) {
   return setMessage(setOverview(deps.R, deps.index, si), { origin: deps.origin });
 }
 
 export function packReply(name, n, it, deps) {
-  const si = pickSet(deps.R, deps.index, name, { released: true });
-  if (si < 0) return noSet(name);
+  const f = pickSet(deps.R, deps.index, name, { released: true });
+  if (f.up) return notOutYet(f.up, " Nothing to open until then.");
+  const si = f.si;
+  if (si < 0) return noSet(name, f.num);
   const set = deps.R.sets[si];
   if (!set.main) return { content: `${set.n} isn't sold in booster packs — try a main set, like \`${deps.index.newestMain}\`.`, embeds: [], components: [] };
+  // A named set still being revealed: pre-sale prices, and an empty pool.
+  if (set.rel && set.rel.lgs && set.rel.lgs > new Date().toISOString().slice(0, 10)) {
+    return notOutYet({ n: set.n, num: set.main, lgs: set.rel.lgs }, ` \`/set ${set.n}\` shows what's been revealed so far.`);
+  }
   const u = (it && ((it.member && it.member.user) || it.user)) || {};
-  const who = String(u.global_name || u.username || "").slice(0, 32).replace(/[*_~`|>\\]/g, "\\$&");
+  const who = E.escMd(String(u.global_name || u.username || "").slice(0, 32));
   return packMessage(deps.R, deps.index, si, openPacks(deps.R, si, n), { origin: deps.origin, who });
 }
 

@@ -5,6 +5,7 @@
 // Installable to a server AND to a person's own account; usable in servers,
 // DMs with the bot, and group DMs / other people's DMs when user-installed.
 const EVERYWHERE = { integration_types: [0, 1], contexts: [0, 1, 2] };
+import { CALENDAR_REGIONS } from "../src/site.generated.js";
 
 const nameOpt = {
   type: 3, name: "name", required: true, autocomplete: true, max_length: 100,
@@ -19,7 +20,7 @@ const rangeChoices = [
 export const COMMANDS = [
   {
     name: "card", type: 1, ...EVERYWHERE,
-    description: "A Lorcana card: its picture, text, stats, price and how much it's played",
+    description: "A Lorcana card, big: its picture with prices and recent changes, and how much it's played",
     options: [nameOpt, privOpt],
   },
   {
@@ -29,25 +30,24 @@ export const COMMANDS = [
   },
   {
     name: "events", type: 1, ...EVERYWHERE,
-    description: "Upcoming Lorcana events near a postal code or town",
+    description: "Upcoming Lorcana events: DLCs, CCQs and releases by region, or store events near you",
     options: [
-      { type: 3, name: "near", required: true, max_length: 60, description: "Postal code or town — 60614, M5V 3L9, Elgin IL" },
-      { type: 4, name: "radius", description: "Miles (default 50)", choices: [
+      { type: 3, name: "kind", description: "Which events (default everything)", choices: [
+        { name: "Everything", value: "all" }, { name: "DLCs (Disney Lorcana Challenges)", value: "dlc" }, { name: "CCQs", value: "ccq" },
+        { name: "DLCs + CCQs", value: "comp" }, { name: "Set and product releases", value: "release" },
+        { name: "Set Championships (needs near)", value: "sc" }, { name: "Prereleases (needs near)", value: "prerelease" },
+        { name: "Weekly play: league nights, locals (needs near)", value: "other" }] },
+      { type: 3, name: "region", description: "DLCs, CCQs: which region (default everywhere, or near's)", choices: [
+        { name: "Everywhere", value: "all" }, ...CALENDAR_REGIONS.map((r) => ({ name: r.label, value: r.key }))] },
+      { type: 3, name: "near", max_length: 60, description: "Postal code or town — 60614, M5V 3L9, Elgin IL" },
+      { type: 4, name: "radius", description: "Store events: miles (default 50)", choices: [
         { name: "10 mi", value: 10 }, { name: "25 mi", value: 25 }, { name: "50 mi", value: 50 }, { name: "100 mi", value: 100 }] },
-      { type: 3, name: "kind", description: "Which events (default all)", choices: [
-        { name: "All events", value: "all" }, { name: "Set Championships", value: "sc" }, { name: "Prereleases", value: "prerelease" },
-        { name: "Weekly play (league nights, locals)", value: "other" }] },
       privOpt,
     ],
   },
   {
     name: "meta", type: 1, ...EVERYWHERE,
     description: "What's winning: ink pairs in recent top cuts, the most-played cards, the latest big events",
-    options: [privOpt],
-  },
-  {
-    name: "calendar", type: 1, ...EVERYWHERE,
-    description: "Set releases, Challenges and qualifiers coming up",
     options: [privOpt],
   },
   { name: "kaylee", type: 1, ...EVERYWHERE, description: "Kaylee's pack stats. Totally normal.", options: [privOpt] },

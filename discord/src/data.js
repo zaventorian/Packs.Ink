@@ -1,6 +1,6 @@
 // data.js — what the bot asks the database, shaped the way the site shapes it.
 import {
-  computeSeriesDeltas, priceStanding, seriesPricedOn, gradedSlotBucket, rawSaleMatch,
+  computeSeriesDeltas, priceStanding, seriesPricedOn, fixSealedLows, gradedSlotBucket, rawSaleMatch,
   gradedCatalogBuckets, gradedSplitTiers, buildGradedPriceIndex, makeGradedPrintingLookup,
   canonicalGradedSlot, SPLIT_PRINTING_CARD_IDS,
   calendarMergeEvents, calendarSetEntries, calendarEstimatedSetEntries, calendarSetEstimates,
@@ -25,7 +25,8 @@ export async function latestPriceDate(db) {
 // The same query the site's fetchCardHistory runs (source=tcgcsv, grade=raw),
 // bounded to what is actually needed: a year and a bit covers every delta
 // window and the 12-month price standing; "all" asks for everything.
-export async function priceHistory(db, pid, printing, { sinceDays = 400 } = {}) {
+export const HISTORY_DAYS = 400;
+export async function priceHistory(db, pid, printing, { sinceDays = HISTORY_DAYS } = {}) {
   if (!pid) return [];
   const params = {
     select: "date,low_price,market_price",
@@ -35,6 +36,12 @@ export async function priceHistory(db, pid, printing, { sinceDays = 400 } = {}) 
   };
   if (sinceDays) params.date = "gte." + ymd(Date.now() - sinceDays * DAY);
   return db.all("prices_daily", params);
+}
+
+// Sealed product's history, with the site's fixSealedLows: a Low under a fifth
+// of Market is one bad listing ($1.00 on a $125 box), and Market stands in.
+export async function sealedHistory(db, pid, printing = "Normal", opts) {
+  return fixSealedLows(await priceHistory(db, pid, printing, opts));
 }
 
 // Everything the card view says about a price, from one history fetch.
@@ -294,16 +301,25 @@ export async function resolvePlace(db, query, home = "US") {
   const m = /^(.*?)[,\s]+([A-Za-z]{2})$/.exec(raw);
   const town = m && m[1].trim().length >= 2 ? m[1].trim() : raw;
   const st = m && m[1].trim().length >= 2 ? m[2].toUpperCase() : null;
-  const rows = await db.get("lorcana_events", {
+  // ⚠ A failed read is not "no such town": it is retried once, and a second
+  // failure throws, so the reply can say to try again.
+  const read = () => db.get("lorcana_events", {
     select: "city,state,country,latitude,longitude",
     city: "ilike." + town.replace(/[%_*,]/g, "") + "%",
     latitude: "not.is.null", order: "city.asc", limit: 400,
-  }).catch(() => []);
+  });
+  const rows = await read().catch(() => read());
   // …or a country: "london gb" is not London, Kentucky.
   const inState = st ? (rows || []).filter((r) => String(r.state || "").toUpperCase() === st
     || String(r.country || "").toUpperCase() === st) : [];
   const places = scRankPlaces(inState.length ? inState : rows || [], town, home);
-  return places[0] || null;
+  const top = places[0];
+  if (!top) return null;
+  // A bare town that names several places (Elgin TX and Elgin IL): the reply
+  // says how to pick another — `alt` is one other's state or country.
+  const other = !st && places.find((p) => p !== top && p.city.toLowerCase() === top.city.toLowerCase()
+    && (p.state || p.country) !== (top.state || top.country));
+  return other ? { ...top, alt: other.state || other.country } : top;
 }
 
 export async function nearbyEvents(db, place, { radius = 50, kind = null, maxSeries = 60, maxOcc = 4 } = {}) {
@@ -320,14 +336,43 @@ export async function nearbyEvents(db, place, { radius = 50, kind = null, maxSer
 // occurrence per series: the next date is all a list needs, and each
 // occurrence carries a description of up to 1,000 characters.
 export const EVENT_KINDS = ["sc", "prerelease", "other"];
+// How many series the RPC is asked for per kind. A list that comes back this
+// long was CUT, so its count reads "15+", never 15.
+export const EVENT_MAX_SERIES = { sc: 15, prerelease: 15, other: 40 };
+// ⚠ Weekly play is asked at every radius button up to the one chosen, merged:
+// the RPC keeps the SOONEST series, so at 50 mi forty sooner, farther nights
+// pushed out the store 2 mi away. A nearer radius's answer is always kept, so
+// a wider radius never drops a nearer store.
+const EVENT_RINGS = [10, 25, 50, 100];
 export async function nearbyByKind(db, place, { radius = 50, kind = "all" } = {}) {
   const want = kind === "all" ? EVENT_KINDS : EVENT_KINDS.filter((k) => k === kind);
-  const out = { sc: [], prerelease: [], other: [] };
-  const got = await Promise.all(want.map((k) => nearbyEvents(db, place, {
-    radius, kind: k, maxSeries: k === "other" ? 40 : 15, maxOcc: 1,
-  }).then((rows) => [k, rows || []], () => [k, null])));
-  for (const [k, rows] of got) out[k] = rows;
+  const out = { sc: [], prerelease: [], other: [], capped: {} };
+  const ask = (k, r) => nearbyEvents(db, place, { radius: r, kind: k, maxSeries: EVENT_MAX_SERIES[k], maxOcc: 1 });
+  const got = await Promise.all(want.map(async (k) => {
+    const radii = k === "other" ? [...EVENT_RINGS.filter((r) => r < radius), radius] : [radius];
+    // The chosen radius failing is "couldn't load"; a nearer ring failing just adds nothing.
+    const res = await Promise.all(radii.map((r, i) => ask(k, r).then((x) => x || [], () => (i === radii.length - 1 ? null : []))));
+    const outer = res[res.length - 1];
+    if (outer === null) return [k, null, false];
+    const byKey = new Map();
+    for (const s of res.flat()) if (s) byKey.set(s.series_key ?? JSON.stringify([s.store_id, s.dow, s.local_time, s.gameplay_format, s.next_start]), s);
+    return [k, [...byKey.values()], outer.length >= EVENT_MAX_SERIES[k]];
+  }));
+  for (const [k, rows, cut] of got) { out[k] = rows; out.capped[k] = cut; }
   return out;
+}
+
+// ── sets the site has dated but the catalog holds no cards of ──────────
+// The build drops a set with no cards (its name would match nothing), so a
+// set like Into the Inkdark is only known from SET_RELEASE_DATES, which lists
+// the booster sets in release order — its position is the set number (the
+// guard pins that its first entries are MAINLINE_SETS).
+export function upcomingSets(R) {
+  const have = new Set(((R && R.sets) || []).map((s) => s.n));
+  return Object.entries(SET_RELEASE_DATES)
+    .sort((a, b) => String(a[1].lgs).localeCompare(String(b[1].lgs)))
+    .map(([n, d], k) => ({ n, num: k + 1, lgs: d.lgs || null, retail: d.retail || null }))
+    .filter((u) => !have.has(u.n));
 }
 
 // ── the release + competitive calendar ───────────────────────────────────
@@ -350,10 +395,10 @@ export async function calendarEvents(db) {
 }
 export const upcoming = (events, n) => calendarUpcoming(events, calTodayYmd(), n);
 
-// /calendar's filters. A set or product release is in no place — it comes
-// out everywhere — so a region filter never drops one (the site's
-// calRegionless rule); it narrows the Challenges and qualifiers.
-export const CAL_FILTERS = { all: null, release: ["set", "product"], dlc: ["dlc"], ccq: ["ccq"] };
+// The calendar's filters (/events with no place). A set or product release
+// is in no place — it comes out everywhere — so a region filter never drops
+// one (the site's calRegionless rule); it narrows the DLCs and CCQs.
+export const CAL_FILTERS = { all: null, release: ["set", "product"], dlc: ["dlc"], ccq: ["ccq"], comp: ["dlc", "ccq"] };
 export function upcomingFiltered(events, { kind = "all", region = "all", n = 12 } = {}) {
   const kinds = CAL_FILTERS[kind] || null;
   const list = (events || []).filter((e) => (!kinds || kinds.includes(e.kind)) &&

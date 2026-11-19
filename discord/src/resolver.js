@@ -116,6 +116,21 @@ export function popcount(x) {
   return (((x + (x >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24;
 }
 
+// ── set names and numbers (pure, shared with the Worker's upcoming sets) ──
+// "set 15", "s15", "chapter 15", "ch15", a bare "15": the number, else null.
+export function setNumber(raw) {
+  const m = /^(?:set|s|chapter|ch)?\s*(\d{1,3})$/.exec(norm(raw));
+  return m ? Number(m[1]) : null;
+}
+export const setQuery = (raw) => norm(String(raw || "").replace(/^set\s+(?=\D)/i, ""));
+export function setScore(q, p) {
+  if (p === q) return 2;
+  if (p.startsWith(q)) return 1 + q.length / p.length / 10;
+  if (q.length >= 4 && p.includes(q)) return 0.7 + q.length / p.length / 10;
+  const d = dl(q, p, q.length >= 8 ? 2 : 1);
+  return d <= (q.length >= 8 ? 2 : 1) && q.length >= 4 ? 0.8 - d * 0.1 : 0;
+}
+
 export function createResolver(index) {
   const sets = index.sets || [];
   const cards = index.cards || [];
@@ -261,17 +276,35 @@ export function createResolver(index) {
       base.grade = { grader: GRADERS[g], grade: n };
       return " ";
     });
+    // A grade no grader gives ("psa 11"): kept as `bad`, so the reply can say
+    // so and show the grader's best tier instead.
+    s = s.replace(/\b(psa|cgc|bgs|beckett|sgc)\s*-?\s*(\d{1,3}(?:\.\d+)?)\b/g, (_, g, n) => {
+      if (!base.grade) base.grade = { grader: GRADERS[g], grade: null, bad: n };
+      return " ";
+    });
+    // A grader alone ("elsa psa"): grade null means that grader's best-selling tier.
     s = s.replace(/\b(psa|cgc|bgs|beckett|sgc)\b/g, (_, g) => {
       if (!base.grade) base.grade = { grader: GRADERS[g], grade: null };
       return " ";
     });
     if (/\bblack\s*label\b/.test(s)) { base.grade = { grader: "BGS", grade: "10" }; s = s.replace(/\bblack\s*label\b/g, " "); }
-    if (/\bgem\s*mint\b/.test(s)) { if (!base.grade) base.grade = { grader: "PSA", grade: "10" }; s = s.replace(/\bgem\s*mint\b/g, " "); }
+    if (/\bgem\s*mint\b/.test(s)) {
+      if (!base.grade) base.grade = { grader: "PSA", grade: "10" };
+      else if (base.grade.grade == null) base.grade = { grader: base.grade.grader, grade: "10" };
+      s = s.replace(/\bgem\s*mint\b/g, " ");
+    }
     if (/\b(graded|slab|slabs|slabbed)\b/.test(s)) { base.graded = true; s = s.replace(/\b(graded|slab|slabs|slabbed)\b/g, " "); }
     if (base.grade) base.graded = true;
     // Collector numbers: "#42", "42/204", "no. 42", "#215 error".
     s = s.replace(/(?:#|\bno\.?\s*)(\d{1,3}[a-z]?)\b|\b(\d{1,3}[a-z]?)\s*\/\s*(?:\d{1,3}|[a-z]{1,3}\d?)\b/g, (_, a, b) => {
       base.number = String(a || b).toLowerCase();
+      return " ";
+    });
+    // "set 15" naming no indexed set is a set that isn't here, never name
+    // words: "set 15 box" found the card Weight Set.
+    s = s.replace(/\b(?:set|chapter)\s*(\d{1,3})\b/g, (m, n) => {
+      if (phrases.has(norm(m))) return m;
+      base.noSet = Number(n);
       return " ";
     });
     const toks = tokens(s);
@@ -288,6 +321,11 @@ export function createResolver(index) {
         const t = toks[i];
         const fz = t.length >= 6 && !nameVocab.has(t) ? RARITY_FUZZ.find((w) => dl(t, w, 2) <= (w.length >= 8 ? 2 : 1)) : null;
         if (fz) { A.dims.rarity = B.dims.rarity = RARITY_WORDS[fz]; i++; continue; }
+        // A bare number AFTER a name ("elsa 42") is a collector number, like
+        // "#42" — unless some card's name carries that number as a word.
+        if (/^\d{1,3}$/.test(t) && A.dims.number == null && !nameVocab.has(t) && A.name.some((w) => !FILLER.has(w) && !STOP.has(w))) {
+          A.dims.number = B.dims.number = t; i++; continue;
+        }
         A.name.push(t); B.name.push(t); i++; continue;
       }
       const span = toks.slice(i, i + len);
@@ -580,6 +618,7 @@ export function createResolver(index) {
     const direct = resolveKey(q);
     if (direct) return direct;
     const { A, B } = parse(q);
+    if (A.dims.noSet != null) return { kind: "none", dims: A.dims, notes: [], query: q, dimsOnly: false, suggestions: [] };
     const cache = new Map();
     const a = evaluate(A, cache);
     let b = B ? evaluate(B, cache) : null;
@@ -631,12 +670,15 @@ export function createResolver(index) {
   const cardKey = (p, fi) => "c|" + p.id + "|" + ((p.f[fi] || p.f[0] || ["N"])[0]);
   const sealedKey = (it) => "s|" + it.pid;
   function resolveKey(q) {
-    let m = q.match(/^c\|([^|\s]+)(?:\|([NCHF]))?$/);
+    // An autocomplete pick may carry the grade that was typed: "c|<id>|N|PSA10",
+    // or "|PSA" for a grader alone (its best tier).
+    let m = q.match(/^c\|([^|\s]+)(?:\|([NCHF]))?(?:\|([A-Z]{2,4})(10|[1-9](?:\.5)?)?)?$/);
     if (m && byCardId.has(m[1])) {
       const { i, p } = byCardId.get(m[1]);
       const k = m[2] ? p.f.findIndex((f) => f[0] === m[2]) : -1;
       const fi = k >= 0 ? k : defaultFinish(p);
-      return { kind: "card", card: cards[i], index: i, printing: p, fi, dims: {}, notes: [], score: 1, exact: true, alts: sameCharAlts(i), basis: "play" };
+      const dims = m[3] ? { grade: { grader: m[3], grade: m[4] || null }, graded: true } : {};
+      return { kind: "card", card: cards[i], index: i, printing: p, fi, dims, notes: [], score: 1, exact: true, alts: sameCharAlts(i), basis: m[3] ? "collector" : "play" };
     }
     m = q.match(/^s\|(\d+)$/);
     if (m && sealedByPid.has(m[1])) {
@@ -829,24 +871,26 @@ export function createResolver(index) {
   // "/set hyperia", "set 5", "azurite", "rotf", "ursulas return": the set's
   // index, or -1. The names and nicknames are the same phrase table the card
   // lookup filters with, so a set is called the same thing in both places.
-  function setScore(q, p) {
-    if (p === q) return 2;
-    if (p.startsWith(q)) return 1 + q.length / p.length / 10;
-    if (q.length >= 4 && p.includes(q)) return 0.7 + q.length / p.length / 10;
-    const d = dl(q, p, q.length >= 8 ? 2 : 1);
-    return d <= (q.length >= 8 ? 2 : 1) && q.length >= 4 ? 0.8 - d * 0.1 : 0;
-  }
-  function resolveSet(raw) {
-    const q = norm(String(raw || "").replace(/^set\s+(?=\D)/i, ""));
-    if (!q) return -1;
+  // {si, score}: the best set and how well it matched (0 when none did).
+  // ⚠ A set NUMBER is exact: "set 15" was one edit from "set 1" and opened The
+  // First Chapter. A number no booster set carries matches nothing.
+  function resolveSetScored(raw) {
+    const n = setNumber(raw);
+    if (n != null) {
+      const si = sets.findIndex((s) => s.main === n);
+      return { si, score: si >= 0 ? 2 : 0 };
+    }
+    const q = setQuery(raw);
+    if (!q) return { si: -1, score: 0 };
     let best = -1, bestScore = 0;
     for (const [p, ph] of phrases) {
       if (ph.type !== "set") continue;
       const s = setScore(q, p);
       if (s > bestScore) { bestScore = s; best = ph.value; }
     }
-    return best;
+    return { si: best, score: bestScore };
   }
+  const resolveSet = (raw) => resolveSetScored(raw).si;
   // Autocomplete for a set option: booster sets newest first when nothing is
   // typed, otherwise the best matches.
   function suggestSets(raw, limit = 25) {
@@ -908,14 +952,14 @@ export function createResolver(index) {
     return c.n + " — " + fitParts([statParts(c, { marks: true }), printing], room, ["inkable", "~set", "kw", "uninkable", "type", "set"], " | ", 0);
   }
   function sealedLabel(p) {
-    const px = money(p.mkt ?? p.low);
+    const px = money(p.low ?? p.mkt);
     let label = p.n + (px ? " · " + px : "");
     if (label.length > 100) label = label.slice(0, 99) + "…";
     return label;
   }
 
   return {
-    resolve, suggest, findInText, parse, cardLabel, suggestLabel, sealedLabel, finishLabel, sameCharAlts, resolveSet, suggestSets, defaultFinish,
+    resolve, suggest, findInText, parse, cardLabel, suggestLabel, sealedLabel, finishLabel, sameCharAlts, resolveSet, resolveSetScored, suggestSets, defaultFinish,
     pickPrinting: (i, dims = {}, words = []) => pickPrinting(cards[i], dims, [], words),
     cardKey, sealedKey, cards, sets, sealed, byCardId, sealedByPid, newestMainIdx, meta,
   };
