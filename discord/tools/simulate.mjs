@@ -113,14 +113,19 @@ function parseLine(line) {
   if (!m) throw new Error("say it like: /price mowgli");
   const [, name, rest] = m;
   if (name === "price" || name === "card") return cmd(name, [{ type: 3, name: "name", value: rest }]);
-  if (name === "events") return cmd(name, [{ type: 3, name: "near", value: rest || "60614" }]);
+  // "/events 60614" is near:; "/events kind:comp region:eu" sets options.
+  if (name === "events") {
+    const kv = [...rest.matchAll(/(\w+):(\S+)/g)].map(([, k, v]) => ({ type: k === "radius" ? 4 : 3, name: k, value: k === "radius" ? Number(v) : v }));
+    const bare = rest.replace(/\w+:\S+/g, "").trim();
+    return cmd(name, bare ? [...kv, { type: 3, name: "near", value: bare }] : kv);
+  }
   if (name === "set" || name === "open") return cmd(name, rest ? [{ type: 3, name: "set", value: rest }] : []);
   return cmd(name, []);
 }
 
 const script = process.argv.slice(2).length ? process.argv.slice(2) : [
   "/price mowgli", "/card enchanted elsa", "/price elsa psa 10", "/price azurite sea box",
-  "/price asdfgh", "/events 60614", "/calendar", "/meta", "/help", "/set azurite", "/set", "/open fabled", "/new",
+  "/price asdfgh", "/events 60614", "/events", "/events kind:comp region:eu", "/meta", "/help", "/set azurite", "/set", "/open fabled", "/new",
 ];
 
 const bad = await (async () => {

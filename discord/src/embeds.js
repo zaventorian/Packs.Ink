@@ -542,7 +542,7 @@ export function notFoundMessage(R, res, query, ids) {
     // "set 15 box": a set that isn't in the catalog — say which, and when.
     const up = upcomingSets(R).find((u) => u.num === noSet);
     lines[0] = up ? notOutYetText(up) : `There's no set ${noSet} on packs.ink.`;
-    lines.push(`${cmdMention(ids, "calendar")} shows what's coming.`);
+    lines.push(`${cmdMention(ids, "events")} shows what's coming.`);
   } else if (/^(?:\d{5}(?:-\d{4})?|[a-z]\d[a-z] ?\d[a-z]\d|[a-z]{1,2}\d[a-z\d]? ?\d[a-z]{2})$/i.test(q)) {
     lines.push(`Looks like a postal code — for events near there, try ${cmdMention(ids, "events")} \`${clip(q, 12)}\`.`);
   } else if (R.resolveSet && R.resolveSet(q) >= 0 && /\S/.test(q)) {
@@ -697,15 +697,20 @@ export function eventsMessage({ place, byKind, radius, kind = "all", query }) {
   };
 }
 
-// ── the calendar ─────────────────────────────────────────────────────────
+// ── the calendar (/events with no place) ─────────────────────────────────
 // Grouped by month, one line an event, marked by kind; buttons narrow the
-// kind and a menu the region. custom_id "cl|<control>|<kind>|<region>".
+// kind, a menu the region, and Previous/Next walk the pages — EVERY upcoming
+// event is reachable, never a first dozen. custom_id
+// "cl|<control>|<kind>|<region>[|<page>]" (no page = the first; old
+// messages' ids still parse).
 const CAL_MARK = { set: "📦", product: "🎁", dlc: "🏆", ccq: "🎟️" };
-const CAL_KIND_BUTTONS = [["all", "Everything"], ["release", "Releases"], ["dlc", "Challenges"], ["ccq", "Qualifiers"]];
-export const calendarId = (ctl, s) => `cl|${ctl}|${s.kind}|${s.region}`;
+// The site's names: DLCs and CCQs.
+const CAL_KIND_BUTTONS = [["all", "Everything"], ["release", "Releases"], ["dlc", "DLCs"], ["ccq", "CCQs"], ["comp", "DLCs + CCQs"]];
+export const CAL_PAGE = 15;
+export const calendarId = (ctl, s) => `cl|${ctl}|${s.kind}|${s.region}` + (s.page > 0 ? `|${s.page}` : "");
 export function parseCalendarId(id) {
-  const m = /^cl\|([kr])\|(all|release|dlc|ccq)\|([a-z]{2,6})$/.exec(String(id || ""));
-  return m ? { kind: m[2], region: m[3] } : null;
+  const m = /^cl\|([kpr])\|(all|release|dlc|ccq|comp)\|([a-z]{2,6})(?:\|(\d{1,3}))?$/.exec(String(id || ""));
+  return m ? { kind: m[2], region: m[3], page: m[4] ? Number(m[4]) : 0 } : null;
 }
 // "Charlie's Collectible Show · 3801 Sumner Blvd, Raleigh, NC 27616" -> the
 // part a reader places an event by: the last "·" segment, its last two
@@ -715,9 +720,12 @@ export function shortPlace(loc) {
   const parts = seg.split(",").map((s) => s.trim()).filter(Boolean);
   return clip(parts.length > 2 ? parts.slice(-2).join(", ") : seg, 40);
 }
-export function calendarMessage({ events, kind = "all", region = "all", regions = [] }) {
+export function calendarMessage({ events, kind = "all", region = "all", regions = [], page = 0 }) {
+  const all = events || [];
+  const pages = Math.max(1, Math.ceil(all.length / CAL_PAGE));
+  page = Math.min(Math.max(0, Math.floor(Number(page) || 0)), pages - 1);
   const months = new Map();
-  (events || []).forEach((e, k) => {
+  all.slice(page * CAL_PAGE, (page + 1) * CAL_PAGE).forEach((e, k) => {
     const m = /^(\d{4})-(\d{2})/.exec(String(e.starts_on || ""));
     const key = m ? `${MONTH_NAMES[+m[2] - 1]} ${m[1]}` : "Later";
     if (!months.has(key)) months.set(key, []);
@@ -725,29 +733,30 @@ export function calendarMessage({ events, kind = "all", region = "all", regions 
     const when = Number.isFinite(t) ? `<t:${Math.floor(t / 1000)}:D>` : shortDate(e.starts_on);
     // The countdown on the first entry only — "in 3 weeks" beside every line
     // is noise, beside the next thing it is the answer.
-    const rel = k === 0 && Number.isFinite(t) ? ` (<t:${Math.floor(t / 1000)}:R>)` : "";
+    const rel = page === 0 && k === 0 && Number.isFinite(t) ? ` (<t:${Math.floor(t / 1000)}:R>)` : "";
     const name = clip(calEventTitle(e), 60);
-    const page = eventPageUrl(e.id) || (e.url && /^https:\/\//.test(e.url) && e.url.length <= 300 ? e.url : null);
-    const title = page ? `[${name}](${page})` : `**${name}**`;
+    const link = eventPageUrl(e.id) || (e.url && /^https:\/\//.test(e.url) && e.url.length <= 300 ? e.url : null);
+    const title = link ? `[${name}](${link})` : `**${name}**`;
     const where = (e.kind === "dlc" || e.kind === "ccq") && e.location ? " · " + shortPlace(e.location) : "";
     months.get(key).push(`${CAL_MARK[e.kind] || "•"} ${title}${e.estimated ? " *(estimated)*" : ""}${where} — ${when}${rel}`);
   });
+  // Whole lines only (a line clipped mid-way is a broken link or a raw <t:…>
+  // tag on screen); a busy month carries on in a second field rather than
+  // dropping events. A page is CAL_PAGE lines, well inside 25 fields and the
+  // 6,000-character message.
   const fields = [];
   for (const [name, lines] of months) {
-    if (fields.length >= 12) break;
-    // Whole lines only: a line clipped mid-way is a broken link or a raw
-    // <t:…> tag on screen.
-    const kept = [];
+    let kept = [];
     let used = 0;
+    const flush = () => { fields.push({ name: fields.some((f) => f.name === name) ? `${name} (cont.)` : name, value: kept.join("\n") }); kept = []; used = 0; };
     for (const l of lines) {
-      if (used + l.length + 1 > 990) break;
+      if (kept.length && used + l.length + 1 > 1000) flush();
       kept.push(l);
       used += l.length + 1;
     }
-    if (kept.length < lines.length) kept.push(`*…and ${lines.length - kept.length} more*`);
-    fields.push({ name, value: kept.join("\n") });
+    if (kept.length) flush();
   }
-  const label = { all: "Coming up in Lorcana", release: "Set and product releases", dlc: "Disney Lorcana Challenges", ccq: "Challenge qualifiers" }[kind];
+  const label = { all: "Coming up in Lorcana", release: "Set and product releases", dlc: "Upcoming DLCs", ccq: "Upcoming CCQs", comp: "Upcoming DLCs and CCQs" }[kind];
   const regionName = region !== "all" ? (regions.find((r) => r.key === region) || {}).label : null;
   const site = new URL(SITE + "/calendar");
   if (kind !== "all") site.searchParams.set("ck", (CAL_FILTERS[kind] || []).join(","));
@@ -755,14 +764,22 @@ export function calendarMessage({ events, kind = "all", region = "all", regions 
   return {
     embeds: [{
       title: label + (regionName ? ` · ${regionName}` : ""), color: BRAND_COLOR, url: site.toString(),
-      ...(fields.length ? { fields } : { description: "Nothing on the calendar for that — try Everything, or another region." }),
-      footer: { text: "📦 release · 🎁 product · 🏆 Challenge · 🎟️ qualifier · dates in your time zone · packs.ink/calendar" },
+      ...(fields.length
+        ? { fields, ...(pages > 1 ? { description: `${all.length} coming up · page ${page + 1} of ${pages}` } : {}) }
+        : { description: "Nothing on the calendar for that — try Everything, or another region." }),
+      footer: { text: "📦 release · 🎁 product · 🏆 DLC · 🎟️ CCQ · dates in your time zone · packs.ink/calendar" },
     }],
     components: [
       { type: 1, components: CAL_KIND_BUTTONS.map(([k, l]) => ({ type: 2, style: k === kind ? 1 : 2, label: l, custom_id: calendarId("k", { kind: k, region }), disabled: k === kind })) },
       { type: 1, components: [{ type: 3, custom_id: calendarId("r", { kind, region }), placeholder: "Region",
         options: [{ key: "all", label: "Everywhere" }, ...regions].slice(0, 25).map((r) => ({ label: r.label, value: r.key, default: r.key === region })) }] },
-      { type: 1, components: [{ type: 2, style: 5, label: "Full calendar", url: site.toString() }] },
+      { type: 1, components: [
+        ...(pages > 1 ? [
+          { type: 2, style: 2, label: "◀ Previous", custom_id: calendarId("p", { kind, region, page: Math.max(0, page - 1) }), disabled: page === 0 },
+          { type: 2, style: 2, label: "Next ▶", custom_id: calendarId("p", { kind, region, page: page + 1 }), disabled: page >= pages - 1 },
+        ] : []),
+        { type: 2, style: 5, label: "Full calendar", url: site.toString() },
+      ] },
     ],
   };
 }
@@ -797,9 +814,9 @@ export function helpMessage(ids) {
           `${c("new")} — the newest cards, as they're revealed`,
         ].join("\n") },
         { name: "Play", value: [
-          `${c("events")} \`60614\` — Set Championships, prereleases and weekly play near you`,
+          `${c("events")} — DLCs, CCQs and set releases coming up, by region`,
+          `${c("events")} \`near: 60614\` — Set Championships, prereleases and weekly play near you`,
           `${c("meta")} — which ink pairs win, the most-played cards, the latest big events`,
-          `${c("calendar")} — set releases, Challenges and qualifiers coming up`,
         ].join("\n") },
         { name: "For fun", value: `${c("open")} — open a booster pack (or a box) at real prices` },
         { name: "Server managers", value: `${c("reports daily")} — the day's movers posted in a channel · ${c("reports send")} — post one now` },

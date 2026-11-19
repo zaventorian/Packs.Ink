@@ -17,8 +17,8 @@ on workers.dev), so deploying it can never touch packs.ink.
 | `/new` | The newest cards: everything added to packs.ink in the last four days (the site's reveal reel), grouped by day, with a picture grid and a menu to open any of them. Cards added since the bot's daily rebuild are included. |
 | `/open` | Open a simulated booster pack — or `box: True`, a whole box — with the site's pull rates and real prices. |
 | `/meta` | What's winning: every top-8 deck since the newest set came out, by ink pair (share, top 4s, wins); the most-played cards; and the top four of the three biggest events of the last three weeks, with links to their decks. |
-| `/events 60614` | Near a postal code or town: Set Championships, prereleases (nearest first, seats and fees), and weekly play one line per store, each linking to its page on packs.ink. Buttons change the kind and the radius. |
-| `/calendar` | Set releases, Challenges and qualifiers by month, each linking to its page on packs.ink (which links on to the organiser); buttons and a menu narrow the kind and the region. |
+| `/events` | Every upcoming DLC and CCQ, plus set and product releases, by month, each linking to its page on packs.ink (which links on to the organiser). `kind:` picks DLCs, CCQs, both or releases; `region:` narrows them (a `near:` place picks its region). Buttons and a menu change the kind and region; Previous/Next page through all of them. |
+| `/events near: 60614` | Near a postal code or town: Set Championships, prereleases (nearest first, seats and fees), and weekly play one line per store, each linking to its page on packs.ink. Buttons change the kind and the radius. |
 | `/help` | What it does, with clickable commands and "Try it" buttons. |
 | `/reports daily` | (Server managers) the daily movers report, posted into a channel; `weekly` on Mondays. |
 | `/reports send` | (Server managers) post the latest daily or weekly report here, now. |
@@ -181,7 +181,7 @@ discord/
   A card links to TCGplayer only when its printing has a listing of its own: a
   card still being revealed has none, and a search link on every line left room
   for 13 of 36 reveals.
-- **Boards are browsed, not re-typed**: /events and /calendar carry
+- **Boards are browsed, not re-typed**: both /events boards carry
   their state in each control's custom_id and redraw in place. Every control
   in a message has a DIFFERENT custom_id — Discord refuses a message with two
   the same, and the guard checks every reply for it.

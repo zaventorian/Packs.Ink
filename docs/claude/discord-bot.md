@@ -6,7 +6,7 @@ Zaven's ask: call a card in Discord and get its picture and price history, plus
 trend reports, with **plain-English, typo-tolerant lookup as the main
 requirement** — "people will say mowgli and not know the subtitle, but there is
 one main one that is played, or spell mowgli slightly wrong". `/card`, `/price`,
-`/set`, `/open`, `/new`, `/meta`, `/events`, `/calendar`, `/help` and `/reports`
+`/set`, `/open`, `/new`, `/meta`, `/events` (which took in `/calendar` on 2026-11-18), `/help` and `/reports`
 (v2 additions below; what changed on 2026-09-29 is in its own section).
 Setup (the steps only Zaven can do) is `discord/README.md`.
 Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
@@ -206,7 +206,7 @@ Guarded by `node scripts/test_discord_bot.mjs` (~3,100 checks) and
 - **⚠ Every component in a message needs a DIFFERENT custom_id** — Discord
   refuses the message otherwise. The boards highlight the current state on
   several controls at once, so each control carries a letter:
-  `e|<k|r>|…` (events), `cl|<k|r>|…` (calendar),
+  `e|<k|r>|…` (events near a place), `cl|<k|p|r>|<kind>|<region>[|<page>]` (the calendar),
   and a second card menu is `o|card|1` beside the first's `o|card`.
   `checkMessage` in the guard asserts uniqueness on every reply.
 - **Box EV and play shares are computed in the daily index build** with the
@@ -607,6 +607,15 @@ through the simulator). Each is guarded: section 14 of `test_discord_bot.mjs`, a
   The chart render alone measured ~11-14 ms locally against the free plan's 10 ms;
   it works live, so the plan is either paid or lenient — check `exceededCpu` in
   Workers observability if replies ever hang on "thinking…".
+- **`/calendar` folded into `/events`** (Zaven 11/18: "they should be just 1"). With
+  no `near:` (or `kind:` DLCs / CCQs / DLCs + CCQs / releases) it is the calendar:
+  EVERY upcoming event, 15 a page with Previous/Next (it used to stop at 12), a busy
+  month continuing in a "(cont.)" field instead of "…and N more". `region:` narrows
+  DLCs and CCQs (releases come out everywhere); a `near:` place given for those picks
+  its region. With `near:` and Everything / Set Championships / prereleases / weekly
+  play it is the store board, unchanged; those kinds without `near:` ask for one.
+  Labels follow the site: DLCs, CCQs. `/calendar` is gone from the registered set;
+  the handler stays for clients that still list it, and old `cl|` buttons still parse.
 
 **Reports**
 - **Movers must be current**: unless `price_movers`' newest `low_date` is the price

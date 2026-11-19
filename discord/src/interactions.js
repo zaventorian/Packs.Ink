@@ -8,7 +8,7 @@ import * as E from "./embeds.js";
 import * as D from "./data.js";
 import { kayleeStats, kayleePack, isKayleeId } from "./kaylee.js";
 import { setOverview, setMessage, openPacks, packMessage, parsePackId, newCards, newCardsMessage, freshRevealRows } from "./set.js";
-import { CALENDAR_REGIONS } from "./site.generated.js";
+import { CALENDAR_REGIONS, calRegionOf } from "./site.generated.js";
 import { setNumber, setQuery, setScore } from "./resolver.js";
 import { norm } from "./text.js";
 import { chartResponse } from "./charts.js";
@@ -72,6 +72,8 @@ function command(it, deps) {
     // No range option given: null, so range words in the name can choose one.
     case "price": return deferred(it, deps, priv, () => lookup(String(optVal(o, "name", "")), "chart", opt(o, "range") ? String(opt(o, "range").value) : null, deps));
     case "events": return deferred(it, deps, priv, () => events(o, deps));
+    // /calendar is folded into /events; a client that still lists it for a
+    // while after the commands are re-registered gets the same board.
     case "calendar": return deferred(it, deps, priv, () => calendar(deps));
     case "meta": return deferred(it, deps, priv, () => meta(deps));
     case "new": return deferred(it, deps, priv, () => newReply(deps));
@@ -396,7 +398,7 @@ function component(it, deps) {
       if (!(r === "all" || CALENDAR_REGIONS.some((x) => x.key === r))) return { type: R_.DEFERRED_UPDATE };
       cal.region = r;
     }
-    return deferredUpdate(it, deps, () => calendar(deps, cal.kind, cal.region));
+    return deferredUpdate(it, deps, () => calendar(deps, cal.kind, cal.region, cal.page));
   }
   const ev = E.parseEventsId(id);
   if (ev) {
@@ -443,10 +445,26 @@ async function byKey(key, view, range, deps, grade) {
 }
 
 // ── /events ──────────────────────────────────────────────────────────────
+// One command, two boards. DLCs, CCQs and releases are the calendar, by
+// region; Set Championships, prereleases and weekly play are store events,
+// by place. "Everything" is the calendar with no place and the store board
+// with one. A place given for the calendar picks its region.
+const CAL_KINDS = ["release", "dlc", "ccq", "comp"];
 async function events(o, deps) {
   const near = String(optVal(o, "near", "")).trim();
   const radius = Math.min(250, Math.max(5, Number(optVal(o, "radius", 50)) || 50));
-  const kind = D.EVENT_KINDS.includes(String(optVal(o, "kind", "all"))) ? String(optVal(o, "kind", "all")) : "all";
+  const asked = String(optVal(o, "kind", "all"));
+  const r = String(optVal(o, "region", "all"));
+  let region = CALENDAR_REGIONS.some((x) => x.key === r) ? r : "all";
+  if (CAL_KINDS.includes(asked) || (asked === "all" && !near)) {
+    if (near && region === "all") {
+      const at = await D.resolvePlace(deps.db, near).catch(() => null);
+      if (at && at.country) region = calRegionOf(at.country);
+    }
+    return calendar(deps, asked, region);
+  }
+  const kind = D.EVENT_KINDS.includes(asked) ? asked : "all";
+  if (!near) return { content: "Set Championships, prereleases and weekly play are found by place — add `near:` with a postal code or town.", embeds: [], components: [] };
   // A lookup that failed twice is not "no such place".
   const place = await D.resolvePlace(deps.db, near).catch((e) => { deps.log && deps.log("place lookup failed", e && e.message); return "failed"; });
   if (place === "failed") return { content: `Couldn't look up “${E.escMd(near.slice(0, 60))}” just now — try again in a moment.`, embeds: [], components: [] };
@@ -475,10 +493,10 @@ async function meta(deps) {
   return E.metaMessage({ R: deps.R, index: deps.index, meta: m });
 }
 
-// ── /calendar ────────────────────────────────────────────────────────────
-async function calendar(deps, kind = "all", region = "all") {
+// ── the calendar (/events with no place) ─────────────────────────────────
+async function calendar(deps, kind = "all", region = "all", page = 0) {
   const all = await D.calendarEvents(deps.db);
-  return E.calendarMessage({ events: D.upcomingFiltered(all, { kind, region, n: 12 }), kind, region, regions: CALENDAR_REGIONS });
+  return E.calendarMessage({ events: D.upcomingFiltered(all, { kind, region, n: 0 }), kind, region, regions: CALENDAR_REGIONS, page });
 }
 
 // ── /reports (server managers) ───────────────────────────────────────────
@@ -581,7 +599,7 @@ const notOutYet = (s, more = "") => ({ content: E.notOutYetText(s) + more, embed
 
 export function setReply(name, deps) {
   const f = pickSet(deps.R, deps.index, name);
-  if (f.up) return notOutYet(f.up, " No cards of it are on packs.ink yet — `/calendar` has what's coming.");
+  if (f.up) return notOutYet(f.up, " No cards of it are on packs.ink yet — `/events` has what's coming.");
   if (f.si < 0) return noSet(name, f.num);
   return setReplyAt(f.si, deps);
 }

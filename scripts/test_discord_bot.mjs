@@ -343,6 +343,32 @@ const D = await mod("discord/src/data.js");
     ok(eu.some((e) => e.kind === "set") && eu.some((e) => e.kind === "ccq") && !eu.some((e) => e.kind === "dlc"),
       `calendar region filter keeps releases, keeps Europe's qualifier, drops the US Challenge (${eu.map((e) => e.kind)})`);
     eq(D.upcomingFiltered(far, { kind: "release", n: 12 }).map((e) => e.kind).join(), "set", "calendar Releases keeps only releases");
+    eq(D.upcomingFiltered(far, { kind: "comp", n: 0 }).map((e) => e.kind).sort().join(), "ccq,dlc", "DLCs + CCQs keeps both and nothing else");
+    for (const pg of [0, 1, 7]) {
+      const back = E.parseCalendarId(E.calendarId("p", { kind: "comp", region: "eu", page: pg }));
+      ok(back && back.kind === "comp" && back.region === "eu" && back.page === pg, `calendar page id round-trips: ${pg}`);
+    }
+    eq(JSON.stringify(E.parseCalendarId("cl|k|dlc|na")), JSON.stringify({ kind: "dlc", region: "na", page: 0 }), "an old calendar button (no page) still parses");
+    // A busy month: every event is listed; the month carries on in a second field.
+    const busy = Array.from({ length: 15 }, (_, k) => ({ ...crowd[k % 12], id: "b" + k, starts_on: "2026-10-0" + (1 + (k % 9)) }));
+    const bm = E.calendarMessage({ events: busy, kind: "comp", region: "all", regions: [] });
+    checkMessage(bm, "calendar, 15 events in one month");
+    const bl = bm.embeds[0].fields.flatMap((f) => f.value.split("\n"));
+    ok(bl.length === 15 && !bl.some((l) => /more\*$/.test(l)) && bm.embeds[0].fields.length > 1 && /\(cont\.\)$/.test(bm.embeds[0].fields[1].name),
+      `a busy month lists all 15 and carries on (${bm.embeds[0].fields.map((f) => f.name)})`);
+    // Pages: 40 events are 15 / 15 / 10, and the buttons stop at the ends.
+    const forty = Array.from({ length: 40 }, (_, k) => ({ ...crowd[k % 12], id: "f" + k }));
+    for (const [pg, want, n] of [[0, 1, 15], [1, 2, 15], [9, 3, 10]]) {
+      const m = E.calendarMessage({ events: forty, kind: "all", region: "all", regions: [], page: pg });
+      checkMessage(m, `calendar page ${pg}`);
+      const [prev, next] = m.components[2].components;
+      ok(m.embeds[0].description === `40 coming up · page ${want} of 3` && m.embeds[0].fields.flatMap((f) => f.value.split("\n")).length === n,
+        `calendar page ${pg} shows page ${want} of 3 with ${n} events (${m.embeds[0].description})`);
+      ok(prev.disabled === (want === 1) && next.disabled === (want === 3) && E.parseCalendarId(next.custom_id).page === want,
+        `calendar page ${want}: Previous/Next stop at the ends`);
+    }
+    const one = E.calendarMessage({ events: calEvents, kind: "all", region: "all", regions: [] });
+    ok(!one.embeds[0].description && one.components[2].components.length === 1, "a one-page calendar has no page line and no Previous/Next");
   }
   const byKind = {
     sc: [{ next_start: "2026-11-04T17:00:00Z", store_name: "SC Shop", name: "Set Championship", kind: "sc", distance_mi: 12, dow: 6, local_time: "12:00", occurrence_count: 1, gameplay_format: "Core Constructed",
@@ -1147,6 +1173,45 @@ const D = await mod("discord/src/data.js");
   await Promise.all(pending.splice(0));
   ok(patches[0] && patches[0].body.embeds && patches[0].body.embeds[0].title, `/new edits in the reel (${patches[0] && patches[0].body.embeds && patches[0].body.embeds[0].title})`);
   patches.length = 0;
+  {
+    // /events is one command, two boards: the calendar (DLCs, CCQs, releases;
+    // by region) with no place, the store board with one.
+    const rows = [
+      ...Array.from({ length: 20 }, (_, k) => ({ id: "d" + k, kind: "dlc", title: "DLC " + k, starts_on: `2099-0${1 + (k % 9)}-1${k % 10}`, location: "Hall · Springfield, IL 62701", country: k % 2 ? "US" : "FR" })),
+      ...Array.from({ length: 25 }, (_, k) => ({ id: "q" + k, kind: "ccq", title: "CCQ " + k, starts_on: `2099-0${1 + (k % 9)}-2${k % 8}`, location: "Store · Paris", country: k % 2 ? "FR" : "US" })),
+    ];
+    const calDb = { ...fakeDb, async get(table, params) {
+      if (table === "calendar_events") return rows;
+      if (table === "lorcana_events") return [{ city: "Paris", state: null, country: "FR", latitude: 48.85, longitude: 2.35 }];
+      return fakeDb.get(table, params);
+    } };
+    const cd = { ...deps, db: calDb };
+    const last = async () => { await Promise.all(pending); return patches[patches.length - 1].body; };
+    const ev = async (options, tok) => { await handleInteraction({ type: 2, token: tok, application_id: "123", data: { type: 1, name: "events", options } }, cd); return last(); };
+    const click = async (custom_id, tok, values) => { await handleInteraction({ type: 3, token: tok, application_id: "123", message: { flags: 0 }, data: { custom_id, component_type: values ? 3 : 2, ...(values ? { values } : {}) } }, cd); return last(); };
+    const names = (b) => b.embeds[0].fields.flatMap((f) => f.value.match(/(?:DLC|CCQ) \d+/g) || []);
+    const s = (v) => ({ type: 3, name: "kind", value: v });
+    let b = await ev([s("comp")], "ev1");
+    eq(b.embeds[0].title, "Upcoming DLCs and CCQs", "/events kind:DLCs + CCQs, no place: the calendar");
+    eq(b.embeds[0].description, "45 coming up · page 1 of 3", "/events DLCs + CCQs counts every one and pages them");
+    const seen = [...names(b)];
+    for (let p = 1; p < 3; p++) {
+      const next = b.components[2].components.find((c) => /Next/.test(c.label));
+      b = await click(next.custom_id, "ev-p" + p);
+      seen.push(...names(b));
+    }
+    ok(seen.length === 45 && new Set(seen).size === 45, `Next walks through all 45 DLCs and CCQs once each (${seen.length}, ${new Set(seen).size} unique)`);
+    b = await ev([s("comp"), { type: 3, name: "region", value: "eu" }], "ev2");
+    ok(/Europe$/.test(b.embeds[0].title) && b.embeds[0].description === "22 coming up · page 1 of 2", `/events region:Europe keeps Europe's 22 (${b.embeds[0].title} · ${b.embeds[0].description})`);
+    b = await ev([s("dlc"), { type: 3, name: "near", value: "Paris FR" }], "ev3");
+    ok(b.embeds[0].title === "Upcoming DLCs · Europe" && names(b).length === 10 && names(b).every((x) => /^DLC/.test(x)), `/events DLCs near Paris: Europe's DLCs (${b.embeds[0].title}, ${names(b).length})`);
+    b = await ev([], "ev4");
+    eq(b.embeds[0].title, "Coming up in Lorcana", "/events with nothing: everything coming up");
+    b = await click(E.calendarId("r", { kind: "ccq", region: "all" }), "ev5", ["eu"]);
+    ok(b.embeds[0].title === "Upcoming CCQs · Europe" && names(b).every((x) => /^CCQ/.test(x)), "the region menu narrows the CCQs");
+    b = await ev([s("sc")], "ev6");
+    ok(/add `near:`/.test(b.content) && !b.embeds.length, "/events Set Championships with no place asks for one");
+  }
   const dbDown = { ...deps, db: { ...fakeDb, async get() { throw new Error("database down"); } } };
   await handleInteraction({ type: 2, token: "t21", application_id: "123", data: { type: 1, name: "new", options: [] } }, dbDown);
   await Promise.all(pending.splice(0));

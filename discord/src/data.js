@@ -395,10 +395,10 @@ export async function calendarEvents(db) {
 }
 export const upcoming = (events, n) => calendarUpcoming(events, calTodayYmd(), n);
 
-// /calendar's filters. A set or product release is in no place — it comes
-// out everywhere — so a region filter never drops one (the site's
-// calRegionless rule); it narrows the Challenges and qualifiers.
-export const CAL_FILTERS = { all: null, release: ["set", "product"], dlc: ["dlc"], ccq: ["ccq"] };
+// The calendar's filters (/events with no place). A set or product release
+// is in no place — it comes out everywhere — so a region filter never drops
+// one (the site's calRegionless rule); it narrows the DLCs and CCQs.
+export const CAL_FILTERS = { all: null, release: ["set", "product"], dlc: ["dlc"], ccq: ["ccq"], comp: ["dlc", "ccq"] };
 export function upcomingFiltered(events, { kind = "all", region = "all", n = 12 } = {}) {
   const kinds = CAL_FILTERS[kind] || null;
   const list = (events || []).filter((e) => (!kinds || kinds.includes(e.kind)) &&
