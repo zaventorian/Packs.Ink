@@ -64,7 +64,9 @@ def pset(label):
 
 
 def env():
-    e = dict(re.findall(r"^([A-Z_]+)=(.*)$", (HERE.parent / ".env").read_text(encoding="utf-8"), re.M))
+    # The nearest .env walking up, so a run from .claude/worktrees/<name> uses the main checkout's.
+    dotenv = next(d / ".env" for d in HERE.parents if (d / ".env").exists())
+    e = dict(re.findall(r"^([A-Z_]+)=(.*)$", dotenv.read_text(encoding="utf-8"), re.M))
     return e["SUPABASE_URL"].rstrip("/"), e["SUPABASE_SERVICE_KEY"]
 
 
