@@ -40,6 +40,19 @@ ok("typo in name corrected", (row["name"], row["version"]), ("Russell", "Finding
 row = L.transform_card({"id": MERLIN, "name": "Merlin's Shop and Smithy", "version": "Magical Markey"}, "s", "14")
 ok("typo in version corrected", (row["name"], row["version"]), ("Merlin's Shop and Smithy", "Magical Market"))
 
+# A wrong-language scan is swapped for our English copy, every size.
+VINE239 = "crd_c9705013eab04705818153d8e3419f5b"
+lorcast_imgs = {s: f"https://cards.lorcast.io/card/digital/{s}/{VINE239}.avif?1783190969" for s in ("small", "normal", "large")}
+row = L.transform_card({"id": VINE239, "name": "Rapunzel & Flynn Rider", "version": "Unlikely Pair",
+                        "image_uris": {"digital": lorcast_imgs}}, "s", "13")
+ok("German scan replaced in all three sizes",
+   {row[f"image_{s}"].split("/card-art/")[-1] for s in ("small", "normal", "large")}, {"lorcast-fix/13-239.jpg?v=974c5372"})
+stale = []
+row = L.transform_card({"id": VINE239, "name": "Rapunzel & Flynn Rider", "version": "Unlikely Pair",
+                        "image_uris": {"digital": {s: u.replace("1783190969", "1799999999") for s, u in lorcast_imgs.items()}}},
+                       "s", "13", stale)
+ok("a re-uploaded Lorcast scan is kept and reported", (row["image_large"].startswith("https://cards.lorcast.io"), len(stale)), (True, 3))
+
 # Once Lorcast fixes it, the entry stops applying and says so.
 stale = []
 row = L.transform_card({"id": RUSSELL, "name": "Russell", "version": "Finding Adventure"}, "s", "14", stale)

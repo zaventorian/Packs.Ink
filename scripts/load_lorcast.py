@@ -73,6 +73,14 @@ CARD_CORRECTIONS: dict[str, dict[str, tuple[str, str]]] = {
     "crd_fa5f0ceced414c31a886670d84e5a6c7": {"name": ("Russel", "Russell")},
     # Hyperia City #68: the card reads Magical Market.
     "crd_ac48e83f0cec4636ae8d4db35632ba27": {"version": ("Magical Markey", "Magical Market")},
+    # Attack of the Vine! #239 Rapunzel & Flynn Rider (Enchanted): Lorcast's English
+    # record serves the GERMAN scan. The official gallery's English print is in the
+    # card-art bucket (uploaded 2026-11-25).
+    "crd_c9705013eab04705818153d8e3419f5b": {
+        f"image_{size}": (f"https://cards.lorcast.io/card/digital/{size}/crd_c9705013eab04705818153d8e3419f5b.avif?1783190969",
+                          "https://umwqowkiatjjltologrd.supabase.co/storage/v1/object/public/card-art/lorcast-fix/13-239.jpg?v=974c5372")
+        for size in ("small", "normal", "large")
+    },
 }
 
 
