@@ -36,7 +36,7 @@
    language saved on the account still beats the guess at sign-in (only a
    STORED choice blocks that adoption). Cards follow it like any site language. */
 (function(){
-  var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="14", l=null;
+  var OK={ja:1,de:1,fr:1,it:1}, I18N_VER="15", l=null;
   try{
     var q=new URLSearchParams(location.search).get("hl");
     if(q && (OK[q]||q==="en")) l=q;
@@ -267,7 +267,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=551">
+<link rel="stylesheet" href="styles.css?v=554">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. FIRST VISIT ONLY: once the
@@ -5619,6 +5619,72 @@ const tcgUrl = (productId, printing) => {
 const tcgSetSearchUrl = (setName) => {
   const dest = `https://www.tcgplayer.com/search/lorcana/product?productLineName=lorcana&Language=English&q=${encodeURIComponent(setName)}`;
   return TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(dest);
+};
+
+// ── TCGplayer Cyber Weekend 2026 — TEMPORARY, delete after 12/2 ──────────────
+// TCGplayer's affiliate email (11/16): 10% back in store credit on all products,
+// 9am ET Sat 11/28 → 11pm ET Tue 12/1. Zaven, 11/24: show nothing before 11/27,
+// a "Tomorrow" note on 11/27, then LIVE for the sale, then gone on its own.
+// Every date here is EST (UTC-5): DST ended 11/1.
+// Two placements: a thin strip on Home (TcgSaleStrip) and one line under the
+// deck page's Buy the deck tile (TcgSaleDeckNote). ⚠ The teaser carries NO link,
+// since nothing is on sale yet; the live strip's link is the affiliate hop with
+// its "affiliate link" label beside it. Guard: scripts/test_tcg_sale.mjs.
+const TCG_SALE = {
+  id: "cyber2026",
+  teaserMs: Date.UTC(2026, 10, 27, 5),  // Fri 11/27 00:00 ET
+  todayMs:  Date.UTC(2026, 10, 28, 5),  // Sat 11/28 00:00 ET: "Tomorrow" becomes "Today"
+  startMs:  Date.UTC(2026, 10, 28, 14), // Sat 11/28 09:00 ET
+  endMs:    Date.UTC(2026, 11, 2, 4),   // Tue 12/1 23:00 ET
+};
+const tcgSalePhase = (now) =>
+  now < TCG_SALE.teaserMs ? null
+  : now < TCG_SALE.todayMs ? "tomorrow"
+  : now < TCG_SALE.startMs ? "today"
+  : now < TCG_SALE.endMs ? "live"
+  : null;
+const tcgSaleShopUrl = () => TCG_AFFILIATE_BASE + "?u=" +
+  encodeURIComponent("https://www.tcgplayer.com/search/lorcana/product?productLineName=lorcana&Language=English");
+// Re-renders at the next boundary, so a tab left open flips on its own.
+const useTcgSalePhase = () => {
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const next = [TCG_SALE.teaserMs, TCG_SALE.todayMs, TCG_SALE.startMs, TCG_SALE.endMs].find(t => t > now);
+    if(next == null) return;
+    const id = setTimeout(() => setNow(Date.now()), Math.min(next - now + 500, 2147483647));
+    return () => clearTimeout(id);
+  }, [now]);
+  return tcgSalePhase(now);
+};
+const TCG_SALE_TAG = {tomorrow: "Tomorrow", today: "Today", live: "Live"};
+const TcgSaleStrip = () => {
+  const phase = useTcgSalePhase();
+  // Dismissed per stage: closing the teaser still shows the LIVE strip.
+  const key = "packsink:saleDismissed:" + TCG_SALE.id + ":" + (phase === "live" ? "live" : "soon");
+  const [goneKey, setGoneKey] = React.useState(null);
+  if(!phase || goneKey === key) return null;
+  try { if(localStorage.getItem(key) === "1") return null; } catch(e) {}
+  const dismiss = () => {
+    try { localStorage.setItem(key, "1"); } catch(e) {}
+    setGoneKey(key);
+  };
+  const live = phase === "live";
+  return html`<div class=${"tcg-sale-strip" + (live ? " is-live" : "")} role="note">
+    <span class="tcg-sale-tag">${_t(TCG_SALE_TAG[phase])}</span>
+    <span class="tcg-sale-text">${live
+      ? _tRich("**TCGplayer Cyber Weekend:** 10% back in store credit on every order, through Tue 12/1, 11pm ET.")
+      : _tRich("**TCGplayer Cyber Weekend** starts Sat 11/28, 9am ET: 10% back in store credit on every order, through Tue 12/1.")}</span>
+    ${live && html`<a class="tcg-sale-link" href=${tcgSaleShopUrl()} target="_blank" rel="noopener nofollow sponsored">${_t("Shop Lorcana on TCGplayer")} ${extIcon()}</a>
+      <span class="tcg-sale-aff">${_t("affiliate link")}</span>`}
+    <button type="button" class="tcg-sale-x" onClick=${dismiss} aria-label=${_t("Dismiss")} title=${_t("Dismiss")}>×</button>
+  </div>`;
+};
+const TcgSaleDeckNote = () => {
+  const phase = useTcgSalePhase();
+  if(!phase) return null;
+  return html`<div class="tcg-sale-note">${phase === "live"
+    ? _tRich("**10% back** in TCGplayer store credit through Tue 12/1, 11pm ET. Tip: hit **Optimize** in your TCGplayer cart to cut shipping.")
+    : _tRich("TCGplayer's **10% back** weekend starts Sat 11/28, 9am ET.")}</div>`;
 };
 
 // ── Amazon affiliate URLs ─────────────────────────────────────────
@@ -56682,6 +56748,7 @@ const HomeView = ({raw, sets, avgs, theme, priceEpoch = 0, user, collection, col
         openCardsWithSearch=${openCardsWithSearch}
         onOpenSealed=${setSelectedSealed}/>
     </div>
+    ${!editing && html`<${TcgSaleStrip}/>`}
     ${/* Only the EDITING controls sit up here, and only while editing: sticky,
           so Done and Cancel stay reachable while you rearrange. The launcher
           lives at the FOOT of the page (see home-edit-foot) -- as a permanent
@@ -64021,6 +64088,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         <span class="muted">${_t("Too many for one TCGplayer cart link — add each part (they all go into the same cart):")}</span>
         ${massEntry.map((p, i) => html`<a key=${i} class="setdet-buy-part" href=${p.url} target="_blank" rel="noopener nofollow sponsored">${_t("Part {i} · {n} copies", {i: i + 1, n: p.copies})} ${extIcon()}</a>`)}
       </div>`}
+      ${massEntryUrl && html`<${TcgSaleDeckNote}/>`}
       ${totalCount > 0 && html`<div class="deck-charts">
         <${DeckCostChart} costByInk=${aggregates.costByInk} cardCountLabel=${cardCountLabel} uniqueCount=${uniqueCount}/>
         <div class="deck-pie-row">
