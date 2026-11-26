@@ -161,15 +161,18 @@ REPORT_PRICE_COL = "low_today"       # price_movers
 REPORT_PCT_PREFIX = "pct_"           # price_movers: pct_1d, pct_7d, ...
 REPORT_DAILY_COL = "low_price"       # prices_daily
 
+# The daily's caps sit above anything its rule lets through in a day (max 6
+# in the calibration): a confirmed move is reported ONCE, so a card cut by a
+# cap would never be listed at all.
 SECTIONS = {
     "chase": {"title": "✦ CHASE", "rank": "pct", "min_price": 10.0, "min_usd": 2.0,
-              "color": 0xE3B341, "lines": {"1d": 4, "7d": 5}},
+              "color": 0xE3B341, "lines": {"1d": 8, "7d": 5}},
     "base": {"title": "◆ BASE CARDS", "rank": "pct", "min_price": 5.0, "min_usd": 1.0,
-             "color": 0x5B9CF5, "lines": {"1d": 4, "7d": 5}},
+             "color": 0x5B9CF5, "lines": {"1d": 8, "7d": 5}},
     "promo": {"title": "★ PROMOS", "rank": "pct", "min_price": 10.0, "min_usd": 2.0,
-              "color": 0xC77DFF, "lines": {"1d": 3, "7d": 4}},
+              "color": 0xC77DFF, "lines": {"1d": 8, "7d": 4}},
     "foil": {"title": "✧ FOILS", "rank": "pct", "min_price": 5.0, "min_usd": 1.0,
-             "color": 0x9AA0AB, "lines": {"1d": 3, "7d": 4}},
+             "color": 0x9AA0AB, "lines": {"1d": 8, "7d": 4}},
 }
 SECTION_ORDER = ("chase", "base", "promo", "foil")
 HEADER_COLOR = 0xE3B341
