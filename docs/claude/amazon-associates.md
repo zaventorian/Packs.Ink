@@ -44,6 +44,12 @@ The rule governs Amazon's content, not TCGplayer's photo of the same box, so thi
 loophole. What a tile can never say is *Amazon's* price or stock: it shows "TCGplayer
 market $X" beside a "Buy/Find on Amazon" button, never "$X on Amazon".
 
+**One exception: our OWN photo (2026-11-25).** The home shelf's Pin board display tile
+(`amazonShelfExtras`, `PIN_DISPLAY_ASIN`, also the /gear "Pin displays" row) shows Zaven's
+photo of his own framed pins, served from `Logos/gear/`, captioned "Pictured: our Lorcana
+pins". It's first-party, so the rule above is untouched. Never put an image copied off an
+Amazon listing there.
+
 **⚠ Sources are secondary.** Every amazon.com / webservices.amazon.com /
 affiliate-program.amazon.com domain is egress-blocked from the agent sandbox, so the
 clauses above were assembled from search results quoting the licence, not read from the
