@@ -20,7 +20,7 @@ on workers.dev), so deploying it can never touch packs.ink.
 | `/events` | Every upcoming DLC and CCQ, plus set and product releases, by month, each linking to its page on packs.ink (which links on to the organiser). `kind:` picks DLCs, CCQs, both or releases; `region:` narrows them (a `near:` place picks its region). Buttons and a menu change the kind and region; Previous/Next page through all of them. |
 | `/events near: 60614` | Near a postal code or town: Set Championships, prereleases (nearest first, seats and fees), and weekly play one line per store, each linking to its page on packs.ink. Buttons change the kind and the radius. |
 | `/help` | What it does, with clickable commands and "Try it" buttons. |
-| `/reports daily` | (Server managers) the daily movers report, posted into a channel; `weekly` on Mondays. |
+| `/reports daily` | (Server managers) the daily movers report, posted into a channel: price moves that held (two of the last three days, Market agreeing) and new cards, nothing on a quiet day; `weekly` on Mondays. |
 | `/reports send` | (Server managers) post the latest daily or weekly report here, now. |
 
 **Names are forgiving by design.** `mowgli`, `mogli`, `moglie`, `how much is

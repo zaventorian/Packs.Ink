@@ -819,7 +819,7 @@ export function helpMessage(ids) {
           `${c("meta")} — which ink pairs win, the most-played cards, the latest big events`,
         ].join("\n") },
         { name: "For fun", value: `${c("open")} — open a booster pack (or a box) at real prices` },
-        { name: "Server managers", value: `${c("reports daily")} — the day's movers posted in a channel · ${c("reports send")} — post one now` },
+        { name: "Server managers", value: `${c("reports daily")} — the day's price moves that held, posted in a channel · ${c("reports send")} — post one now` },
       ],
       footer: { text: "Add private: True to a command to see the reply alone · prices from TCGplayer, sales from eBay · packs.ink" },
     }],

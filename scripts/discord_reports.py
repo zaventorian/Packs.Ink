@@ -13,6 +13,11 @@ One post per subscribed channel, through the bot's own account
 freshness rules come from discord_digest.py, so a report can never disagree
 with the digest about a card; the LAYOUT is the report's own (2026-09-28):
 
+  * The DAILY lists only moves that HELD (see "the daily: confirmed moves
+    only"): a new Low on two of the last three days, with Market moving the
+    same way, each move once. It leads with a drawn picture of those cards
+    (discord_report_art.daily_board), and on a day with no such move and no
+    new cards it posts nothing (2026-11-25).
   * Sections by kind of card, because one list ranked by percent was mostly
     $5 foils jumping 30% on one sale. CHASE (Enchanted / Epic / Iconic),
     PROMOS, BASE CARDS (non-foil) and FOILS (base-rarity foils) all rank by
@@ -156,15 +161,18 @@ REPORT_PRICE_COL = "low_today"       # price_movers
 REPORT_PCT_PREFIX = "pct_"           # price_movers: pct_1d, pct_7d, ...
 REPORT_DAILY_COL = "low_price"       # prices_daily
 
+# The daily's caps sit above anything its rule lets through in a day (max 6
+# in the calibration): a confirmed move is reported ONCE, so a card cut by a
+# cap would never be listed at all.
 SECTIONS = {
     "chase": {"title": "✦ CHASE", "rank": "pct", "min_price": 10.0, "min_usd": 2.0,
-              "color": 0xE3B341, "lines": {"1d": 4, "7d": 5}},
+              "color": 0xE3B341, "lines": {"1d": 8, "7d": 5}},
     "base": {"title": "◆ BASE CARDS", "rank": "pct", "min_price": 5.0, "min_usd": 1.0,
-             "color": 0x5B9CF5, "lines": {"1d": 4, "7d": 5}},
+             "color": 0x5B9CF5, "lines": {"1d": 8, "7d": 5}},
     "promo": {"title": "★ PROMOS", "rank": "pct", "min_price": 10.0, "min_usd": 2.0,
-              "color": 0xC77DFF, "lines": {"1d": 3, "7d": 4}},
+              "color": 0xC77DFF, "lines": {"1d": 8, "7d": 4}},
     "foil": {"title": "✧ FOILS", "rank": "pct", "min_price": 5.0, "min_usd": 1.0,
-             "color": 0x9AA0AB, "lines": {"1d": 3, "7d": 4}},
+             "color": 0x9AA0AB, "lines": {"1d": 8, "7d": 4}},
 }
 SECTION_ORDER = ("chase", "base", "promo", "foil")
 HEADER_COLOR = 0xE3B341
@@ -395,6 +403,150 @@ def sectioned(rows, window, ebay=()):
         if key and qualifies(row, key):
             out[key].append(row)
     return {k: rank(v, k) for k, v in out.items()}
+
+
+# ── the daily: confirmed moves only (2026-11-25) ─────────────────────────────
+# A one-day move in TCGplayer's Low is usually one listing selling or being
+# listed: Low changes on ~9% of cards a day, and the old daily ranked those
+# blips ("+109%" on a $20 Cold Foil, "-16.7%" that was $1.05). Feedback: daily
+# price moves were not the most useful thing to see. So the daily reports a
+# move only once it has HELD and the Market agrees:
+#   * now = the median Low of the last CONFIRM_NOW price days, was = the median
+#     of the CONFIRM_BASE days before them, so a new price has to hold on two
+#     of the last three days;
+#   * the section's floors (price at both ends, dollar move) plus a minimum
+#     percent (DAILY_MIN_PCT);
+#   * TCGplayer's Market, measured the same way, moved the same way by at
+#     least MARKET_AGREE_PCT;
+#   * reported ONCE: a card that already qualified in the same direction on
+#     any of the previous CONFIRM_REPEAT price days stays out. No table: the
+#     history it needs is already read.
+# Calibrated on Oct 17 - Nov 25 2026: ~3 cards a typical day, 0-8 a day.
+# A day with no confirmed move and no new cards posts nothing.
+CONFIRM_NOW = 3
+CONFIRM_BASE = 7
+CONFIRM_REPEAT = 7
+DAILY_MIN_PCT = {"chase": 10.0, "promo": 15.0, "base": 15.0, "foil": 20.0}
+MARKET_AGREE_PCT = 5.0
+# Calendar days of prices read for the daily: CONFIRM_NOW + CONFIRM_BASE +
+# CONFIRM_REPEAT price days, with room for a missed ETL day or two.
+DAILY_LOOKBACK_DAYS = 24
+# Price days of each card's Low drawn in the daily picture.
+DAILY_CHART_DAYS = 21
+
+
+def _median(vs):
+    vs = sorted(vs)
+    n = len(vs)
+    return vs[n // 2] if n % 2 else (vs[n // 2 - 1] + vs[n // 2]) / 2
+
+
+def levels(series, dates, end):
+    """(now, was) for the price date dates[end], or None. series: {date: value};
+    dates: every price date, ascending. A day the card has no price is not
+    filled in: `now` needs all CONFIRM_NOW days (so a card with no price on
+    the price date itself is out), `was` all but two of its days."""
+    start = end - CONFIRM_NOW - CONFIRM_BASE + 1
+    if start < 0:
+        return None
+    now = [series[d] for d in dates[end - CONFIRM_NOW + 1:end + 1] if series.get(d)]
+    was = [series[d] for d in dates[start:end - CONFIRM_NOW + 1] if series.get(d)]
+    if len(now) < CONFIRM_NOW or len(was) < CONFIRM_BASE - 2:
+        return None
+    return _median(now), _median(was)
+
+
+def confirmed_at(low, market, dates, end, key):
+    """(now, was, pct) when the card's Low move at dates[end] is confirmed."""
+    lv = levels(low, dates, end)
+    if not lv:
+        return None
+    now, was = lv
+    cfg = SECTIONS[key]
+    if min(now, was) < cfg["min_price"] or abs(now - was) < cfg["min_usd"]:
+        return None
+    pct = (now / was - 1) * 100
+    if abs(pct) < DAILY_MIN_PCT[key]:
+        return None
+    mk = levels(market, dates, end)
+    if not mk or not mk[1]:
+        return None
+    mpct = (mk[0] / mk[1] - 1) * 100
+    if (mpct > 0) != (pct > 0) or abs(mpct) < MARKET_AGREE_PCT:
+        return None
+    return now, was, pct
+
+
+def confirmed_moves(rows, low_hist, mkt_hist, dates):
+    """price_movers rows -> report rows (price = now, was, usd, pct) for every
+    move confirmed on the newest date that was not already confirmed, the same
+    way, on one of the CONFIRM_REPEAT days before. Pure — the test drives it."""
+    out = []
+    end = len(dates) - 1
+    for r in rows:
+        key = bucket_of(r)
+        if not key:
+            continue
+        low, mkt = low_hist.get(key_of(r), {}), mkt_hist.get(key_of(r), {})
+        q = confirmed_at(low, mkt, dates, end, key)
+        if not q:
+            continue
+        up = q[2] > 0
+        seen = False
+        for j in range(1, CONFIRM_REPEAT + 1):
+            p = confirmed_at(low, mkt, dates, end - j, key)
+            if p and (p[2] > 0) == up:
+                seen = True
+                break
+        if not seen:
+            out.append({**r, "price": q[0], "was": q[1], "usd": q[0] - q[1], "pct": q[2]})
+    return out
+
+
+def market_agrees(row, window):
+    """The weekly's foils: TCGplayer's Market moved the same way, by enough."""
+    m = row.get("mkt_pct_" + window)
+    return m is not None and (float(m) > 0) == (row["pct"] > 0) and abs(float(m)) >= MARKET_AGREE_PCT
+
+
+def fetch_daily_series(sb, pids, price_date):
+    """({key: {date: low}}, {key: {date: market}}, [price dates ascending])
+    for the daily's rule and its picture."""
+    since = (price_date - dt.timedelta(days=DAILY_LOOKBACK_DAYS)).isoformat()
+    low, mkt, dates = {}, {}, set()
+    for i in range(0, len(pids), 60):
+        rows = sb.select("prices_daily", columns="tcgplayer_product_id,printing,date,low_price,market_price",
+                         filters={"source": "eq.tcgcsv", "grade": "eq.raw", "date": f"gte.{since}",
+                                  "tcgplayer_product_id": "in.(" + ",".join(str(p) for p in pids[i:i + 60]) + ")"},
+                         order="tcgplayer_product_id.asc,printing.asc,date.asc")
+        for r in rows:
+            d = dt.date.fromisoformat(str(r["date"])[:10])
+            if d > price_date or str(r["date"])[:10] < since:
+                continue
+            dates.add(d)
+            key = (r["tcgplayer_product_id"], r.get("printing") or "Normal")
+            if r.get("low_price") is not None:
+                low.setdefault(key, {})[d] = float(r["low_price"])
+            if r.get("market_price") is not None:
+                mkt.setdefault(key, {})[d] = float(r["market_price"])
+    return low, mkt, sorted(dates)
+
+
+def daily_sections(sb, cands, ebay, price_date):
+    """{section: [ranked rows]} for the daily, plus the Low series and dates
+    its picture draws: confirmed TCGplayer moves, and eBay moves that clear
+    the same floors and minimum percent."""
+    pids = sorted({r["tcgplayer_product_id"] for r in cands if r.get("tcgplayer_product_id")})
+    low, mkt, dates = fetch_daily_series(sb, pids, price_date) if pids else ({}, {}, [])
+    rows = confirmed_moves(cands, low, mkt, dates) if dates and dates[-1] == price_date else []
+    out = {k: [] for k in SECTION_ORDER}
+    for r in rows:
+        out[bucket_of(r)].append(r)
+    for r in ebay:
+        key = bucket_of(r)
+        if key and qualifies(r, key) and abs(r["pct"]) >= DAILY_MIN_PCT[key]:
+            out[key].append({**r, "was": r["price"] - r["usd"]})
+    return {k: rank(v, k) for k, v in out.items()}, low, dates
 
 
 # ── promos we track eBay sales for ──────────────────────────────────────────
@@ -662,7 +814,10 @@ def daily_line(row, key, sets, standing):
     tail = f" · *{note}*" if note else ""
     if row.get("ebay"):
         tail = f" · *{ebay_note(row, False)}*"
-    return f"{arrow(row)} **{lead_number(row, key)}** {link} · {fmt_money(row['price'])}{tail}"
+    # was -> now: the two numbers the percent is made of (the Cruella lesson:
+    # a line's price and its percent must come from the same figures).
+    return (f"{arrow(row)} **{lead_number(row, key)}** {link} · "
+            f"{fmt_money(row['was'])} → {fmt_money(row['price'])}{tail}")
 
 
 def weekly_line(row, key, sets, standing):
@@ -888,13 +1043,17 @@ def market_chart_series(sb, price_date, pulse, sets_meta):
 
 # ── the report ───────────────────────────────────────────────────────────────
 def fetch_candidates(sb, window):
-    pct_col = REPORT_PCT_PREFIX + window
+    """price_movers rows a report may consider. The weekly's carry their move
+    (pct_7d, and mkt_pct_7d for the foils' Market check); the daily works its
+    moves out of the price history, so it takes every card over the floor."""
     floor = min(s["min_price"] for s in SECTIONS.values())
-    cols = ("card_id,name,version,rarity,set_id,printing,tcgplayer_product_id,low_date,"
-            f"{REPORT_PRICE_COL},{pct_col}")
-    return sb.select("price_movers", columns=cols,
-                     filters={REPORT_PRICE_COL: f"gte.{floor}", pct_col: "neq.0"},
-                     order="card_id.asc,printing.asc")
+    cols = f"card_id,name,version,rarity,set_id,printing,tcgplayer_product_id,low_date,{REPORT_PRICE_COL}"
+    filters = {REPORT_PRICE_COL: f"gte.{floor}"}
+    if window != "1d":
+        pct_col = REPORT_PCT_PREFIX + window
+        cols += f",{pct_col},mkt_pct_{window}"
+        filters[pct_col] = "neq.0"
+    return sb.select("price_movers", columns=cols, filters=filters, order="card_id.asc,printing.asc")
 
 
 def movers_current(sb, price_date):
@@ -1074,12 +1233,23 @@ def build_report(sb, price_date, window, session=requests, now=None):
     eb = fetch_ebay(sb, price_date, window, now=now)
     tracked, ebay = eb if eb is not None else (set(), [])
     ebay = [site_rarity(r, sets) for r in ebay]
-    ranked = sectioned([r for r in cands if r.get("card_id") not in tracked], window, ebay)
-    fresh = {}
-    for key in SECTION_ORDER:
-        want = SECTIONS[key]["lines"][window]
-        fresh[key] = drop_stale(sb, ranked[key][:want * OVERFETCH], price_date)
-    if not any(fresh.values()):
+    cands = [r for r in cands if r.get("card_id") not in tracked]
+    daily_low, daily_dates = {}, []
+    if weekly:
+        ranked = sectioned(cands, window, ebay)
+        # A foil's Low is the noisiest number in the report: one listing moves
+        # it 40%. The weekly keeps a foil only when its Market moved too.
+        ranked["foil"] = [r for r in ranked["foil"] if r.get("ebay") or market_agrees(r, window)]
+        fresh = {}
+        for key in SECTION_ORDER:
+            want = SECTIONS[key]["lines"][window]
+            fresh[key] = drop_stale(sb, ranked[key][:want * OVERFETCH], price_date)
+    else:
+        fresh, daily_low, daily_dates = daily_sections(sb, cands, ebay, price_date)
+    extras = extra_embeds(sb, price_date, window, sets, now=now)
+    # A daily with no confirmed move still goes out for new cards; with
+    # neither, nothing posts that day. The weekly always needs its movers.
+    if not any(fresh.values()) and (weekly or not extras):
         return None
 
     look = {}
@@ -1119,27 +1289,37 @@ def build_report(sb, price_date, window, session=requests, now=None):
     files = {}
     line = weekly_line if weekly else daily_line
 
-    wk0 = price_date - dt.timedelta(days=6)
     if weekly:
-        span = (f"{wk0:%b} {wk0.day}–{price_date.day}" if wk0.month == price_date.month
-                else f"{wk0:%b} {wk0.day} – {price_date:%b} {price_date.day}")
-        title = f"Lorcana week in review · {span}, {price_date:%Y}"
+        title = f"Lorcana week in review · {week_label(price_date)}, {price_date:%Y}"
     else:
         title = f"Lorcana movers · {price_date:%a}, {price_date:%b} {price_date.day}, {price_date:%Y}"
-    desc = pulse_sentence(pulse, window) or (
-        "This week's biggest moves, by kind of card." if weekly else "Today's biggest moves, by kind of card.")
-    if not weekly:
-        desc += "\n*Italic notes say where a price sits against that card's own history.*"
+    if weekly:
+        desc = pulse_sentence(pulse, window) or "This week's biggest moves, by kind of card."
+    else:
+        moved = sum(len(v) for v in shown.values())
+        desc = pulse_sentence(pulse, window)
+        desc += ("\n" if desc else "") + (
+            f"**{moved} confirmed move{'' if moved == 1 else 's'}**: a new TCGplayer Low that held "
+            "on two of the last three days, with Market moving the same way."
+            if moved else "No confirmed price moves today.")
     header = {"title": title, "url": f"{digest.SITE}/screener", "color": HEADER_COLOR,
               "description": desc, "_keep": True}
     if weekly and pulse:
         header["fields"] = pulse_fields(pulse)
         chart = market_chart_series(sb, price_date, pulse, sets_meta)
-        if chart:
-            png = art.market_chart(chart[2], chart[0], chart[1])
-            if png:
-                files["market.png"] = png
-                header["image"] = {"url": "attachment://market.png"}
+        png = art.week_poster(pulse, chart, week_label(price_date))
+        if png:
+            files["market.png"] = png
+            header["image"] = {"url": "attachment://market.png"}
+    board = None
+    if not weekly:
+        board = art.daily_board(
+            [board_card(r, sets, daily_low.get(key_of(r), {}), daily_dates)
+             for key in SECTION_ORDER for r in shown[key]],
+            f"{price_date:%a}, {price_date:%b} {price_date.day}", pulse, session=session)
+        if board:
+            files["daily.png"] = board
+            header["image"] = {"url": "attachment://daily.png"}
     embeds = [header]
 
     def section_embed(key, rows, label=None, color=None):
@@ -1148,8 +1328,10 @@ def build_report(sb, price_date, window, session=requests, now=None):
         lines = [line(r, bucket_of(r), sets, standing.get(key_of(r))) for r in rows]
         cfg = SECTIONS[key]
         if not label:
-            label = cfg["title"] + (" · biggest $ moves" if cfg["rank"] == "usd" else " · biggest % moves")
-            label += " this week" if weekly else ""
+            if weekly:
+                label = cfg["title"] + (" · biggest $ moves" if cfg["rank"] == "usd" else " · biggest % moves") + " this week"
+            else:
+                label = cfg["title"] + " · confirmed moves"
         return {"author": {"name": label}, "color": color or cfg["color"],
                 "description": "\n".join(lines), "_lines": lines}
 
@@ -1170,7 +1352,8 @@ def build_report(sb, price_date, window, session=requests, now=None):
             if strip:
                 files[f"{key}.png"] = strip
                 e["image"] = {"url": f"attachment://{key}.png"}
-        if "image" not in e and e["_thumb"]:
+        # The daily's picture already shows every card: no thumbnails beside it.
+        if "image" not in e and e["_thumb"] and not board:
             e["thumbnail"] = e["_thumb"]
         embeds.append(e)
         if key == "base" and worth:
@@ -1180,9 +1363,9 @@ def build_report(sb, price_date, window, session=requests, now=None):
             if pid:
                 w["thumbnail"] = {"url": art.art_url(pid)}
             embeds.append(w)
-    if len(embeds) == 1:
+    if len(embeds) == 1 and (weekly or not extras):
         return None
-    embeds.extend(extra_embeds(sb, price_date, window, sets, now=now))
+    embeds.extend(extras)
     embeds[-1]["footer"] = {"text": FOOTER + " · /reports"}
 
     fitted = fit_embeds(embeds)
@@ -1200,6 +1383,27 @@ def build_report(sb, price_date, window, session=requests, now=None):
     return {"embeds": [clean_embed(e) for e in fitted],
             "files": [(n, files[n]) for n in sorted(names) if n in used],
             "plain": plain}
+
+
+def week_label(price_date):
+    """"Sep 21–27" (or "Sep 28 – Oct 4"): the seven price days a weekly covers."""
+    wk0 = price_date - dt.timedelta(days=6)
+    return (f"{wk0:%b} {wk0.day}–{price_date.day}" if wk0.month == price_date.month
+            else f"{wk0:%b} {wk0.day} – {price_date:%b} {price_date.day}")
+
+
+def board_card(row, sets, low, dates):
+    """What the daily picture draws for one row: the card, its two levels and
+    its Low over the last DAILY_CHART_DAYS price days, with the first day of
+    each window, so the picture shows where its two numbers came from."""
+    ver = row.get("version") if row.get("version") not in (None, "None") else ""
+    sub = " · ".join(x for x in (row.get("rarity") or "", set_display(sets.get(row.get("set_id"), ""))) if x)
+    return {"pid": row.get("tcgplayer_product_id"), "name": row.get("name") or "", "version": ver,
+            "sub": sub, "price": row["price"], "was": row["was"], "pct": row["pct"],
+            "ebay": bool(row.get("ebay")),
+            "series": [(d, low[d]) for d in dates[-DAILY_CHART_DAYS:] if low.get(d)],
+            "now_from": dates[-CONFIRM_NOW] if len(dates) >= CONFIRM_NOW else None,
+            "was_from": dates[-CONFIRM_NOW - CONFIRM_BASE] if len(dates) >= CONFIRM_NOW + CONFIRM_BASE else None}
 
 
 def report_nonce(sub, price_date):
