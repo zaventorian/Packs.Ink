@@ -63,6 +63,7 @@ const moduleSrc = [
   grab("const SEALED_EXCLUSIVES = [", "}));").replace("const SEALED_EXCLUSIVES = [",
     "const SEALED_EXCLUSIVES_FIXTURE = [" + EXCL_FIXTURE_ENTRY + ","),
   grabLine("const isUnpricedSealed = "),
+  grabLine("const PIN_DISPLAY_ASIN = "),
   grab("const LORCANA_GEAR = [", NL + "];"),
   grabLine("const gearUrl = "),
   grabLine("const gearKey = "),
@@ -81,6 +82,7 @@ const moduleSrc = [
   grabLine("const AMAZON_SHELF_SEARCH_TYPES = "),
   grabLine("const AMAZON_SHELF_MAX = "),
   grab("const amazonListingKey = (url) => {", NL + "};"),
+  grab("const amazonShelfExtras = () => [", NL + "];"),
   grab("function amazonShelfPool(sealedPrices, setNameById){", NL + "}"),
   grab("function amazonShelfItems(sealedPrices, setNameById, hidden){", NL + "}"),
   grabLine("const AMAZON_PRICE_CEILING = "),
@@ -90,7 +92,7 @@ const moduleSrc = [
   "  AMAZON_ASIN_BY_SET, AMAZON_SEALED_RULES, AMAZON_PUZZLE_ASINS,",
   "  LORCANA_GEAR, MAINLINE_SETS, amazonDirectory,",
   "  tcgProductImg, tcgImgSized, amazonSealedMatches,",
-  "  amazonShelfItems, AMAZON_SHELF_MAX, amazonListingKey, amazonShelfPool,",
+  "  amazonShelfItems, AMAZON_SHELF_MAX, amazonListingKey, amazonShelfPool, amazonShelfExtras,",
   "  AMAZON_PRICE_CEILING, amazonPriceCeiling, amazonListingHidden,",
   "  SEALED_EXCLUSIVES, SEALED_EXCLUSIVES_FIXTURE, isUnpricedSealed};",
 ].join(NL);
@@ -482,7 +484,7 @@ const azTrove = shelf.find((it) => it.name === "Azurite Sea Illumineer's Trove")
 ok("market price first, low only when market is missing",
   azTrove && azTrove.priceBasis === "low" && azTrove.price === 70, JSON.stringify(azTrove));
 ok("every sealed shelf tile carries both links",
-  shelf.filter((it) => it.type !== "Puzzles").every((it) => it.tcg && it.amazon.includes("tag=packsink-20")));
+  shelf.filter((it) => it.type !== "Puzzles" && !it.extra).every((it) => it.tcg && it.amazon.includes("tag=packsink-20")));
 
 // Cap: one row per curated set x type is more than the shelf holds.
 const TYPE_ROW = {"Booster Boxes": ["Booster Box", "Booster Box"],
@@ -498,7 +500,13 @@ const bigShelf = m.amazonShelfItems(bigRows, bigSets);
 check("the shelf is capped", bigShelf.length, m.AMAZON_SHELF_MAX);
 ok("every curated tile links its exact listing",
   bigShelf.filter((it) => it.exact).every((it) => /\/dp\/[A-Z0-9]{10}\?tag=packsink-20/.test(it.amazon)));
-const shelfPhotos = [...shelf, ...bigShelf].map((it) => it.img).filter(Boolean);
+const shelfPhotos = [...shelf, ...bigShelf].filter((it) => !it.extra).map((it) => it.img).filter(Boolean);
+// The extras (the pin board display) carry OUR photo, served from Logos/gear/.
+const pinDisplay = shelf.find((it) => it.key === "amz:pin-board-display");
+ok("the pin board display sits in the shelf's second slot", shelf[1] === pinDisplay, shelf.slice(0, 3).map((it) => it.key).join(", "));
+ok("…and in the capped row too", bigShelf.length === m.AMAZON_SHELF_MAX && bigShelf[1].key === "amz:pin-board-display");
+ok("…with our own photo and a tagged product link", pinDisplay && /^Logos\/gear\//.test(pinDisplay.img) &&
+  /\/dp\/B0F5HN8ZCB\?tag=packsink-20/.test(pinDisplay.amazon), JSON.stringify(pinDisplay));
 ok("no shelf photo is Amazon's",
   shelfPhotos.every((u) => !/media-amazon|ssl-images-amazon|images-amazon/i.test(u)));
 ok("every shelf photo is TCGplayer's or Ravensburger's",
