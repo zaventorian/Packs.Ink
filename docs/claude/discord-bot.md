@@ -528,6 +528,40 @@ Epics and promos "(foil)". Mocked up, then built. Guarded by
 - `python scripts/discord_reports.py --preview <dir>` builds both reports from
   live data (read-only) and writes the JSON and pictures to `<dir>`.
 
+### 2026-11-25: the daily reports only moves that held; drawn pictures
+
+A reader said daily price moves weren't the most useful thing to see. A one-day Low
+move is usually one listing (Low changes on ~9% of cards a day): the daily of
+11/25 led with "+109%" on a $20 Cold Foil and a "-16.7%" that was $1.05.
+
+- **The daily's rule** (`confirmed_moves`, pure, guarded): now = median Low of the
+  last 3 price days, was = median of the 7 before; section floors at both ends,
+  `DAILY_MIN_PCT` (chase 10, promo 15, base 15, foil 20), Market measured the same
+  way moving the same direction by ≥ `MARKET_AGREE_PCT` (5), and **once per move**:
+  a card that qualified the same way on any of the previous 7 price days stays out
+  (no table: it reruns the rule on the history it already read). A median of 3
+  means a new price counts once it has held **two days in a row**. Calibrated
+  through the production code on Oct 23 – Nov 25 2026: median 2 cards a day,
+  mean 2.4, max 6, no empty day (Low alone, no Market check: ~9 a day; the old
+  daily showed ~14 lines).
+- **Quiet days post nothing.** `build_report` returns None for a daily with no
+  confirmed move and no new cards; nothing is recorded, `/reports send daily` keeps
+  the last one. `/reports daily`'s reply, its command description, /help and the
+  README say so (the 9/28 "it didn't send" lesson).
+- Each daily line reads `−19.9% Card · $49.91 → $40.00`: the two medians the
+  percent is made of, never today's Low beside a median percent.
+- eBay-tracked promos keep their own rule (new sales since the last report) and
+  face the same floors and minimum percent.
+- **The weekly's foils** need `mkt_pct_7d` to agree (same sign, ≥5%); the other
+  weekly sections are unchanged.
+- **Pictures** (house style of promo/graphics_src: #160c22, gold kicker, Cinzel,
+  `Logos/packs-ink-logo-sm.png`): the daily leads with `daily.png`
+  (`daily_board`: per card the art, the % pill, was → now, and its Low over 21
+  price days with the "was" and "now" windows shaded); the weekly's `market.png`
+  is now `week_poster` (whole market / chase / sealed for the week and month,
+  every booster set's week as a bar, then the market chart). Daily sections carry
+  no thumbnails beside the board. The fonts carry no ▲ ▼ →, so those are drawn.
+
 ### 2026-10-06: review fixes
 
 Each is guarded (section 10 of `test_discord_bot.mjs`, and `test_discord_reports.py`).

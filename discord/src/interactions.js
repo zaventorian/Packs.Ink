@@ -500,11 +500,12 @@ async function calendar(deps, kind = "all", region = "all", page = 0) {
 }
 
 // ── /reports (server managers) ───────────────────────────────────────────
-// The report itself is the daily digest (scripts/discord_digest.py's layout):
-// NM Market moves, cards priced $5+, led by "fell AND at a multi-month low".
+// The reports are scripts/discord_reports.py's: the daily lists only price
+// moves that held (two of the last three days, Market agreeing) and new
+// cards, and posts NOTHING on a day with neither (2026-11-25).
 // The Worker only records WHERE to post it; scripts/discord_reports.py posts.
 const CADENCE = {
-  daily: "every day once the day's prices are in (about 4:20 PM US Central)",
+  daily: "once the day's prices are in (about 4:20 PM US Central) on any day with a price move that held or new cards — quiet days post nothing",
   weekly: "every Monday morning at 9 AM US Central",
 };
 async function reports(it, deps) {

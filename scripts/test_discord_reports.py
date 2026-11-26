@@ -55,16 +55,16 @@ MORNING = at(TODAY, 14, 5)        # 9:05 AM Chicago (CDT): the weekly's slot
 def mover(cid, name, version, rarity, printing, pid, price, p1, p7, set_id="s_fab"):
     return {"card_id": cid, "name": name, "version": version, "rarity": rarity, "set_id": set_id,
             "printing": printing, "tcgplayer_product_id": pid, "low_today": price,
-            "pct_1d": p1, "pct_7d": p7}
+            "pct_1d": p1, "pct_7d": p7, "mkt_pct_7d": p7}
 
 
 MOVERS = [
     # chase: an Iconic up $145 on +5.4% must lead a $6 Epic down 18%
-    mover("c_minnie", "Minnie Mouse", "Sweetheart Princess", "Iconic", "Holofoil", 11, 2838.89, 1.0, 5.4),
+    mover("c_minnie", "Minnie Mouse", "Sweetheart Princess", "Iconic", "Holofoil", 11, 2838.89, 11.0, 5.4),
     mover("c_buzz", "Buzz Lightyear", "Space Ranger", "Epic", "Holofoil", 12, 6.86, -18.0, -18.0),
-    mover("c_eeyore", "Eeyore", "In the Way", "Enchanted", "Holofoil", 13, 613.15, -2.0, -6.4),
+    mover("c_eeyore", "Eeyore", "In the Way", "Enchanted", "Holofoil", 13, 613.15, -12.0, -6.4),
     # base: big % on a real card; a $4 card and a 50-cent move stay out
-    mover("b_max", "Max Goof", "Chart Topper", "Legendary", "Normal", 21, 22.17, 7.8, 148.3),
+    mover("b_max", "Max Goof", "Chart Topper", "Legendary", "Normal", 21, 22.17, 20.0, 148.3),
     # $4.49 moving $1.92 clears the dollar floor, so only the PRICE floor keeps it out
     mover("b_cheap", "Cheap", "Card", "Rare", "Normal", 22, 4.49, -30.0, -26.8),
     mover("b_small", "Small", "Move", "Super Rare", "Normal", 23, 8.36, -4.7, -4.7),
@@ -72,10 +72,10 @@ MOVERS = [
     mover("b_cin", "Cinderella", "Dream Come True", "Legendary", "Normal", 25, 24.65, 1.0, 67.2),
     mover("b_dumbo", "Dumbo", "Ninth Wonder of the Universe", "Legendary", "Normal", 26, 39.99, -1.0, -24.4),
     # promo: a Challenge (C1) card, two markets on one card_id
-    mover("p_rap", "Rapunzel", "Gifted with Healing", "Promo", "Normal", 31, 125.87, -2.4, -2.4, set_id="s_c1"),
+    mover("p_rap", "Rapunzel", "Gifted with Healing", "Promo", "Normal", 31, 125.87, -16.0, -2.4, set_id="s_c1"),
     mover("p_woody", "Woody", "Jungle Guide", "Promo", "Holofoil", 32, 70.78, -8.1, -19.7, set_id="s_p3"),
     # foil: a base-rarity foil, and a stale row whose price is not today's
-    mover("f_trump", "Mickey Mouse", "Trumpeter", "Legendary", "Cold Foil", 41, 23.45, 9.7, 24.9),
+    mover("f_trump", "Mickey Mouse", "Trumpeter", "Legendary", "Cold Foil", 41, 23.45, 25.0, 24.9),
     mover("f_stale", "Stale", "Two", "Rare", "Cold Foil", 42, 30.0, 90.0, 90.0),
 ]
 STALE_PIDS = {42}
@@ -142,23 +142,32 @@ class FakeSb:
         if table == "price_movers" and "low_date" in filters:     # how current is the matview?
             return [{"low_date": self.movers_date.isoformat()}]
         if table == "price_movers":
-            pct = next(k for k in filters if k.startswith("pct_"))
+            pct = next((k for k in filters if k.startswith("pct_")), None)   # the daily asks for no move
             floor = float(filters[rep.REPORT_PRICE_COL].split(".", 1)[1])
             return [{"low_date": self.movers_date.isoformat(), **m} for m in self.movers
-                    if m[pct] not in (None, 0) and m["low_today"] >= floor]
+                    if (pct is None or m[pct] not in (None, 0)) and m["low_today"] >= floor]
         if table == "prices_daily" and filters.get("date", "").startswith("eq."):
             return [{"tcgplayer_product_id": m["tcgplayer_product_id"], "printing": m["printing"],
                      "low_price": (m["low_today"] - 1 if m["tcgplayer_product_id"] in STALE_PIDS else m["low_today"])}
                     for m in self.movers]
         if table == "prices_daily":      # history: a year of prices, today's at the end
+            # The last TWO days sit at today's price and the 18 before them
+            # at the level pct_1d came from: the move the daily confirms.
+            # A stale card, or one whose last Low is older, has no price today.
             out = []
             for m in self.movers:
+                base = m["low_today"] / (1 + m["pct_1d"] / 100)
                 for i in range(200):
                     d = self.price_date - dt.timedelta(days=199 - i)
-                    if i == 199:
+                    if i == 199 and (m["tcgplayer_product_id"] in STALE_PIDS
+                                     or m.get("low_date", d.isoformat()) < d.isoformat()):
+                        continue
+                    if i >= 198:
                         v = m["low_today"]
                     elif m["tcgplayer_product_id"] in LOW_PIDS:
                         v = m["low_today"] * 1.3
+                    elif i >= 180:
+                        v = base
                     else:
                         v = m["low_today"] * (0.9 + 0.2 * ((i * 7) % 13) / 13)
                     out.append({"tcgplayer_product_id": m["tcgplayer_product_id"], "printing": m["printing"],
@@ -411,8 +420,8 @@ check(set(re.findall(r'"([^"]+)"', pblock)) == rep.PROMO_RARITY_SETS, "PROMO_RAR
 # A card in a promo-only set is a Promo, whatever Lorcast printed on it: a Promo
 # Set 2 "Enchanted" was reported as chase, a Magical Places "Rare" as a base card.
 promo_sb = FakeSb([], movers=MOVERS + [
-    mover("x_p3", "Elsa", "Spirit of Winter", "Enchanted", "Holofoil", 61, 300.0, 12.0, 12.0, set_id="s_p3"),
-    mover("x_dis", "Stitch", "Rock Star", "Rare", "Normal", 62, 40.0, 15.0, 15.0, set_id="s_epcot")])
+    mover("x_p3", "Elsa", "Spirit of Winter", "Enchanted", "Holofoil", 61, 300.0, 16.0, 12.0, set_id="s_p3"),
+    mover("x_dis", "Stitch", "Rock Star", "Rare", "Normal", 62, 40.0, 16.0, 15.0, set_id="s_epcot")])
 promo_sb.sets_extra = [{"id": "s_epcot", "name": "EPCOT Festival of the Arts", "released_at": "2025-02-01"}]
 with redirect_stdout(io.StringIO()):
     prep = rep.build_report(promo_sb, TODAY, "1d", session=FakeCdn(), now=EVENING)
@@ -453,7 +462,10 @@ class SplitSb(FakeSb):
     while his Low history does not."""
     def select(self, table, columns="*", limit=None, filters=None, page_size=1000, order=None):
         rows = super().select(table, columns, limit, filters, page_size, order)
-        if table == "prices_daily" and not (filters or {}).get("date", "").startswith("eq."):
+        # The year of Market the standing note reads, not the daily's own
+        # three weeks (where Market has to agree for Max to be listed at all).
+        if (table == "prices_daily" and not (filters or {}).get("date", "").startswith("eq.")
+                and "low_price" not in columns):
             for r in rows:
                 if r["tcgplayer_product_id"] == 21 and r["date"] != self.price_date.isoformat():
                     r["market_price"] = 5.0
@@ -978,11 +990,49 @@ check("Woody" in promo, "an untracked promo still moves by TCGplayer")
 with redirect_stdout(io.StringIO()):
     drep = rep.build_report(ebay_sb, TODAY, "1d", session=FakeCdn(), now=EVENING)
 dpromo = next((e["description"] for e in drep["embeds"] if "PROMOS" in (e.get("author") or {}).get("name", "")), "")
-check("Rapunzel — Gifted with Healing (Prize Wall)" in dpromo and "1 new sale" in dpromo,
-      "the daily carries an eBay sale from the last day")
+check("Rapunzel — Gifted with Healing (Prize Wall)" not in dpromo,
+      "the daily leaves out an eBay move under the promo minimum (+12% < 15%)")
 check("Belle — Strange but Special" in dpromo and "+25.0%" in dpromo,
       "the daily carries a sale that sold days ago but reached us since the last report")
 check("Elsa — Snow Queen" not in dpromo, "the daily leaves out a sale the last daily already knew of")
+
+# ── the daily reports only moves that held (2026-11-25) ──
+DAYS = [TODAY - dt.timedelta(days=29 - i) for i in range(30)]
+
+
+def held(seq, mseq=None):
+    """confirmed_moves for one $40 base card whose Low runs `seq` (the
+    newest last) and whose Market runs `mseq` (default: the same)."""
+    row = {"card_id": "x", "name": "X", "version": "Y", "rarity": "Legendary", "printing": "Normal",
+           "tcgplayer_product_id": 9, "set_id": "s_fab"}
+    k = (9, "Normal")
+    low = {DAYS[-len(seq) + i]: v for i, v in enumerate(seq) if v is not None}
+    mkt = {DAYS[-len(seq) + i]: v for i, v in enumerate(mseq or seq) if v is not None}
+    return rep.confirmed_moves([row], {k: low}, {k: mkt}, DAYS)
+
+
+flat = [40.0] * 28
+check(not held(flat + [30.0, 30.0][:1] + [40.0]), "a one-day dip that comes back is no move")
+check(not held(flat[:-1] + [40.0, 40.0, 30.0]), "a new price on the price date alone is not confirmed yet")
+two = held(flat + [30.0, 30.0])
+check(len(two) == 1 and abs(two[0]["pct"] + 25) < 1e-9 and two[0]["was"] == 40.0 and two[0]["price"] == 30.0,
+      f"a new price that held two days is a move, was -> now from the medians ({two})")
+check(not held(flat[:-2] + [40.0, 30.0, 30.0, 30.0]), "...reported once: the day after, it is not news again")
+check(not held(flat + [30.0, 30.0], [40.0] * 30), "Market did not move: no move")
+check(not held(flat + [30.0, 30.0], [40.0] * 28 + [44.0, 44.0]), "Market moved the other way: no move")
+check(not held(flat + [36.0, 36.0]), "-10% is under the base minimum (15%)")
+check(not held([4.0] * 28 + [6.0, 6.0]), "a card that started under the floor is no move")
+check(not held(flat + [30.0, None]), "no price on the price date: no move")
+quiet = FakeSb([{"guild_id": "g", "channel_id": "c1", "cadence": "daily", "last_posted_on": None}],
+               movers=[{**m, "pct_1d": 0.0} for m in MOVERS if m["tcgplayer_product_id"] not in LOW_PIDS], latest=[])
+disc_q = FakeDiscord()
+run(quiet, disc_q)
+check(not disc_q.posts and not any("last_posted_on" in u[2] for u in quiet.updates),
+      "a day with no move that held and no new cards posts nothing and records nothing")
+d_png = next((v for v in (daily.get("files") or {}).values() if v[0] == "daily.png"), None)
+check(d_png and d_png[1][:8] == b"\x89PNG\r\n\x1a\n" and d_emb[0].get("image", {}).get("url") == "attachment://daily.png",
+      "the daily leads with its drawn picture")
+check(" → " in d_emb[1]["description"], "a daily line shows was -> now")
 
 print("FAILS:", FAILS)
 sys.exit(1 if FAILS else 0)

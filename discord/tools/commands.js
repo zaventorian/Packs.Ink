@@ -78,7 +78,7 @@ export const COMMANDS = [
     // checks the permission again anyway.
     default_member_permissions: "32",
     options: [
-      { type: 1, name: "daily", description: "Post the movers every day", options: reportOpts() },
+      { type: 1, name: "daily", description: "Post the day's price moves that held (quiet days post nothing)", options: reportOpts() },
       { type: 1, name: "weekly", description: "Post the week's movers every Monday at 9 AM Central", options: reportOpts() },
       { type: 1, name: "send", description: "Post the latest report here, now", options: [
         { type: 3, name: "report", description: "Which report (default: daily)", choices: [
