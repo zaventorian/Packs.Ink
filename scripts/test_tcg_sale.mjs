@@ -2,8 +2,8 @@
 //
 //     node scripts/test_tcg_sale.mjs
 //
-// Zaven, 2026-11-24: show nothing before 11/27, a "Tomorrow" note on 11/27,
-// LIVE during the sale (9am ET Sat 11/28 to 11pm ET Tue 12/1), then nothing.
+// Window corrected 2026-11-27 to TCGplayer's promo terms: LIVE from 9am ET
+// Fri 11/27 to 11pm ET Mon 11/30. Nothing before 11/27, "today" 00:00-09:00 ET 11/27.
 // Extracts the real TCG_SALE + tcgSalePhase out of Index.html and feeds them
 // explicit timestamps, never Date.now(), so the test keeps passing after the sale.
 // Delete this file together with the TCG_SALE block.
@@ -27,25 +27,23 @@ const { TCG_SALE, tcgSalePhase } = new Function(code + "\nreturn {TCG_SALE, tcgS
 // Every boundary, both sides. ET is EST (UTC-5) on all of these dates.
 const ET = (mo, d, h) => Date.UTC(2026, mo - 1, d, h + 5);
 const cases = [
-  [ET(11, 24, 12), null, "today (11/24): nothing"],
+  [ET(11, 24, 12), null, "11/24: nothing"],
   [ET(11, 27, 0) - 1, null, "1ms before 11/27 00:00 ET"],
-  [ET(11, 27, 0), "tomorrow", "11/27 00:00 ET"],
-  [ET(11, 27, 12), "tomorrow", "11/27 noon ET"],
-  [ET(11, 28, 0) - 1, "tomorrow", "1ms before 11/28 00:00 ET"],
-  [ET(11, 28, 0), "today", "11/28 00:00 ET"],
-  [ET(11, 28, 9) - 1, "today", "1ms before 9am ET"],
-  [ET(11, 28, 9), "live", "11/28 9am ET"],
-  [ET(11, 30, 12), "live", "11/30 noon ET"],
-  [ET(12, 1, 23) - 1, "live", "1ms before 12/1 11pm ET"],
-  [ET(12, 1, 23), null, "12/1 11pm ET"],
+  [ET(11, 27, 0), "today", "11/27 00:00 ET"],
+  [ET(11, 27, 9) - 1, "today", "1ms before 9am ET 11/27"],
+  [ET(11, 27, 9), "live", "11/27 9am ET"],
+  [ET(11, 28, 12), "live", "11/28 noon ET"],
+  [ET(11, 30, 23) - 1, "live", "1ms before 11/30 11pm ET"],
+  [ET(11, 30, 23), null, "11/30 11pm ET"],
+  [ET(12, 1, 12), null, "12/1 noon ET: over"],
   [ET(12, 25, 0), null, "Christmas"],
 ];
 for (const [t, want, label] of cases) {
   const got = tcgSalePhase(t);
   ok(got === want, `${label}: expected ${want}, got ${got}`);
 }
-ok(TCG_SALE.startMs === Date.UTC(2026, 10, 28, 14), "start is 14:00 UTC on 11/28");
-ok(TCG_SALE.endMs === Date.UTC(2026, 11, 2, 4), "end is 04:00 UTC on 12/2");
+ok(TCG_SALE.startMs === Date.UTC(2026, 10, 27, 14), "start is 14:00 UTC on 11/27");
+ok(TCG_SALE.endMs === Date.UTC(2026, 11, 1, 4), "end is 04:00 UTC on 12/1");
 
 // The teaser must carry no link; the live link must be the affiliate hop,
 // marked sponsored, with its disclosure label beside it.
