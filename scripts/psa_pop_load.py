@@ -68,7 +68,8 @@ def grades_of(row: dict) -> dict:
 
 
 def env():
-    txt = (HERE.parent / ".env").read_text(encoding="utf-8")
+    # The nearest .env walking up, so a run from .claude/worktrees/<name> uses the main checkout's.
+    txt = next(d / ".env" for d in HERE.parents if (d / ".env").exists()).read_text(encoding="utf-8")
     e = dict(re.findall(r"^([A-Z_]+)=(.*)$", txt, re.M))
     for k in ("SUPABASE_URL", "SUPABASE_SERVICE_KEY"):
         if not e.get(k):
